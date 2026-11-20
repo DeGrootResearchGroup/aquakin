@@ -11,6 +11,8 @@ import io
 import json
 
 import jax.numpy as jnp
+import re
+
 import pytest
 
 import aquakin
@@ -462,3 +464,29 @@ def test_aeration_must_be_a_mapping_and_series_may_be_absolute(tmp_path):
     table = write_influent_table(load_bsm1_influent("dry", m), tmp_path / "feed.csv")
     series = build_unit("influent", "feed", {"model": "asm1", "series": str(table)})
     assert series.Q.shape[0] > 100
+
+
+@pytest.mark.parametrize("value", [[1, 2], {"a": 1}, True])
+def test_a_scheduled_setting_is_a_number_or_an_expression_and_nothing_else(value):
+    """An influent's Q may be either; a bool is not a number here, and a list or
+    mapping is neither. (``None`` is not refused -- it means the setting is
+    unset, which an optional setting is allowed to be.)"""
+    from aquakin.plant.catalog import unit_kind, validate_settings
+
+    kind = unit_kind("influent")
+    with pytest.raises(ValueError, match="a real number, or an expression of time"):
+        validate_settings(kind, {"model": "asm1", "Q": value})
+
+
+def test_a_scheduled_setting_takes_a_number_or_a_readable_expression():
+    from aquakin.plant.catalog import unit_kind, validate_settings
+
+    kind = unit_kind("influent")
+    for good in (2000.0, 2000, "2000", "2000 + 500*sin(2*pi*t)"):
+        validate_settings(kind, {"model": "asm1", "Q": good})
+    # Each composition entry is read the same way, and names the species.
+    validate_settings(
+        kind, {"model": "asm1", "Q": 1.0, "composition": {"SNH": "30 + t", "SS": 60.0}}
+    )
+    with pytest.raises(ValueError, match=re.escape("'composition.SNH'")):
+        validate_settings(kind, {"model": "asm1", "Q": 1.0, "composition": {"SNH": "wobble(t)"}})

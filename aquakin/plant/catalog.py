@@ -754,7 +754,18 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
         elif t == "scheduled_number":
             ok = _is_scheduled(name, value)
         elif t == "scheduled_species_values":
-            _check_map(name, value, lambda v: _is_scheduled(name, v), "a species")
+            # Checked key by key rather than through _check_map, so an
+            # unreadable expression names the species that holds it.
+            if not isinstance(value, dict):
+                raise ValueError(f"'{name}' must be a mapping, got {type(value).__name__}")
+            for species, entry in value.items():
+                if not isinstance(species, str):
+                    raise ValueError(f"'{name}' key {species!r} must be a string (a species)")
+                if not _is_scheduled(f"{name}.{species}", entry):
+                    raise ValueError(
+                        f"'{name}.{species}' must be "
+                        f"{SETTING_TYPES['scheduled_number'].split(' (')[0]}, got {entry!r}"
+                    )
             ok = True
         elif t == "integer":
             ok = isinstance(value, int) and not isinstance(value, bool)
