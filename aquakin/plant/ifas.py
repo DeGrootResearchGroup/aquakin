@@ -202,8 +202,10 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
             raise ValueError(
                 f"IFASUnit '{self.name}' fill_fraction must be in (0, 1]; got {self.fill_fraction}."
             )
-        check_positive(self.name, "specific_surface_area", self.specific_surface_area)
-        check_positive(self.name, "biofilm_thickness", self.biofilm_thickness)
+        if self.specific_surface_area <= 0 or self.volume <= 0:
+            raise ValueError(
+                f"IFASUnit '{self.name}' specific_surface_area and volume must be positive."
+            )
 
         n = self.model.n_species
         soluble = (
