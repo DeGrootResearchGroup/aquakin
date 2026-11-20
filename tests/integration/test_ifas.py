@@ -8,6 +8,8 @@ that an IFAS tank removes more substrate (and nitrifies more) than an
 equivalent CSTR -- the point of the intensification retrofit.
 """
 
+import warnings
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -173,3 +175,257 @@ def test_grad_through_ifas_plant_is_finite(asm1):
 
     g = jax.grad(loss)(4.0)
     assert jnp.isfinite(g)
+
+
+# --- layer resolution and the steady-state criterion -------------------------
+
+def test_layer_resolution_reports_the_worst_single_layer_drop(asm1):
+    """``layer_resolution`` measures how much of a soluble's profile falls across
+    one layer -- the quantity the first-order discretization error tracks.
+
+    Checked on hand-built profiles so the metric is pinned independently of any
+    solve: a flat profile is perfectly resolved, and one that collapses inside a
+    single layer is not.
+    """
+    u = _ifas(asm1, n_layers=4)
+    ss, so = asm1.species_index["SS"], asm1.species_index["SO"]
+
+    flat = jnp.zeros((5, asm1.n_species)).at[:, ss].set(10.0).at[:, so].set(2.0)
+    assert u.layer_resolution(flat)["SS"] == pytest.approx(0.0)
+
+    # All of SS consumed between the bulk and the first layer.
+    collapsed = jnp.zeros((5, asm1.n_species)).at[0, ss].set(10.0)
+    assert u.layer_resolution(collapsed)["SS"] == pytest.approx(1.0)
+
+    # Gradual decay is well resolved; the flat species is unaffected either way.
+    gradual = jnp.zeros((5, asm1.n_species))
+    gradual = gradual.at[:, ss].set(jnp.asarray([10.0, 9.0, 8.0, 7.0, 6.0]))
+    gradual = gradual.at[:, so].set(2.0)
+    report = u.layer_resolution(gradual)
+    assert report["SS"] == pytest.approx(0.1)
+    assert report["SO"] == pytest.approx(0.0)
+    # Particulates are not reported -- they never diffuse.
+    assert "XB_H" not in report
+
+
+def test_layer_resolution_accepts_a_flat_state(asm1):
+    """The report reads a flat unit state, as ``states_by_unit`` hands it back."""
+    u = _ifas(asm1, n_layers=4)
+    flat = u.initial_state()
+    assert set(u.layer_resolution(flat)) == {
+        s for s in asm1.species if not s.startswith("X")
+    }
+
+
+def test_norm_steady_state_warning_threshold_and_message(asm1):
+    """The guard fires on a misleading verdict and names the offending state.
+
+    Exercised directly on the helper so the threshold and the message are pinned
+    without a multi-minute solve. ``NORM_RESIDUAL_WARN_FACTOR * ss_rtol`` is the
+    line: a healthy plant sits orders of magnitude inside it.
+    """
+    from aquakin.plant.plant import NORM_RESIDUAL_WARN_FACTOR
+
+    plant = _plant(_ifas(asm1, n_layers=4, aeration=Aeration(kla=600.0)), asm1)
+    plant._build_state_layout()
+    state = plant.initial_state()
+    floor = jnp.maximum(jnp.abs(state), 1e-6)
+    ss_rtol = 1e-3
+
+    quiet = NORM_RESIDUAL_WARN_FACTOR * ss_rtol / 10.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        plant._warn_if_norm_test_overstates(
+            state, jnp.zeros_like(state), floor, quiet, ss_rtol
+        )
+
+    # One badly unsteady entry is enough, however large the rest of the state.
+    worst = int(jnp.argmax(jnp.abs(state)))
+    F = jnp.zeros_like(state).at[worst].set(5.0 * jnp.abs(state[worst]))
+    loud = NORM_RESIDUAL_WARN_FACTOR * ss_rtol * 10.0
+    with pytest.warns(RuntimeWarning, match="reported convergence") as caught:
+        plant._warn_if_norm_test_overstates(state, F, floor, loud, ss_rtol)
+    message = str(caught[0].message)
+    assert plant._describe_state_index(worst) in message
+    assert "scaled_residual" in message
+
+
+@pytest.mark.slow
+def test_norm_steady_state_warns_when_frozen_biomass_hides_a_moving_bulk():
+    """A held-fixed biofilm inventory defeats the norm steady-state test.
+
+    The attached biomass contributes ``n_layers * density`` to ``||y||`` but
+    nothing to ``||dy/dt||``, so it inflates the tolerance the *bulk* is held to
+    and the solve stops while the bulk is still moving. The solver cannot refuse
+    to return -- but it must not call that converged without saying so.
+
+    The configuration is a carrier-dominated tank whose bulk substrate is driven
+    low by the biofilm: a small residual in absolute terms is then a large one
+    relative to the bulk's own concentration, which is exactly the gap the norm
+    test cannot see.
+    """
+    import os
+
+    model = aquakin.load_model_from_file(
+        os.path.join(os.path.dirname(__file__), "..", "fixtures", "bm1_biofilm.yaml")
+    )
+    unit = IFASUnit(
+        "reactor", model, volume=1.25e-3, input_port_names=["in"],
+        specific_surface_area=80.0, fill_fraction=1.0,
+        biofilm_thickness=5e-4, n_layers=32,
+        diffusivity=jnp.array([1e-4, 2e-4, 0.0]), boundary_layer=1e-9,
+        conditions={"T": 293.15},
+        aeration=Aeration(kla=1.0e6, do_sat=10.0, species="SO2"),
+        biofilm_initial=model.concentrations({"XH": 1e4, "SS": 30.0, "SO2": 10.0}),
+    )
+    plant = Plant("t", time_unit="d")
+    plant.add_unit(unit)
+    plant.add_influent(
+        "feed", model.influent({"SS": 30.0, "SO2": 10.0}, Q=0.02), to="reactor.in"
+    )
+
+    with pytest.warns(RuntimeWarning, match="reported convergence"):
+        result = plant.run_to_steady_state()
+    assert result.converged          # the verdict the warning is about
+    assert result.residual > 0.1     # ... and why it is misleading
+
+    # The componentwise criterion is the documented remedy and does not warn.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        tight = plant.run_to_steady_state(
+            criterion="scaled_residual", tol=1e-7, scale_floor=1e-3, max_time=200.0
+        )
+    assert tight.residual < 0.1
+
+
+# --- a biofilm that grows (moving boundary) ---------------------------------
+
+def _bm1_model():
+    import os
+    return aquakin.load_model_from_file(
+        os.path.join(os.path.dirname(__file__), "..", "fixtures", "bm1_biofilm.yaml")
+    )
+
+
+def _growing(model, **kw):
+    base = dict(
+        name="r", model=model, volume=1.0, input_port_names=["in"],
+        specific_surface_area=10.0, fill_fraction=1.0,
+        biofilm_thickness=3.0e-5, n_layers=24,
+        diffusivity=jnp.array([1e-4, 2e-4, 0.0]), boundary_layer=1e-9,
+        conditions={"T": 293.15},
+        aeration=Aeration(kla=1.0e6, do_sat=10.0, species="SO2"),
+        dynamic_thickness=True, biofilm_density=1.0e4,
+        detachment_rate=2.0e5, detachment_law="quadratic",
+        biofilm_initial=model.concentrations({"XH": 1.0e4, "SS": 30.0, "SO2": 10.0}),
+    )
+    base.update(kw)
+    return IFASUnit(**base)
+
+
+def test_dynamic_thickness_adds_one_state_entry():
+    """``L_f`` becomes a state: the last entry, named and seeded."""
+    model = _bm1_model()
+    u = _growing(model, n_layers=8)
+    assert u.state_size == (8 + 1) * model.n_species + 1
+    assert u.state_names()[-1] == "L_f"
+    assert len(u.state_names()) == u.state_size
+    y0 = u.initial_state()
+    assert y0.shape == (u.state_size,)
+    assert float(y0[-1]) == pytest.approx(3.0e-5)
+    # The fixed-thickness unit is untouched: no extra entry, no L_f.
+    fixed = _growing(model, n_layers=8, dynamic_thickness=False,
+                     biofilm_density=None, detachment_rate=0.0)
+    assert fixed.state_size == (8 + 1) * model.n_species
+    assert "L_f" not in fixed.state_names()
+
+
+def test_dynamic_thickness_requires_a_coherent_configuration():
+    model = _bm1_model()
+    with pytest.raises(ValueError, match="biofilm_density"):
+        _growing(model, biofilm_density=None)
+    with pytest.raises(ValueError, match="detachment_law"):
+        _growing(model, detachment_law="exponential")
+    with pytest.raises(ValueError, match="detachment_rate"):
+        _growing(model, detachment_rate=-1.0)
+    # Freezing the attached biomass contradicts growing it.
+    frozen = jnp.asarray([False, False, True])
+    with pytest.raises(ValueError, match="cannot combine dynamic_thickness"):
+        _growing(model, biofilm_fixed_mask=frozen)
+
+
+def test_dynamic_thickness_warns_on_a_seed_off_the_stated_density():
+    model = _bm1_model()
+    with pytest.warns(RuntimeWarning, match="incompressible"):
+        _growing(model, biofilm_initial=model.concentrations({"XH": 50.0}))
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("detach_rate", [1.0e5, 2.0e5, 4.0e5])
+def test_growing_biofilm_settles_at_the_thickness_the_closure_predicts(detach_rate):
+    """A fully penetrated film balances growth against quadratic detachment.
+
+    With the substrate abundant everywhere inside, the net specific production
+    is uniform, so ``dL_f/dt = mu_net*L_f - lambda*L_f**2`` and the steady
+    thickness is ``mu_net/lambda``. A flow-dominated tank holds the bulk at the
+    influent composition, which fixes ``mu_net`` without a second unknown.
+    """
+    model = _bm1_model()
+    unit = _growing(model, detachment_rate=detach_rate)
+    plant = Plant("g", time_unit="d")
+    plant.add_unit(unit)
+    plant.add_influent(
+        "feed", model.influent({"SS": 30.0, "SO2": 10.0}, Q=5000.0), to="r.in")
+
+    sol = plant.solve(t_span=(0.0, 30.0), y0=plant.initial_state(),
+                      t_eval=jnp.asarray([30.0]))
+    rows, thickness = unit._split(jnp.asarray(np.asarray(sol.state)[-1]))
+    rows = np.asarray(rows)
+
+    ss = rows[0, model.species_index["SS"]]
+    o2 = rows[0, model.species_index["SO2"]]
+    mu_net = 6.0 * ss / (4.0 + ss) * o2 / (0.2 + o2) - 0.4
+    assert float(thickness) == pytest.approx(mu_net / detach_rate, rel=0.01)
+
+
+@pytest.mark.slow
+def test_growing_biofilm_stays_incompressible():
+    """The film holds its stated density at every depth, which is the premise.
+
+    The displacement velocity is derived from incompressibility, so if the
+    advection were wrong the total particulate concentration would drift away
+    from ``biofilm_density`` -- the sharpest check on the transport.
+    """
+    model = _bm1_model()
+    unit = _growing(model)
+    plant = Plant("g", time_unit="d")
+    plant.add_unit(unit)
+    plant.add_influent(
+        "feed", model.influent({"SS": 30.0, "SO2": 10.0}, Q=5000.0), to="r.in")
+
+    sol = plant.solve(t_span=(0.0, 20.0), y0=plant.initial_state(),
+                      t_eval=jnp.linspace(1.0, 20.0, 5))
+    for row in np.asarray(sol.state):
+        rows, thickness = unit._split(jnp.asarray(row))
+        layers = np.asarray(rows)[1:, model.species_index["XH"]]
+        np.testing.assert_allclose(layers, 1.0e4, rtol=1e-6)
+        assert float(thickness) > 0.0
+
+
+@pytest.mark.slow
+def test_a_starved_biofilm_thins_instead_of_holding_its_thickness():
+    """Decay outrunning growth must shrink the film -- the case a fixed
+    thickness cannot represent at all."""
+    model = _bm1_model()
+    unit = _growing(model, biofilm_thickness=1.0e-4)
+    plant = Plant("g", time_unit="d")
+    plant.add_unit(unit)
+    # No substrate in the feed: lysis runs, growth does not.
+    plant.add_influent(
+        "feed", model.influent({"SS": 0.0, "SO2": 10.0}, Q=5000.0), to="r.in")
+
+    sol = plant.solve(t_span=(0.0, 10.0), y0=plant.initial_state(),
+                      t_eval=jnp.asarray([0.0, 10.0]))
+    start, end = np.asarray(sol.state)[0, -1], np.asarray(sol.state)[-1, -1]
+    assert end < 0.5 * start
+    assert end > 0.0

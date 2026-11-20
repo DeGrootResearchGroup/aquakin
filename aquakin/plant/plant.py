@@ -95,6 +95,14 @@ from aquakin.utils.units import conversion_factor, units_match
 # never iterated as one -- ``_unit_order`` does not contain it).
 _TEMPERATURE_KEY = "__temperature__"
 
+#: How far past ``ss_rtol`` a single state's scaled residual may sit before a
+#: ``criterion="norm"`` convergence is reported as misleading (see
+#: :meth:`Plant._warn_if_norm_test_overstates`). Calibrated on BSM1, whose
+#: norm-converged scaled residual is ~4x ``ss_rtol`` with either clarifier --
+#: two orders of magnitude inside this threshold, so an ordinary converged
+#: plant never trips it.
+NORM_RESIDUAL_WARN_FACTOR = 100.0
+
 
 @dataclass(frozen=True)
 class Connection:
@@ -3975,6 +3983,19 @@ class Plant:
         ``residual`` (computed with ``scale_floor``), so the two methods can be
         compared on one measure.
 
+        .. warning::
+
+           The norm test holds every state to a tolerance set by *all* of them,
+           so a large and structurally constant block of states loosens it for
+           everything else. An IFAS/MBBR tank is the case to watch: its attached
+           biomass is held fixed, so it adds ``n_layers * density`` to ``||y||``
+           while contributing nothing to ``||dy/dt||``, and the solve can stop
+           with the tank's bulk still moving -- reported as converged. A
+           ``RuntimeWarning`` naming the offending state is raised when the
+           returned state's scaled residual exceeds
+           ``NORM_RESIDUAL_WARN_FACTOR * ss_rtol``; ``criterion="scaled_residual"``
+           avoids the problem outright by holding each state to its own size.
+
         The absolute tolerance for the underlying solve defaults to a
         per-component noise floor scaled off the operating magnitudes
         (``atol_i = atol_factor * max(|y0_i|, |default_i|)``, with a small global
@@ -4074,8 +4095,56 @@ class Plant:
             criterion=criterion,
             tol=tol,
             floor=floor,
+            ss_rtol=ss_rtol,
             solution=sol,
         )
+
+    def _warn_if_norm_test_overstates(self, state, F, floor, residual, ss_rtol) -> None:
+        """Warn when the norm steady-state test accepts a state that is not steady.
+
+        The norm test compares ``||dy/dt||`` against ``ss_atol + ss_rtol*||y||``,
+        so every state inflates the tolerance that every *other* state is held
+        to. A unit carrying a large, structurally constant inventory breaks it:
+        an IFAS/MBBR tank's attached biomass is held fixed, so its layer rates
+        are zeroed and it contributes ``n_layers * density`` to ``||y||`` while
+        never contributing to ``||dy/dt||``. It loosens the test without ever
+        being tested by it, and the solve stops with the bulk still moving --
+        reported as converged.
+
+        The componentwise scaled residual is already computed for the result, so
+        the inconsistency is free to detect: if some state is changing by far
+        more than ``ss_rtol`` of its own size per unit time, the norm test's
+        verdict does not mean what it appears to. A measured healthy plant sits
+        a couple of orders of magnitude inside this threshold, so it does not
+        fire on an ordinary converged solve.
+        """
+        threshold = NORM_RESIDUAL_WARN_FACTOR * float(ss_rtol)
+        if not residual > threshold:
+            return
+        scaled = jnp.abs(F) / jnp.maximum(jnp.abs(state), floor)
+        where = self._describe_state_index(int(jnp.argmax(scaled)))
+        warnings.warn(
+            f"run_to_steady_state reported convergence, but {where} is still changing "
+            f"by {residual:.3g} of its own value per unit time -- {residual / float(ss_rtol):.0f}x "
+            f"the ss_rtol={ss_rtol:g} the norm test implies. The norm test compares "
+            f"||dy/dt|| with ss_atol + ss_rtol*||y||, so a large and structurally constant "
+            f"block of states (an IFAS/MBBR tank's held-fixed attached biomass, for example) "
+            f"inflates the tolerance for everything else. Re-run with "
+            f'criterion="scaled_residual" to hold every state to its own size.',
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+    def _describe_state_index(self, index: int) -> str:
+        """Name a flat state index as ``"unit.entry"``, falling back to the index."""
+        try:
+            for unit, entries in self._named_positions().items():
+                for name, position in entries.items():
+                    if position == index:
+                        return f"{unit}.{name}"
+        except Exception:  # pragma: no cover - naming must never break a solve
+            pass
+        return f"state[{index}]"
 
     def _steady_forward_event(self, y0, *, criterion, ss_rtol, ss_atol, tol, scale_floor):
         """The stopping event and ``|y|`` floor of a forward steady-state solve.
@@ -4097,9 +4166,8 @@ class Plant:
             event = diffrax.Event(_scaled_residual_event(tol, floor))
         return event, floor
 
-    @staticmethod
     def _steady_forward_result(
-        state, F, t_final, *, max_time, criterion, tol, floor, solution=None
+        self, state, F, t_final, *, max_time, criterion, tol, floor, ss_rtol=None, solution=None
     ) -> SteadyStateResult:
         """Package a forward steady-state solve, with its scaled ``residual``.
 
@@ -4113,6 +4181,8 @@ class Plant:
         residual = float(_scaled_resnorm(F, state, floor))
         if criterion == "norm":
             converged = bool(t_final < float(max_time))
+            if converged and ss_rtol is not None:
+                self._warn_if_norm_test_overstates(state, F, floor, residual, ss_rtol)
         else:
             converged = bool(residual <= tol)
         return SteadyStateResult(
@@ -4457,6 +4527,7 @@ class Plant:
             criterion=criterion,
             tol=tol,
             floor=floor,
+            ss_rtol=ss_rtol,
         )
 
     def steady_state(
