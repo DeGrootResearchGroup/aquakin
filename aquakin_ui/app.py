@@ -38,6 +38,7 @@ from aquakin_ui.worker import AquakinWorker, WorkerError
 
 DRAG_TYPE = "application/x-aquakin-unit"
 CHECK_DELAY = 0.3  # seconds of quiet before aquakin's checks run
+UNDO_DEPTH = 50  # edits of the flowsheet Undo can take back
 
 PAGE_CSS = """
 .ak-chart { display: block; font: 11px Roboto, sans-serif; }
@@ -135,6 +136,8 @@ class Editor:
         self._show_when_done: set[str] = set()  # runs whose results open when they finish
         self._results: dict = {}  # the results on show
         self._study_flowsheet: str | None = None  # the spec the study being edited follows
+        self._history: list[tuple] = []  # document snapshots to undo to, oldest first
+        self._after_unsaved = None  # what the unsaved-changes question goes on to do
         self._init_state(path)
         if path is not None:
             self.open(path, quiet=True)
@@ -334,15 +337,37 @@ class Editor:
         self.state.message_colour = "error" if error else "success"
         self.state.show_message = True
 
+    # -- undo -----------------------------------------------------------------
+
+    def _remember(self) -> None:
+        """Keep the document as it is now, to undo the edit about to be made."""
+        self._history = [*self._history[-(UNDO_DEPTH - 1) :], self.doc.snapshot()]
+        self.state.can_undo = True
+
+    def undo(self) -> None:
+        """Take back the last edit of the flowsheet (a removal, a wire, a move, Apply)."""
+        if not self._history:
+            return
+        self.doc.restore(self._history.pop())
+        self.state.can_undo = bool(self._history)
+        if self.state.selected not in self.doc.units:
+            self.state.selected = None
+        self.publish()
+
     # -- canvas events (finished edits only) --------------------------------
 
     def on_connect(self, c: dict) -> None:
+        before = self.doc.snapshot()
         why = self.doc.connect(c["source"], c["sourceHandle"], c["target"], c["targetHandle"])
         if why:
             self.say(why)
+        else:
+            self._history = [*self._history[-(UNDO_DEPTH - 1) :], before]
+            self.state.can_undo = True
         self.publish()
 
     def on_move(self, moved: list[dict]) -> None:
+        self._remember()
         for m in moved:
             if m["id"] in self.doc.units:
                 self.doc.units[m["id"]].position = m["position"]
@@ -350,9 +375,12 @@ class Editor:
         self.publish(checks=False)
 
     def on_remove(self, r: dict) -> None:
+        self._remember()
         self.doc.remove(units=r["nodes"], edges=r["edges"])
         if self.state.selected not in self.doc.units:
             self.state.selected = None
+        gone = [*r["nodes"], *(e for e in r["edges"] if not r["nodes"])]
+        self.say(f"removed {', '.join(gone)}: Undo brings it back", error=False)
         self.publish()
 
     def on_dropped(self, d: dict) -> None:
@@ -365,12 +393,20 @@ class Editor:
             if "conditions" in names and info:
                 defaults = {c["name"]: c["default"] for c in info["conditions"]}
                 settings["conditions"] = {k: v for k, v in defaults.items() if v is not None}
+        self._remember()
         uid = self.doc.add(kind, d["position"], settings)
         self.state.selected = uid
         self.state.panel = "properties"
         self.publish()
 
-    def on_select(self, s: dict) -> None:
+    def on_select(self, s: dict, pending: list[dict] | None = None) -> None:
+        """A new selection on the canvas; ``pending`` is the form's unapplied
+        edits of the unit selected until now, which are applied first (or, when
+        they cannot be, that unit stays selected so nothing typed is lost)."""
+        if pending is not None and self.state.selected in self.doc.units:
+            if not self.apply_properties(pending):
+                self.state.dirty("nodes")  # the canvas shows the selection Python keeps
+                return
         self.state.selected = s["nodes"][0] if len(s["nodes"]) == 1 else None
         self.refresh_selection()
 
@@ -380,6 +416,7 @@ class Editor:
         uid = self.state.selected
         if uid not in self.doc.units:
             self.state.sel_rows = []
+            self.state.sel_dirty = False
             return
         u = self.doc.units[uid]
         k = self.catalog.kind(u.kind)
@@ -388,33 +425,41 @@ class Editor:
         self.state.sel_icon = SVG[icon_name(u.kind, u.settings)]
         self.state.sel_error = self.unit_errors().get(uid)
         self.state.sel_rows = forms.rows_for(self.doc, uid, self.model_info)
+        self.state.sel_dirty = False
         self.state.focus_help = ""
 
-    def apply_properties(self, rows: list[dict], confirmed: bool = False) -> None:
+    def apply_properties(self, rows: list[dict], confirmed: bool = False) -> bool:
         """Read the form (sent whole, so no keystroke waits on the server) into the unit.
 
         When the new settings remove ports that have connections, nothing
         changes until the user confirms the removal (``confirmed``).
+
+        Returns
+        -------
+        bool
+            Whether the unit now has the form's settings.
         """
         uid = self.state.selected
         if uid not in self.doc.units:
-            return
+            return False
         try:
             label, settings = forms.read_rows(self.doc, uid, rows)
         except ValueError as exc:
-            self.say(f"could not read a value: {exc}")
-            return
+            self.say(f"{uid}: {exc}")
+            return False
         dropped = self.doc.dropped_by(uid, settings)
         if dropped and not confirmed:
             self._pending_rows = rows
             self.state.confirm_lines = dropped
             self.state.confirm_open = True
-            return
+            return False
         self.state.confirm_open = False
+        self._remember()
         self.doc.apply(uid, settings, label)
         if dropped:
             self.say("removed " + "; ".join(dropped), error=False)
         self.publish()
+        return True
 
     def confirm_apply(self) -> None:
         """Apply the form the user confirmed, removing the listed connections."""
@@ -427,6 +472,9 @@ class Editor:
         self._pending_rows = None
         self.state.confirm_open = False
         self.refresh_selection()
+        # The rows equal the last ones sent, so they would not be sent again
+        # and the page would keep the edits just declined.
+        self.state.dirty("sel_rows")
 
     def reshape_form(self, rows: list[dict], i: int, value) -> None:
         """A choice that changes which rows the form has (aeration mode, model)."""
@@ -483,6 +531,8 @@ class Editor:
             self.state.fit_key += 1
             self._unit_checks.clear()
             self._plant_check = (None, None)
+            self._history = []
+            self.state.can_undo = False
             if not quiet:
                 self.publish()
                 self.say(f"opened {path}", error=False)
@@ -493,12 +543,76 @@ class Editor:
     def _snapshot(self) -> str:
         return json.dumps(self.doc.to_spec(), sort_keys=True)
 
-    def save(self, then=None) -> None:
+    def _unsaved(self) -> bool:
+        """Whether the flowsheet has edits its file does not hold (an empty new
+        flowsheet has none)."""
+        if self._saved is None:
+            return bool(self.doc.units)
+        return self._snapshot() != self._saved
+
+    def _spec_file(self) -> Path | None:
+        """The flowsheet's file: the one last opened or saved here, else the path
+        typed in the toolbar, else ``None`` (a new flowsheet with no name yet).
+
+        The toolbar's path is also where Open reads and Save writes next, so it
+        only becomes the flowsheet's file once one of them has gone through.
+        """
+        if self._opened is not None:
+            return self._opened[0]
+        typed = str(self.state.spec_path or "").strip()
+        return Path(typed).resolve() if typed else None
+
+    def request_open(self) -> None:
+        """Open the path in the toolbar, asking first when there are unsaved edits."""
+        target = str(self.state.spec_path or "").strip()
+        if not target:
+            self.say("type the path of a flowsheet file to open")
+            return
+        self._unless_unsaved(
+            lambda: self.open(target),
+            f"Open {Path(target).name} and leave the unsaved edits of this flowsheet?",
+        )
+
+    def _unless_unsaved(self, then, question: str) -> None:
+        """``then()`` at once when nothing is unsaved; otherwise ask, offering to
+        save to the flowsheet's file first or to discard the edits."""
+        if not self._unsaved():
+            then()
+            return
+        self._after_unsaved = then
+        self.state.unsaved_text = question
+        self.state.unsaved_can_save = self._opened is not None
+        self.state.unsaved_open = True
+
+    def answer_unsaved(self, choice: str) -> None:
+        """The answer to the unsaved-edits question: ``"save"``, ``"discard"`` or
+        ``"cancel"``."""
+        self.state.unsaved_open = False
+        then, self._after_unsaved = self._after_unsaved, None
+        if then is None or choice == "cancel":
+            return
+        if choice == "save":
+            self.save(then=then, path=self._opened[0])
+        else:
+            then()
+
+    def save(self, then=None, path=None) -> None:
         """Save through aquakin's own spec writer: settings checked and filled in,
         the aquakin version and file hashes recorded, outside model and influent
         files copied into the project, and the file replaced atomically; then
-        ``then()``, when given and the save went through."""
-        path = Path(self.state.spec_path).resolve()
+        ``then()``, when given and the save went through.
+
+        ``path`` defaults to the path in the toolbar (so Save can save as)."""
+        if path is None:
+            typed = str(self.state.spec_path or "").strip()
+            if not typed:
+                self.say(
+                    "type where to keep the flowsheet in the path field (a .yaml file, "
+                    "in the folder of its project), then Save"
+                )
+                return
+            path = typed
+        path = Path(path).resolve()
         refusal = self._save_refusal(path)
         if refusal:
             self.say(refusal)
@@ -517,6 +631,7 @@ class Editor:
                 self.doc = Flowsheet.from_spec(self.catalog, written, base_dir=path.parent)
                 self._saved = self._snapshot()
             self._opened = (path, _digest(path))
+            self.state.spec_path = str(path)
             self._plant_check = (None, None)
             self.publish()
             self.say(f"saved {path}", error=False)
@@ -547,12 +662,17 @@ class Editor:
 
     # -- studies ------------------------------------------------------------
 
-    def _project(self) -> Path:
-        return Path(self.state.spec_path).resolve().parent
+    def _project(self) -> Path | None:
+        """The project folder: the flowsheet file's (``None`` before it has one)."""
+        spec = self._spec_file()
+        return spec.parent if spec is not None else None
 
     def refresh_studies(self) -> None:
         """List the project's studies with where each stands (off the page's thread)."""
         project = self._project()
+        if project is None:
+            self.state.studies = []
+            return
 
         def done(studies):
             if isinstance(studies, Exception):
@@ -569,6 +689,10 @@ class Editor:
         """Run a study; ask first when that would replace its results."""
         study = self._study(name)
         if study is None or name in self._runs:
+            return
+        if not study.get("frozen") and self._unsaved():
+            # A live study runs the flowsheet's file: bring it up to the drawing.
+            self.save(then=lambda: self.run_study(name), path=self._spec_file())
             return
         if study["state"] in ("not run",):
             self._start_run(study, replace=False)
@@ -627,18 +751,25 @@ class Editor:
         if self._simulation() in self._runs:
             self.state.panel = "studies"
             return
-        if self._saved is None or self._snapshot() != self._saved:
-            self.save(then=self._run_simulation)
+        if self._spec_file() is None:
+            self.say(
+                "the flowsheet has no file yet: type where to keep it in the path field "
+                "(a .yaml file in the folder of its project), then Simulate"
+            )
+            return
+        if self._unsaved() or not self._spec_file().exists():
+            self.save(then=self._run_simulation, path=self._spec_file())
         else:
             self._run_simulation()
 
     def _simulation(self) -> str:
         """The name of the open spec's Simulate study."""
-        return simulation_name(Path(self.state.spec_path))
+        spec = self._spec_file()
+        return simulation_name(spec) if spec is not None else SIMULATION
 
     def _run_simulation(self) -> None:
-        project = self._project()
-        spec = Path(self.state.spec_path).resolve()
+        spec = self._spec_file()
+        project = spec.parent
         name = simulation_name(spec)
         folder = project / "studies" / name
 
@@ -682,12 +813,17 @@ class Editor:
 
         self._off_page(work, done)
 
-    def show_results(self, name: str) -> None:
+    def show_results(self, name: str, state: str | None = None) -> None:
         """Open a study's results: a steady state as tables, a run in time as a
-        chart per channel, any other kind as the list of its result files."""
+        chart per channel, any other kind as the list of its result files.
+
+        ``state`` is where the study stands when the caller knows better than
+        the listing (a run that just finished, before the list is refreshed).
+        """
         study = self._study(name)
         if study is None:
             return
+        state = state or study["state"]
 
         def done(results):
             if isinstance(results, Exception):
@@ -700,7 +836,7 @@ class Editor:
             s.results_files = results["files"]
             s.results_note = (
                 "The flowsheet has changed since this ran; run it again for the plant as drawn."
-                if study["state"] == "stale"
+                if state == "stale"
                 else ""
             )
             units = results.get("units") or {}
@@ -788,6 +924,9 @@ class Editor:
 
     def new_study(self) -> None:
         """Open the dialog for a new study (a simulation to start with)."""
+        if self._project() is None:
+            self.say("save the flowsheet first: its studies are kept in its folder")
+            return
         self.state.study_name = ""
         self._with_form(
             lambda: self._open_study_dialog(
@@ -850,7 +989,7 @@ class Editor:
                 study["flowsheet"] = self._study_flowsheet
             work = lambda: self.worker.request("update_study", path=editing, study=study)
         else:
-            study.update(flowsheet_entry(Path(self.state.spec_path)))
+            study.update(flowsheet_entry(self._spec_file()))
             project = str(self._project())
             work = lambda: self.worker.request(
                 "create_study", project=project, name=name, study=study
@@ -900,6 +1039,8 @@ class Editor:
         self.state.study_confirm_open = False
         action, self._study_action = self._study_action, None
         if action is None or choice == "cancel":
+            if action is not None:
+                self._show_when_done.discard(action[1])  # it will not run now
             return
         kind, name = action
         if kind == "run" and self.state.study_confirm_dont_ask:
@@ -965,7 +1106,7 @@ class Editor:
             if event["event"] == "done":
                 self.say(f"{name}: {event['state']}", error=event["state"] != "fresh")
                 if show and event["state"] in ("fresh", "stale"):
-                    self.show_results(name)
+                    self.show_results(name, state=event["state"])
             elif event["event"] == "cancelled":
                 self.say(f"{name}: cancelled", error=False)
             else:
@@ -1031,7 +1172,12 @@ class Editor:
         s.dark = False
         s.focus_help = ""
         s.focus_label = ""
-        s.spec_path = str(path) if path else "flowsheet.yaml"
+        s.spec_path = str(path) if path else ""
+        s.can_undo = False
+        s.sel_dirty = False
+        s.unsaved_open = False
+        s.unsaved_text = ""
+        s.unsaved_can_save = False
         s.fit_key = 0
         s.spec_text = ""
         s.checking = False
@@ -1082,7 +1228,7 @@ class Editor:
                             move=(self.on_move, "[$event]"),
                             remove=(self.on_remove, "[$event]"),
                             dropped=(self.on_dropped, "[$event]"),
-                            select=(self.on_select, "[$event]"),
+                            select=(self.on_select, "[$event, sel_dirty ? sel_rows : null]"),
                             style="position: absolute; inset: 0;",
                         )
                     self._side_panel()
@@ -1090,6 +1236,7 @@ class Editor:
                 self._study_dialog()
                 self._study_settings_dialog()
                 self._results_dialog()
+                self._unsaved_dialog()
                 v3.VSnackbar(
                     "{{ message }}",
                     v_model=("show_message",),
@@ -1102,6 +1249,8 @@ class Editor:
             v3.VSpacer()
             v3.VTextField(
                 v_model=("spec_path",),
+                placeholder="path/to/flowsheet.yaml",
+                title="The flowsheet's file: Open reads it, Save writes it",
                 density="compact",
                 variant="outlined",
                 hide_details=True,
@@ -1110,8 +1259,16 @@ class Editor:
                 classes="mr-2",
             )
             v3.VBtn(
+                icon="mdi-undo",
+                click=self.undo,
+                disabled=("!can_undo",),
+                variant="text",
+                title="Undo the last edit of the flowsheet",
+                classes="mr-1",
+            )
+            v3.VBtn(
                 "Open",
-                click=lambda: self.open(),
+                click=self.request_open,
                 disabled=("busy",),
                 variant="tonal",
                 classes="mr-1 text-none",
@@ -1249,7 +1406,7 @@ class Editor:
             title="When off, running a study again replaces its results without asking",
         )
         html.Div(
-            "No studies yet: set one up with New study.",
+            "No studies yet: set one up with New study (once the flowsheet has a file).",
             v_if="!studies.length",
             classes="text-body-2 text-medium-emphasis",
         )
@@ -1404,7 +1561,10 @@ class Editor:
         """The New / Edit study dialog, generated from aquakin's study form."""
         common = dict(density="compact", variant="outlined", hide_details=True)
         draft = "study_draft[f.name]"
-        with v3.VDialog(v_model=("study_dialog_open",), max_width=760, scrollable=True):
+        # Persistent: a click beside it would lose a long form; Cancel closes it.
+        with v3.VDialog(
+            v_model=("study_dialog_open",), max_width=760, scrollable=True, persistent=True
+        ):
             with v3.VCard(title=("study_dialog_title",)):
                 with v3.VCardText(style="max-height: 70vh;"):
                     with html.Div(classes="d-flex ga-2 mb-1 pt-2"):
@@ -1789,6 +1949,34 @@ class Editor:
                         classes="text-none",
                     )
 
+    def _unsaved_dialog(self) -> None:
+        with v3.VDialog(v_model=("unsaved_open",), max_width=520, persistent=True):
+            with v3.VCard(title="Unsaved edits"):
+                v3.VCardText("{{ unsaved_text }}")
+                with v3.VCardActions(classes="flex-wrap ga-1"):
+                    v3.VSpacer()
+                    v3.VBtn(
+                        "Cancel",
+                        click=(self.answer_unsaved, "['cancel']"),
+                        variant="text",
+                        classes="text-none",
+                    )
+                    v3.VBtn(
+                        "Discard edits",
+                        click=(self.answer_unsaved, "['discard']"),
+                        color="error",
+                        variant="tonal",
+                        classes="text-none",
+                    )
+                    v3.VBtn(
+                        "Save first",
+                        v_if="unsaved_can_save",
+                        click=(self.answer_unsaved, "['save']"),
+                        color="primary",
+                        variant="flat",
+                        classes="text-none",
+                    )
+
     def _confirm_dialog(self) -> None:
         with v3.VDialog(v_model=("confirm_open",), max_width=480, persistent=True):
             with v3.VCard(title="Remove connections?"):
@@ -1821,12 +2009,17 @@ class Editor:
                 html.Div("{{ sel_kind }}", classes="text-subtitle-1 font-weight-medium")
             html.Div("{{ sel_summary }}", classes="text-caption text-medium-emphasis mb-3")
             v3.VBtn(
-                "Apply",
+                "{{ sel_dirty ? 'Apply changes' : 'Apply' }}",
                 click=(self.apply_properties, "[sel_rows]"),
                 color="primary",
                 block=True,
-                variant="flat",
-                classes="mb-3",
+                variant=("sel_dirty ? 'flat' : 'tonal'",),
+                classes="mb-3 text-none",
+            )
+            html.Div(
+                "Selecting another unit applies these changes.",
+                v_if="sel_dirty",
+                classes="text-caption text-medium-emphasis mb-2",
             )
             v3.VAlert(
                 "{{ sel_error }}",
@@ -1858,6 +2051,7 @@ class Editor:
                     v_else_if="row.widget === 'select'",
                     items=("row.items",),
                     v_model="row.value",
+                    update_modelValue="sel_dirty = true",
                     **common,
                 )
                 v3.VSelect(
@@ -1867,6 +2061,7 @@ class Editor:
                     chips=True,
                     closable_chips=True,
                     v_model="row.value",
+                    update_modelValue="sel_dirty = true",
                     **common,
                 )
                 v3.VTextField(
@@ -1875,7 +2070,9 @@ class Editor:
                     model_value=("row.value",),
                     **common,
                 )
-                v3.VTextField(v_else=True, v_model="row.value", **common)
+                v3.VTextField(
+                    v_else=True, v_model="row.value", update_modelValue="sel_dirty = true", **common
+                )
             with v3.VSheet(
                 v_if="focus_help", rounded=True, border=True, classes="pa-2 mt-1 text-caption"
             ):

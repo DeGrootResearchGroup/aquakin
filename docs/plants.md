@@ -438,6 +438,12 @@ described above; Save writes exactly what `plant.to_spec(path)` would, copying a
 model (with every file it `extends:`) or influent table from outside the project
 folder into it. Save refuses to overwrite a flowsheet that changed on disk since
 the window opened it, so two windows cannot silently undo each other's work.
+Opening another file while the flowsheet has unsaved edits asks first (save
+them, or discard them), and **Undo** in the toolbar takes back the last edits:
+a removed unit or wire, a move, a new unit or wire, or an applied form. Delete
+removes the selected units and wires (Backspace does not). Edits typed into a
+unit's form are applied when you select another unit, and a value that cannot
+be read is named by its field.
 
 **Simulate** runs the plant. It saves the flowsheet if you changed it, sets up
 a study named `simulation` the first time (`simulation_<file name>` for a
@@ -453,7 +459,9 @@ gives those settings and `study_results(path)` reads a study's results back.
 The **Studies** tab lists the project's studies and where each stands (fresh,
 stale and why, not run, failed, cancelled). Run one to watch its progress and
 cancel it; freeze, unfreeze or copy it. Running a study that has results, or
-unfreezing one, asks first and offers to keep a copy. Tick **Don't ask again**
+unfreezing one, asks first and offers to keep a copy. Running a study saves the
+flowsheet's unsaved edits first, so the study runs what you see (a frozen study
+runs its snapshot). Tick **Don't ask again**
 to replace results without the question from then on; the **Ask before
 replacing results** switch at the top of the tab brings it back (the choice is
 remembered for you, in `aquakin/ui.json` in your configuration folder).

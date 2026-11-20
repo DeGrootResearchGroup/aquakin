@@ -119,6 +119,25 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   finishes (`_show_when_done`). **Results** (`show_results`) asks the worker for
   `study_results`; the charts are redrawn in Python when the stream or channels
   change (`choose_results_stream` / `show_charts`).
+- **The flowsheet's file** (`_spec_file`) is the one last opened or saved here;
+  the toolbar path is only where Open reads and Save writes next (an unsaved
+  new flowsheet has none, and Save, Simulate and New study ask for one rather
+  than writing into the server's working folder). `_project` follows the file,
+  never a half-typed path.
+- **Unsaved work is never dropped silently** (`_unsaved`, against the `_saved`
+  snapshot): Open asks (`request_open` → `_unless_unsaved` → `answer_unsaved`,
+  "Save first" saving to the file, not to the newly typed path); Run and
+  Simulate save the drawing before a live study runs the file.
+- **Undo** (`_remember` before every document edit, `undo`, `UNDO_DEPTH`
+  snapshots of `Flowsheet.snapshot`, cleared on Open). Delete removes; Backspace
+  is not a delete key (a "go back" habit, and it reached the canvas behind a
+  dialog). A widget change needs the bundle rebuilt.
+- **Unapplied form edits:** every form widget sets `sel_dirty`; the canvas's
+  select event carries `sel_rows` while it is set, and `on_select` applies them
+  to the unit selected until then (or keeps it selected, with the field-named
+  error, when they cannot be read). `refresh_selection` clears the flag. When
+  the rows Python computes equal the last ones sent, trame sends nothing, so a
+  reset of the form (`cancel_apply`) must `state.dirty("sel_rows")`.
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only

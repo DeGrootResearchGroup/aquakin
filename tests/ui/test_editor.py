@@ -5,6 +5,7 @@ import yaml
 from trame.app import get_server
 
 from aquakin_ui.app import Editor
+from aquakin_ui.document import edge_id
 from aquakin_ui.settings import Settings
 from aquakin_ui.worker import AquakinWorker, WorkerError
 
@@ -456,5 +457,149 @@ def test_a_study_is_set_up_and_edited_in_the_dialog(tmp_path):
         ed.new_study()
         ed.save_study_dialog("design", "simulate", {**s.study_draft, "streams": ["tank.out"]})
         assert s.study_error.startswith("a study named design already exists")
+    finally:
+        ed.worker.stop()
+
+
+def _rows_with(ed, key, value):
+    rows = [dict(r) for r in ed.state.sel_rows]
+    next(r for r in rows if r["key"] == key)["value"] = value
+    return rows
+
+
+def test_edits_can_be_undone_and_unapplied_form_edits_are_not_lost(tmp_path):
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-undo-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        assert not ed.state.can_undo
+        ed.on_remove({"nodes": ["tank"], "edges": []})
+        assert "tank" not in ed.doc.units and "Undo brings it back" in ed.state.message
+        ed.undo()
+        assert "tank" in ed.doc.units and ed.doc.connections and not ed.state.can_undo
+        ed.undo()  # nothing left: nothing happens
+        [wire] = ed.doc.connections
+        ed.on_remove({"nodes": [], "edges": [edge_id(wire)]})
+        ed.on_connect(
+            {"source": wire[0], "sourceHandle": wire[1], "target": wire[2], "targetHandle": wire[3]}
+        )
+        assert ed.doc.connections == [wire]
+        ed.undo()
+        assert ed.doc.connections == []
+        ed.undo()
+        assert ed.doc.connections == [wire] and not ed.state.can_undo
+        ed.state.selected = None
+        assert ed.apply_properties([]) is False
+        ed.answer_study("cancel")  # no question asked: nothing to do
+
+        # A refused wire is no edit; a move and an Apply are.
+        ed.on_connect(
+            {"source": "tank", "sourceHandle": "out", "target": "tank", "targetHandle": "in"}
+        )
+        assert not ed.state.can_undo
+        ed.on_move([{"id": "tank", "position": {"x": 999, "y": 0}}])
+        ed.on_select({"nodes": ["tank"], "edges": []})
+        assert not ed.state.sel_dirty
+        assert ed.apply_properties(_rows_with(ed, "volume", "1500"))
+        ed.undo()
+        assert ed.doc.units["tank"].settings["volume"] == 1000.0
+        ed.undo()
+        assert ed.doc.units["tank"].position["x"] != 999
+
+        # Selecting another unit applies the form's unapplied edits first; edits
+        # that cannot be read keep the unit selected (nothing typed is lost).
+        ed.on_select({"nodes": ["tank"], "edges": []})
+        ed.on_select({"nodes": ["feed"], "edges": []}, _rows_with(ed, "volume", "1200"))
+        assert ed.doc.units["tank"].settings["volume"] == 1200.0
+        assert ed.state.selected == "feed"
+        ed.on_select({"nodes": ["tank"], "edges": []})
+        ed.on_select({"nodes": ["feed"], "edges": []}, _rows_with(ed, "volume", "big"))
+        assert ed.state.selected == "tank"
+        assert ed.state.message == "tank: volume: 'big' is not a number"
+
+        # Cancel in the remove-connections question sends the unit's rows again.
+        ed.state.flush()
+        ed.on_select({"nodes": ["feed"], "edges": []})
+        ed.state.flush()
+        ed.cancel_apply()
+        assert "sel_rows" in ed.state._pending_update
+
+        # Opening another file loses the history.
+        ed.on_move([{"id": "tank", "position": {"x": 5, "y": 5}}])
+        ed.state.spec_path = str(project / "flowsheet.yaml")
+        ed.request_open()
+        assert ed.state.unsaved_open and ed.state.unsaved_can_save
+        ed.answer_unsaved("discard")
+        assert not ed.state.can_undo and ed.doc.units["tank"].position["x"] != 5
+    finally:
+        ed.worker.stop()
+
+
+def test_unsaved_edits_are_saved_or_kept_before_open_and_run(tmp_path):
+    project = _study_project(tmp_path)
+    (project / "other.yaml").write_text((project / "flowsheet.yaml").read_text())
+    server = get_server(name="aquakin-ui-unsaved-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        ed.state.spec_path = str(project / "other.yaml")
+        ed.request_open()  # nothing unsaved: opens at once
+        assert not ed.state.unsaved_open and ed._opened[0] == project / "other.yaml"
+
+        ed.on_move([{"id": "tank", "position": {"x": 777, "y": 0}}])
+        ed.state.spec_path = str(project / "flowsheet.yaml")
+        ed.request_open()
+        assert ed.state.unsaved_open and "leave the unsaved edits" in ed.state.unsaved_text
+        ed.answer_unsaved("cancel")
+        assert ed._opened[0] == project / "other.yaml"
+        ed.request_open()
+        ed.answer_unsaved("save")  # saved to other.yaml, then flowsheet.yaml opened
+        assert "777" in (project / "other.yaml").read_text()
+        assert ed._opened[0] == project / "flowsheet.yaml"
+
+        # Run brings the file up to the drawing before a live study runs it.
+        ed.refresh_studies()
+        ed.on_move([{"id": "tank", "position": {"x": 555, "y": 0}}])
+        ed.run_study("short")
+        assert "555" in (project / "flowsheet.yaml").read_text()
+        assert ed._runs["short"].wait(300)["event"] == "done"
+
+        # A replace question answered Cancel does not leave results to pop up later.
+        ed._show_when_done.add("short")
+        ed.run_study("short")
+        ed.answer_study("cancel")
+        assert "short" not in ed._show_when_done
+        # Results just run are not called stale by an older listing.
+        ed.state.studies = [{**st, "state": "stale"} for st in ed.state.studies]
+        ed.show_results("short", state="fresh")
+        assert ed.state.results_note == ""
+        ed.state.spec_path = "  "
+        ed.request_open()
+        assert ed.state.message == "type the path of a flowsheet file to open"
+    finally:
+        ed.stop_runs()
+        ed.worker.stop()
+
+
+def test_a_flowsheet_without_a_file_asks_where_to_keep_it(tmp_path):
+    server = get_server(name="aquakin-ui-nofile-test", client_type="vue3")
+    ed = Editor(server)
+    try:
+        assert ed.state.spec_path == "" and not ed._unsaved()
+        ed.refresh_studies()
+        assert ed.state.studies == []
+        ed.on_dropped({"kind": "cstr", "position": {"x": 0, "y": 0}})
+        assert ed._unsaved()
+        ed.simulate()
+        assert "the flowsheet has no file yet" in ed.state.message
+        ed.save()
+        assert "type where to keep the flowsheet" in ed.state.message
+        ed.new_study()
+        assert "save the flowsheet first" in ed.state.message and not ed.state.study_dialog_open
+        ed.request_open()  # nothing typed: nothing to open, and nothing asked
+        assert not ed.state.unsaved_open
+        ed.state.spec_path = str(tmp_path / "new" / "plant.yaml")
+        ed.request_open()  # unsaved edits and no file of their own: only Discard
+        assert ed.state.unsaved_open and not ed.state.unsaved_can_save
+        ed.answer_unsaved("cancel")
     finally:
         ed.worker.stop()

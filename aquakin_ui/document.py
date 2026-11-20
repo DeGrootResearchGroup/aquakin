@@ -10,6 +10,7 @@ breaks when it is relabelled. :meth:`Flowsheet.to_spec` writes exactly what
 
 from __future__ import annotations
 
+import copy
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,6 +154,14 @@ class Flowsheet:
                 uid: [u.position["x"], u.position["y"]] for uid, u in self.units.items()
             }
         return out
+
+    def snapshot(self) -> tuple:
+        """Everything an edit can change, copied (for :meth:`restore`, an undo)."""
+        return copy.deepcopy((self.units, self.connections, self.extras, self.meta))
+
+    def restore(self, snapshot: tuple) -> None:
+        """Go back to what :meth:`snapshot` copied."""
+        self.units, self.connections, self.extras, self.meta = copy.deepcopy(snapshot)
 
     def model_files(self) -> dict[str, str]:
         """``{model name: absolute YAML path}`` for the project's own models."""
