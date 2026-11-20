@@ -282,7 +282,7 @@ class ChlorineContactUnit:
     volume : float
         Contact-tank volume (m³).
     dose : float
-        Applied chlorine dose at the inlet (g Cl/m³ ≡ mg/L).
+        Applied chlorine dose at the inlet (g/m³, i.e. mg/L of chlorine).
     ct_per_log : float
         CT (residual × T10) that earns one log of inactivation, in the same units
         as ``residual × time`` (from the regulatory CT tables for the organism /
@@ -294,7 +294,7 @@ class ChlorineContactUnit:
         and the credit are off by ``1440×``. ``V``/``Q`` and ``decay_rate`` are in
         that same plant time unit.
     decay_rate : float
-        First-order chlorine-decay rate (1/time, plant time unit). Default 0.
+        First-order chlorine-decay rate (1/d). Default 0.
     baffling_factor : float
         T10/HRT factor for the contact time (``T10 = baffling·V/Q``). Default 0.5.
     max_log : float, optional

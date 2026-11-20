@@ -846,6 +846,12 @@ cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic eff
 means within 0.07% of Takács, the constant-influent steady state identical (layers
 2–5 equal there, where the rules agree).
 
+**Units in the help.** A setting's numpydoc entry names its unit in
+parentheses, flows and times per day as aquakin runs them on the plant's clock
+(`Volume (m³).`, `Fixed dose flow (m³/d).`, `Integral time (d).`); the editor
+shows that unit beside the field (on the plant's clock). Give each setting its
+own entry (a shared `Kp, Ti, Tt : float` cannot name one unit each).
+
 **Sizes are checked at construction.** Every unit with a volume calls
 `_constants.check_positive(name, "volume", value)` first in `__post_init__`
 (zero, negative and infinite volumes are refused: they used to build, and a

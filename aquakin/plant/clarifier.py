@@ -55,11 +55,11 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
     name : str
     model : CompiledModel
     overflow_Q : float, optional
-        Fixed overflow (effluent) flow rate; underflow takes the remainder.
+        Fixed overflow (effluent) flow rate (m³/d); underflow takes the remainder.
         Supply exactly one of ``overflow_Q`` or ``underflow_Q``.
     underflow_Q : float, optional
-        Fixed underflow flow rate (the controlled RAS+wastage pump flow,
-        ``Q_r + Q_w``); the overflow (effluent) is then the remainder and
+        Fixed underflow flow rate (m³/d): the controlled RAS+wastage pump flow,
+        ``Q_r + Q_w``; the overflow (effluent) is then the remainder and
         tracks the feed (``Q_e = Q_f - Q_u``, the BSM convention). Preferred
         for plants with dynamic influent -- a fixed overflow forces a
         near-singular recycle-flow gain. Supply exactly one of ``overflow_Q``

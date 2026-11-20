@@ -125,7 +125,7 @@ class DosingUnit:
     reagent : Reagent
         The dosed reagent. Its ``model`` is the unit's model.
     flow : float, optional
-        Fixed dose flow (volume/time). Mutually exclusive with ``setpoint``.
+        Fixed dose flow (m³/d). Mutually exclusive with ``setpoint``.
     setpoint : float, optional
         Feedback target value for ``measured_species`` at ``sensor``. Mutually
         exclusive with ``flow``.
@@ -141,9 +141,19 @@ class DosingUnit:
     gain : float
         This unit's share of the controller's flow output (default 1.0), so one
         controller can drive several dose points.
-    Kp, Ti, Tt, flow_offset, flow_min, flow_max : float
-        Feedback PI tuning and dose-flow bounds. ``flow_min`` defaults to 0 (a
-        dose cannot be negative); ``flow_offset`` is the bias flow.
+    Kp : float
+        Proportional gain of the feedback PI controller (dose flow per unit of
+        the measured species).
+    Ti : float
+        Integral time of the feedback PI controller (d).
+    Tt : float
+        Anti-windup tracking time of the feedback PI controller (d).
+    flow_offset : float
+        Bias dose flow (m³/d): the flow when the error and its integral are zero.
+    flow_min : float
+        Lowest dose flow (m³/d); 0 by default, as a dose cannot be negative.
+    flow_max : float
+        Highest dose flow (m³/d).
     input_port, output_port : str
         Port names (defaults ``"in"`` / ``"out"``).
     """

@@ -179,3 +179,20 @@ def test_settling_species_follow_the_units_model():
     assert forms.suggest_species(settling, ["XS"], asm3) is None  # all in the model
     assert forms.suggest_species({**settling, "default": []}, None, asm3) == ["XI", "XS", "XH"]
     assert forms.suggest_species({"name": "gas_species", "default": ["X"]}, None, asm3) is None
+
+
+def test_units_on_the_plants_clock_follow_it(ui_catalog):
+    assert forms.unit_in("Fixed dose flow (m³/d).", "h") == "m³/h"
+    assert forms.unit_in("Integral time (d, on the plant's clock).", "min") == "min"
+    assert forms.unit_in("Decay rate (1/d). Default 0.", "s") == "1/s"
+    assert forms.unit_in("Applied dose (g/m³, i.e. mg/L of chlorine).", "h") == "g/m³"
+    assert forms.unit_in("Surface (m²/m³: biofilm area per volume).") == "m²/m³"
+    # Every shipped unit kind names the unit of its main sizes and flows.
+    named = {
+        (k, s["name"]): forms.unit_in(s["help"])
+        for k, kind in ui_catalog.kinds.items()
+        for s in kind["settings"]
+    }
+    assert named[("cstr", "volume")] == "m³" and named[("influent", "Q")] == "m³/d"
+    assert named[("ideal_clarifier", "underflow_Q")] == "m³/d"
+    assert named[("dosing", "flow")] == "m³/d" and named[("pi_controller", "Ti")] == "d"

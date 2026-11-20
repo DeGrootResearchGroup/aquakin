@@ -92,8 +92,8 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     input_port_names : list[str]
         Incoming-stream ports (summed as a built-in mixer, like a CSTR).
     specific_surface_area : float
-        Protected surface area of the carrier media (m^2 of biofilm area per m^3
-        of media) -- the manufacturer's SSA.
+        Protected surface area of the carrier media (m²/m³: biofilm area per
+        volume of media) -- the manufacturer's SSA.
     fill_fraction : float
         Media fill: the volume fraction of the tank occupied by carriers (0-1).
         The effective biofilm-area-to-bulk-volume ratio is
