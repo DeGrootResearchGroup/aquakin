@@ -28,8 +28,8 @@ import aquakin (to build expected values).
 |---|---|---|
 | `worker.py` | `AquakinWorker`, `WorkerError` | one process, requests serialized by a lock, replies read on a daemon thread; a fresh worker's first reply gets `START_TIMEOUT` extra (importing JAX); reply ids checked; stderr to a per-worker log file (`mkstemp`, removed on `stop`) quoted in errors |
 | `catalog.py` | `Catalog` | the worker's catalogue reply; `ports_for` reads the catalogue's port rules (no round trip) |
-| `document.py` | `Flowsheet`, `Unit`, `edge_id` | **pure**: units keyed by stable id (the plant's unit name), labels as display text; `from_spec`/`to_spec` (format 2), `connect` (refuses with a reason), `dropped_by` (previews the connections new settings would remove) and `apply`, `remove` (also drops streams/endpoints naming the unit), `port_status`, `back_edges` (aquakin's recycles when known, else a DFS), `lanes`, `auto_layout` (wraps into bands of 7 ranks) |
-| `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. Lists no setting or type of its own |
+| `document.py` | `Flowsheet`, `Unit`, `edge_id` | **pure**: units keyed by stable id (the plant's unit name), labels as display text; `from_spec`/`to_spec` (format 2; `from_spec` refuses a kind the catalogue lacks, which would otherwise break every redraw), `connect` (refuses with a reason), `dropped_by` (previews the connections new settings would remove) and `apply`, `remove` (also drops streams/endpoints naming the unit), `port_status`, `back_edges` (aquakin's recycles when known, else a DFS), `lanes`, `auto_layout` (wraps into bands of 7 ranks) |
+| `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. **Numbers are shown exactly** (`_float_text`, the shortest round-trip text): Apply reads every field back, so a rounded display would change values nobody edited. The aeration value is read only in the mode the form was drawn with, and a unit's conditions are kept when its model could not be described (no condition rows). Lists no setting or type of its own |
 | `icons.py` | `ICONS`, `COLOURS`, `CATEGORY_LABELS`, `SVG`, `icon_name` | the only per-kind presentation table; an unlisted kind gets the tank icon |
 | `study_form.py` | `fields_for`, `draft_for`, `study_from`, `missing` | **pure**: the study dialog's draft from the worker's `study_form` (numbers kept as text, an even time grid as start / stop / count) and back, empty fields and defaults left out; `missing` names a kind's required fields by label. Lists no setting of its own |
 | `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`) |
@@ -106,10 +106,16 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   Vuetify's `aria-labelledby` points at.
 - **Simulate** (`Editor.simulate`): saves first when the document differs from
   what was last opened or saved (`_saved`, a JSON snapshot; a move counts),
-  then, off the page's thread, creates the `simulation` study from the worker's
-  `simulation_study` if the project has none (pointing at the spec when it is not
-  `flowsheet.yaml`) and runs it through `run_study`, so replacing its results
-  asks first like any study. A run started this way opens its results when it
+  then, off the page's thread, creates the spec's Simulate study from the worker's
+  `simulation_study` if the project has none and runs it through `run_study`, so
+  replacing its results asks first like any study. **Studies are per folder but
+  a spec is per file**: the study is `simulation` for `flowsheet.yaml` and
+  `simulation_<stem>` for any other spec (`simulation_name`), an existing one
+  whose `flowsheet:` points at another file is pointed back, and a frozen one is
+  refused (it would run its snapshot, not the drawing). The study dialog sets
+  `flowsheet:` for a new study of a spec not named `flowsheet.yaml`
+  (`flowsheet_entry`) and keeps an edited study's own (the form has no such
+  field, so `study_from` would drop it). A run started this way opens its results when it
   finishes (`_show_when_done`). **Results** (`show_results`) asks the worker for
   `study_results`; the charts are redrawn in Python when the stream or channels
   change (`choose_results_stream` / `show_charts`).

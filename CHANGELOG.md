@@ -102,7 +102,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `Plant.to_spec`, so a model or influent file from elsewhere is copied into
   the project). A Studies tab lists the project's studies with their status and
   runs them in the background with progress and cancel. **Simulate** runs the
-  plant: it saves the flowsheet, sets up a `simulation` study the first time and
+  plant: it saves the flowsheet, sets up a `simulation` study the first time
+  (one per flowsheet file in the folder) and
   shows its results, a steady state as tables of the streams leaving the plant
   and a run in time as a chart per channel (**Results** on any study shows them
   again; temperature is shown in °C). Replacing a study's results asks first,

@@ -440,7 +440,9 @@ folder into it. Save refuses to overwrite a flowsheet that changed on disk since
 the window opened it, so two windows cannot silently undo each other's work.
 
 **Simulate** runs the plant. It saves the flowsheet if you changed it, sets up
-a study named `simulation` the first time (the plant at steady state, saving
+a study named `simulation` the first time (`simulation_<file name>` for a
+flowsheet not named `flowsheet.yaml`, so each spec in a folder has its own; the
+plant at steady state, saving
 every stream that leaves it, with its flow, COD, TKN, NOx, TN and TSS), runs it,
 and shows the results (temperature in °C): a table of what leaves the plant, with every species
 under *Flow and species*. To run it in time instead, or to save other streams,
@@ -461,7 +463,8 @@ in a dialog: pick its kind, and the fields that kind uses appear, with the
 plant's own streams, parameters and measurable channels to choose from;
 **Edit** opens a study's settings in the same dialog. The dialog writes the same
 `study.yaml` you would write by hand, and a data table or saved state chosen from
-elsewhere is copied into the study folder.
+elsewhere is copied into the study folder. A study set up in the editor follows
+the flowsheet file that is open, and keeps following it when edited.
 
 From Python, `aquakin.study.create_study(project, name, settings)` and
 `update_study(path, settings)` do the same, checking the settings as a run would
