@@ -98,6 +98,55 @@ def test_what_is_refused(text, message):
         parse_measure(text)
 
 
+def test_a_malformed_number_is_named():
+    """The scanner takes digits and dots together, so a second dot reaches
+    ``float`` and must come back as a measure error, not a bare ValueError."""
+    with pytest.raises(
+        MeasureSyntaxError, match=re.escape("'1.2.3' at position 4 is not a number")
+    ):
+        parse_measure("x = 1.2.3*[SS]")
+
+
+def test_flow_and_temperature_may_be_given_as_keywords():
+    """``parse_measure`` puts Q and T in their own fields, but a Measure built
+    by hand may name them as keywords, and must weigh the same thing."""
+    import aquakin
+    from aquakin.plant.measures import measure_map
+
+    model = aquakin.load_model("asm1")
+    by_keyword = measure_map(model, (Measure("x", keywords={"Q": 2.0, "T": 3.0}),))
+    by_field = measure_map(model, (Measure("x", flow=2.0, temperature=3.0),))
+    assert by_keyword.q == by_field.q == 2.0
+    assert by_keyword.t == by_field.t == 3.0
+    assert by_keyword.uses_temperature
+
+
+def test_tss_is_weighed_like_any_other_keyword_in_a_custom_channel():
+    """TSS comes from the model's own species rather than its composition table,
+    so a channel built on it takes a different route than COD or TN."""
+    import aquakin
+    from aquakin.plant.measures import measure_map
+
+    model = aquakin.load_model("asm1")
+    scaled = measure_map(model, ("x = 0.75*TSS",)).W[:, 0]
+    plain = measure_map(model, ("TSS",)).W[:, 0]
+    assert scaled.any()
+    assert scaled == pytest.approx(0.75 * plain)
+
+
+def test_a_keyword_the_model_cannot_give_names_the_measure():
+    """asm1 carries no phosphorus, so a channel built on TP cannot be weighed --
+    the error has to say which measure asked for it."""
+    import aquakin
+    from aquakin.plant.measures import measure_map
+
+    model = aquakin.load_model("asm1")
+    with pytest.raises(KeyError, match="measure 'x' weighs TP"):
+        measure_map(model, ("x = TP",))
+    with pytest.raises(KeyError, match="carries nothing measured as TP"):
+        measure_map(model, ("x = TP",))
+
+
 def test_a_syntax_error_is_a_value_error():
     """So a caller validating user input with ``except ValueError`` still fits."""
     assert issubclass(MeasureSyntaxError, ValueError)
