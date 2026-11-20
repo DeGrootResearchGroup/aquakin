@@ -160,3 +160,59 @@ def test_a_unit_measuring_another_quantity_is_refused(model):
     need a density, which the influent has no way to know."""
     with pytest.raises(ValueError, match="cannot be converted to"):
         InfluentExpression(model, Q=1.0, units={"Q": "kg/d"})
+
+
+# ---------------------------------------------------------------------------
+# Through a flowsheet spec
+# ---------------------------------------------------------------------------
+
+
+def test_a_pattern_round_trips_through_a_spec_with_no_table_file(tmp_path, model):
+    """The point of writing the feed as text: it goes in the spec as it stands,
+    so there is no CSV to carry beside the flowsheet."""
+    plant = _tank(
+        model,
+        InfluentExpression(
+            model,
+            Q="2000 + 500*sin(2*pi*t)",
+            composition={**FEED, "SNH": "31.6 + 10*sin(2*pi*t)"},
+            T=288.15,
+        ),
+    )
+    spec = plant.to_spec(tmp_path / "flowsheet.yaml")
+    entry = spec["units"]["feed"]
+    assert entry["Q"] == "2000 + 500*sin(2*pi*t)"
+    assert entry["composition"]["SNH"] == "31.6 + 10*sin(2*pi*t)"
+    assert entry["composition"]["SS"] == 69.5  # a constant stays a number
+    assert entry["series"] is None
+    assert not (tmp_path / "data").exists()
+
+    rebuilt = Plant.from_spec(tmp_path / "flowsheet.yaml")
+    assert isinstance(rebuilt.influents["feed"], InfluentExpression)
+    for t in (0.0, 0.25, 0.75):
+        before, after = plant.influents["feed"].at(t), rebuilt.influents["feed"].at(t)
+        assert float(before.Q) == pytest.approx(float(after.Q))
+        np.testing.assert_allclose(np.asarray(before.C), np.asarray(after.C))
+        assert float(before.scalars["T"]) == pytest.approx(float(after.scalars["T"]))
+
+
+def test_a_feed_of_plain_numbers_is_still_a_sampled_series(tmp_path, model):
+    """So every spec written before expressions existed reads back unchanged."""
+    from aquakin.plant import InfluentSeries
+
+    plant = _tank(model, InfluentSeries.constant(model, Q=2000.0, T=288.15, **FEED))
+    plant.to_spec(tmp_path / "flowsheet.yaml")
+    rebuilt = Plant.from_spec(tmp_path / "flowsheet.yaml")
+    assert isinstance(rebuilt.influents["feed"], InfluentSeries)
+
+
+def test_an_unreadable_expression_in_a_spec_names_the_setting(tmp_path, model):
+    import yaml
+
+    plant = _tank(model, InfluentExpression(model, Q=2000.0, composition=FEED))
+    plant.to_spec(tmp_path / "flowsheet.yaml")
+    doc = yaml.safe_load((tmp_path / "flowsheet.yaml").read_text())
+    doc["units"]["feed"]["Q"] = "2000 + wobble(t)"
+    (tmp_path / "flowsheet.yaml").write_text(yaml.safe_dump(doc))
+    with pytest.raises(ValueError, match="'Q'"):
+        Plant.from_spec(tmp_path / "flowsheet.yaml")

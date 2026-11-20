@@ -156,6 +156,13 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   (`_needs_python`: an SBR's phases, a dosing unit's reagent). A new flowsheet
   runs on days (`options: {time_unit: d}`). Errors reach the page without
   exception class names (`_plain_error`).
+- **A scheduled value is text, read by aquakin** (`scheduled_number`,
+  `scheduled_species_values` — an influent's `Q`, `T` and each `composition`
+  entry): `forms._scheduled` keeps a number a number (so a constant feed is
+  written to the spec exactly as before expressions existed) and anything else
+  the text the user typed. `aquakin_ui` cannot read an expression — the
+  independence rule — so an unreadable one is reported by the background check
+  or by Save, never parsed here.
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only

@@ -846,6 +846,38 @@ cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic eff
 means within 0.07% of Takács, the constant-influent steady state identical (layers
 2–5 equal there, where the rules agree).
 
+**Expressions of time (`plant/time_expr.py`).** An operating value that varies on
+a schedule — an influent's flow, a setpoint — may be written as a function of the
+plant clock (`"18446 + 4000*sin(2*pi*t)"`). `compile_time_expression(value,
+time_scale=, what=)` reads one into a callable; a plain number compiles to a
+constant, so a value that does not vary costs nothing. It compiles to plain JAX
+arithmetic with **no Python control flow**, so it traces, differentiates and
+batches inside the RHS; there is deliberately **no comparison or conditional**
+(a value that switches uses `clip` or `step`), because an `if` on a traced value
+cannot run. `time_scale` is the factor from the caller's clock to the clock the
+expression was written on. **The grammar follows `core/parser.py` deliberately,
+including that a sign binds tighter than a power** (`(-2)**2`, not Python's
+`-(2**2)`) — two expression languages in one tool must not read the same text
+differently; do not "fix" it to match Python. New functions go in `FUNCTIONS`
+(name → `(callable, arities)`), which the parser, the arity check and the
+error messages all read, so they cannot drift.
+
+**Influents: a record or a pattern.** `InfluentSeries` is sampled data
+(`at(t)` interpolates); **`InfluentExpression`** is the same feed written as
+expressions of time, for a load that follows a shape rather than a measurement.
+Both satisfy the only seam the plant uses — `at(t)`, `.model`,
+`in_time_unit(tu)` — so nothing in `plant.py` / `recycle.py` branches on which it
+is. Differences to keep in mind: a declared unit is applied **as the expression
+is evaluated** (folded into the compiled callable) rather than to stored arrays,
+since a string cannot be scaled in place; and `in_time_unit` converts the `t` the
+expressions are *given* and the flow they *return*, never the expression, so one
+written in days still means days on an hourly plant. The catalogue's `Q`, `T` and
+`composition` are `scheduled_number` / `scheduled_species_values`: `_influent`
+builds an `InfluentExpression` when **any** value is an expression and otherwise
+the sampled constant series exactly as before, so every existing spec reads back
+bit-identically. `spec._influent_entry` writes a pattern straight back as its own
+settings (no `data/` table).
+
 **Units in the help.** A setting's numpydoc entry names its unit in
 parentheses, flows and times per day as aquakin runs them on the plant's clock
 (`Volume (m³).`, `Fixed dose flow (m³/d).`, `Integral time (d).`); the editor
