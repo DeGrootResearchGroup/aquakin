@@ -499,6 +499,18 @@ def test_a_scheduled_composition_must_be_a_mapping(value):
         validate_settings(unit_kind("influent"), {"model": "asm1", "Q": 1.0, "composition": value})
 
 
+@pytest.mark.parametrize("value", [[1], {"a": 1}, True, None])
+def test_a_scheduled_composition_value_is_a_number_or_an_expression(value):
+    """Each entry is read like Q itself, so a value that is neither names the
+    species rather than only the composition."""
+    from aquakin.plant.catalog import unit_kind, validate_settings
+
+    with pytest.raises(ValueError, match=re.escape("'composition.SNH' must be")):
+        validate_settings(
+            unit_kind("influent"), {"model": "asm1", "Q": 1.0, "composition": {"SNH": value}}
+        )
+
+
 def test_a_scheduled_composition_is_keyed_by_species_name():
     from aquakin.plant.catalog import unit_kind, validate_settings
 
