@@ -1,0 +1,38 @@
+model:
+  name: monod_biofilm
+  version: "1.0"
+  description: "Single-substrate Monod utilization by a fixed biomass."
+  references:
+    - "Rittmann, B.E. & McCarty, P.L. (2001). Environmental Biotechnology: Principles and Applications. McGraw-Hill. (steady-state biofilm model)"
+    - "Saez, P.B. & Rittmann, B.E. (1992). Accurate pseudoanalytical solution for steady-state biofilms. Biotechnology and Bioengineering 39(7), 790-793."
+
+species:
+  - name: SS
+    description: "Rate-limiting substrate"
+    units: g/m3
+    default_concentration: 20.0
+  - name: XB
+    description: "Attached biomass (held fixed)"
+    units: g/m3
+    default_concentration: 10000.0
+
+conditions:
+  - name: T
+    description: "Temperature (K), unused."
+    default: 293.15
+
+reactions:
+  - name: utilization
+    description: "Monod substrate utilization, first order in biomass."
+    rate: "k * [XB] * [SS] / (Ks + [SS])"
+    parameters:
+      k:
+        value: 10.0
+        units: "d-1"
+        bounds: [0.1, 100.0]
+      Ks:
+        value: 10.0
+        units: "g/m3"
+        bounds: [0.1, 1000.0]
+    stoichiometry:
+      SS: -1
