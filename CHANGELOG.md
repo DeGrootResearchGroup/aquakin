@@ -113,7 +113,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   (one per flowsheet file in the folder) and
   shows its results, a steady state as tables of the streams leaving the plant
   and a run in time as a chart per channel (**Results** on any study shows them
-  again; temperature is shown in °C). Replacing a study's results asks first,
+  again; temperature is shown in °C). Fisher information, sensor-set ranking,
+  calibration (the data against the fit) and profile studies show their results
+  as tables and charts too. Unit forms show each setting's unit where its help
+  names one, plain help text, and an unreadable value under its field; new
+  settling units take the particulates of their model, and selecting a unit
+  opens its form. Replacing a study's results asks first,
   with a **Don't ask again** box; the Studies tab's **Ask before replacing
   results** switch turns the question back on, and the choice is kept for the
   user between sessions. **New study** and

@@ -7,6 +7,21 @@ port list follows a unit's settings without a round trip to aquakin.
 
 from __future__ import annotations
 
+import re
+
+# Docstring markup the help text comes with: ``code``, :role:`target`, *emphasis*.
+_ROLE = re.compile(r":[a-z]+:`~?([^`<]*?)(?:\s*<[^>]*>)?`")
+_CODE = re.compile(r"``([^`]*)``")
+_EMPHASIS = re.compile(r"(?<![\w*])\*{1,2}([^*\s][^*]*?)\*{1,2}(?![\w*])")
+
+
+def plain(text: str) -> str:
+    """Docstring text as plain text: ``code`` and roles (:class:`Aeration`) lose
+    their markup, as does *emphasis*; a role's ``~`` and dotted prefix go too."""
+    text = _ROLE.sub(lambda m: m.group(1).rsplit(".", 1)[-1], text)
+    text = _CODE.sub(r"\1", text)
+    return _EMPHASIS.sub(r"\1", text)
+
 
 class Catalog:
     """The unit kinds and shipped models, as ``aquakin serve`` describes them.
@@ -21,7 +36,7 @@ class Catalog:
 
     def __init__(self, data: dict, models: list[dict]):
         self.categories: list[str] = list(data["categories"])
-        self.kinds: dict[str, dict] = {k["kind"]: k for k in data["kinds"]}
+        self.kinds: dict[str, dict] = {k["kind"]: _plain_kind(k) for k in data["kinds"]}
         self.shipped_models: list[str] = [m["name"] for m in models]
 
     def kind(self, kind: str) -> dict:
@@ -57,3 +72,12 @@ class Catalog:
                     names = list(value)
             out[rule["side"]] += [str(n) for n in names]
         return out["input"], out["output"]
+
+
+def _plain_kind(kind: dict) -> dict:
+    """A kind with its summary and every setting's help as plain text."""
+    return {
+        **kind,
+        "summary": plain(kind.get("summary", "")),
+        "settings": [{**s, "help": plain(s.get("help", ""))} for s in kind["settings"]],
+    }

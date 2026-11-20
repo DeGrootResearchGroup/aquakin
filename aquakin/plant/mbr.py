@@ -49,8 +49,8 @@ class MBRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     name : str
     model : CompiledModel
     volume : float
-        Reactor liquid volume (held constant; the permeate pump matches the feed
-        less wasting).
+        Reactor liquid volume (m³), held constant: the permeate pump matches the feed
+        less wasting.
     aeration : Aeration, optional
         Aeration spec, exactly as for a :class:`~aquakin.plant.cstr.CSTRUnit`
         (open-loop ``kla`` or a DO ``do_setpoint`` the plant auto-wires a

@@ -146,3 +146,36 @@ def test_the_aerated_species_is_chosen_from_the_units_model(ui_catalog):
     _, settings = forms.read_rows(doc, uid, list(rows.values()))
     assert settings["aeration"]["species"] == "SO2" and settings["aeration"]["kla"] == 100.0
     assert forms._oxygen(["SA", "S_O2_aq"]) == "S_O2_aq" and forms._oxygen(["SA"]) is None
+
+
+def test_help_text_is_plain_and_names_the_unit(bsm1):
+    from aquakin_ui.catalog import plain
+
+    assert plain("Sums ``Q_in``, see :class:`~aquakin.plant.Aeration` and *note*.") == (
+        "Sums Q_in, see Aeration and note."
+    )
+    assert "``" not in bsm1.catalog.kind("mixer")["summary"]
+    assert forms.unit_in("Clarifier liquid volume (m³); sets the HRT.") == "m³"
+    assert forms.unit_in("Bulk liquid volume (m^3).") == "m³"
+    assert forms.unit_in("Fixed underflow flow rate, m³/d (the pump).") == "m³/d"
+    assert forms.unit_in("A ratio (e.g. 0.5).") == ""
+    rows = {r["key"]: r for r in forms.rows_for(bsm1, "tank3", _info)}
+    assert rows["volume"]["suffix"] == "m³" and rows["conditions.T"]["suffix"] == "K"
+    assert rows["aeration.value"]["suffix"] == "1/d"
+
+
+def test_a_bad_value_names_its_row(bsm1):
+    rows = forms.rows_for(bsm1, "tank3", _info)
+    next(r for r in rows if r["key"] == "volume")["value"] = "big"
+    with pytest.raises(forms.FieldError) as caught:
+        forms.read_rows(bsm1, "tank3", rows)
+    assert caught.value.key == "volume"
+
+
+def test_settling_species_follow_the_units_model():
+    asm3 = ["SO2", "SS", "XI", "XS", "XH"]
+    settling = {"name": "particulate_species", "default": ["XS", "XB_H"]}
+    assert forms.suggest_species(settling, None, asm3) == ["XI", "XS", "XH"]
+    assert forms.suggest_species(settling, ["XS"], asm3) is None  # all in the model
+    assert forms.suggest_species({**settling, "default": []}, None, asm3) == ["XI", "XS", "XH"]
+    assert forms.suggest_species({"name": "gas_species", "default": ["X"]}, None, asm3) is None

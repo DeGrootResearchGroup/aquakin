@@ -10,7 +10,15 @@ from __future__ import annotations
 import math
 from html import escape
 
-__all__ = ["NO_VALUE", "channels_of", "fmt", "line_chart", "steady_table"]
+__all__ = [
+    "NO_VALUE",
+    "analysis_view",
+    "channels_of",
+    "fmt",
+    "line_chart",
+    "steady_table",
+    "xy_chart",
+]
 
 #: What a missing (or not finite) value reads as: an en dash.
 NO_VALUE = "\u2013"
@@ -129,27 +137,78 @@ def line_chart(results: dict, stream: str, channel: str, *, width=420, height=20
     str
         The ``<svg>`` element.
     """
-    t = results["t"]
-    y = _series(results, stream, channel)
     unit = _unit(results.get("units") or {}, stream, channel)
     time_unit = results.get("time_unit") or ""
-    points = [(a, b) for a, b in zip(t, y) if a is not None and b is not None]
-    title = escape(f"{channel}" + (f" ({unit})" if unit else ""))
+    return xy_chart(
+        title=channel + (f" ({unit})" if unit else ""),
+        label=f"{channel} of {stream} over time",
+        x_name="t",
+        x_unit=time_unit,
+        y_unit=unit,
+        line=list(zip(results["t"], _series(results, stream, channel))),
+        width=width,
+        height=height,
+    )
+
+
+def xy_chart(
+    *,
+    title: str,
+    label: str,
+    x_name: str,
+    x_unit: str = "",
+    y_unit: str = "",
+    line=None,
+    dots=None,
+    reference: tuple[float, str] | None = None,
+    x_axis: str | None = None,
+    width=420,
+    height=200,
+) -> str:
+    """An SVG chart of one quantity: a line, data points, or both on one axis.
+
+    Parameters
+    ----------
+    title : str
+        Named above the plot (with the unit, when it has one).
+    label : str
+        What the chart shows, for a screen reader.
+    x_name, x_unit, y_unit : str
+        For the hover tooltips (``t = 0.5 d: 2.3 g/m³``) and the x-axis title.
+    line, dots : list of (x, y), optional
+        A 2px line (the palette's first colour) and points (its second); with
+        both, a legend names them. ``None`` values are skipped.
+    reference : (value, text), optional
+        A horizontal hairline at ``value`` with its text (a threshold).
+    x_axis : str, optional
+        The x-axis title (default ``time (<x_unit>)`` when there is a unit).
+    width, height : int
+        The chart's size in pixels (it scales to its container).
+
+    Returns
+    -------
+    str
+        The ``<svg>`` element.
+    """
+    line = [(a, b) for a, b in (line or []) if a is not None and b is not None]
+    dots = [(a, b) for a, b in (dots or []) if a is not None and b is not None]
+    title = escape(title)
     left, right, top, bottom = 52, 12, 26, 22
     plot_w, plot_h = width - left - right, height - top - bottom
     parts = [
         f'<svg class="ak-chart" viewBox="0 0 {width} {height}" width="100%" '
-        f'role="img" aria-label="{title} of {escape(stream)} over time">',
+        f'role="img" aria-label="{escape(label)}">',
         f'<text class="ak-chart-title" x="{left}" y="16">{title}</text>',
     ]
+    points = line + dots
     if not points:
         parts.append(
             f'<text class="ak-chart-axis" x="{left}" y="{top + plot_h / 2}">no finite values</text>'
         )
         return "".join(parts) + "</svg>"
-    ts = [p[0] for p in points]
-    ys = [p[1] for p in points]
-    t0, t1 = min(ts), max(ts)
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points] + ([reference[0]] if reference else [])
+    t0, t1 = min(xs), max(xs)
     y_ticks = _ticks(min(ys), max(ys))
     x_ticks = _ticks(t0, t1, 5) if t1 > t0 else [t0]
     y0, y1 = y_ticks[0], y_ticks[-1]
@@ -176,20 +235,46 @@ def line_chart(results: dict, stream: str, channel: str, *, width=420, height=20
                 f'<text class="ak-chart-axis" x="{sx(v):.1f}" y="{top + plot_h + 16}" '
                 f'text-anchor="middle">{_tick_text(v, x_step)}</text>'
             )
-    if time_unit:
+    axis = x_axis if x_axis is not None else (f"time ({x_unit})" if x_unit else "")
+    legend = line and dots
+    if axis and not legend:
         parts.append(
             f'<text class="ak-chart-axis" x="{left + plot_w}" y="16" '
-            f'text-anchor="end">time ({escape(time_unit)})</text>'
+            f'text-anchor="end">{escape(axis)}</text>'
         )
-    stride = max(1, math.ceil(len(points) / MAX_POINTS))
-    drawn = points[::stride] if points[-1] in points[::stride] else [*points[::stride], points[-1]]
-    path = " ".join(f"{sx(a):.1f},{sy(b):.1f}" for a, b in drawn)
-    parts.append(f'<polyline class="ak-chart-line" points="{path}"/>')
-    # Hover: a band per sampled time, each with its crosshair, dot and tooltip.
-    hover = points[:: max(1, math.ceil(len(points) / MAX_HOVER))]
+    if legend:
+        x = left + plot_w
+        parts.append(
+            f'<text class="ak-chart-axis" x="{x}" y="16" text-anchor="end">fit</text>'
+            f'<line class="ak-chart-line" x1="{x - 38}" x2="{x - 22}" y1="12" y2="12"/>'
+            f'<text class="ak-chart-axis" x="{x - 46}" y="16" text-anchor="end">data</text>'
+            f'<circle class="ak-chart-dot" cx="{x - 80}" cy="12" r="4"/>'
+        )
+    if reference:
+        value, text = reference
+        parts.append(
+            f'<line class="ak-chart-ref" x1="{left}" x2="{left + plot_w}" '
+            f'y1="{sy(value):.1f}" y2="{sy(value):.1f}"/>'
+            f'<text class="ak-chart-axis" x="{left + 4}" y="{sy(value) - 4:.1f}">'
+            f"{escape(text)}</text>"
+        )
+    if line:
+        stride = max(1, math.ceil(len(line) / MAX_POINTS))
+        drawn = line[::stride] if line[-1] in line[::stride] else [*line[::stride], line[-1]]
+        path = " ".join(f"{sx(a):.1f},{sy(b):.1f}" for a, b in drawn)
+        parts.append(f'<polyline class="ak-chart-line" points="{path}"/>')
+    for a, b in dots[:MAX_POINTS]:
+        tip = escape(f"data {x_name} = {fmt(a)} {x_unit}: {fmt(b)} {y_unit}".replace("  ", " "))
+        parts.append(
+            f'<circle class="ak-chart-dot" cx="{sx(a):.1f}" cy="{sy(b):.1f}" r="4">'
+            f"<title>{tip}</title></circle>"
+        )
+    # Hover on the line: a band per sampled point, with its crosshair, dot and tooltip.
+    hover = line[:: max(1, math.ceil(len(line) / MAX_HOVER))] if line else []
     edges = [left] + [(sx(a[0]) + sx(b[0])) / 2 for a, b in zip(hover, hover[1:])] + [left + plot_w]
     for (a, b), x_from, x_to in zip(hover, edges, edges[1:]):
-        tip = escape(f"t = {fmt(a)}{(' ' + time_unit) if time_unit else ''}: {fmt(b)} {unit}")
+        unit_x = f" {x_unit}" if x_unit else ""
+        tip = escape(f"{x_name} = {fmt(a)}{unit_x}: {fmt(b)} {y_unit}".rstrip())
         parts.append(
             f'<g class="ak-chart-hit"><title>{tip}</title>'
             f'<rect x="{x_from:.1f}" y="{top}" width="{max(x_to - x_from, 0.5):.1f}" '
@@ -198,3 +283,168 @@ def line_chart(results: dict, stream: str, channel: str, *, width=420, height=20
             f'<circle cx="{sx(a):.1f}" cy="{sy(b):.1f}" r="4"/></g>'
         )
     return "".join(parts) + "</svg>"
+
+
+def _table(title: str, columns: list[str], rows: list[list]) -> dict:
+    return {"title": title, "columns": columns, "rows": rows}
+
+
+def analysis_view(results: dict) -> dict:
+    """What a Fisher, rank, calibrate or profile study found, ready to show.
+
+    Parameters
+    ----------
+    results : dict
+        The worker's ``study_results`` reply.
+
+    Returns
+    -------
+    dict
+        ``{"lines": [text], "tables": [{"title", "columns", "rows"}],
+        "charts": [{"channel", "svg"}]}``; every number as text.
+    """
+    kind = results["kind"]
+    summary = results.get("summary") or {}
+    lines: list[str] = []
+    tables: list[dict] = []
+    charts: list[dict] = []
+    if kind == "fisher":
+        values = summary.get("values") or {}
+        std = summary.get("std")
+        tables.append(
+            _table(
+                "Parameters",
+                ["parameter", "value", "standard deviation"],
+                [[n, fmt(v), fmt((std or {}).get(n))] for n, v in values.items()],
+            )
+        )
+        if std is None:
+            lines.append(
+                "The information matrix is singular: these measurements cannot tell the "
+                "free parameters apart."
+            )
+        criteria = summary.get("criteria") or {}
+        tables.append(
+            _table(
+                "Design criteria",
+                ["criterion", "value"],
+                [[c, fmt(v)] for c, v in criteria.items()],
+            )
+        )
+        matrix = results.get("matrix")
+        if matrix:
+            tables.append(
+                _table(
+                    "Information matrix (log-parameters where transformed)",
+                    ["", *matrix["names"]],
+                    [
+                        [n, *(fmt(v) for v in row)]
+                        for n, row in zip(matrix["names"], matrix["rows"])
+                    ],
+                )
+            )
+    elif kind == "rank":
+        table = results.get("table") or {}
+        criterion = results.get("criterion", "D")
+        n = len(table.get("candidate") or [])
+        rows = [
+            [
+                str(i + 1),
+                table["candidate"][i],
+                fmt((table.get(criterion) or [None] * n)[i]),
+                fmt((table.get("improvement") or [None] * n)[i]),
+            ]
+            for i in range(n)
+        ]
+        tables.append(
+            _table(
+                "Sensor sets, best first", ["rank", "sensor set", criterion, "improvement"], rows
+            )
+        )
+        lines.append(
+            "Improvement is over the sensors already in place (the base); it is empty "
+            "when there is no base."
+        )
+    elif kind == "calibrate":
+        fitted = summary.get("fitted") or {}
+        std = summary.get("std") or {}
+        if fitted:
+            tables.append(
+                _table(
+                    "Fitted parameters",
+                    ["parameter", "value", "standard deviation"],
+                    [[n, fmt(v), fmt(std.get(n))] for n, v in fitted.items()],
+                )
+            )
+        if summary:
+            state = "converged" if summary.get("converged") else "did not converge"
+            lines.append(
+                f"The fit {state} after {summary.get('iterations')} iterations "
+                f"({summary.get('message')})."
+            )
+        estimate = summary.get("sigma_estimate")
+        if estimate:
+            tables.append(
+                _table(
+                    "Estimated measurement error",
+                    ["channel", "standard deviation"],
+                    [[n, fmt(v)] for n, v in estimate.items()],
+                )
+            )
+        fit = results.get("fitted") or {}
+        data = results.get("data") or {}
+        for stream, channels in (fit.get("values") or {}).items():
+            for channel, values in channels.items():
+                observed = (data.get("values") or {}).get(stream, {}).get(channel)
+                charts.append(
+                    {
+                        "channel": f"{stream}.{channel}",
+                        "svg": xy_chart(
+                            title=f"{stream} {channel}",
+                            label=f"{channel} of {stream}: data and fit",
+                            x_name="t",
+                            line=list(zip(fit["t"], values)),
+                            dots=list(zip(data.get("t") or [], observed or [])),
+                            x_axis="time",
+                        ),
+                    }
+                )
+    elif kind == "profile":
+        table = results.get("table") or {}
+        parameter = summary.get("parameter")
+        low, high = (summary.get("ci") or [None, None])[:2]
+        bounds = (
+            "below the grid" if low is None else fmt(low),
+            "above the grid" if high is None else fmt(high),
+        )
+        lines.append(
+            f"Best of the grid: {parameter} = {fmt(summary.get('mle'))}. 95 % interval: "
+            f"{bounds[0]} to {bounds[1]} (where the curve stays under the threshold)."
+        )
+        if parameter in table:
+            charts.append(
+                {
+                    "channel": parameter,
+                    "svg": xy_chart(
+                        title=f"Profile of {parameter}",
+                        label=f"likelihood profile of {parameter}",
+                        x_name=parameter,
+                        line=list(zip(table[parameter], table.get("delta_loss") or [])),
+                        reference=(summary.get("delta", 1.92), "threshold"),
+                        x_axis=parameter,
+                    ),
+                }
+            )
+            tables.append(
+                _table(
+                    "Profile",
+                    [parameter, "loss", "rise from the best"],
+                    [
+                        [fmt(x), fmt(v), fmt(d)]
+                        for x, v, d in zip(
+                            table[parameter], table.get("loss"), table.get("delta_loss")
+                        )
+                    ],
+                )
+            )
+    return {"lines": lines, "tables": tables, "charts": charts}
