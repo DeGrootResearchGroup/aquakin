@@ -21,6 +21,34 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `IFASUnit` / `MBBRUnit` can grow their biofilm. `dynamic_thickness=True` makes
+  the thickness `L_f` a state instead of a fixed parameter: with
+  `biofilm_density` setting the incompressible film's density and
+  `detachment_rate` / `detachment_law` closing the surface balance, the film
+  thickens as it grows,
+  thins when decay outruns growth, and sorts its species by depth. This is the
+  one-dimensional multispecies biofilm of Wanner & Gujer (1986): net production
+  anywhere inside an incompressible film has to displace material outward, and
+  that displacement carries the species with it. `L_f` is the final state entry
+  and is named `L_f` in `state_names()`. Validated against the closed form a
+  fully penetrated film must satisfy, `L_f = mu_net / lambda`, to better than
+  0.3%.
+- `detachment_law="balance"` on a growing `IFASUnit` / `MBBRUnit`: **a specified
+  total thickness.** Detachment is set to exactly the velocity arriving at the
+  surface, so `dL_f/dt` is zero by construction and the film stays at
+  `biofilm_thickness` -- while the species still grow, advect and stratify, and
+  biomass still leaves at the surface. It is what a problem means by a specified
+  average thickness "maintained by detachment", and it takes no
+  `detachment_rate`. The rate-driven laws (`"quadratic"`, `"linear"`,
+  `"constant"`) are unchanged and still let the thickness follow from the
+  physics, so a thickness can now be either specified or predicted.
+- `IFASUnit.layer_resolution(state)` reports, per soluble species, the largest
+  fractional concentration drop across one biofilm layer -- how well `n_layers`
+  resolves the gradient the substrate flux is read from. A few per cent is well
+  resolved; a value near 1 means the substrate is consumed inside a single layer
+  and `n_layers` is too low. It distinguishes a limiting substrate from one that
+  penetrates freely.
+
 - `Plant.to_spec()` and `Plant.from_spec(spec)`: a plant as a JSON/YAML file and
   back. A spec (format 2) writes every setting, defaults included, with the
   aquakin version that wrote it, so a later change of default cannot change a
@@ -273,6 +301,14 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Changed
 
+- `IFASUnit` / `MBBRUnit` now default to `n_layers=16`, up from 4. The biofilm
+  discretization is first order and its error is governed by the penetration
+  ratio `L_f/delta` rather than thickness alone: at `L_f/delta = 4` four layers
+  put the substrate flux 26% high, where sixteen keep a typical carrier biofilm
+  within a couple of per cent. The class docstring carries the error table; lower
+  it again for a thin, fully penetrated film, where four layers are accurate to
+  well under a per cent and cheaper.
+
 - A plant created without `time_unit` whose kinetic models use different time
   units, for example an ozonation model in seconds next to ASM1 in days, now
   raises `UnitsError` when solved; give it a `time_unit` and the models are
@@ -367,6 +403,21 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `Plant.run_to_steady_state()` no longer reports convergence in silence when its
+  default `criterion="norm"` has stopped early. That test compares `||dy/dt||`
+  with `ss_atol + ss_rtol*||y||`, so every state inflates the tolerance that
+  every other state is held to -- and an IFAS/MBBR tank defeats it, because its
+  held-fixed attached biomass contributes `n_layers * density` to `||y||` and
+  nothing to `||dy/dt||`. A solve could stop with the tank's bulk still moving by
+  70% of its own value per day and call it converged. The componentwise scaled
+  residual the result already carried is now checked against the verdict, and a
+  `RuntimeWarning` names the offending state and points at
+  `criterion="scaled_residual"`. No steady state changes: this is a check on the
+  verdict, not on the solve.
+- `plant.mass_balance()` now accounts for an IFAS/MBBR tank. Its state is a depth
+  profile rather than a single concentration vector, so the balance skipped the
+  unit outright -- its bulk liquid as well as its attached biomass -- and the
+  shortfall appeared as an imbalance the size of the whole tank.
 - Every plant unit with a volume (CSTR, MBR, IFAS/MBBR, digester, primary
   clarifier, storage tank, SBR, UV and chlorine contact) refuses a volume that
   is not a positive finite number; a zero or negative volume used to build, and

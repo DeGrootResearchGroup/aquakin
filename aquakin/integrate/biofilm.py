@@ -780,7 +780,7 @@ class BiofilmReactor(GradientCheckMixin):
             )
         )
 
-    def _make_rhs(self, condition_arrays, params):
+    def _make_rhs(self, condition_arrays, params, dz=None):
         """Build the depth-resolved diffusion--reaction RHS ``f(t, y, args)``.
 
         Shared by the time-stepping solve and :meth:`steady_state`. Reads only
@@ -788,11 +788,18 @@ class BiofilmReactor(GradientCheckMixin):
         traced/jitted (no trace leak). ``args`` carries the (possibly traced)
         parameter vector for the rate evaluation; the stoichiometry is built from
         ``params`` so the whole RHS depends on the parameters through both.
+
+        ``dz`` overrides the layer thickness, which is otherwise the fixed
+        ``thickness / n_layers``. A caller that grows the biofilm passes the
+        current value -- it may be a tracer, since the RHS is rebuilt per
+        evaluation there -- so the diffusion operator follows the moving
+        boundary. See :mod:`aquakin.integrate.biofilm_growth`.
         """
         model = self.model
         fixed_mask = self.fixed_mask
         biofilm_mask = self._biofilm_mask
-        D, kL, dz = self._D, self._kL, self._dz
+        D, kL = self._D, self._kL
+        dz = self._dz if dz is None else dz
         area_per_volume = self.area_per_volume
         n_species = model.n_species
         inv_rho, packing = self._inv_rho, self.packing_fraction
