@@ -63,7 +63,18 @@ parameters:
   # q_max = mu_max/Y_H = 9.52 g_CODS/(g_CODX d), and the nitrifier's
   # q_max = mu_max/Y_N = 2.2 g_N/(g_CODX d).
   Y_H: {value: 0.63,  units: "g_CODX/g_CODS", bounds: [0.3, 0.9]}
-  Y_N: {value: 0.063, units: "g_CODX/g_N",    bounds: [0.02, 0.2]}
+  # The benchmark lists Y_N as 0.063 g_CODX/g_CODN -- per gram of the COD
+  # equivalent of the nitrogen. The stoichiometry is written against C_N, which
+  # is a nitrogen concentration (the influent and half-saturation are both given
+  # in g_N/m3), so the yield has to be carried onto that basis before it is
+  # used: 1 g N is 4.57 g COD_N, giving 0.063 * 4.57 = 0.28791 g_CODX/g_N.
+  #
+  # The benchmark's own oxygen coefficient is the check. On this basis
+  # -(4.57 - Y_N)/Y_N = -14.87, which is what oxidising the 1/Y_N = 3.47 g N
+  # takes (3.47 * 4.57 = 15.87 g O2) less the 1 g O2-equivalent retained as
+  # biomass COD. Left at 0.063 the same expression gives -71.54, which
+  # corresponds to no amount of nitrogen the reaction actually consumes.
+  Y_N: {value: 0.28791, units: "g_CODX/g_N", bounds: [0.05, 0.6]}
   # Oxygen half-saturations are shared by each organism's growth and
   # respiration, so they sit at the model level rather than in one reaction.
   K_O2H: {value: 0.2, units: "g_O2/m3", bounds: [0.01, 5.0]}
