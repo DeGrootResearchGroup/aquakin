@@ -224,3 +224,22 @@ def tss_concentration(C: jnp.ndarray, tss_vec: jnp.ndarray) -> jnp.ndarray:
     per-layer hot loop -- the same weighted sum, restricted to the nonzero terms.)
     """
     return jnp.sum(tss_vec * C, axis=-1)
+
+
+def check_positive(unit: str, name: str, value) -> None:
+    """Refuse a size that is not a positive finite number (a volume, say).
+
+    A zero or negative volume builds a unit whose mass balance divides by it,
+    and a steady-state solve of such a plant does not end.
+
+    Raises
+    ------
+    ValueError
+        Naming the unit and the setting.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{unit}: {name} must be a positive number; got {value!r}") from None
+    if not (v > 0.0 and v != float("inf")):
+        raise ValueError(f"{unit}: {name} must be a positive number; got {value!r}")

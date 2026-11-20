@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.core.temperature import T_REF_20C
+from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.streams import Stream, mixed_scalars
 from aquakin.plant.temperature import OPERATING_T_SIGNAL
@@ -520,6 +521,7 @@ class CSTRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     output_port: str = "out"
 
     def __post_init__(self) -> None:
+        check_positive(self.name, "volume", self.volume)
         missing = set(self.model.conditions_required) - set(self.conditions)
         if missing:
             raise ValueError(

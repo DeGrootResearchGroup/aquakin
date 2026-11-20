@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import Aeration, AerationUnit, aeration_transfer
 from aquakin.plant.streams import Stream, mixed_scalars
@@ -107,6 +108,7 @@ class MBRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     waste_port: str = "waste"
 
     def __post_init__(self) -> None:
+        check_positive(self.name, "volume", self.volume)
         if not (0.0 <= self.rejection <= 1.0):
             raise ValueError(
                 f"MBRUnit '{self.name}' rejection must be in [0, 1], got {self.rejection}."

@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import check_positive
 from aquakin.plant.streams import Stream
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -105,6 +106,9 @@ class StorageTank:
     empty_fraction: float = 0.1
     initial_concentrations: jnp.ndarray | None = None
     input_port: str = "in"
+
+    def __post_init__(self) -> None:
+        check_positive(self.name, "volume", self.volume)
 
     @property
     def state_size(self) -> int:

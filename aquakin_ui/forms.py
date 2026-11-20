@@ -40,6 +40,14 @@ def _text(value) -> str:
     return str(value)
 
 
+def _oxygen(species: list[str]) -> str | None:
+    """The model's dissolved-oxygen species, by its usual names, or ``None``."""
+    for name in ("SO", "SO2", "S_O2", "S_O", "DO", "O2"):
+        if name in species:
+            return name
+    return next((s for s in species if s.upper().startswith(("SO", "S_O"))), None)
+
+
 def _placeholder(s: dict) -> str:
     if s["required"]:
         return "required"
@@ -125,6 +133,20 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
             )
             if mode != "none":
                 rows.append(_row("aeration.value", mode, value=_text(value[mode]), hint=s["help"]))
+            if mode != "none" and species:
+                aerated = (value or {}).get("species")
+                if aerated not in species:  # e.g. ASM1's SO on an ASM3 plant
+                    aerated = _oxygen(species) or aerated
+                rows.append(
+                    _row(
+                        "aeration.species",
+                        "aerated species",
+                        "select",
+                        aerated or "",
+                        items=species,
+                        hint="The dissolved species the aeration transfers (oxygen).",
+                    )
+                )
         elif t == "species" and species:
             rows.append(_row(key, label, "select", value or "", items=species, **common))
         elif t == "species_list" and species:
@@ -263,6 +285,8 @@ def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, 
                 raw = str(values.get("aeration.value", "")).strip() if mode == shown else ""
                 value = _field("aeration.value", _finite, raw) if raw else (old.get(mode) or 0.0)
                 kept = {k: v for k, v in old.items() if k not in AERATION_MODES[1:]}
+                if str(values.get("aeration.species") or "").strip():
+                    kept["species"] = values["aeration.species"]
                 settings[name] = {**kept, mode: value}
             else:
                 settings[name] = None

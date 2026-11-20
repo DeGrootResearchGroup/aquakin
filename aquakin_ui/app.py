@@ -136,6 +136,7 @@ class Editor:
         self._show_when_done: set[str] = set()  # runs whose results open when they finish
         self._results: dict = {}  # the results on show
         self._study_flowsheet: str | None = None  # the spec the study being edited follows
+        self._form_revision = 0  # makes a reset of the unit form reach the page
         self._history: list[tuple] = []  # document snapshots to undo to, oldest first
         self._after_unsaved = None  # what the unsaved-changes question goes on to do
         self._init_state(path)
@@ -472,15 +473,30 @@ class Editor:
         self._pending_rows = None
         self.state.confirm_open = False
         self.refresh_selection()
-        # The rows equal the last ones sent, so they would not be sent again
-        # and the page would keep the edits just declined.
-        self.state.dirty("sel_rows")
+        # The rows equal the last ones sent, and the page keeps the edits just
+        # declined unless it is sent something new: a revision mark makes them so.
+        self._form_revision += 1
+        rows = list(self.state.sel_rows)
+        if rows:
+            rows[0] = {**rows[0], "revision": self._form_revision}
+            self.state.sel_rows = rows
 
     def reshape_form(self, rows: list[dict], i: int, value) -> None:
         """A choice that changes which rows the form has (aeration mode, model)."""
         rows = [dict(r) for r in rows]
         rows[i]["value"] = value
-        self.apply_properties(rows)
+        if not self.apply_properties(rows):
+            return
+        # The new rows may suggest values the old ones could not (the aerated
+        # species of the unit's model): take them, so the unit builds at once.
+        uid = self.state.selected
+        try:
+            _, settings = forms.read_rows(self.doc, uid, self.state.sel_rows)
+        except ValueError:
+            return
+        if settings != self.doc.units[uid].settings:
+            self.doc.apply(uid, settings, self.doc.units[uid].label)
+            self.publish()
 
     # -- files --------------------------------------------------------------
 
@@ -562,8 +578,24 @@ class Editor:
         typed = str(self.state.spec_path or "").strip()
         return Path(typed).resolve() if typed else None
 
-    def request_open(self) -> None:
+    def _apply_pending(self, pending: list[dict] | None) -> bool:
+        """Apply the unit form's unapplied edits (``pending``, ``None`` when there
+        are none) before an action that reads the flowsheet; ``False`` when they
+        could not be applied, and the action should wait (the error, or the
+        question about connections, is shown)."""
+        if pending is None or self.state.selected not in self.doc.units:
+            return True
+        return self.apply_properties(pending)
+
+    def save_button(self, pending: list[dict] | None = None) -> None:
+        """Save, with the unit form's unapplied edits applied first."""
+        if self._apply_pending(pending):
+            self.save()
+
+    def request_open(self, pending: list[dict] | None = None) -> None:
         """Open the path in the toolbar, asking first when there are unsaved edits."""
+        if not self._apply_pending(pending):
+            return
         target = str(self.state.spec_path or "").strip()
         if not target:
             self.say("type the path of a flowsheet file to open")
@@ -685,8 +717,10 @@ class Editor:
     def _study(self, name: str) -> dict | None:
         return next((st for st in self.state.studies if st["name"] == name), None)
 
-    def run_study(self, name: str) -> None:
+    def run_study(self, name: str, pending: list[dict] | None = None) -> None:
         """Run a study; ask first when that would replace its results."""
+        if not self._apply_pending(pending):
+            return
         study = self._study(name)
         if study is None or name in self._runs:
             return
@@ -694,7 +728,8 @@ class Editor:
             # A live study runs the flowsheet's file: bring it up to the drawing.
             self.save(then=lambda: self.run_study(name), path=self._spec_file())
             return
-        if study["state"] in ("not run",):
+        if study["state"] not in ("fresh", "stale", "damaged"):
+            # Not run, failed or cancelled: no results to replace.
             self._start_run(study, replace=False)
             return
         if not self.state.ask_replace:
@@ -744,10 +779,12 @@ class Editor:
 
     # -- simulating the plant -------------------------------------------------
 
-    def simulate(self) -> None:
+    def simulate(self, pending: list[dict] | None = None) -> None:
         """Run the plant: save the flowsheet if it changed, set up the project's
         ``simulation`` study the first time (the plant at steady state, saving the
         streams that leave it), run it, and show its results when it finishes."""
+        if not self._apply_pending(pending):
+            return
         if self._simulation() in self._runs:
             self.state.panel = "studies"
             return
@@ -1268,14 +1305,14 @@ class Editor:
             )
             v3.VBtn(
                 "Open",
-                click=self.request_open,
+                click=(self.request_open, "[sel_dirty ? sel_rows : null]"),
                 disabled=("busy",),
                 variant="tonal",
                 classes="mr-1 text-none",
             )
             v3.VBtn(
                 "Save",
-                click=self.save,
+                click=(self.save_button, "[sel_dirty ? sel_rows : null]"),
                 loading=("busy",),
                 disabled=("busy",),
                 variant="tonal",
@@ -1284,7 +1321,7 @@ class Editor:
             v3.VBtn(
                 "Simulate",
                 prepend_icon="mdi-play",
-                click=self.simulate,
+                click=(self.simulate, "[sel_dirty ? sel_rows : null]"),
                 loading=("simulating",),
                 disabled=("busy",),
                 color="primary",
@@ -1462,7 +1499,7 @@ class Editor:
                     v_if="!st.running",
                     size="small",
                     disabled=("st.state === 'unreadable'",),
-                    click=(self.run_study, "[st.name]"),
+                    click=(self.run_study, "[st.name, sel_dirty ? sel_rows : null]"),
                 )
                 v3.VBtn(
                     "Cancel",

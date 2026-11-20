@@ -270,6 +270,7 @@ FIT = {
     "data": "data.csv",
     "t_span": [0, 0.5],
     "transforms": {"asm1_local.muH": "positive_log"},
+    "sigma": [0.05, 0.5],  # one per channel (SNH, SS)
     "max_iter": 40,
     # ASM1's literature prior on muH (centred at 6.0) would pull the estimate.
     "use_priors": False,
@@ -310,10 +311,45 @@ def test_a_calibration_study_recovers_a_parameter(project):
     assert "the study's settings have changed" in check_study(folder).reasons
 
 
+def test_a_run_replaces_results_only_when_it_succeeds(project):
+    from aquakin import Cancelled
+
+    folder = _study(project, "keep", {"kind": "simulate", "streams": ["effluent"]})
+    run_study(folder)
+    before = (folder / "results" / "streams.yaml").read_text()
+
+    def stop(p):
+        raise Cancelled()
+
+    with pytest.raises(Cancelled):
+        run_study(folder, replace=True, progress=stop)
+    status = check_study(folder)
+    assert status.state == "fresh" and (folder / "results" / "streams.yaml").read_text() == before
+    assert "the last run" in status.notes[-1] and "was cancelled" in status.notes[-1]
+    assert not (folder / "results.partial").exists()
+
+    # A run killed outright leaves its partial results; they block nothing.
+    (folder / "results.partial").mkdir()
+    (folder / "results.partial" / "junk.yaml").write_text("x: 1\n")
+    assert run_study(folder, replace=True).state == "fresh"
+    assert not (folder / "results.partial").exists() and not (folder / "last_attempt.yaml").exists()
+    assert not any("the last run" in n for n in check_study(folder).notes)
+
+    # A study whose only run failed has no results to replace: it runs again as is.
+    bad = _study(project, "bad_run", {"kind": "simulate", "streams": ["nowhere"]})
+    with pytest.raises(Exception):
+        run_study(bad)
+    assert check_study(bad).state == "failed"
+    (bad / "study.yaml").write_text(
+        yaml.safe_dump({"study": {"kind": "simulate", "streams": ["effluent"]}})
+    )
+    assert run_study(bad).state == "fresh"
+
+
 def test_a_study_names_the_data_columns_it_cannot_find(project):
     folder = project / "studies" / "nodata"
     _synthetic_data(project, folder, 4.0)
-    study = {**FIT, "observables": [{"stream": "effluent", "channels": ["SNO"]}]}
+    study = {**FIT, "observables": [{"stream": "effluent", "channels": ["SNO"]}], "sigma": 0.1}
     (folder / "study.yaml").write_text(yaml.safe_dump({"study": {"kind": "calibrate", **study}}))
     with pytest.raises(StudyError, match="has no column effluent.SNO"):
         run_study(folder)
@@ -350,7 +386,6 @@ def test_a_profile_study(project):
         "transforms": {},
         "profile": "asm1_local.muH",
         "grid": [3.5, 4.0],
-        "loss": "nll",
         "sigma": 0.1,
         "max_iter": 15,
     }
@@ -447,6 +482,11 @@ def test_a_singular_fisher_design_is_reported_without_failing(project):
             "names the channels of each observable",
         ),
         ({**FIT, "kind": "calibrate", "sigma": 1, "estimate_sigma": True}, "not both"),
+        (
+            {**{k: v for k, v in FIT.items() if k != "sigma"}, "kind": "calibrate"},
+            "give the measurement error",
+        ),
+        ({**FIT, "kind": "calibrate", "sigma": [1, 2, 3]}, "3 errors for 2 measured channels"),
         ({"kind": "simulate", "streams": ["x"], "sigma": "1"}, "sigma"),
     ],
 )
@@ -583,7 +623,8 @@ def test_a_json_run_streams_events_and_stops_on_cancel(project, monkeypatch):
 
     code, events = run(folder, "--replace", cancel=True)
     assert code == 1 and events[-1] == {"event": "cancelled"}
-    assert check_study(folder).state == "cancelled"
+    status = check_study(folder)  # the earlier results stand
+    assert status.state == "fresh" and "was cancelled" in status.notes[-1]
     code, events = run(project / "studies" / "missing")
     assert code == 2 and events[-1]["event"] == "error"
 

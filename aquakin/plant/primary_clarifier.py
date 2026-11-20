@@ -35,7 +35,12 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
-from aquakin.plant._constants import ASM1_SETTLING_SPECIES, MINUTES_PER_DAY, species_mask
+from aquakin.plant._constants import (
+    ASM1_SETTLING_SPECIES,
+    MINUTES_PER_DAY,
+    check_positive,
+    species_mask,
+)
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
 from aquakin.utils.units import conversion_factor
@@ -91,6 +96,7 @@ class PrimaryClarifier(FlowParameterized):
     sludge_port: str = "underflow"
 
     def __post_init__(self) -> None:
+        check_positive(self.name, "volume", self.volume)
         if not (0.0 < self.f_PS < 1.0):
             raise ValueError(
                 f"PrimaryClarifier '{self.name}': f_PS must be in (0, 1); got {self.f_PS}"

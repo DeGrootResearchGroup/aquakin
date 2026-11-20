@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
-from aquakin.plant._constants import EPS_Q, SECONDS_PER_DAY
+from aquakin.plant._constants import EPS_Q, SECONDS_PER_DAY, check_positive
 from aquakin.plant.streams import Stream
 from aquakin.utils.units import conversion_factor
 
@@ -201,6 +201,9 @@ class UVUnit:
     output_port: str = "out"
 
     # ----- stateless ------------------------------------------------------
+    def __post_init__(self) -> None:
+        check_positive(self.name, "volume", self.volume)
+
     @property
     def state_size(self) -> int:
         return 0
@@ -320,8 +323,7 @@ class ChlorineContactUnit:
     output_port: str = "out"
 
     def __post_init__(self) -> None:
-        if self.volume <= 0.0:
-            raise ValueError(f"ChlorineContactUnit '{self.name}': volume must be > 0.")
+        check_positive(self.name, "volume", self.volume)
         if self.ct_per_log <= 0.0:
             raise ValueError(f"ChlorineContactUnit '{self.name}': ct_per_log must be > 0.")
 

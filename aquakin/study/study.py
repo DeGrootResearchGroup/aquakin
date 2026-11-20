@@ -57,6 +57,10 @@ STUDY_FILE = "study.yaml"
 RUN_FILE = "run.yaml"
 FROZEN_FILE = "frozen.yaml"
 RESULTS = "results"
+#: Where a run writes; it becomes ``results`` only when the run succeeds.
+PARTIAL = "results.partial"
+#: A run that failed or was cancelled while earlier results stood: they are kept.
+ATTEMPT_FILE = "last_attempt.yaml"
 SNAPSHOT = "snapshot"
 
 
@@ -177,7 +181,10 @@ class _Study(BaseModel):
     # calibrate / profile: the observations, a CSV table relative to the study
     # folder with a "t" column and one "<stream>.<channel>" column per channel.
     data: str | None = None
-    loss: Literal["mse", "nll"] = "mse"
+    # The fit is always the Gaussian likelihood of the data, so it needs each
+    # channel's measurement error (``sigma``) or ``estimate_sigma``: least squares
+    # ignores the error, which leaves uncertainties, profile intervals and the
+    # weight of priors without a scale.
     estimate_sigma: bool = False
     transforms: dict[str, Literal["none", "positive_log", "logit"]] = {}
     use_priors: bool = True
@@ -249,6 +256,17 @@ def _check_kind(study: _Study, where: str) -> None:
             )
         if study.estimate_sigma and study.sigma is not None:
             raise StudyError(f"{where}: give sigma or estimate_sigma, not both")
+        if not study.estimate_sigma and study.sigma is None:
+            raise StudyError(
+                f"{where}: a {study.kind} study fits the likelihood of the data, so give "
+                f"the measurement error (sigma) or estimate it (estimate_sigma)"
+            )
+        n_channels = sum(len(_channel_names(_channels(o))) for o in study.observables)
+        if isinstance(study.sigma, list) and len(study.sigma) != n_channels:
+            raise StudyError(
+                f"{where}: sigma gives {len(study.sigma)} errors for {n_channels} measured "
+                f"channel{'s' if n_channels != 1 else ''}; give one for all, or one per channel"
+            )
 
 
 def load_study(path) -> _Study:
@@ -401,6 +419,14 @@ def check_study(path) -> StudyStatus:
     if run is None:
         return StudyStatus("not run", frozen is not None)
     status = StudyStatus("fresh", frozen is not None)
+    attempt = _read_yaml(folder / ATTEMPT_FILE)
+    if attempt is not None:
+        what = "was cancelled" if attempt.get("outcome") == "cancelled" else "failed"
+        error = "" if attempt.get("outcome") == "cancelled" else f" ({attempt.get('error')})"
+        status.notes.append(
+            f"the last run, started {attempt.get('started')}, {what}{error}; these are the "
+            f"results of the run before"
+        )
     if run.get("aquakin") != aquakin_version():
         status.notes.append(
             f"run with aquakin {run.get('aquakin')}; this is aquakin {aquakin_version()}"
@@ -632,6 +658,19 @@ def _observations(folder: Path, study: _Study):
     return t, np.stack([columns[n] for n in names], axis=1), names
 
 
+def _fit_sigma(study: _Study):
+    """The fit's ``sigma``: ``"estimate"``, one error for every observation, or an
+    array of one per channel (broadcast over the times; a list would mean one
+    per dataset)."""
+    import numpy as np
+
+    if study.estimate_sigma:
+        return "estimate"
+    if isinstance(study.sigma, list):
+        return np.asarray(study.sigma, dtype=float)
+    return study.sigma
+
+
 def _fit_arguments(plant, study: _Study, params, y0, progress) -> dict:
     from aquakin import OptimizerConfig
 
@@ -641,8 +680,8 @@ def _fit_arguments(plant, study: _Study, params, y0, progress) -> dict:
         y0=y0,
         params=params,
         transforms=dict(study.transforms) or None,
-        loss=study.loss,
-        sigma="estimate" if study.estimate_sigma else study.sigma,
+        loss="nll",
+        sigma=_fit_sigma(study),
         use_priors=study.use_priors,
         optimizer=OptimizerConfig(n_starts=study.n_starts, max_iter=study.max_iter),
         time_unit=study.time_unit,
@@ -844,7 +883,9 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     folder = _folder(path)
     study = load_study(folder)
     out = folder / RESULTS
-    if (out.exists() or (folder / RUN_FILE).exists()) and not replace:
+    previous = _read_yaml(folder / RUN_FILE)
+    has_results = previous is not None and previous.get("outcome") == "finished"
+    if has_results and not replace:
         raise StudyError(
             f"study {folder.name} already has results; run it with replace=True to replace "
             f"them (copy the study first to keep them)"
@@ -858,9 +899,11 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
         "spec_inputs": inputs,
         "study": _study_fingerprint(folder, study),
     }
-    if out.exists():
-        shutil.rmtree(out)
-    (folder / RUN_FILE).unlink(missing_ok=True)
+    # The run writes beside the results it would replace, which stay until it
+    # succeeds: a run that fails, is cancelled or is killed loses nothing.
+    partial = folder / PARTIAL
+    if partial.exists():
+        shutil.rmtree(partial)  # left by a run that was killed
     try:
         from aquakin.progress import report
 
@@ -870,7 +913,7 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
         params = plant.default_parameters() if params is None else params
         y0 = _initial_state(plant, folder, study, params)
         runner = _RUNNERS[study.kind]
-        written = runner(plant, folder, study, params, np.asarray(y0), out, progress)
+        written = runner(plant, folder, study, params, np.asarray(y0), partial, progress)
     except BaseException as exc:
         from aquakin.progress import Cancelled
 
@@ -880,16 +923,25 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
             "outcome": "cancelled" if cancelled else "failed",
             "error": "cancelled" if cancelled else f"{type(exc).__name__}: {exc}",
         }
-        _write_yaml(folder / RUN_FILE, record)
+        shutil.rmtree(partial, ignore_errors=True)
+        if has_results:
+            _write_yaml(folder / ATTEMPT_FILE, record)  # the results stand
+        else:
+            if out.exists():
+                shutil.rmtree(out)  # files no finished run recorded
+            _write_yaml(folder / RUN_FILE, record)
         raise
-    record |= {
-        "finished": _now(),
-        "outcome": "finished",
-        "results": {
-            p.relative_to(folder).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in written
-        },
+    digests = {
+        (Path(RESULTS) / p.relative_to(partial)).as_posix(): hashlib.sha256(
+            p.read_bytes()
+        ).hexdigest()
+        for p in written
     }
+    if out.exists():
+        shutil.rmtree(out)
+    partial.rename(out)
+    (folder / ATTEMPT_FILE).unlink(missing_ok=True)
+    record |= {"finished": _now(), "outcome": "finished", "results": digests}
     _write_yaml(folder / RUN_FILE, record)
     return check_study(folder)
 
@@ -1016,7 +1068,9 @@ def unfreeze_study(path, *, discard_results: bool = False) -> None:
             f"discard_results=True"
         )
     shutil.rmtree(folder / RESULTS, ignore_errors=True)
+    shutil.rmtree(folder / PARTIAL, ignore_errors=True)
     (folder / RUN_FILE).unlink(missing_ok=True)
+    (folder / ATTEMPT_FILE).unlink(missing_ok=True)
     shutil.rmtree(folder / SNAPSHOT, ignore_errors=True)
     (folder / FROZEN_FILE).unlink()
 
@@ -1053,5 +1107,5 @@ def copy_study(path, name: str) -> Path:
     dest = folder.parent / name
     if dest.exists():
         raise StudyError(f"{dest} already exists")
-    shutil.copytree(folder, dest)
+    shutil.copytree(folder, dest, ignore=shutil.ignore_patterns(PARTIAL))
     return dest

@@ -39,7 +39,6 @@ STUDIES = [
         "free": ["asm1.muH"],
         "observables": [{"stream": "effluent", "channels": ["SNH"]}],
         "data": "obs.csv",
-        "loss": "nll",
         "sigma": 0.5,
         "transforms": {"asm1.muH": "positive_log"},
         "use_priors": False,

@@ -33,6 +33,7 @@ import jax.numpy as jnp
 
 from aquakin.core.conditions import SpatialConditions
 from aquakin.integrate.biofilm import BiofilmReactor, _default_soluble_mask
+from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import (
     Aeration,
@@ -153,6 +154,7 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     output_port: str = "out"
 
     def __post_init__(self) -> None:
+        check_positive(self.name, "volume", self.volume)
         missing = set(self.model.conditions_required) - set(self.conditions)
         if missing:
             raise ValueError(
