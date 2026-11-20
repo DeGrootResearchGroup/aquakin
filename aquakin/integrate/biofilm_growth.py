@@ -47,6 +47,17 @@ import jax.numpy as jnp
 #: grows fastest and so pins the thickness most tightly.
 DETACHMENT_POWERS = {"constant": 0.0, "linear": 1.0, "quadratic": 2.0}
 
+#: The law that holds the thickness at its specified value instead of letting a
+#: rate decide it: detachment is set to exactly the velocity arriving at the
+#: surface, so ``dL_f/dt`` is zero by construction. Species still grow, advect
+#: and stratify, and biomass still leaves at the surface -- only the total
+#: thickness is pinned. This is what a benchmark means by a specified average
+#: thickness "maintained by detachment", and it takes no detachment rate.
+BALANCED_DETACHMENT = "balance"
+
+#: Every accepted ``detachment_law``.
+DETACHMENT_LAWS = (*sorted(DETACHMENT_POWERS), BALANCED_DETACHMENT)
+
 
 def detachment_velocity(rate, thickness, law: str = "quadratic"):
     """Velocity at which detachment strips the biofilm surface (m / time).
@@ -60,7 +71,9 @@ def detachment_velocity(rate, thickness, law: str = "quadratic"):
     thickness : float or jnp.ndarray
         Current biofilm thickness ``L_f`` (m).
     law : {"quadratic", "linear", "constant"}
-        Dependence on thickness.
+        Dependence on thickness. ``"balance"`` is not handled here -- it has no
+        rate of its own, being defined by the arriving velocity, so a caller
+        resolves it with :func:`balanced_detachment_velocity`.
 
     Returns
     -------
@@ -104,6 +117,24 @@ def advection_velocity(production, density, dz):
         [jnp.zeros((1,), dtype=from_wall.dtype), jnp.cumsum(from_wall)]
     )
     return jnp.flip(faces_from_wall)
+
+
+def balanced_detachment_velocity(face_velocities):
+    """Detachment that exactly absorbs the velocity arriving at the surface.
+
+    Holds the thickness at whatever it was specified to be: growth inside the
+    film still displaces material outward and still carries the species with it,
+    but everything that reaches the surface detaches, so ``dL_f/dt`` is zero to
+    the last bit rather than to a tolerance.
+    """
+    return face_velocities[0]
+
+
+def surface_detachment(face_velocities, rate, thickness, law: str = "quadratic"):
+    """The detachment velocity under any accepted law, balanced or rate-driven."""
+    if law == BALANCED_DETACHMENT:
+        return balanced_detachment_velocity(face_velocities)
+    return detachment_velocity(rate, thickness, law)
 
 
 def thickness_derivative(face_velocities, detach_velocity):

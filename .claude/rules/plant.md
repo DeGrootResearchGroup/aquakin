@@ -747,6 +747,17 @@ load-bearing and easy to get wrong.
   fully penetrated film and against BM1 cases 2 and 5, where the benchmark lets
   thickness be an output of the growth/lysis balance (`detachment_rate=0`, so the
   film settles where net production integrates to zero).
+  **The thickness is either specified or predicted, chosen by `detachment_law`.**
+  `"balance"` pins it: detachment is set to the velocity arriving at the surface
+  (`balanced_detachment_velocity`), so `dL_f/dt` is **exactly** zero — not zero to
+  a tolerance, which matters because a specified thickness must not drift over a
+  long solve — while the species still advect, stratify and shed at the surface.
+  It takes no `detachment_rate` and refuses one, since the velocity is not a free
+  parameter under that law. The power laws (`"quadratic"`, `"linear"`,
+  `"constant"`, via `DETACHMENT_POWERS`) instead let the thickness follow from
+  the physics. A benchmark that fixes the film at a stated thickness (BM3, and
+  BM1 cases 1, 3, 4) wants `"balance"`; one that lets lysis thin it (BM1 cases 2
+  and 5) wants a rate-driven law with `detachment_rate=0`.
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `IFASUnit` / `MBBRUnit`
 (an IFAS/MBBR tank: a CSTR bulk coupled to a depth-resolved attached biofilm —

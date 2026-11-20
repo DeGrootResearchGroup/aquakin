@@ -24,8 +24,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 - `IFASUnit` / `MBBRUnit` can grow their biofilm. `dynamic_thickness=True` makes
   the thickness `L_f` a state instead of a fixed parameter: with
   `biofilm_density` setting the incompressible film's density and
-  `detachment_rate` / `detachment_law` (`"quadratic"`, `"linear"` or
-  `"constant"`) closing the surface balance, the film thickens as it grows,
+  `detachment_rate` / `detachment_law` closing the surface balance, the film
+  thickens as it grows,
   thins when decay outruns growth, and sorts its species by depth. This is the
   one-dimensional multispecies biofilm of Wanner & Gujer (1986): net production
   anywhere inside an incompressible film has to displace material outward, and
@@ -33,6 +33,15 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   and is named `L_f` in `state_names()`. Validated against the closed form a
   fully penetrated film must satisfy, `L_f = mu_net / lambda`, to better than
   0.3%.
+- `detachment_law="balance"` on a growing `IFASUnit` / `MBBRUnit`: **a specified
+  total thickness.** Detachment is set to exactly the velocity arriving at the
+  surface, so `dL_f/dt` is zero by construction and the film stays at
+  `biofilm_thickness` -- while the species still grow, advect and stratify, and
+  biomass still leaves at the surface. It is what a problem means by a specified
+  average thickness "maintained by detachment", and it takes no
+  `detachment_rate`. The rate-driven laws (`"quadratic"`, `"linear"`,
+  `"constant"`) are unchanged and still let the thickness follow from the
+  physics, so a thickness can now be either specified or predicted.
 - `IFASUnit.layer_resolution(state)` reports, per soluble species, the largest
   fractional concentration drop across one biofilm layer -- how well `n_layers`
   resolves the gradient the substrate flux is read from. A few per cent is well

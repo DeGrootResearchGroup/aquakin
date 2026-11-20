@@ -16,10 +16,14 @@ import numpy as np
 import pytest
 
 from aquakin.integrate.biofilm_growth import (
+    BALANCED_DETACHMENT,
+    DETACHMENT_LAWS,
+    DETACHMENT_POWERS,
     advection_transport,
     advection_velocity,
     detachment_velocity,
     layer_thickness,
+    surface_detachment,
     thickness_derivative,
 )
 
@@ -186,3 +190,59 @@ def test_inward_velocity_draws_from_the_bulk():
 def test_layer_thickness_floors_a_vanishing_film():
     assert float(layer_thickness(0.0, N)) > 0.0
     assert float(layer_thickness(8.0e-4, N)) == pytest.approx(1.0e-4)
+
+
+# --- a specified total thickness ---------------------------------------------
+
+
+def test_balanced_detachment_holds_the_thickness_exactly():
+    """``"balance"`` sets detachment to the velocity arriving at the surface.
+
+    A thickness that is specified rather than predicted has to stay put to the
+    last bit, not to a tolerance, or a long solve drifts off the value the
+    problem was posed with.
+    """
+    dz = layer_thickness(5.0e-4, N)
+    faces = advection_velocity(jnp.full((N,), 0.5 * RHO), RHO, dz)
+    u_det = surface_detachment(faces, 0.0, 5.0e-4, "balance")
+
+    assert float(u_det) == float(faces[0])
+    assert float(thickness_derivative(faces, u_det)) == 0.0
+
+
+def test_balanced_detachment_still_sheds_biomass_at_the_surface():
+    """Pinning the thickness must not pin the film: growth still leaves.
+
+    With no grid motion the whole displacement crosses the outer face, so what
+    detaches is the surface concentration carried at the arriving velocity.
+    """
+    dz = layer_thickness(5.0e-4, N)
+    layers = jnp.full((N, 1), RHO)
+    faces = advection_velocity(jnp.full((N,), 0.5 * RHO), RHO, dz)
+    u_det = surface_detachment(faces, 0.0, 5.0e-4, "balance")
+    d_layers, surface_flux = advection_transport(
+        layers,
+        jnp.zeros((1,)),
+        faces,
+        thickness_derivative(faces, u_det),
+        dz,
+        jnp.asarray([True]),
+    )
+    assert float(surface_flux[0]) == pytest.approx(float(faces[0]) * RHO, rel=1e-12)
+    # Uniform production is exactly cancelled, so the film holds its density.
+    np.testing.assert_allclose(np.asarray(d_layers), -0.5 * RHO, rtol=1e-10)
+
+
+def test_surface_detachment_dispatches_the_rate_driven_laws():
+    """The shared resolver must agree with the plain law for every other case."""
+    faces = advection_velocity(jnp.full((N,), 0.5 * RHO), RHO, layer_thickness(4e-4, N))
+    for law in ("constant", "linear", "quadratic"):
+        assert float(surface_detachment(faces, 3.0, 4.0e-4, law)) == pytest.approx(
+            float(detachment_velocity(3.0, 4.0e-4, law))
+        )
+
+
+def test_every_accepted_law_is_listed():
+    """``DETACHMENT_LAWS`` is what the unit validates against, so it must cover
+    the rate-driven powers and the balanced case."""
+    assert set(DETACHMENT_LAWS) == set(DETACHMENT_POWERS) | {BALANCED_DETACHMENT}

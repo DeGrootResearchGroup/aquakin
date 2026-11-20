@@ -580,3 +580,87 @@ def test_unknown_state_index_is_described_by_position(asm1):
     assert plant._describe_state_index(0).endswith(f".{asm1.species[0]}")
     # An index outside the layout still produces a usable label.
     assert plant._describe_state_index(10_000) == "state[10000]"
+
+
+# --- a specified total thickness (detachment_law="balance") ------------------
+
+
+def test_balanced_detachment_rejects_a_rate():
+    """The balanced law has no rate of its own, so supplying one is a mistake
+    worth naming rather than silently ignoring."""
+    with pytest.raises(ValueError, match="takes no detachment_rate"):
+        _growing(_bm1_model(), detachment_law="balance", detachment_rate=1.0)
+
+
+def test_balanced_detachment_is_an_accepted_law():
+    """It builds with no rate, and an unknown law still names every option."""
+    unit = _growing(_bm1_model(), detachment_law="balance", detachment_rate=0.0)
+    assert unit.detachment_law == "balance"
+    with pytest.raises(ValueError, match="balance"):
+        _growing(_bm1_model(), detachment_law="exponential")
+
+
+@pytest.mark.slow
+def test_a_specified_thickness_is_held_while_the_film_still_grows():
+    """``"balance"`` pins the total without freezing the film.
+
+    This is the mode for a problem that specifies a biofilm thickness: the
+    species still grow, advect and shed at the surface, but the total stays
+    where it was put -- exactly, not to a tolerance, so a long solve cannot
+    drift off the posed value.
+    """
+    model = _bm1_model()
+    unit = _growing(
+        model, biofilm_thickness=5.0e-4, n_layers=12, detachment_law="balance", detachment_rate=0.0
+    )
+    plant = Plant("g", time_unit="d")
+    plant.add_unit(unit)
+    plant.add_influent("feed", model.influent({"SS": 30.0, "SO2": 10.0}, Q=5000.0), to="r.in")
+
+    sol = plant.solve(
+        t_span=(0.0, 20.0), y0=plant.initial_state(), t_eval=jnp.linspace(0.0, 20.0, 5)
+    )
+    for row in np.asarray(sol.state):
+        rows, thickness = unit._split(jnp.asarray(row))
+        assert float(thickness) == pytest.approx(5.0e-4, rel=1e-9)
+        # The film is still live: it holds its density at every depth.
+        layers = np.asarray(rows)[1:, model.species_index["XH"]]
+        np.testing.assert_allclose(layers, 1.0e4, rtol=1e-6)
+
+
+@pytest.mark.slow
+def test_the_two_thickness_modes_remain_independent():
+    """A specified thickness and a predicted one are both available.
+
+    The rate-driven laws still let the thickness follow from the physics; the
+    balanced law still pins it. Adding the second must not have disturbed the
+    first.
+    """
+    model = _bm1_model()
+    common = dict(biofilm_thickness=3.0e-5, n_layers=16)
+
+    pinned = _growing(model, detachment_law="balance", detachment_rate=0.0, **common)
+    predicted = _growing(model, detachment_law="quadratic", detachment_rate=2.0e5, **common)
+
+    results = {}
+    for name, unit in (("pinned", pinned), ("predicted", predicted)):
+        plant = Plant("g", time_unit="d")
+        plant.add_unit(unit)
+        plant.add_influent("feed", model.influent({"SS": 30.0, "SO2": 10.0}, Q=5000.0), to="r.in")
+        sol = plant.solve(t_span=(0.0, 30.0), y0=plant.initial_state(), t_eval=jnp.asarray([30.0]))
+        rows, thickness = unit._split(jnp.asarray(np.asarray(sol.state)[-1]))
+        results[name] = (float(thickness), np.asarray(rows))
+
+    pinned_thickness, _ = results["pinned"]
+    predicted_thickness, rows = results["predicted"]
+
+    assert pinned_thickness == pytest.approx(3.0e-5, rel=1e-9)
+
+    # The predicted one leaves the seed and settles where growth balances
+    # quadratic detachment, at mu_net/lambda -- here below the seed, so the
+    # film thins rather than grows.
+    ss = rows[0, model.species_index["SS"]]
+    o2 = rows[0, model.species_index["SO2"]]
+    mu_net = 6.0 * ss / (4.0 + ss) * o2 / (0.2 + o2) - 0.4
+    assert predicted_thickness == pytest.approx(mu_net / 2.0e5, rel=0.01)
+    assert abs(predicted_thickness - pinned_thickness) > 0.1 * pinned_thickness

@@ -36,11 +36,12 @@ import numpy as np
 from aquakin.core.conditions import SpatialConditions
 from aquakin.integrate.biofilm import BiofilmReactor, _default_soluble_mask
 from aquakin.integrate.biofilm_growth import (
-    DETACHMENT_POWERS,
+    BALANCED_DETACHMENT,
+    DETACHMENT_LAWS,
     advection_transport,
     advection_velocity,
-    detachment_velocity,
     layer_thickness,
+    surface_detachment,
     thickness_derivative,
 )
 from aquakin.plant._constants import check_positive
@@ -162,7 +163,43 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     biofilm_initial : jnp.ndarray, optional
         Initial biofilm-layer concentrations ``(n_species,)``, tiled across the
         layers -- the attached-biomass inventory of the mature biofilm. Defaults
-        to the model's default concentrations.
+        to the model's default concentrations. With a growing biofilm this is the
+        starting composition of the film, and its particulate total should be
+        ``biofilm_density`` -- the film is modelled as incompressible at that
+        density, so a seed far from it starts the solve off its own constraint.
+    dynamic_thickness : bool
+        ``False`` (default) is the mature biofilm: the attached biomass is held
+        as a sustained reservoir and nothing moves through the film. ``True``
+        makes the film **grow**: net production anywhere inside displaces
+        material outward (the film is incompressible and the wall impermeable),
+        that displacement carries the species with it, so they stratify by
+        growth rate, and biomass leaves at the surface by detachment. ``L_f``
+        becomes the final state entry. See
+        :mod:`aquakin.integrate.biofilm_growth`.
+    biofilm_density : float, optional
+        Total particulate density of the film (e.g. ``1e4`` g_COD/m^3). Required
+        when ``dynamic_thickness=True``: it is what converts production into a
+        displacement velocity. Ignored otherwise.
+    detachment_law : {"quadratic", "linear", "constant", "balance"}
+        What sets the detachment velocity at the surface, and so what the
+        thickness does:
+
+        - ``"balance"`` -- **a specified total thickness.** Detachment is set to
+          exactly the velocity arriving at the surface, so ``dL_f/dt`` is zero by
+          construction and the film stays at ``biofilm_thickness``. The species
+          still grow, advect and stratify, and biomass still leaves at the
+          surface; only the total is pinned. Takes no ``detachment_rate``. This
+          is what a specified average thickness "maintained by detachment" means.
+        - ``"quadratic"`` (default), ``"linear"``, ``"constant"`` -- **a
+          thickness that follows from the physics.** ``u_det = rate * L_f**p``
+          with ``p = 2, 1, 0``, so the film settles where growth and detachment
+          balance, and thins when decay outruns growth. Use
+          ``detachment_rate=0`` to let it settle wherever net production
+          integrates to zero.
+    detachment_rate : float
+        Detachment coefficient, in the units its law implies: m/time for
+        ``"constant"``, 1/time for ``"linear"``, 1/(m time) for ``"quadratic"``.
+        Must be left at zero for ``"balance"``, which has no rate of its own.
     output_port : str
         Name of the single output port (default ``"out"``).
     """
@@ -276,10 +313,17 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
                 )
             if self.detachment_rate < 0:
                 raise ValueError(f"IFASUnit '{self.name}' detachment_rate must not be negative.")
-            if self.detachment_law not in DETACHMENT_POWERS:
+            if self.detachment_law not in DETACHMENT_LAWS:
                 raise ValueError(
                     f"IFASUnit '{self.name}' detachment_law must be one of "
-                    f"{sorted(DETACHMENT_POWERS)}; got {self.detachment_law!r}."
+                    f"{sorted(DETACHMENT_LAWS)}; got {self.detachment_law!r}."
+                )
+            if self.detachment_law == BALANCED_DETACHMENT and self.detachment_rate:
+                raise ValueError(
+                    f"IFASUnit '{self.name}' takes no detachment_rate with "
+                    f"detachment_law='{BALANCED_DETACHMENT}': the detachment velocity is "
+                    f"whatever holds the thickness, not something set independently. "
+                    f"Got detachment_rate={self.detachment_rate!r}."
                 )
             seeded = self.biofilm_initial
             if seeded is not None:
@@ -603,7 +647,7 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         # reaction term the velocity integral needs.
         production = jnp.sum(dydt[1:] * self._advect_mask[None, :], axis=1)
         faces = advection_velocity(production, self.biofilm_density, dz)
-        u_det = detachment_velocity(self.detachment_rate, thickness, self.detachment_law)
+        u_det = surface_detachment(faces, self.detachment_rate, thickness, self.detachment_law)
         dLdt = thickness_derivative(faces, u_det)
         d_layers, surface_flux = advection_transport(
             y[1:], bulk, faces, dLdt, dz, self._advect_mask
