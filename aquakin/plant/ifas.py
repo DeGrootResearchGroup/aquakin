@@ -43,6 +43,7 @@ from aquakin.integrate.biofilm_growth import (
     layer_thickness,
     thickness_derivative,
 )
+from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import (
     Aeration,
@@ -190,6 +191,7 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     output_port: str = "out"
 
     def __post_init__(self) -> None:
+        check_positive(self.name, "volume", self.volume)
         missing = set(self.model.conditions_required) - set(self.conditions)
         if missing:
             raise ValueError(
@@ -200,10 +202,8 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
             raise ValueError(
                 f"IFASUnit '{self.name}' fill_fraction must be in (0, 1]; got {self.fill_fraction}."
             )
-        if self.specific_surface_area <= 0 or self.volume <= 0:
-            raise ValueError(
-                f"IFASUnit '{self.name}' specific_surface_area and volume must be positive."
-            )
+        check_positive(self.name, "specific_surface_area", self.specific_surface_area)
+        check_positive(self.name, "biofilm_thickness", self.biofilm_thickness)
 
         n = self.model.n_species
         soluble = (

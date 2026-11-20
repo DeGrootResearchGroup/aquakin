@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
 from aquakin.plant.units import ModelTimeScaling
@@ -71,6 +72,7 @@ class ADM1DigesterUnit(ModelTimeScaling, CouplingAware):
     temperature_fixed = True
 
     def __post_init__(self) -> None:
+        check_positive(self.name, "volume", self.volume)
         # Fill in any unspecified required conditions from the model defaults.
         defaults = {
             name: float(arr[0]) for name, arr in self.model.default_conditions().fields.items()

@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.integrate.events import Event
+from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.settling import SettlingModel
 from aquakin.plant.streams import Stream
@@ -136,6 +137,7 @@ class SBRUnit(ModelTimeScaling, CouplingAware):
     output_port: str = "effluent"
 
     def __post_init__(self) -> None:
+        check_positive(self.name, "full_volume", self.full_volume)
         if not self.phases:
             raise ValueError(f"SBRUnit '{self.name}' needs at least one phase.")
         if any(p.duration <= 0 for p in self.phases):

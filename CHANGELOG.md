@@ -83,6 +83,13 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   a newer aquakin is noted without making it stale. A frozen study runs on a
   snapshot of its plant with every model flattened (shipped models too), so
   neither project edits nor upgrades change it; unfreezing deletes its results.
+  A run replaces a study's results only once it succeeds: a run that fails or
+  is cancelled (or is killed) keeps the earlier results and notes the attempt.
+  Calibration and profile studies always fit the Gaussian likelihood of the
+  data, so they need each channel's measurement error (`sigma`, one value for
+  all or one per channel) or `estimate_sigma: true`; least squares, which
+  ignores the error and leaves uncertainties, profile intervals and priors
+  without a scale, remains available from Python (`Plant.calibrate`).
   A study can also be set up from plain settings: `study_form()` describes
   every setting, `plant_choices(spec)` lists the streams, parameters and
   measurable channels a study of that flowsheet may name, and `create_study`,
@@ -397,7 +404,10 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   profile rather than a single concentration vector, so the balance skipped the
   unit outright -- its bulk liquid as well as its attached biomass -- and the
   shortfall appeared as an imbalance the size of the whole tank.
-
+- Every plant unit with a volume (CSTR, MBR, IFAS/MBBR, digester, primary
+  clarifier, storage tank, SBR, UV and chlorine contact) refuses a volume that
+  is not a positive finite number; a zero or negative volume used to build, and
+  a steady-state solve of the plant then did not end.
 - A unit can no longer be named after one of its plant's models (for example a
   splitter named `asm1`), which made `plant.parameter_index("asm1.muH")` return
   the splitter's flow setpoint instead of the kinetic rate. Unit, port and

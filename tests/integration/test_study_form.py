@@ -71,6 +71,7 @@ def test_a_study_is_created_read_and_updated(project, tmp_path):
         "free": ["asm1.muH"],
         "observables": [{"stream": "effluent", "channels": ["SNH"]}],
         "data": str(data),
+        "sigma": 0.1,
         "max_iter": 20,
     }
     folder = create_study(project, "fit", study)
@@ -105,6 +106,7 @@ def test_bad_studies_are_refused_and_leave_nothing(project):
                 "free": ["asm1.muH"],
                 "observables": [{"stream": "effluent", "channels": ["SNH"]}],
                 "data": "missing.csv",
+                "sigma": 0.1,
             },
         )
     assert not (project / "studies" / "bad").exists()

@@ -58,6 +58,7 @@ class StudyRun:
         self.command = [*base, *(["--replace"] if replace else []), str(self.folder)]
         self.finished = threading.Event()
         self.final: dict | None = None
+        self.cancelled = False  # a cancel was asked for
         fd, name = tempfile.mkstemp(prefix="aquakin-study-", suffix=".log")
         self.log_path = Path(name)
         log = os.fdopen(fd, "w")
@@ -89,10 +90,16 @@ class StudyRun:
             self.on_event(event)
         self._proc.wait()
         if self.final is None:
-            self.final = {
-                "event": "error",
-                "error": f"the run ended without a result{self._log_tail()}",
-            }
+            # Asked to stop and killed before a checkpoint: that is a cancel (the
+            # study keeps whatever results it had), not a failure.
+            self.final = (
+                {"event": "cancelled"}
+                if self.cancelled
+                else {
+                    "event": "error",
+                    "error": f"the run ended without a result{self._log_tail()}",
+                }
+            )
             self.on_event(self.final)
         self.finished.set()
         with contextlib.suppress(OSError):
@@ -108,6 +115,7 @@ class StudyRun:
     def cancel(self) -> None:
         """Ask the run to stop at its next checkpoint; kill it if it has not
         within :data:`CANCEL_GRACE` seconds."""
+        self.cancelled = True
         try:
             self._proc.stdin.write("cancel\n")
             self._proc.stdin.flush()

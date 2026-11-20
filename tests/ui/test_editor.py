@@ -521,8 +521,9 @@ def test_edits_can_be_undone_and_unapplied_form_edits_are_not_lost(tmp_path):
         ed.state.flush()
         ed.on_select({"nodes": ["feed"], "edges": []})
         ed.state.flush()
+        before = ed.state.sel_rows
         ed.cancel_apply()
-        assert "sel_rows" in ed.state._pending_update
+        assert ed.state.sel_rows != before and ed.state.sel_rows[1:] == before[1:]
 
         # Opening another file loses the history.
         ed.on_move([{"id": "tank", "position": {"x": 5, "y": 5}}])
@@ -602,4 +603,35 @@ def test_a_flowsheet_without_a_file_asks_where_to_keep_it(tmp_path):
         assert ed.state.unsaved_open and not ed.state.unsaved_can_save
         ed.answer_unsaved("cancel")
     finally:
+        ed.worker.stop()
+
+
+def test_toolbar_actions_apply_the_forms_edits_and_aeration_suits_the_model(tmp_path):
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-pending-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        ed.on_select({"nodes": ["tank"], "edges": []})
+        ed.save_button(_rows_with(ed, "volume", "1300"))
+        assert "volume: 1300.0" in (project / "flowsheet.yaml").read_text()
+        ed.save_button(_rows_with(ed, "volume", "lots"))  # not applied, not saved
+        assert "volume: 'lots'" in ed.state.message
+        ed.request_open(_rows_with(ed, "volume", "lots"))
+        assert not ed.state.unsaved_open
+        ed.simulate(_rows_with(ed, "volume", "lots"))
+        assert not ed._runs
+        ed.run_study("short", _rows_with(ed, "volume", "1350"))
+        assert ed.doc.units["tank"].settings["volume"] == 1350.0
+        assert "volume: 1350.0" in (project / "flowsheet.yaml").read_text()  # saved first
+        assert ed._runs["short"].wait(300)["event"] == "done"
+
+        # Switching on aeration in an ASM3 tank aerates ASM3's oxygen at once.
+        rows = ed.state.sel_rows
+        ed.reshape_form(rows, next(i for i, r in enumerate(rows) if r["key"] == "model"), "asm3")
+        rows = ed.state.sel_rows
+        i = next(i for i, r in enumerate(rows) if r["key"] == "aeration.mode")
+        ed.reshape_form(rows, i, "kla")
+        assert ed.doc.units["tank"].settings["aeration"]["species"] == "SO2"
+    finally:
+        ed.stop_runs()
         ed.worker.stop()

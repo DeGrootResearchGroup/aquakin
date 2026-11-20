@@ -120,7 +120,7 @@ def test_chlorine_residual_dynamics_and_validation(asm1):
     d = cl.rhs(0.0, jnp.asarray([2.0]), {"in": s_in}, asm1.default_parameters())
     assert float(d[0]) == pytest.approx((1000.0 / 500.0) * (5.0 - 2.0) - 2.0 * 2.0)
     assert cl.state_size == 1
-    with pytest.raises(ValueError, match="volume must be > 0"):
+    with pytest.raises(ValueError, match="volume must be a positive number"):
         ChlorineContactUnit("c", asm1, volume=0.0, dose=5.0, ct_per_log=1.0)
     with pytest.raises(ValueError, match="ct_per_log must be > 0"):
         ChlorineContactUnit("c", asm1, volume=1.0, dose=5.0, ct_per_log=0.0)
