@@ -358,3 +358,119 @@ def test_coarse_layer_counts_are_inadequate_for_this_biofilm(model):
 
     assert coarse["flux_s"] > 1.05 * reference["flux_s"]
     assert coarse["cs_bulk"] < 0.6 * reference["cs_bulk"]
+
+
+# --- the cases where the benchmark lets the thickness move -------------------
+#
+# Cases 2 and 5 report a *mean* biofilm thickness below the specified 500 um:
+# there lysis outruns growth and the benchmark lets the film thin until the two
+# balance, so thickness is an output rather than an input. That is exactly
+# ``dL_f/dt = u(L_f) = 0`` with no detachment -- the film settles where net
+# production integrates to zero -- which is how they are run here.
+#
+# These two are checked against the published table directly rather than against
+# an independent re-solve. The table itself carries the corroboration: three 1-D
+# models (analytical, pseudo-analytical and numerical) were submitted for each
+# case, and where they disagree the spread is the meaningful tolerance, so it is
+# the spread that is asserted rather than a single column.
+
+#: Published 1-D results and, for the thickness, the range the three 1-D models
+#: span. Fluxes in g/(m2 d), concentrations in g/m3, thickness in um.
+PUBLISHED_MOVING = {
+    "oxygen_limited": dict(
+        case=dict(co2_bulk=0.2),
+        n_layers=(48, 96),
+        cs_bulk=19.0,
+        flux_s=2.2,
+        thickness_range=(350.0, 360.0),
+    ),
+    "boundary_layer": dict(
+        case=dict(boundary_layer=500e-6),
+        n_layers=(48,),
+        cs_bulk=15.7,
+        flux_s=2.8,
+        thickness_range=(430.0, 467.0),
+    ),
+}
+
+
+def _moving_film(model, n_layers, co2_bulk=C_O2, boundary_layer=1e-9, t_end=200.0):
+    """Run a benchmark case with the thickness free to find its own level."""
+    diffusivity = jnp.array([D_S, D_O2, 0.0])
+    unit = IFASUnit(
+        "reactor",
+        model,
+        volume=V_R,
+        input_port_names=["in"],
+        specific_surface_area=A_V,
+        fill_fraction=1.0,
+        biofilm_thickness=L_F,
+        n_layers=n_layers,
+        diffusivity=diffusivity,
+        boundary_layer=boundary_layer,
+        boundary_diffusivity=diffusivity,
+        conditions={"T": 293.15},
+        aeration=Aeration(kla=1.0e6, do_sat=co2_bulk, species="SO2"),
+        # No detachment: the benchmark's rule for these cases is that the film
+        # thins until growth and lysis balance over its depth.
+        dynamic_thickness=True,
+        biofilm_density=X_F,
+        detachment_rate=0.0,
+        biofilm_initial=model.concentrations({"XH": X_F, "SS": 1.0, "SO2": co2_bulk}),
+    )
+    plant = Plant("bm1", time_unit="d")
+    plant.add_unit(unit)
+    plant.add_influent(
+        "feed", model.influent({"SS": C_S_IN, "SO2": co2_bulk}, Q=Q), to="reactor.in"
+    )
+
+    sol = plant.solve(t_span=(0.0, t_end), y0=plant.initial_state(), t_eval=jnp.asarray([t_end]))
+    rows, thickness = unit._split(jnp.asarray(np.asarray(sol.state)[-1]))
+    rows = np.asarray(rows)
+    cs_bulk = float(rows[0, model.species_index["SS"]])
+    return dict(
+        cs_bulk=cs_bulk,
+        co2_base=float(rows[-1, model.species_index["SO2"]]),
+        flux_s=Q * (C_S_IN - cs_bulk) / A_F,
+        thickness=float(thickness) * 1e6,
+    )
+
+
+@pytest.mark.parametrize("name", sorted(PUBLISHED_MOVING))
+def test_the_film_finds_the_thickness_the_benchmark_reports(model, name):
+    """BM1's two moving-thickness cases, which a fixed ``L_f`` cannot reach.
+
+    The discretization is first order, so where a case needs a fine grid the two
+    runs are Richardson-extrapolated; where one grid is already converged it is
+    used directly.
+    """
+    spec = PUBLISHED_MOVING[name]
+    runs = [_moving_film(model, n, **spec["case"]) for n in spec["n_layers"]]
+    if len(runs) == 2:
+        coarse, fine = runs
+        got = {k: 2.0 * fine[k] - coarse[k] for k in fine}
+    else:
+        got = runs[0]
+
+    low, high = spec["thickness_range"]
+    assert low * 0.95 <= got["thickness"] <= high * 1.05, (
+        f"{name}: thickness {got['thickness']:.0f} um outside the published "
+        f"{low:.0f}-{high:.0f} um spread"
+    )
+    assert got["flux_s"] == pytest.approx(spec["flux_s"], rel=0.06)
+    assert got["cs_bulk"] == pytest.approx(spec["cs_bulk"], rel=0.06)
+    # Both cases thin the film well below the 500 um a fixed-thickness run holds.
+    assert got["thickness"] < 0.96 * L_F * 1e6
+
+
+def test_oxygen_is_exhausted_at_the_base_when_it_limits(model):
+    """Case 2's defining feature: the electron acceptor runs out inside the film.
+
+    The benchmark reports zero oxygen at the carrier, which is what moves the
+    limitation off the organic substrate -- and what makes the deep film pure
+    decay, so that the thickness has to shrink.
+    """
+    got = _moving_film(model, 48, co2_bulk=0.2)
+    assert got["co2_base"] < 1e-3
+    # ... and the substrate is then the one left over, not the limiting one.
+    assert got["cs_bulk"] > 0.5 * C_S_IN
