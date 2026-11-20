@@ -62,7 +62,8 @@ class StorageTank:
         Default 0 -- with no release the tank fills and bypasses (the BSM2
         open-loop default). Ignored when ``level_setpoint`` is set.
     level_setpoint : float, optional
-        If given, run a **proportional level controller**: the release request
+        The liquid volume to hold (m³). If given, run a **proportional level
+        controller**: the release request
         becomes ``clip(output_flow_bias + level_gain*(V - level_setpoint), 0,
         output_flow_max)`` instead of the fixed ``output_flow``. The release
         rises with the liquid level, so the tank self-regulates to a steady
@@ -73,8 +74,8 @@ class StorageTank:
         is only available *after* the flow solve -- so the controller lives in
         the tank).
     level_gain : float, optional
-        Proportional gain of the level controller (m³/d per m³). Only used when
-        ``level_setpoint`` is set.
+        Proportional gain of the level controller (1/d: m³/d per m³). Only used
+        when ``level_setpoint`` is set.
     output_flow_bias : float, optional
         Feed-forward release at the setpoint level (m³/d). Only used with
         ``level_setpoint``.

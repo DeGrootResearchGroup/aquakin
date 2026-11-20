@@ -69,19 +69,24 @@ def _oxygen(species: list[str]) -> str | None:
     return next((s for s in species if s.upper().startswith(("SO", "S_O"))), None)
 
 
-_UNIT_IN_HELP = re.compile(r"\(([^()]{1,14})\)|,\s*(m³/d|m³/h)\b")
+_UNIT_IN_HELP = re.compile(r"\(([^()]{1,40})\)|,\s*(m³/d|m³/h)\b")
 _UNIT = re.compile(
     r"^(m³|m²|m|mm|K|°C|d|h|s|min|1/d|1/h|1/s|m³/d|m³/h|m/d|m/h|g/m³|kg/m³|mg/L|g/L|%"
-    r"|g_\w+/m³|kg_\w+/m³|mol/m³|kmol/m³)$"
+    r"|m²/m³|mW/cm²|mJ/cm²|mJ/cm²/log|g_\w+/m³|kg_\w+/m³|mol/m³|kmol/m³)$"
 )
+#: Units on the plant's clock, written per day in the help; shown per the clock.
+_PER_DAY = {"d": "{}", "1/d": "1/{}", "m³/d": "m³/{}", "m/d": "m/{}"}
 
 
-def unit_in(help_text: str) -> str:
-    """The unit a setting's help names, ``(m³)`` or ``, m³/d``, or ``""``."""
+def unit_in(help_text: str, clock: str = "d") -> str:
+    """The unit a setting's help names, ``(m³)``, ``(g/m³, i.e. mg/L)`` or
+    ``, m³/d``, or ``""``. aquakin runs every flow and time on the plant's clock,
+    and the help writes them per day: they are shown per ``clock``."""
     for match in _UNIT_IN_HELP.finditer(help_text or ""):
-        text = (match.group(1) or match.group(2)).strip().replace("^3", "³").replace("^2", "²")
+        text = re.split(r"[,;:]", match.group(1) or match.group(2))[0].strip()
+        text = text.replace("^3", "³").replace("^2", "²")
         if _UNIT.match(text):
-            return text
+            return _PER_DAY[text].format(clock) if text in _PER_DAY else text
     return ""
 
 
@@ -137,7 +142,12 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
     for s in doc.catalog.settings(u.kind):
         key, value, t = s["name"], u.settings.get(s["name"]), s["type"]
         label = key + (" *" if s["required"] else "")
-        common = {"hint": s["help"], "placeholder": _placeholder(s), "suffix": unit_in(s["help"])}
+        clock = (doc.meta.get("options") or {}).get("time_unit") or "d"
+        common = {
+            "hint": s["help"],
+            "placeholder": _placeholder(s),
+            "suffix": unit_in(s["help"], clock),
+        }
         if t == "model":
             rows.append(_row(key, label, "select", value or "", items=doc.model_names(), **common))
         elif t == "conditions":

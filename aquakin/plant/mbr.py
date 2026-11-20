@@ -56,7 +56,8 @@ class MBRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         (open-loop ``kla`` or a DO ``do_setpoint`` the plant auto-wires a
         controller for). ``None`` = no aeration.
     waste_flow : float
-        Mixed-liquor wasting flow (the only solids sink; sets SRT = V/waste_flow).
+        Mixed-liquor wasting flow (m³/d), the only solids sink
+        (SRT = V/waste_flow).
         Default 0 (no wasting -- solids then accumulate, see the SBR note).
     rejection : float
         Membrane particulate rejection in [0, 1]; the permeate carries
@@ -65,14 +66,14 @@ class MBRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         Species the membrane rejects (the solids, e.g. the ASM ``X*``). Solubles
         pass through unhindered.
     membrane_area : float
-        Membrane area, for the permeate flux ``J = Q_permeate / area`` that drives
-        fouling and TMP.
+        Membrane area (m²), for the permeate flux ``J = Q_permeate / area`` that
+        drives fouling and TMP.
     fouling_rate : float
         Fouling-resistance growth per unit flux (``dR_f/dt`` gains
         ``fouling_rate * J``). Default 0 (no fouling).
     fouling_relax : float
-        First-order recovery rate of the fouling resistance (reversible fouling /
-        relaxation), 1/time. Default 0.
+        First-order recovery rate (1/d) of the fouling resistance (reversible
+        fouling / relaxation). Default 0.
     membrane_resistance : float
         Clean-membrane resistance ``R_m`` in the TMP relation.
     tmp_viscosity : float

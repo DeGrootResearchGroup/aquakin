@@ -426,7 +426,7 @@ def _influent_kind() -> UnitKind:
                 False,
                 None,
                 optional=True,
-                help="Volumetric flow rate (constant feed).",
+                help="Volumetric flow rate of the constant feed (m³/d).",
             ),
             Setting(
                 "T",
@@ -434,14 +434,17 @@ def _influent_kind() -> UnitKind:
                 False,
                 None,
                 optional=True,
-                help="Influent temperature (Kelvin); unset leaves the feed temperature-agnostic.",
+                help="Influent temperature (K); unset leaves the feed temperature-agnostic.",
             ),
             Setting(
                 "composition",
                 "species_values",
                 False,
                 {},
-                help="Feed concentration of each species; species not listed are absent.",
+                help=(
+                    "Feed concentration of each species, in that species' unit (g/m³ for "
+                    "most); species not listed are absent."
+                ),
             ),
             Setting(
                 "series",
