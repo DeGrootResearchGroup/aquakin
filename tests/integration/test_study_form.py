@@ -290,6 +290,7 @@ def test_the_results_of_each_analysis_read_as_plain_data(project):
 
     fisher = create_study(project, "f", {"kind": "fisher", **common, "t_obs": [1.0], "sigma": 0.1})
     (fisher / "results").mkdir()
+    assert study_results(fisher) == {"kind": "fisher", "files": [], "summary": None}
     write_matrix(fisher / "results" / "fisher.csv", np.array([[4.0]]), ["asm1.muH"])
     (fisher / "results" / "summary.yaml").write_text("values: {asm1.muH: 6.0}\nstd: null\n")
     found = study_results(fisher)
@@ -299,12 +300,21 @@ def test_the_results_of_each_analysis_read_as_plain_data(project):
     fit = create_study(
         project, "c", {"kind": "calibrate", **common, "data": str(data), "sigma": 0.1}
     )
+    (fit / "results").mkdir()
+    assert study_results(fit) == {  # no results yet: the data alone
+        "kind": "calibrate",
+        "files": [],
+        "summary": None,
+        "data": {"t": [0.5, 1.0], "values": {"effluent": {"SNH": [1.0, 1.2]}}},
+    }
     write_trajectory(fit / "results" / "fitted.csv", [0.5, 1.0], {"effluent.SNH": [1.05, math.inf]})
     (fit / "results" / "fit.yaml").write_text("fitted: {asm1.muH: 5.9}\nconverged: true\n")
     found = study_results(fit)
     assert found["fitted"] == {"t": [0.5, 1.0], "values": {"effluent": {"SNH": [1.05, None]}}}
     assert found["data"]["values"] == {"effluent": {"SNH": [1.0, 1.2]}}  # TN not measured
     assert found["summary"]["converged"] is True
+    (fit / "obs.csv").unlink()  # the data gone: the fit alone
+    assert "data" not in study_results(fit)
 
     prof = create_study(
         project,
@@ -312,6 +322,8 @@ def test_the_results_of_each_analysis_read_as_plain_data(project):
         {"kind": "profile", **common, "data": str(data), "sigma": 0.1, "profile": "asm1.muH",
          "grid": [5.0, 6.0]},
     )  # fmt: skip
+    (prof / "results").mkdir()
+    assert study_results(prof) == {"kind": "profile", "files": [], "summary": None}
     write_table(
         prof / "results" / "profile.csv", {"asm1.muH": [5.0, 6.0], "delta_loss": [2.0, 0.0]}
     )
@@ -326,6 +338,7 @@ def test_the_results_of_each_analysis_read_as_plain_data(project):
          "candidates": [{"name": "a", "observables": common["observables"], "sigma": 0.1}]},
     )  # fmt: skip
     (rank / "results").mkdir()
+    assert study_results(rank) == {"kind": "rank", "files": [], "criterion": "A"}
     write_table(rank / "results" / "ranking.csv", {"rank": [1], "candidate": ["a"], "A": [0.5]})
     found = study_results(rank)
     assert found["criterion"] == "A" and found["table"]["candidate"] == ["a"]

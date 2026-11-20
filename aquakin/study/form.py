@@ -547,7 +547,7 @@ def _analysis_results(folder: Path, study, out: Path) -> dict:
                     {n: _finite(list(v)) for n, v in columns.items() if n in names}, streams
                 ),
             }
-    elif study.kind == "profile":
+    else:  # profile, the last kind with results to read
         found["summary"] = yaml_file("profile.yaml")
         if (out / "profile.csv").is_file():
             found["table"] = _finite_tree(read_table(out / "profile.csv"))
@@ -560,10 +560,8 @@ def _finite_tree(value):
         return {k: _finite_tree(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_finite_tree(v) for v in value]
-    if isinstance(value, bool) or value is None or isinstance(value, str):
-        return value
-    if isinstance(value, (int, float)):
-        return value if math.isfinite(value) else None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     return value
 
 
