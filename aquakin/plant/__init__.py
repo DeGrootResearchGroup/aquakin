@@ -74,6 +74,7 @@ from aquakin.plant.characterize import (
     fractionate,
 )
 from aquakin.plant.influent import (
+    InfluentExpression,
     InfluentSeries,
     read_influent_csv,
     read_influent_table,
@@ -106,6 +107,10 @@ from aquakin.plant.settling import (
 )
 from aquakin.plant.steady import PTCResult, ptc_forward, solve_steady_state
 from aquakin.plant.storage import StorageTank
+from aquakin.plant.time_expr import (
+    TimeExpressionError,
+    compile_time_expression,
+)
 from aquakin.plant.streams import Stream, StreamSeries
 from aquakin.plant.temperature import (
     AlgebraicTemperature,
@@ -190,6 +195,7 @@ __all__ = [
     "IFASUnit",
     "IdealThickener",
     "IdentityTranslator",
+    "InfluentExpression",
     "InfluentFractions",
     "InfluentSeries",
     "InterfaceSettling",
@@ -230,6 +236,7 @@ __all__ = [
     "StreamSeries",
     "TemperatureModel",
     "ThresholdSplitter",
+    "TimeExpressionError",
     "UVUnit",
     "Unit",
     "UnitScalingTranslator",
@@ -250,6 +257,7 @@ __all__ = [
     "characterize_influent",
     "check_spec",
     "co2e_from_energy",
+    "compile_time_expression",
     "ct_log_removal",
     "ct_value",
     "derived_BOD",
