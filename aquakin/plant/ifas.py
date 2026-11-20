@@ -405,6 +405,45 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
             out[name] = float(np.max(np.abs(np.diff(column))) / abs(surface))
         return out
 
+    def component_inventory(self, state, content, params) -> dict[str, float]:
+        """Component mass held in the tank: the bulk liquid plus the biofilm.
+
+        The unit's state is a profile rather than a single concentration vector,
+        so without this the plant's mass balance skips the tank entirely -- not
+        only its attached biomass but its bulk liquid too, which shows up as an
+        imbalance the size of the whole unit. The biofilm holds
+        ``A_V * L_f * mean(C)`` per unit bulk volume, and when the film grows
+        that inventory moves with ``L_f``, so it has to be read from the state
+        rather than from the configured thickness.
+
+        Parameters
+        ----------
+        state : jnp.ndarray
+            This unit's flat state.
+        content : dict
+            ``{component: (n_species,) array}`` of per-species content.
+        params : jnp.ndarray
+            This unit's parameter slice (unused -- the geometry is fixed).
+
+        Returns
+        -------
+        dict
+            ``{component: grams}``.
+        """
+        rows, thickness = self._split(jnp.asarray(state).reshape(-1))
+        rows = np.asarray(rows)
+        bulk, layers = rows[0], rows[1:]
+        # Biofilm volume per unit bulk volume: area ratio times thickness, split
+        # evenly across the layers.
+        film_volume = self._area_per_volume * float(thickness) / self.n_layers
+        out: dict[str, float] = {}
+        for component, vec in content.items():
+            vec = np.asarray(vec)
+            out[component] = self.volume * (
+                float(np.dot(bulk, vec)) + film_volume * float(np.sum(layers @ vec))
+            )
+        return out
+
     def set_temperature(self, temperature_K: float) -> None:
         """Set the static operating temperature (Kelvin) for the bulk + biofilm."""
         if "T" not in self.model.conditions_required:
