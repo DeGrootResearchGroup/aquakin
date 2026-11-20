@@ -134,3 +134,15 @@ def test_a_bad_value_is_named_by_its_field(bsm1):
     row["value"] = "internal_recycle 55338"
     with pytest.raises(ValueError, match="write each entry as 'name: value'"):
         forms.read_rows(bsm1, "tank5_split", rows)
+
+
+def test_the_aerated_species_is_chosen_from_the_units_model(ui_catalog):
+    doc = Flowsheet(ui_catalog)
+    uid = doc.add("cstr", {"x": 0, "y": 0}, {"model": "asm3", "volume": 500.0})
+    doc.units[uid].settings["aeration"] = {"kla": 100.0, "species": "SO"}  # ASM1's name
+    rows = {r["key"]: r for r in forms.rows_for(doc, uid, _info)}
+    assert rows["aeration.species"]["value"] == "SO2"  # ASM3's oxygen, suggested
+    assert "SO2" in rows["aeration.species"]["items"]
+    _, settings = forms.read_rows(doc, uid, list(rows.values()))
+    assert settings["aeration"]["species"] == "SO2" and settings["aeration"]["kla"] == 100.0
+    assert forms._oxygen(["SA", "S_O2_aq"]) == "S_O2_aq" and forms._oxygen(["SA"]) is None

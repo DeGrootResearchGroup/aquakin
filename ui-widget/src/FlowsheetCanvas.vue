@@ -146,14 +146,27 @@ function onDragStop(evt) {
 // Vue Flow removes deleted elements itself; report them so Python can follow.
 // Only elements Python still has are reported, so the removals made while
 // applying Python's own update (a rename, say) are not echoed back.
+// Vue Flow reports a deleted unit and its wires as two changes; they are sent
+// as one removal (so one Undo brings both back), once the current task is done.
 const known = (list, id) => (list || []).some((x) => x.id === id);
+let removal = null;
+function queueRemoval(kind, ids) {
+  if (!ids.length) return;
+  if (!removal) {
+    removal = { nodes: [], edges: [] };
+    Promise.resolve().then(() => {
+      const r = removal;
+      removal = null;
+      emit("remove", r);
+    });
+  }
+  removal[kind].push(...ids);
+}
 function onNodesChange(changes) {
-  const ids = changes.filter((c) => c.type === "remove" && known(props.nodes, c.id)).map((c) => c.id);
-  if (ids.length) emit("remove", { nodes: ids, edges: [] });
+  queueRemoval("nodes", changes.filter((c) => c.type === "remove" && known(props.nodes, c.id)).map((c) => c.id));
 }
 function onEdgesChange(changes) {
-  const ids = changes.filter((c) => c.type === "remove" && known(props.edges, c.id)).map((c) => c.id);
-  if (ids.length) emit("remove", { nodes: [], edges: ids });
+  queueRemoval("edges", changes.filter((c) => c.type === "remove" && known(props.edges, c.id)).map((c) => c.id));
 }
 
 // Report the selection whenever Vue Flow's own selected lists change (a click,

@@ -29,7 +29,7 @@ __all__ = [
 ]
 
 _COMMON = ("description", "parameters", "initial_state")
-_FIT = ("free", "observables", "data", "t_span", "loss", "sigma", "estimate_sigma")
+_FIT = ("free", "observables", "data", "t_span", "sigma", "estimate_sigma")
 _FIT_OPTIONS = ("transforms", "use_priors", "n_starts", "max_iter", "time_unit")
 
 _KINDS = {
@@ -180,12 +180,6 @@ _FIELDS = {
         "channel. It is copied into the study.",
         None,
     ),
-    "loss": (
-        "choice",
-        "Objective",
-        "Least squares (mse), or the negative log-likelihood (nll) with the measurement error.",
-        "mse",
-    ),
     "estimate_sigma": (
         "boolean",
         "Estimate the error",
@@ -249,7 +243,6 @@ _FIELDS = {
 
 _CHOICES = {
     "sensitivity": ["forward", "reverse"],
-    "loss": ["mse", "nll"],
     "criterion": ["D", "A", "E", "modified_E"],
     "transforms": ["none", "positive_log", "logit"],
     "initial_state": ["default", "steady"],

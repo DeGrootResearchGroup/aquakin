@@ -399,8 +399,7 @@ study:
   observables:
     - {stream: effluent, channels: [SNH, TSS]}
   data: data.csv          # columns t, effluent.SNH, effluent.TSS
-  loss: nll
-  sigma: [0.2, 2.0]
+  sigma: [0.2, 2.0]       # each channel's measurement error (or estimate_sigma: true)
   laplace: true
 ```
 
@@ -414,7 +413,15 @@ influent table it was run on changes, `check` reports it **stale** and names
 what changed. A newer aquakin is noted but does not make a result stale; read
 the changelog to decide whether to run it again. Running a study that has
 results replaces them only when asked (`--replace`); `aquakin study copy` keeps
-a copy first.
+a copy first. The new results take the old ones' place only when the run
+succeeds: a run that fails or is cancelled leaves the earlier results as they
+were, and `check` notes the attempt.
+
+A calibration or profile study fits the likelihood of the data, so it needs
+the measurement error of each channel (`sigma`: one value for all channels, or
+one per channel) or `estimate_sigma: true` to estimate it from the fit. With
+those, the uncertainty of a fit and the interval of a profile have their
+proper scale.
 
 `aquakin study freeze` instead pins a study to a snapshot of its plant, taken
 inside the study folder with every model flattened (shipped models too) and

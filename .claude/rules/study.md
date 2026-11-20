@@ -18,6 +18,8 @@ results. The design and the owner's decisions are in
 | `study.yaml` | the user / the editor, **never rewritten by the runner** | `study:` inputs, validated strictly (`_Study`, Pydantic, `allow_inf_nan=False`) |
 | `run.yaml` | `run_study` | the run record: times, aquakin version, `spec_fingerprint`, `spec_inputs`, the study's own fingerprint (`_study_fingerprint`: settings + any file they read), outcome / error, `results: {path: sha256}` |
 | `results/` | `run_study` | result files (`files.py`), every value keyed by name |
+| `results.partial/` | `run_study` | where a run writes; renamed to `results/` only on success (a killed run leaves it; the next run deletes it, copies leave it out) |
+| `last_attempt.yaml` | `run_study` | the record of a run that failed or was cancelled while earlier results stood (they are kept; `check_study` notes it; a success removes it) |
 | `frozen.yaml` | `freeze_study` | its presence means frozen; the snapshot's fingerprint and `spec_inputs` at freeze time (never recomputed: a spec from an older aquakin may not read through the current catalogue) |
 | `snapshot/` | `freeze_study` | `flowsheet.yaml`, `models/` (every model **flattened**: its `extends` chain merged in, shipped models included as `copy_of: shipped`), `data/` |
 
@@ -33,6 +35,18 @@ results. The design and the owner's decisions are in
   inputs changed; live: `spec_inputs` differ, with the changed key named;
   frozen: the run's fingerprint differs from the snapshot's) / `fresh`. A
   different aquakin version is a **note**, never stale (owner's decision).
+- **A run replaces results only when it succeeds** (owner's decision after a
+  cancelled run left a study unrunnable): it writes into `results.partial/`,
+  and only a finished run removes the old `results/` and renames. Without
+  earlier results a failed or cancelled run writes `run.yaml` as before
+  (state `failed` / `cancelled`); with them it writes `last_attempt.yaml` and
+  the study keeps its state. "Has results" means a finished `run.yaml`, so a
+  failed or cancelled study runs again without `replace`.
+- **Calibration and profile fit the likelihood** (`loss="nll"`, owner's
+  decision): there is no `loss` setting; `_check_kind` requires `sigma` or
+  `estimate_sigma`, and a `sigma` list must have one entry per measured channel
+  (`_fit_sigma` passes it as an array, which broadcasts over the times; a list
+  would mean one per dataset). Least squares stays a Python option.
 - **Replacing results needs `replace=True`**; the message points at
   `copy_study`. **Unfreezing deletes the results and needs
   `discard_results=True`** (owner's decision: results computed on the snapshot

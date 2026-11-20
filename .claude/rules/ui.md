@@ -135,9 +135,22 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
 - **Unapplied form edits:** every form widget sets `sel_dirty`; the canvas's
   select event carries `sel_rows` while it is set, and `on_select` applies them
   to the unit selected until then (or keeps it selected, with the field-named
-  error, when they cannot be read). `refresh_selection` clears the flag. When
-  the rows Python computes equal the last ones sent, trame sends nothing, so a
-  reset of the form (`cancel_apply`) must `state.dirty("sel_rows")`.
+  error, when they cannot be read). Save, Open, Simulate and Run carry them
+  too (`_apply_pending`) and wait when they cannot be applied.
+  `refresh_selection` clears the flag. When the rows Python computes equal the
+  last ones sent, trame sends nothing and the page keeps its edits; even
+  `state.dirty` did not reach the page, so a reset of the form (`cancel_apply`)
+  marks the first row with a new `revision` (only there: a background redraw
+  must never overwrite typing).
+- **Aeration's species** is a form row (`aeration.species`, the model's
+  species) while aeration is on; a stored species the model lacks (ASM1's `SO`
+  on an ASM3 plant) is replaced by the model's oxygen (`forms._oxygen`), and
+  `reshape_form` applies such suggestions at once.
+- **A deleted unit and its wires are one removal**: Vue Flow reports them as
+  two changes; the canvas queues them and emits one `remove` (one Undo).
+- **A cancelled run is reported cancelled** even when it is killed before a
+  checkpoint (`StudyRun.cancelled`). "Replace results?" is asked only for a
+  study with results (fresh, stale, damaged).
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only

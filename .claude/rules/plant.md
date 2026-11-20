@@ -795,6 +795,12 @@ cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic eff
 means within 0.07% of Takács, the constant-influent steady state identical (layers
 2–5 equal there, where the rules agree).
 
+**Sizes are checked at construction.** Every unit with a volume calls
+`_constants.check_positive(name, "volume", value)` first in `__post_init__`
+(zero, negative and infinite volumes are refused: they used to build, and a
+steady-state solve then never ended). A new unit with a volume, area or
+other size does the same.
+
 **Unit catalogue (`plant/catalog.py`, the `aquakin` command).** Front ends
 (the flowsheet editor prototype) learn the unit types from
 `aquakin.plant.catalog`, never by importing unit classes. A kind's *settings* are
