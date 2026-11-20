@@ -21,7 +21,12 @@ from aquakin.plant.aeration_system import (
 )
 from aquakin.plant.balance import ComponentBalance, MassBalance, mass_balance
 from aquakin.plant.calibrate import PlantObservable, calibrate_plant
-from aquakin.plant.measures import Measure
+from aquakin.plant.measures import (
+    Measure,
+    MeasureSyntaxError,
+    channel_name,
+    parse_measure,
+)
 from aquakin.plant.spec import (
     SpecError,
     SpecWarning,
@@ -198,6 +203,7 @@ __all__ = [
     "MBRUnit",
     "MassBalance",
     "Measure",
+    "MeasureSyntaxError",
     "MixerUnit",
     "NoDigesterError",
     "OperatingCost",
@@ -247,6 +253,7 @@ __all__ = [
     "calibrate_plant",
     "carbon_footprint",
     "carbon_mass",
+    "channel_name",
     "characterize_influent",
     "check_spec",
     "co2e_from_energy",
@@ -273,6 +280,7 @@ __all__ = [
     "operational_cost_index",
     "operational_cost_index_bsm2",
     "oxygen_saturation",
+    "parse_measure",
     "plant_fisher_information",
     "plant_profile_likelihood",
     "plant_rank_sensor_sets",

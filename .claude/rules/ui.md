@@ -115,8 +115,16 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   refused (it would run its snapshot, not the drawing). The study dialog sets
   `flowsheet:` for a new study of a spec not named `flowsheet.yaml`
   (`flowsheet_entry`) and keeps an edited study's own (the form has no such
-  field, so `study_from` would drop it). A run started this way opens its results when it
-  finishes (`_show_when_done`). **Results** (`show_results`) asks the worker for
+  field, so `study_from` would drop it). **A measured channel may be a measure
+  expression** (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, see `.claude/rules/plant.md`):
+  the channels widget is a `VCombobox`, not a `VSelect`, so free text becomes a
+  chip and travels as a plain string the draft must not touch — aquakin reads it
+  when the study is written (`create_study` / `update_study`), and the refusal
+  shows beside the buttons like any other. Do **not** add a per-keystroke
+  validation round trip for it (the form rule above); `aquakin_ui` cannot read an
+  expression itself anyway. A structured measure read from a file still rides in
+  the row's `measures` map, keyed by name. A run started this way opens its
+  results when it finishes (`_show_when_done`). **Results** (`show_results`) asks the worker for
   `study_results`; the charts are redrawn in Python when the stream or channels
   change (`choose_results_stream` / `show_charts`).
 - **The flowsheet's file** (`_spec_file`) is the one last opened or saved here;

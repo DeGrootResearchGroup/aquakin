@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 import aquakin
-from aquakin.plant import CSTRUnit, InfluentSeries, Measure, Plant
+from aquakin.plant import CSTRUnit, InfluentSeries, Measure, Plant, PlantObservable
 from aquakin.plant.bsm import build_bsm1
 from aquakin.plant.calibrate import _normalize_observables, _resolve_observable_columns
 from aquakin.plant.identifiability import (
@@ -258,3 +258,95 @@ def test_a_file_chain_edited_into_a_loop_after_loading_has_no_base(tmp_path):
     assert composition_base(model) == "asm1"
     (tmp_path / "b.yaml").write_text("model:\n  name: b1\n  extends: a.yaml\n")
     assert composition_base(model) is None
+
+
+# ---------------------------------------------------------------------------
+# Measure expressions
+# ---------------------------------------------------------------------------
+
+
+def test_an_expression_channel_weighs_the_stream_like_the_measure_it_names():
+    """A channel written as text is the channel built in Python: same column."""
+    plant = _asm1_tank()
+    m = plant.units["tank"].model
+    params = plant.default_parameters()
+    t = np.array([0.0, 0.1])
+    sol = plant.solve(t_span=(0.0, 0.1), t_eval=t, params=params)
+
+    def columns(channels):
+        resolved, _ = _resolve_observable_columns(
+            plant, _normalize_observables([("tank.out", channels)], None, None)
+        )
+        return np.asarray(_observed_channels(plant, resolved, sol.t, sol.state, params))
+
+    written = columns(("BOD5 = 0.65*[SS] + 0.65*[XS]", "sTN = TN - [XS]", "Qm3 = Q/1000"))
+    built = columns(
+        (
+            Measure("BOD5", {"SS": 0.65, "XS": 0.65}),
+            Measure("sTN", {"XS": -1.0}, keywords={"TN": 1.0}),
+            Measure("Qm3", flow=1e-3),
+        )
+    )
+    np.testing.assert_array_equal(written, built)
+
+    # And each column is what it says: the stream, weighed.
+    stream = plant.stream(sol, "tank.out", params)
+    C, Q = np.asarray(stream.C), np.asarray(stream.Q)
+    tn = measure_map(m, ("TN",)).W[:, 0]
+    expected = np.stack(
+        [
+            0.65 * (C[:, m.species_index["SS"]] + C[:, m.species_index["XS"]]),
+            C @ tn - C[:, m.species_index["XS"]],
+            Q / 1000.0,
+        ],
+        axis=1,
+    )
+    np.testing.assert_allclose(written, expected, rtol=1e-10)
+
+
+def test_a_keyword_in_a_custom_channel_follows_the_composition_parameters():
+    """The weights of COD/TN/... move with the parameters of the run, so a
+    channel built on one must move with them too -- otherwise a fit of ``i_XB``
+    would see a custom TN but not its sensitivity."""
+    m = aquakin.load_model("asm1")
+    tn = measure_map(m, ("TN",))
+    half = measure_map(m, ("half_TN = 0.5*TN",))
+    assert half.params == tn.params == ("i_XB", "i_XP")
+    np.testing.assert_allclose(half.W[:, 0], 0.5 * tn.W[:, 0])
+    np.testing.assert_allclose(half.dW, 0.5 * tn.dW)
+
+    # A channel built only on species does not depend on them.
+    assert measure_map(m, ("x = [SNH]",)).params == ()
+
+
+def test_a_custom_channel_is_ranked_like_any_other():
+    """Sensor ranking maps every candidate through one union of whole streams,
+    which is only valid because a channel is linear in the stream."""
+    plant = _asm1_tank()
+    free = ["asm1.muH"]
+    t_obs = jnp.linspace(0.05, 0.1, 3)
+    sets = [
+        SensorSet([PlantObservable("tank.out", ("SNH",))], sigma=0.1),
+        SensorSet([PlantObservable("tank.out", ("half = 0.5*[SNH]",))], sigma=0.05),
+    ]
+    plain, half = plant_rank_sensor_sets(plant, sets, t_obs, free, t_span=(0.0, 0.1))
+    # Halving the channel and its noise together leaves the information unchanged,
+    # which it can only do if the custom column really is half the species column.
+    assert half.value == pytest.approx(plain.value, rel=1e-8)
+
+
+def test_an_expression_channel_names_its_stream_when_it_cannot_be_read():
+    plant = _asm1_tank()
+
+    def resolve(channel):
+        return _resolve_observable_columns(
+            plant, _normalize_observables([("tank.out", (channel,))], None, None)
+        )
+
+    with pytest.raises(KeyError, match="not a species of model"):
+        resolve("x = [NOPE]")
+    with pytest.raises(ValueError, match="cannot multiply two measured quantities"):
+        resolve("x = [SS]*[XS]")
+    # Either way the stream is named, so the user knows which observable to fix.
+    with pytest.raises(ValueError, match="stream 'tank.out'"):
+        resolve("x = [SS]*[XS]")

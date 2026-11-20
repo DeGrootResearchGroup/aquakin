@@ -102,10 +102,11 @@ class _Measure(BaseModel):
     model_config = _STRICT
     measure: str
     weights: dict[str, float] = {}
+    keywords: dict[str, float] = {}
     flow: float = 0.0
     temperature: float = 0.0
 
-    @field_validator("weights", mode="before")
+    @field_validator("weights", "keywords", mode="before")
     @classmethod
     def _int_weights(cls, v):
         return {k: _to_float(x) for k, x in v.items()} if isinstance(v, dict) else v
@@ -117,6 +118,22 @@ class _Observable(BaseModel):
     model_config = _STRICT
     stream: str
     channels: list[str | _Measure] | None = None
+
+    @field_validator("channels")
+    @classmethod
+    def _readable_measures(cls, v):
+        """Refuse an unreadable measure expression as the study is written.
+
+        Only the syntax: the species an expression names are resolved against
+        the model of the stream it reads, which needs the flowsheet, so they are
+        checked when the study runs.
+        """
+        from aquakin.plant.measures import is_measure_expression, parse_measure
+
+        for channel in v or []:
+            if is_measure_expression(channel):
+                parse_measure(channel)
+        return v
 
 
 class _Time(BaseModel):
@@ -478,18 +495,25 @@ def _channels(observable: _Observable):
         channels = tuple(
             c
             if isinstance(c, str)
-            else Measure(c.measure, c.weights, flow=c.flow, temperature=c.temperature)
+            else Measure(
+                c.measure, c.weights, keywords=c.keywords, flow=c.flow, temperature=c.temperature
+            )
             for c in observable.channels
         )
     return PlantObservable(observable.stream, channels)
 
 
 def _channel_names(observable) -> list[str]:
-    from aquakin.plant import Measure
+    """The names a resolved observable's channels are reported under.
+
+    A measure expression is reported under its own name, not the text that
+    defines it, so ``"BOD5 = 0.65*[SS]"`` becomes the column ``"<stream>.BOD5"``.
+    """
+    from aquakin.plant import channel_name
 
     if observable.channels is None:
         return []
-    return [c.name if isinstance(c, Measure) else c for c in observable.channels]
+    return [channel_name(c) for c in observable.channels]
 
 
 def _initial_state(plant, folder: Path, study: _Study, params):

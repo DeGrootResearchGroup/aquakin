@@ -96,6 +96,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Choose the best set of measurements from a candidate pool under a budget | `design_from_candidates` → `CandidateDesign` |
 | Optimise sampling times and initial concentrations | `optimize_experiment` → `ExperimentDesignResult` |
 | Configure the fit | `LaplaceConfig`, `OptimizerConfig`, `FreeICConfig` |
+| Name what a plant sensor measures | `aquakin.plant.PlantObservable` with species, a measurement keyword, a weighted sum of your own (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, read by `aquakin.plant.parse_measure`) or `aquakin.plant.Measure` |
 
 ## Uncertainty propagation and design
 
