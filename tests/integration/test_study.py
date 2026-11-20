@@ -337,9 +337,10 @@ def test_a_run_replaces_results_only_when_it_succeeds(project):
 
     # A study whose only run failed has no results to replace: it runs again as is.
     bad = _study(project, "bad_run", {"kind": "simulate", "streams": ["nowhere"]})
+    (bad / "results").mkdir()  # files no finished run recorded (an older aquakin's leftovers)
     with pytest.raises(Exception):
         run_study(bad)
-    assert check_study(bad).state == "failed"
+    assert check_study(bad).state == "failed" and not (bad / "results").exists()
     (bad / "study.yaml").write_text(
         yaml.safe_dump({"study": {"kind": "simulate", "streams": ["effluent"]}})
     )
@@ -748,3 +749,15 @@ def test_a_calibration_without_a_posterior_writes_no_covariance(project, monkeyp
     run_study(folder)
     assert not (folder / "results" / "covariance.csv").exists()
     assert yaml.safe_load((folder / "results" / "fit.yaml").read_text())["std"] is None
+
+
+def test_the_fit_is_given_one_error_per_channel_or_estimates_it():
+    from aquakin.study.study import _fit_sigma, _Study
+
+    base = {"kind": "calibrate", **FIT}
+    assert _fit_sigma(_Study.model_validate({**base, "sigma": None, "estimate_sigma": True})) == (
+        "estimate"
+    )
+    per_channel = _fit_sigma(_Study.model_validate(base))
+    assert isinstance(per_channel, np.ndarray) and per_channel.tolist() == [0.05, 0.5]
+    assert _fit_sigma(_Study.model_validate({**base, "sigma": 0.2})) == 0.2
