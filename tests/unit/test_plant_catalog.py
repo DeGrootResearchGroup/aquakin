@@ -9,10 +9,9 @@ unit built from those settings.
 
 import io
 import json
-
-import jax.numpy as jnp
 import re
 
+import jax.numpy as jnp
 import pytest
 
 import aquakin
@@ -490,3 +489,20 @@ def test_a_scheduled_setting_takes_a_number_or_a_readable_expression():
     )
     with pytest.raises(ValueError, match=re.escape("'composition.SNH'")):
         validate_settings(kind, {"model": "asm1", "Q": 1.0, "composition": {"SNH": "wobble(t)"}})
+
+
+@pytest.mark.parametrize("value", ["not a mapping", [1, 2], 3.0])
+def test_a_scheduled_composition_must_be_a_mapping(value):
+    from aquakin.plant.catalog import unit_kind, validate_settings
+
+    with pytest.raises(ValueError, match="'composition' must be a mapping"):
+        validate_settings(unit_kind("influent"), {"model": "asm1", "Q": 1.0, "composition": value})
+
+
+def test_a_scheduled_composition_is_keyed_by_species_name():
+    from aquakin.plant.catalog import unit_kind, validate_settings
+
+    with pytest.raises(ValueError, match="key 3 must be a string"):
+        validate_settings(
+            unit_kind("influent"), {"model": "asm1", "Q": 1.0, "composition": {3: 1.0}}
+        )

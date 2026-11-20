@@ -216,3 +216,13 @@ def test_an_unreadable_expression_in_a_spec_names_the_setting(tmp_path, model):
     (tmp_path / "flowsheet.yaml").write_text(yaml.safe_dump(doc))
     with pytest.raises(ValueError, match="'Q'"):
         Plant.from_spec(tmp_path / "flowsheet.yaml")
+
+
+def test_a_pattern_holding_a_non_finite_value_is_refused_by_the_spec(tmp_path, model):
+    """``inf`` builds (it is a number), but a spec is strict JSON and holds no
+    such value, so writing one has to say which influent and which field."""
+    from aquakin.plant.spec import SpecError
+
+    plant = _tank(model, InfluentExpression(model, Q=float("inf"), composition=FEED))
+    with pytest.raises(SpecError, match=r"influent 'feed' holds a value that is not finite \(Q\)"):
+        plant.to_spec(tmp_path / "flowsheet.yaml")
