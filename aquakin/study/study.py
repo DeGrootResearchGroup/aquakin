@@ -53,7 +53,12 @@ __all__ = [
     "unfreeze_study",
 ]
 
+#: The folder of a project that holds its studies, one folder each.
+STUDIES_DIR = "studies"
 STUDY_FILE = "study.yaml"
+#: The spec file a study follows unless its ``flowsheet:`` names another (and the
+#: name of the spec inside a frozen study's snapshot).
+SPEC_FILE = "flowsheet.yaml"
 RUN_FILE = "run.yaml"
 FROZEN_FILE = "frozen.yaml"
 RESULTS = "results"
@@ -62,6 +67,37 @@ PARTIAL = "results.partial"
 #: A run that failed or was cancelled while earlier results stood: they are kept.
 ATTEMPT_FILE = "last_attempt.yaml"
 SNAPSHOT = "snapshot"
+
+# Result files, inside ``results/``. Their names are part of the stored format:
+# a project written by an earlier aquakin must still read.
+PARAMETERS_FILE = "parameters.yaml"
+FINAL_STATE_FILE = "final_state.yaml"
+# simulate at steady state
+STREAMS_STEADY_FILE = "streams.yaml"
+MEASURED_STEADY_FILE = "measured.yaml"
+# simulate in time
+STREAMS_FILE = "streams.csv"
+MEASURED_FILE = "measured.csv"
+# fisher
+FISHER_FILE = "fisher.csv"
+FISHER_SUMMARY_FILE = "summary.yaml"
+# calibrate
+FIT_FILE = "fit.yaml"
+FITTED_FILE = "fitted.csv"
+COVARIANCE_FILE = "covariance.csv"
+# profile
+PROFILE_FILE = "profile.csv"
+PROFILE_SUMMARY_FILE = "profile.yaml"
+# rank
+RANKING_FILE = "ranking.csv"
+
+#: The kinds of study. Each has a runner (``_RUNNERS``), required fields
+#: (``_REQUIRED``), a form entry and a result reader (:mod:`aquakin.study.form`).
+KINDS = ("simulate", "fisher", "calibrate", "profile", "rank")
+#: Every state :func:`check_study` can report (see :class:`StudyStatus`).
+STATES = ("not run", "fresh", "stale", "damaged", "failed", "cancelled")
+#: The states of a study whose last run finished, so it has results to show or replace.
+RESULT_STATES = ("fresh", "stale", "damaged")
 
 
 class StudyError(ValueError):
@@ -171,10 +207,10 @@ class _Candidate(BaseModel):
 
 class _Study(BaseModel):
     model_config = _STRICT
-    kind: Literal["simulate", "fisher", "calibrate", "profile", "rank"]
+    kind: Literal[KINDS]
     description: str | None = None
     # The flowsheet, relative to the study folder (a live study's plant).
-    flowsheet: str = "../../flowsheet.yaml"
+    flowsheet: str = f"../../{SPEC_FILE}"
     # Plant parameters changed from the flowsheet's, "<model>.<param>": value.
     parameters: dict[str, float] = {}
     # "default" (each unit's own), "steady" (the steady state at the
@@ -246,6 +282,8 @@ class _Study(BaseModel):
 
 
 _REQUIRED = {
+    # A simulation needs streams or observables, either one (see _check_kind).
+    "simulate": (),
     "fisher": ("free", "observables", "t_obs", "sigma"),
     "calibrate": ("free", "observables", "data"),
     "profile": ("free", "observables", "data", "profile", "grid"),
@@ -361,7 +399,7 @@ def _write_yaml(path: Path, data: dict) -> None:
 def _flowsheet(folder: Path, study: _Study) -> Path:
     """The spec the study builds its plant from: the snapshot when frozen."""
     if (folder / FROZEN_FILE).is_file():
-        return folder / SNAPSHOT / "flowsheet.yaml"
+        return folder / SNAPSHOT / SPEC_FILE
     return (folder / study.flowsheet).resolve()
 
 
@@ -394,6 +432,11 @@ class StudyStatus:
     frozen: bool
     reasons: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+
+    @property
+    def has_results(self) -> bool:
+        """Whether the last run finished, so there are results to show or replace."""
+        return self.state in RESULT_STATES
 
 
 def _changed_inputs(before: dict, now: dict) -> list[str]:
@@ -555,7 +598,7 @@ def _run_simulate(
     from aquakin.plant.calibrate import _resolve_observable_columns, measured
     from aquakin.progress import report
 
-    written = [write_named_values(out / "parameters.yaml", _named_parameters(plant, params))]
+    written = [write_named_values(out / PARAMETERS_FILE, _named_parameters(plant, params))]
     observables = [_channels(o) for o in study.observables]
     resolved = _resolve_observable_columns(plant, observables)[0] if observables else ()
     if study.time is None:
@@ -573,7 +616,7 @@ def _run_simulate(
                 values["T"] = s.scalars["T"]
             streams[name] = values
         if streams:
-            written.append(write_named_values(out / "streams.yaml", streams))
+            written.append(write_named_values(out / STREAMS_STEADY_FILE, streams))
         if resolved:
             channels = {}
             for observable, (endpoint, m) in zip(observables, resolved):
@@ -581,8 +624,8 @@ def _run_simulate(
                 values = np.asarray(measured(s.C, s.Q, s.scalars.get("T"), m, params))
                 names = _channel_names(observable) or list(s.model.species)
                 channels[observable.stream] = dict(zip(names, values))
-            written.append(write_named_values(out / "measured.yaml", channels))
-        written.append(write_named_values(out / "final_state.yaml", plant.named_state(state)))
+            written.append(write_named_values(out / MEASURED_STEADY_FILE, channels))
+        written.append(write_named_values(out / FINAL_STATE_FILE, plant.named_state(state)))
         return written
 
     t_eval = None if study.time.t_eval is None else np.asarray(_times(study.time.t_eval))
@@ -600,12 +643,12 @@ def _run_simulate(
             columns[f"{name}.{sp}"] = np.asarray(s.C)[:, i]
     report(progress, "simulate", 1, 1, "writing the results")
     if columns:
-        written.append(write_trajectory(out / "streams.csv", sol.t, columns))
+        written.append(write_trajectory(out / STREAMS_FILE, sol.t, columns))
     if resolved:
         measured_columns = _measured_columns(plant, sol, observables, params)
-        written.append(write_trajectory(out / "measured.csv", sol.t, measured_columns))
+        written.append(write_trajectory(out / MEASURED_FILE, sol.t, measured_columns))
     final = np.asarray(sol.state)[-1]
-    written.append(write_named_values(out / "final_state.yaml", plant.named_state(final)))
+    written.append(write_named_values(out / FINAL_STATE_FILE, plant.named_state(final)))
     return written
 
 
@@ -647,13 +690,13 @@ def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path, progr
         "std": std,
         "criteria": criteria,
     }
-    path = out / "summary.yaml"
+    path = out / FISHER_SUMMARY_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_yaml(path, summary)
     return [
-        write_matrix(out / "fisher.csv", fim.matrix, fim.names),
+        write_matrix(out / FISHER_FILE, fim.matrix, fim.names),
         path,
-        write_named_values(out / "parameters.yaml", _named_parameters(plant, params)),
+        write_named_values(out / PARAMETERS_FILE, _named_parameters(plant, params)),
     ]
 
 
@@ -744,15 +787,15 @@ def _run_calibrate(
         if result.sigma_estimate is None
         else dict(zip(names, (float(v) for v in np.ravel(result.sigma_estimate)))),
     }
-    written = [write_named_values(out / "parameters.yaml", _named_parameters(plant, fitted))]
-    path = out / "fit.yaml"
+    written = [write_named_values(out / PARAMETERS_FILE, _named_parameters(plant, fitted))]
+    path = out / FIT_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_yaml(path, summary)
     written.append(path)
     if result.posterior_cov is not None:
         written.append(
             write_matrix(
-                out / "covariance.csv", np.asarray(result.posterior_cov), result.parameter_names
+                out / COVARIANCE_FILE, np.asarray(result.posterior_cov), result.parameter_names
             )
         )
     # The fitted plant's channels at the observation times, beside the data.
@@ -761,7 +804,7 @@ def _run_calibrate(
     observables = [_channels(o) for o in study.observables]
     written.append(
         write_trajectory(
-            out / "fitted.csv", sol.t, _measured_columns(plant, sol, observables, fitted)
+            out / FITTED_FILE, sol.t, _measured_columns(plant, sol, observables, fitted)
         )
     )
     return written
@@ -787,7 +830,7 @@ def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, prog
     )
     written = [
         write_table(
-            out / "profile.csv",
+            out / PROFILE_FILE,
             {
                 study.profile: list(prof.grid),
                 "loss": [None if not np.isfinite(v) else v for v in prof.loss],
@@ -802,7 +845,7 @@ def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, prog
         "ci": [None if lo is None else float(lo), None if hi is None else float(hi)],
         "delta": study.delta,
     }
-    path = out / "profile.yaml"
+    path = out / PROFILE_SUMMARY_FILE
     _write_yaml(path, summary)
     written.append(path)
     return written
@@ -842,7 +885,7 @@ def _run_rank(plant, folder: Path, study: _Study, params, y0, out: Path, progres
     )
     written = [
         write_table(
-            out / "ranking.csv",
+            out / RANKING_FILE,
             {
                 "rank": list(range(1, len(ranked) + 1)),
                 "candidate": [study.candidates[c.index].name for c in ranked],
@@ -850,7 +893,7 @@ def _run_rank(plant, folder: Path, study: _Study, params, y0, out: Path, progres
                 "improvement": [c.improvement for c in ranked],
             },
         ),
-        write_named_values(out / "parameters.yaml", _named_parameters(plant, params)),
+        write_named_values(out / PARAMETERS_FILE, _named_parameters(plant, params)),
     ]
     return written
 
@@ -1045,13 +1088,13 @@ def freeze_study(path) -> dict:
             models[name] = {"source": str(flat)}
             if ref.get("source", "shipped") == "shipped":
                 models[name]["copy_of"] = "shipped"
-        write_spec(dict(spec, models=models), snapshot / "flowsheet.yaml", base_dir=source.parent)
+        write_spec(dict(spec, models=models), snapshot / SPEC_FILE, base_dir=source.parent)
         record = {
             "frozen": _now(),
             "aquakin": aquakin_version(),
             "from": study.flowsheet,
-            "spec_fingerprint": spec_fingerprint(snapshot / "flowsheet.yaml"),
-            "spec_inputs": spec_inputs(snapshot / "flowsheet.yaml"),
+            "spec_fingerprint": spec_fingerprint(snapshot / SPEC_FILE),
+            "spec_inputs": spec_inputs(snapshot / SPEC_FILE),
         }
     except BaseException:
         shutil.rmtree(snapshot, ignore_errors=True)

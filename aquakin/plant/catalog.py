@@ -40,6 +40,7 @@ from aquakin.plant.delay import HydraulicDelayUnit
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.disinfection import ChlorineContactUnit, UVUnit
 from aquakin.plant.dosing import DosingUnit
+from aquakin.plant.errors import error_reply
 from aquakin.plant.ifas import IFASUnit
 from aquakin.plant.mbr import MBRUnit
 from aquakin.plant.mixer import MixerUnit, RatioSplitter, SetpointSplitter, ThresholdSplitter
@@ -1104,8 +1105,9 @@ def check_unit(
     -------
     dict
         ``{"ok": True, "inputs": [...], "outputs": [...]}`` with the built
-        unit's real ports, or ``{"ok": False, "error": message}`` with the
-        reason it could not be built.
+        unit's real ports, or ``{"ok": False, "error": message, "type": class
+        name}`` with the reason it could not be built (see
+        :func:`~aquakin.plant.errors.error_reply`).
     """
     try:
         models = {n: load_model_file(p) for n, p in (model_files or {}).items()}
@@ -1114,7 +1116,7 @@ def check_unit(
             return {"ok": True, "inputs": [], "outputs": ["out"]}
         return {"ok": True, "inputs": list(unit.input_ports), "outputs": list(unit.output_ports)}
     except Exception as exc:  # the constructor's own message is the answer
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, **error_reply(exc)}
 
 
 def _class_of(kind: UnitKind):

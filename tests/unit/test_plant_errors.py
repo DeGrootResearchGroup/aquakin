@@ -18,6 +18,7 @@ from aquakin.plant.errors import (
     UnknownPortError,
     UnknownUnitError,
     WiringError,
+    error_reply,
 )
 
 
@@ -64,3 +65,19 @@ def test_biogas_cod_swallows_only_no_digester_error(monkeypatch):
     monkeypatch.setattr("aquakin.plant.bsm.evaluation.digester_gas", _real_bug)
     with pytest.raises(ValueError, match="genuine bug inside digester_gas"):
         balance._biogas_cod(object(), object(), None)
+
+
+@pytest.mark.parametrize(
+    ("exc", "reply"),
+    [
+        (ValueError("volume must be positive"), ("volume must be positive", "ValueError")),
+        # A KeyError's str() quotes its message; the reply does not.
+        (UnknownUnitError("unit 'x' not found"), ("unit 'x' not found", "UnknownUnitError")),
+        (KeyError("SO"), ("SO", "KeyError")),
+        (KeyError(3), ("3", "KeyError")),
+        # No text at all: the class name says what happened.
+        (AssertionError(), ("AssertionError", "AssertionError")),
+    ],
+)
+def test_error_reply_keeps_the_class_name_out_of_the_message(exc, reply):
+    assert error_reply(exc) == {"error": reply[0], "type": reply[1]}

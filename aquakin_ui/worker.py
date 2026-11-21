@@ -28,7 +28,21 @@ START_TIMEOUT = 60.0
 
 
 class WorkerError(RuntimeError):
-    """The worker refused a request, timed out, or died."""
+    """The worker refused a request, timed out, or died.
+
+    Parameters
+    ----------
+    message : str
+        What went wrong, as a user may read it (no exception class in front).
+    type : str, optional
+        The class name of aquakin's exception when the worker refused the
+        request (``"StudyError"``, ``"SpecError"``, ...); ``None`` when there
+        was none (a timeout, a dead worker, an unknown command).
+    """
+
+    def __init__(self, message: str, type: str | None = None):
+        super().__init__(message)
+        self.type = type
 
 
 class AquakinWorker:
@@ -121,8 +135,8 @@ class AquakinWorker:
         Parameters
         ----------
         command : str
-            The worker command (``catalog``, ``models``, ``model``,
-            ``check_unit``, ``check_spec``, ``ping``).
+            The worker command (one of ``aquakin serve``'s; see
+            :mod:`aquakin.__main__`).
         **fields
             The command's fields.
 
@@ -134,7 +148,8 @@ class AquakinWorker:
         Raises
         ------
         WorkerError
-            If the worker answers with an error, times out, or exits.
+            If the worker answers with an error (its ``type`` set to the
+            exception's class name), times out, or exits.
         """
         with self._lock:
             if self._proc is None or self._proc.poll() is not None:
@@ -166,5 +181,5 @@ class AquakinWorker:
                 self.stop()
                 raise WorkerError(f"aquakin answered request {reply.get('id')}, not {rid}")
             if not reply.get("ok"):
-                raise WorkerError(reply.get("error", "unknown error"))
+                raise WorkerError(reply.get("error", "unknown error"), reply.get("type"))
             return reply["result"]

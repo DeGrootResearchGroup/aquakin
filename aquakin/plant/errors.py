@@ -69,3 +69,28 @@ class UnitsError(ValueError):
     meaningless -- e.g. two kinetic models on different time units (one in
     seconds, one in days) integrated against the same clock. See
     :meth:`Plant.check_units` for the full, non-raising report."""
+
+
+def error_reply(exc: BaseException) -> dict:
+    """An exception as a front end shows it: ``{"error": message, "type": class name}``.
+
+    The message is the exception's own text, without its class name in front, so
+    a front end can show it to a user as it stands and still tell the kinds of
+    error apart by ``type``. A ``KeyError``'s message loses the quotes its
+    ``str`` adds, and an exception with no text is described by its class name.
+
+    Parameters
+    ----------
+    exc : BaseException
+        The exception to describe.
+
+    Returns
+    -------
+    dict
+        ``{"error": str, "type": str}``.
+    """
+    if isinstance(exc, KeyError) and len(exc.args) == 1 and isinstance(exc.args[0], str):
+        message = exc.args[0]
+    else:
+        message = str(exc)
+    return {"error": message or type(exc).__name__, "type": type(exc).__name__}

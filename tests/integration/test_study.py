@@ -587,7 +587,11 @@ def test_the_worker_lists_freezes_copies_and_unfreezes_studies(project):
     assert all(r["ok"] for r in replies), replies
     broken, worker = replies[0]["result"]
     assert worker["name"] == "worker" and worker["state"] == "not run"
+    assert worker["has_results"] is False and worker["path"] == p
+    assert worker["flowsheet"] == str((project / "flowsheet.yaml").resolve())
     assert broken["state"] == "unreadable" and "kind" in broken["reasons"][0]
+    assert broken["has_results"] is False and broken["flowsheet"] is None
+    assert not broken["reasons"][0].startswith("ValidationError")
     assert replies[1]["result"] is True and replies[2]["result"].endswith("worker_copy")
     assert check_study(folder).frozen is False
     assert check_study(project / "studies" / "worker_copy").frozen is True
@@ -620,14 +624,25 @@ def test_a_json_run_streams_events_and_stops_on_cancel(project, monkeypatch):
     folder = _study(project, "json", DYNAMIC)
     code, events = run(folder)
     assert code == 0 and events[0]["event"] == "progress" and events[0]["stage"] == "setup"
-    assert events[-1] == {"event": "done", "state": "fresh", "reasons": [], "notes": []}
+    assert events[-1] == {
+        "event": "done",
+        "state": "fresh",
+        "has_results": True,
+        "reasons": [],
+        "notes": [],
+    }
 
     code, events = run(folder, "--replace", cancel=True)
     assert code == 1 and events[-1] == {"event": "cancelled"}
     status = check_study(folder)  # the earlier results stand
     assert status.state == "fresh" and "was cancelled" in status.notes[-1]
-    code, events = run(project / "studies" / "missing")
-    assert code == 2 and events[-1]["event"] == "error"
+    missing = project / "studies" / "missing"
+    code, events = run(missing)
+    assert code == 2 and events[-1] == {
+        "event": "error",
+        "error": f"{missing / 'study.yaml'} does not exist",
+        "type": "StudyError",
+    }
 
 
 def _warm_project(tmp_path):
