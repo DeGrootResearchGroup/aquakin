@@ -362,8 +362,15 @@ Key types:
     materially-different states and **falls back to per-RHS probing** for any
     topology whose `M` is genuinely state-coupled — so the optimization is safe
     for arbitrary plants.
-    The cached map is built once from `params` by `_maybe_recycle_map` (the
-    shared helper) and reused by **four** paths: the forward `jax_adjoint` solve,
+    **Every path builds the cached maps through `RecycleResolver.cached_rhs`**
+    (the plant RHS closed over both maps) **or `cached_maps`** (the maps alone,
+    for a path that calls `_resolve_streams` directly). Do not call
+    `_maybe_recycle_map` / `_maybe_flow_map` and close over `_rhs` by hand: the
+    cached maps are the exactness-critical surface, so one helper wires them.
+    Pass `stop_gradient=True` only where the maps are closed over inside a custom
+    VJP that accounts for their parameter dependence itself (the
+    `stable_adjoint` primal); everywhere else the gradient flows through them.
+    The cached map is built once from `params` and reused by **four** paths: the forward `jax_adjoint` solve,
     the located-event segmented solve (`events=`, reused across every segment),
     the single-instant `outputs_at`, and the whole-trajectory stream
     reconstruction (`_cached_streams` / `plant.stream`, the `evaluate_bsm*`
@@ -417,7 +424,7 @@ Key types:
     passes) on every RHS. `_compute_flow_map` precomputes `A` **once per solve**
     (from `params`, gradient-preserving — `A` depends on the flow-setpoint block,
     so it is coerced in and `stop_gradient`'d on the `stable_adjoint` primal like
-    `M`), threaded into every RHS as `flow_map=` by `_maybe_flow_map`; the flow
+    `M`), threaded into every RHS as `flow_map=` by the same helper; the flow
     resolution then computes only `b` (one pass) + the cached `(I−A)` solve,
     skipping the `n` column probes. State-invariance is detected once by
     `_check_flow_map_constant` (compares `A` at three states; falls back to per-RHS

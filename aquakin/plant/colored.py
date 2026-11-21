@@ -306,12 +306,10 @@ class ColoredJacobianManager:
             if isinstance(params, jax.core.Tracer) or isinstance(y0, jax.core.Tracer):
                 return None  # can't build under trace
             t0a = jnp.asarray(float(t0))
-            states0 = plant._split_state(y0)
-            rmap = plant._recycle._maybe_recycle_map(t0a, states0, params)
-            fmap = plant._recycle._maybe_flow_map(t0a, states0, params)
+            cached, _ = plant._recycle.cached_rhs(t0a, plant._split_state(y0), params)
 
             def rhs_y(y):
-                return plant._rhs(t0a, y, params, recycle_map=rmap, flow_map=fmap)
+                return cached(t0a, y, params)
 
             atol_arr = jnp.asarray(atol)
             self._root_finder = self._colored_from_probe(
@@ -406,13 +404,7 @@ class ColoredJacobianManager:
             y0 = plant.initial_state()
             params = plant.default_parameters()
             t0f = float(t0)
-            rmap = plant._recycle._maybe_recycle_map(
-                jnp.asarray(t0f), plant._split_state(y0), params
-            )
-            fmap = plant._recycle._maybe_flow_map(jnp.asarray(t0f), plant._split_state(y0), params)
-
-            def primal(t, y, p):
-                return plant._rhs(t, y, p, recycle_map=rmap, flow_map=fmap)
+            primal, _ = plant._recycle.cached_rhs(jnp.asarray(t0f), plant._split_state(y0), params)
 
             # The discrete adjoint integrates the autonomized [y; tau] state, so
             # the backward Jacobians -- and hence the coloring -- are of that.

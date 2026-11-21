@@ -519,9 +519,8 @@ class RecycleResolver:
         ``None`` -- the signal for the resolver to probe ``M`` every call. The map
         is built from ``params_full`` (so a downstream gradient still flows through
         it and a parameter sweep stays correct) at the supplied ``(t, states)``,
-        which the caller uses as the once-per-solve reference point. Shared by the
-        forward RHS, the located-event segments and the stream reconstruction so
-        all three reuse one definition.
+        which the caller uses as the once-per-solve reference point. Solve paths
+        reach it through :meth:`cached_maps` / :meth:`cached_rhs`.
         """
         if self._recycle_map_constant is not True:
             return None
@@ -758,6 +757,71 @@ class RecycleResolver:
         if self._flow_map_constant is not True:
             return None
         return self._compute_flow_map(t, params_full, states)
+
+    def cached_maps(self, t, states, params_full, *, stop_gradient=False):
+        """Build the cached recycle and flow maps once, at a reference point.
+
+        The one place a solve path builds the maps it then threads into every
+        RHS or stream reconstruction as ``recycle_map=`` / ``flow_map=``. Each
+        map is the :meth:`_maybe_recycle_map` / :meth:`_maybe_flow_map` result
+        (``None`` when it is not state-invariant, so the resolver probes it per
+        call), built in that order from ``params_full`` at ``(t, states)``.
+        ``t`` and ``params_full`` are passed through unchanged, so a caller keeps
+        its own conversion of each.
+
+        Parameters
+        ----------
+        t : float or jnp.ndarray
+            Reference time (plant units).
+        states : dict
+            Per-unit states at the reference point (``plant._split_state(y)``).
+        params_full : jnp.ndarray
+            Plant parameter vector the maps are built from.
+        stop_gradient : bool, optional
+            Wrap each non-``None`` map in ``jax.lax.stop_gradient``. Required
+            when the maps are closed over inside a custom VJP that accounts for
+            their parameter dependence itself (the discrete-adjoint primal RHS);
+            leave it ``False`` where the gradient should flow through them.
+
+        Returns
+        -------
+        tuple
+            ``(recycle_map, flow_map)``; either may be ``None``.
+        """
+        recycle_map = self._maybe_recycle_map(t, states, params_full)
+        flow_map = self._maybe_flow_map(t, states, params_full)
+        if stop_gradient:
+            recycle_map = None if recycle_map is None else jax.lax.stop_gradient(recycle_map)
+            flow_map = None if flow_map is None else jax.lax.stop_gradient(flow_map)
+        return recycle_map, flow_map
+
+    def cached_rhs(self, t, states, params_full, *, stop_gradient=False):
+        """The plant RHS closed over the cached recycle and flow maps.
+
+        Builds the maps once with :meth:`cached_maps` (same arguments) and
+        returns a closure ``rhs(t, y, params, design=None)`` that evaluates
+        ``plant._rhs`` with them, so every solve path wires the cached maps the
+        same way. The maps are fixed at build time: a gradient taken through the
+        closure's ``params`` argument does not reach them (the
+        :meth:`cached_maps` ``params_full`` does, unless ``stop_gradient``).
+
+        Returns
+        -------
+        tuple
+            ``(rhs, (recycle_map, flow_map))``. The maps are returned so a caller
+            can tell whether the cache is in use (``recycle_map is None`` means
+            the resolver probes ``M`` on every call).
+        """
+        maps = self.cached_maps(t, states, params_full, stop_gradient=stop_gradient)
+        recycle_map, flow_map = maps
+        plant = self.plant
+
+        def rhs(t, y, params, design=None):
+            return plant._rhs(
+                t, y, params, design=design, recycle_map=recycle_map, flow_map=flow_map
+            )
+
+        return rhs, maps
 
     def _check_flow_map_constant(self, t, y0, params_full, *, rtol: float = 1e-9):
         """Set ``_flow_map_constant`` -- is the recycle flow map ``A``
