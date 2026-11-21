@@ -50,6 +50,8 @@ from aquakin.integrate.calibrate import (
     FreeICConfig,
     LaplaceConfig,
     OptimizerConfig,
+)
+from aquakin.integrate.seam import (
     _array_digest,
     _build_loss,
     _build_objective,
@@ -57,26 +59,24 @@ from aquakin.integrate.calibrate import (
     _CalibrationProblem,
     _check_sigma_arg,
     _check_start_args,
+    _check_start_in_domain,
     _coerce_sigma,
     _convert_observations,
     _FitConfig,
     _free_ic_fields,
+    _is_multi_dataset,
     _is_sigma_estimate,
     _n_obs_per_output,
     _observation_unit_factors,
     _observed_counts,
     _resolve_ic_coords,
+    _resolve_priors,
     _resolve_rate_bounds,
+    _resolve_transforms,
     _run_fit,
     _run_multistart,
     _sigma_per_dataset,
 )
-from aquakin.integrate.calibration.problem import (
-    _check_start_in_domain,
-    _is_multi_dataset,
-    _resolve_priors,
-)
-from aquakin.integrate.fisher import _resolve_transforms
 from aquakin.plant.measures import channel_name, measure_map
 
 if TYPE_CHECKING:  # pragma: no cover
