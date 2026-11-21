@@ -88,6 +88,15 @@ adopt and inventing one would silently change the model. So `log`'s guard
 protects the gradient only, and its caller still has to keep the argument
 positive.
 
+The second consumer is real: **`plant/time_expr.py` binds `sqrt` and `log` to
+these**, not to `jnp`. A clock is the harshest case for them — every solve
+starts at `t = 0`, exactly where their derivative is infinite — and the failure
+is quiet, because the forward solve stays correct and only the gradient breaks,
+surfacing as an exhausted solver step budget that points at the integrator.
+`core/lexer.py`, `core/precedence.py` and `core/kernels.py` are now the three
+things the expression languages share; a fourth divergence between them is a
+bug, not a difference of taste.
+
 The four Monod nodes and `SafeDivideNode` all evaluate their `num/denom` through
 `_safe_ratio` (`core/nodes.py`), a **double-where** guard returning 0 (with a
 finite gradient) where the denominator is exactly zero — for the Monod nodes the

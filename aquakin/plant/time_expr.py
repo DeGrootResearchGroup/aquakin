@@ -22,6 +22,15 @@ functions in :data:`FUNCTIONS` -- with no comparison or conditional. A value
 that has to switch is written with ``clip`` or ``step``, which stay
 differentiable, rather than an ``if`` that a traced value cannot take.
 
+``sqrt`` and ``log`` are the guarded ones from :mod:`aquakin.core.kernels`, the
+same definitions the rate language uses -- a name must not mean two things
+depending on which language it was written in. A clock is where that guard
+matters most: every solve starts at ``t = 0``, which is exactly where their
+derivative is infinite, so an unguarded ``sqrt(t)`` breaks the gradient of every
+run while leaving the forward solve looking correct. ``log``'s guard protects
+the gradient only -- its value at zero is still ``-inf``, so write ``log(1 + t)``
+rather than ``log(t)``.
+
 Precedence follows Python and ordinary mathematical notation throughout,
 including that a sign binds **looser** than a power: ``-2**t`` is ``-(2**t)``.
 A rate expression reads the same way (:mod:`aquakin.core.parser` shares the
@@ -36,6 +45,7 @@ from functools import reduce
 
 import jax.numpy as jnp
 
+from aquakin.core.kernels import _safe_log, _safe_sqrt
 from aquakin.core.lexer import Token
 from aquakin.core.precedence import PrecedenceParser, accepts, spell_arity
 
@@ -61,15 +71,25 @@ def _step(x):
     return jnp.heaviside(x, 1.0)
 
 
+def _safe_log10(x):
+    """``log10(x)``, guarded exactly as :func:`~aquakin.core.kernels._safe_log`.
+
+    Written as the natural logarithm over ``ln(10)`` rather than ``jnp.log10``
+    so there is one guarded logarithm rather than two, and the value off the
+    domain stays ``-inf``.
+    """
+    return _safe_log(x) / math.log(10.0)
+
+
 #: The functions an expression may call, by name and arity.
 FUNCTIONS: dict[str, tuple[Callable, tuple[int, ...]]] = {
     "sin": (jnp.sin, (1,)),
     "cos": (jnp.cos, (1,)),
     "tan": (jnp.tan, (1,)),
     "exp": (jnp.exp, (1,)),
-    "log": (jnp.log, (1,)),
-    "log10": (jnp.log10, (1,)),
-    "sqrt": (jnp.sqrt, (1,)),
+    "log": (_safe_log, (1,)),
+    "log10": (_safe_log10, (1,)),
+    "sqrt": (_safe_sqrt, (1,)),
     "abs": (jnp.abs, (1,)),
     "floor": (jnp.floor, (1,)),
     "min": (jnp.minimum, (2,)),
