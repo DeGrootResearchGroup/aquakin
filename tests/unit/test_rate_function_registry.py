@@ -350,3 +350,62 @@ def test_re_registering_the_same_class_is_idempotent():
     register_rate_function(cls)
     register_rate_function(cls)
     assert registered_rate_functions()["hill"] is cls
+
+
+def test_rejects_something_that_is_not_a_class():
+    """An *instance* slipped in where the class was meant -- the easy slip when
+    a decorator is written with parentheses it does not take."""
+    with pytest.raises(TypeError, match="_OperatorNode"):
+        register_rate_function(object())
+
+
+def test_rejects_a_plain_class_that_is_not_a_dataclass():
+    class NotADataclass(_OperatorNode):
+        KIND = "test_plain"
+        FUNCTION_NAME = "plain"
+
+        @staticmethod
+        def op(o):
+            return o[0]
+
+    with pytest.raises(TypeError, match="dataclass"):
+        register_rate_function(NotADataclass)
+
+
+def test_rejects_a_node_with_no_op():
+    """``_OperatorNode`` only *annotates* ``op``, so forgetting it leaves no
+    attribute at all rather than an inherited stub."""
+
+    @dataclass(frozen=True)
+    class NoOp(_OperatorNode):
+        X: ASTNode
+
+        KIND = "test_noop"
+        FUNCTION_NAME = "noop"
+
+    with pytest.raises(TypeError, match="op"):
+        register_rate_function(NoOp)
+
+
+def test_rejects_a_node_whose_children_do_not_cover_its_fields():
+    """The kernel's operand order is ``children()``, so a node that hides a
+    field from it would silently mis-call ``op``. Reachable by overriding
+    ``children()`` -- which is why the guard is not dead code."""
+
+    @dataclass(frozen=True)
+    class HalfBlind(_OperatorNode):
+        X: ASTNode
+        K: ASTNode
+
+        KIND = "test_halfblind"
+        FUNCTION_NAME = "halfblind"
+
+        def children(self):
+            return (self.X,)  # drops K
+
+        @staticmethod
+        def op(o):
+            return o[0]
+
+    with pytest.raises(ValueError, match="AST child"):
+        register_rate_function(HalfBlind)
