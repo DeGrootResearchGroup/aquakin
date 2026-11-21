@@ -149,7 +149,16 @@ def test_two_cstrs_in_series(simple_net):
 
 
 def test_mixer_mass_balance(simple_net):
-    """Mixer downstream of two CSTRs: total Q and Q*C are conserved."""
+    """A mixer between two CSTRs conserves flow and mass flow.
+
+    The mixer joins tank 1's outlet (Q = 10) with a side feed (Q = 5, A = 2).
+    Its outlet carries ``Q = 15`` and ``Q*C`` equal to the sum of its inlets at
+    every saved time, and the plant settles at the hand-computed steady state:
+    tank 1 at ``A = 1/(1 + k*tau) = 0.5`` (``k = 0.1``, ``tau = 10``); the mixed
+    stream at ``A = (10*0.5 + 5*2)/15 = 1``, ``B = 10*0.5/15 = 1/3``; tank 2
+    (``tau = 100/15``) at ``A = 1/(1 + 2/3) = 0.6`` and, since ``A + B`` is
+    conserved by the reaction, ``B = 4/3 - 0.6 = 11/15``.
+    """
     plant = Plant("mixer_test", time_unit="s")
     plant.add_unit(
         CSTRUnit(
@@ -182,6 +191,25 @@ def test_mixer_mass_balance(simple_net):
     plant.connect("mix", "t2")
     sol = plant.solve(t_span=(0.0, 500.0), t_eval=jnp.linspace(0.0, 500.0, 5))
     assert jnp.all(jnp.isfinite(sol.state))
+
+    # Conservation across the mixer, at every saved time (transient included).
+    tank1 = plant.stream(sol, "t1.out")
+    mixed = plant.stream(sol, "mix.out")
+    side_mass_flow = 5.0 * jnp.asarray([2.0, 0.0])
+    assert jnp.allclose(mixed.Q, tank1.Q + 5.0, rtol=1e-12, atol=0.0)
+    assert jnp.allclose(
+        mixed.Q[:, None] * mixed.C,
+        tank1.Q[:, None] * tank1.C + side_mass_flow,
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+    # The steady state the conserved streams imply.
+    assert float(mixed.Q[-1]) == pytest.approx(15.0, rel=1e-12)
+    assert float(mixed.C[-1, 0]) == pytest.approx(1.0, abs=1e-6)
+    assert float(mixed.C[-1, 1]) == pytest.approx(1.0 / 3.0, abs=1e-6)
+    assert float(sol.C_named("t2", "A")[-1]) == pytest.approx(0.6, abs=1e-6)
+    assert float(sol.C_named("t2", "B")[-1]) == pytest.approx(11.0 / 15.0, abs=1e-6)
 
 
 def test_splitter_flow_mode_conserves_under_low_feed(simple_net):
