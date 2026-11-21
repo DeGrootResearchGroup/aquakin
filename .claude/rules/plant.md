@@ -877,10 +877,12 @@ arithmetic with **no Python control flow**, so it traces, differentiates and
 batches inside the RHS; there is deliberately **no comparison or conditional**
 (a value that switches uses `clip` or `step`), because an `if` on a traced value
 cannot run. `time_scale` is the factor from the caller's clock to the clock the
-expression was written on. **The grammar follows `core/parser.py` deliberately,
-including that a sign binds tighter than a power** (`(-2)**2`, not Python's
-`-(2**2)`) — two expression languages in one tool must not read the same text
-differently; do not "fix" it to match Python. New functions go in `FUNCTIONS`
+expression was written on. **The grammar is shared in spirit with
+`core/parser.py` and follows Python's precedence**, including that a sign binds
+*looser* than a power (`-2**2` is `-(2**2)`): `unary := ('+'|'-') unary | power`
+and `power := primary ('**' unary)?`. Both parsers were changed together in
+#699 — they had bound a sign tighter, which nobody predicts; keep them in step.
+New functions go in `FUNCTIONS`
 (name → `(callable, arities)`), which the parser, the arity check and the
 error messages all read, so they cannot drift.
 

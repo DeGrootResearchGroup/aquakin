@@ -3,9 +3,9 @@
 Grammar (lowest to highest precedence)::
 
     expr      := term (('+' | '-') term)*
-    term      := factor (('*' | '/') factor)*
-    factor    := unary ('**' factor)?          # right-associative
-    unary     := ('+' | '-') unary | primary
+    term      := unary (('*' | '/') unary)*
+    unary     := ('+' | '-') unary | power
+    power     := primary ('**' unary)?         # right-associative
     primary   := number
                | '[' species_name ']'
                | '{' condition_name '}'
@@ -193,29 +193,35 @@ class _Parser:
         return node
 
     def _term(self) -> ASTNode:
-        node = self._factor()
+        node = self._unary()
         while self._peek().kind in ("STAR", "SLASH"):
             op = self._eat(("STAR", "SLASH"))
-            right = self._factor()
+            right = self._unary()
             node = MultiplyNode(node, right) if op.kind == "STAR" else DivideNode(node, right)
         return node
 
-    def _factor(self) -> ASTNode:
-        node = self._unary()
-        if self._peek().kind == "POW":
-            self._eat("POW")
-            right = self._factor()  # right-associative
-            node = PowerNode(node, right)
-        return node
-
     def _unary(self) -> ASTNode:
+        """A sign, or a power.
+
+        A sign binds **looser** than ``**``, as in Python and ordinary
+        mathematical notation: ``-2**2`` is ``-(2**2)``, not ``(-2)**2``.
+        """
         if self._peek().kind == "PLUS":
             self._eat("PLUS")
             return self._unary()
         if self._peek().kind == "MINUS":
             self._eat("MINUS")
             return NegateNode(self._unary())
-        return self._primary()
+        return self._power()
+
+    def _power(self) -> ASTNode:
+        node = self._primary()
+        if self._peek().kind == "POW":
+            self._eat("POW")
+            # Right-associative, and the exponent may carry its own sign, so
+            # ``2**-1`` and ``2**3**2`` both read as they do in Python.
+            node = PowerNode(node, self._unary())
+        return node
 
     def _primary(self) -> ASTNode:
         tok = self._peek()

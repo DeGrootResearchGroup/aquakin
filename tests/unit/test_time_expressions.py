@@ -43,6 +43,8 @@ def value(text, t, **kw):
         ("1E+3*t", 2.0, 2000.0),
         # ** is right-associative, as in Python: 2**(3**2), not (2**3)**2.
         ("2**3**2", 0.0, 512.0),
+        ("-2**2", 0.0, -4.0),
+        ("2**-1", 0.0, 0.5),
         ("pi", 0.0, math.pi),
         ("e", 0.0, math.e),
     ],
@@ -77,15 +79,16 @@ def test_the_functions(text, t, expected):
     assert value(text, t) == pytest.approx(expected)
 
 
-def test_a_sign_binds_tighter_than_a_power_as_in_a_rate_expression():
-    """``-2**2`` is ``(-2)**2 = 4``, not Python's ``-(2**2) = -4``.
-
-    Surprising on its own, but it is what aquakin's rate expressions already do
-    (``core/parser.py`` has the same unary/factor grammar), and two expression
-    languages in one tool must not disagree about the same text.
-    """
-    assert value("-2**2", 0.0) == 4.0
-    assert value("0 - 2**2", 0.0) == -4.0  # write it this way to mean Python's
+def test_precedence_follows_python():
+    """A sign binds looser than a power, as in Python and ordinary notation, so
+    ``-2**2`` is ``-(2**2)``. A rate expression reads it the same way."""
+    assert value("-2**2", 0.0) == -4.0
+    assert value("(0 - 2)**2", 0.0) == 4.0
+    # The exponent may carry its own sign, and ** stays right-associative.
+    assert value("2**-1", 0.0) == 0.5
+    assert value("2**3**2", 0.0) == 512.0
+    # A sign on the base of a product binds that operand only.
+    assert value("-2*3**2", 0.0) == -18.0
 
 
 def test_every_declared_function_and_constant_can_be_called():

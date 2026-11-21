@@ -22,11 +22,10 @@ functions in :data:`FUNCTIONS` -- with no comparison or conditional. A value
 that has to switch is written with ``clip`` or ``step``, which stay
 differentiable, rather than an ``if`` that a traced value cannot take.
 
-One precedence to know: a sign binds **tighter** than a power, so ``-2**t`` is
-``(-2)**t`` rather than Python's ``-(2**t)``. That is deliberate -- it is what a
-rate expression already does (:mod:`aquakin.core.parser` shares the grammar), and
-the two languages must not read the same text differently. Write ``0 - 2**t`` for
-the other reading.
+Precedence follows Python and ordinary mathematical notation throughout,
+including that a sign binds **looser** than a power: ``-2**t`` is ``-(2**t)``.
+A rate expression reads the same way (:mod:`aquakin.core.parser` shares the
+grammar), so the two languages never disagree about the same text.
 """
 
 from __future__ import annotations
@@ -146,9 +145,9 @@ class _Parser:
     leaves close over constants, so evaluating it is plain JAX arithmetic::
 
         expr    := term (('+' | '-') term)*
-        term    := factor (('*' | '/') factor)*
-        factor  := unary ('**' factor)?          # right-associative
-        unary   := ('+' | '-') unary | primary
+        term    := unary (('*' | '/') unary)*
+        unary   := ('+' | '-') unary | power
+        power   := primary ('**' unary)?         # right-associative
         primary := number | 't' | constant | name '(' args ')' | '(' expr ')'
     """
 
@@ -195,11 +194,11 @@ class _Parser:
         return fn
 
     def _term(self) -> Callable:
-        fn = self._factor()
+        fn = self._unary()
         while self._peek().kind in "*/":
             times = self._peek().kind == "*"
             self.i += 1
-            right = self._factor()
+            right = self._unary()
             left = fn
             fn = (
                 (lambda t, a=left, b=right: a(t) * b(t))
@@ -208,21 +207,28 @@ class _Parser:
             )
         return fn
 
-    def _factor(self) -> Callable:
-        fn = self._unary()
-        if self._peek().kind == "pow":
-            self.i += 1
-            right = self._factor()  # right-associative
-            return lambda t, a=fn, b=right: a(t) ** b(t)
-        return fn
-
     def _unary(self) -> Callable:
+        """A sign, or a power.
+
+        A sign binds **looser** than ``**``, as in Python: ``-2**t`` is
+        ``-(2**t)``.
+        """
         token = self._peek()
         if token.kind in "+-":
             self.i += 1
             fn = self._unary()
             return fn if token.kind == "+" else (lambda t, a=fn: -a(t))
-        return self._primary()
+        return self._power()
+
+    def _power(self) -> Callable:
+        fn = self._primary()
+        if self._peek().kind == "pow":
+            self.i += 1
+            # Right-associative, and the exponent may carry its own sign, so
+            # ``2**-1`` and ``2**3**2`` both read as they do in Python.
+            right = self._unary()
+            return lambda t, a=fn, b=right: a(t) ** b(t)
+        return fn
 
     def _primary(self) -> Callable:
         token = self._peek()
