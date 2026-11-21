@@ -134,6 +134,36 @@ def test_a_gradient_flows_through_a_solve_the_pattern_drives(model):
     assert np.any(grad != 0.0)
 
 
+@pytest.mark.parametrize("Q", ["2000 + 500*sqrt(t)", "2000 + 50*log(1 + t)"])
+def test_a_pattern_on_a_singular_function_still_differentiates(model, Q):
+    """``sqrt`` and ``log`` are guarded, and a clock is where it matters most.
+
+    Their derivative is infinite at zero and **every solve starts at t = 0**, so
+    an unguarded ``sqrt(t)`` sits on the singularity at the first step of every
+    run. The failure is quiet: the forward solve is unaffected -- same
+    trajectory, same answer -- and only the gradient breaks, as ``0 * inf = nan``
+    in the backward linearization diverges the adjoint. It surfaces as an
+    exhausted solver step budget, which points at the integrator rather than at
+    the influent, so this is pinned rather than left to be rediscovered.
+
+    ``log(1 + t)`` is the written form a clock wants: ``log``'s guard protects
+    the gradient only, and its value at ``t = 0`` is still ``-inf``, which no
+    guard can hide and which fails the forward solve honestly.
+    """
+    plant = _tank(model, InfluentExpression(model, Q=Q, composition=FEED))
+    t = np.array([0.0, 0.2])
+
+    def final_snh(params):
+        solution = plant.solve(t_span=(0.0, 0.2), t_eval=t, params=params)
+        return plant.stream(solution, "tank.out", params).C[-1, model.species_index["SNH"]]
+
+    value = float(final_snh(plant.default_parameters()))
+    assert np.isfinite(value)
+    grad = np.asarray(jax.grad(final_snh)(plant.default_parameters()))
+    assert np.all(np.isfinite(grad))
+    assert np.any(grad != 0.0)
+
+
 def test_what_is_refused(model):
     with pytest.raises(ValueError, match="not species of model"):
         InfluentExpression(model, Q=1.0, composition={"NOPE": 1.0})

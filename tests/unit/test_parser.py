@@ -248,12 +248,24 @@ def test_malformed_condition_brace_is_parse_error(expr):
         parse_rate_expression(expr)
 
 
-@pytest.mark.parametrize("expr", ["monod([SS], KS,)", "max()", "max(1,)"])
+@pytest.mark.parametrize("expr", ["max()", "monod([SS],,KS)", "max(1,)"])
 def test_bad_arglist_is_parse_error(expr):
-    """A trailing comma or an empty argument list leaves a primary with no
-    expression to parse, which raises (before the arity check is even reached)."""
+    """An empty argument list, or a doubled comma, leaves a primary with no
+    expression to parse; `max(1,)` parses but then fails the arity check."""
     with pytest.raises(ParseError):
         parse_rate_expression(expr)
+
+
+def test_a_trailing_comma_is_allowed_as_in_python():
+    """`f(a, b,)` is legal Python, so a long call written across lines does not
+    make its last argument special."""
+    assert parse_rate_expression("monod([SS], KS,)") == parse_rate_expression("monod([SS], KS)")
+
+
+def test_max_folds_when_given_more_than_two_arguments():
+    """Python's `max` is variadic; `max(a, b, c)` reads as `max(max(a, b), c)`,
+    which is exact because max is associative."""
+    assert parse_rate_expression("max(k1, k2, k3)") == parse_rate_expression("max(max(k1, k2), k3)")
 
 
 @pytest.mark.parametrize("expr", ["1 2", "1.2.3", "[A] [B]"])

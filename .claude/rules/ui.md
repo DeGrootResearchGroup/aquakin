@@ -9,7 +9,7 @@ paths:
 
 A local browser flowsheet editor: palette, Vue Flow canvas, a unit form generated
 from aquakin's unit catalogue, aquakin's checks, and Open/Save of flowsheet specs
-(`Plant.to_spec` / `Plant.from_spec`, see `.claude/rules/plant.md`). trame +
+(`Plant.to_spec` / `Plant.from_spec`, see `.claude/rules/plant-spec.md`). trame +
 Vuetify, the same stack as aquaflux's `aquaflux-ui`. `ui` extra; entry point
 `aquakin-ui [flowsheet.yaml] [--port] [--no-browser]` (`aquakin_ui.__main__:main`).
 
@@ -119,7 +119,7 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   `flowsheet:` for a new study of a spec not named `flowsheet.yaml`
   (`flowsheet_entry`) and keeps an edited study's own (the form has no such
   field, so `study_from` would drop it). **A measured channel may be a measure
-  expression** (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, see `.claude/rules/plant.md`):
+  expression** (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, see `.claude/rules/plant-analysis.md`):
   the channels widget is a `VCombobox`, not a `VSelect`, so free text becomes a
   chip and travels as a plain string the draft must not touch — aquakin reads it
   when the study is written (`create_study` / `update_study`), and the refusal

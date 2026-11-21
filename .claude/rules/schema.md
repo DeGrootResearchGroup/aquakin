@@ -1,7 +1,10 @@
 ---
 paths:
   - "aquakin/schema/**"
-  - "**/*.yaml"
+  - "aquakin/models/**/*.yaml"
+  - "tests/fixtures/*.yaml"
+  - "examples/*.yaml"
+  - "examples/**/models/*.yaml"
 ---
 
 # Rules — YAML model schema (`aquakin/schema/`, model `*.yaml`)
