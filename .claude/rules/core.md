@@ -98,6 +98,42 @@ are both 0 (`K = X = 0`); for `safe_div` wherever the author's denominator hits
 through the masked branch, so the denominator is guarded too. Identity for any
 nonzero denominator — the only change is exactly at the singularity.
 
+### Rate functions registered from outside the package
+
+`aquakin.register_rate_function(node_cls)` (`core/registry.py`) lets a user add
+a rate function without editing aquakin — the rate-law counterpart of the
+`Unit` protocol. A registered node is **not** second class: the parser's
+grammar, the batched kernel's operand order and the scalar closure are all
+derived from the node type, so it parses, vectorizes (bit-identically to its
+own scalar path) and differentiates exactly as a built-in does.
+
+**Discovery is restricted to `core/nodes.py`, and this is load-bearing.**
+`parser._build_function_registry` and `vector_kernel._collect_kernels` walk
+live subclasses, so before this restriction a class that was merely *defined*
+and never registered could take a built-in's name on the next rebuild —
+silently, and depending on traversal order — bypassing the collision check
+registration does. (Demonstrated: a subclass of `MonodNode` declaring
+`FUNCTION_NAME = "monod"` captured `monod` on a refresh.) So:
+
+- built-ins = nodes whose `__module__` is `core.nodes` (`_NODES_MODULE`);
+- everything else enters only through `parser._EXTRA_FUNCTIONS` and
+  `vector_kernel._EXTRA_KERNELS`, which **only** `core/registry.py` writes;
+- `registry._refresh()` projects its `_REGISTERED` map into both and calls
+  `parser.refresh_function_registry()` / `vector_kernel.refresh_kernels()`.
+
+Registration refuses a `FUNCTION_NAME` or `KIND` that collides with a built-in,
+a non-frozen dataclass, a zero-argument node, a field with a default (the
+parser requires one parsed argument per field, so a default can never be used)
+and an `op` that does not take a single operand tuple. Keep the validations
+there rather than discovering breakage at solve time. `to_latex` has a generic
+`\mathrm{name}(args)` fallback for any `_OperatorNode` carrying a
+`FUNCTION_NAME`, so a registered function renders — and so a future built-in
+added without a LaTeX branch renders plainly instead of crashing export. A node
+may optionally declare `DIMENSION(arg_dims)` for `check_units`; without it the
+dimension is unknown and the check is skipped, which is the safe default.
+Covered by `tests/unit/test_rate_function_registry.py` and
+`tests/integration/test_registered_rate_function.py`.
+
 New domain-specific node types are added here as needed. An **operator** node
 (everything but the four leaves) subclasses `_OperatorNode` and declares its
 arithmetic **once**, as a single `op(operands)` staticmethod plus a `KIND`

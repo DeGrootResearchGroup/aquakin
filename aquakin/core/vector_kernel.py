@@ -108,24 +108,68 @@ def _k_powc(o, exp_array):
     return PowerNode.op((o[0], exp_array))
 
 
+#: The module a *built-in* node lives in; discovery is restricted to it for the
+#: same reason as the parser's registry (see ``parser._build_function_registry``).
+_NODES_MODULE = ASTNode.__module__
+
+#: Kernels of rate functions registered from outside the package, KIND -> op.
+#: Populated **only** by :func:`aquakin.register_rate_function`.
+_EXTRA_KERNELS: dict[str, Callable] = {}
+
+
 def _collect_kernels() -> dict[str, Callable]:
     """Map each operator node's ``KIND`` to its batched ``op`` by walking the AST
-    node hierarchy, so the kernel table can never drift from the node set."""
+    node hierarchy, so the kernel table can never drift from the node set.
+
+    Restricted to nodes defined in :mod:`aquakin.core.nodes`; a node registered
+    from outside reaches the table through ``_EXTRA_KERNELS`` instead, so that
+    defining a class is never on its own enough to change how a rate
+    expression evaluates.
+    """
     kernels: dict[str, Callable] = {}
     stack = list(ASTNode.__subclasses__())
     while stack:
         cls = stack.pop()
         stack.extend(cls.__subclasses__())
+        if cls.__module__ != _NODES_MODULE:
+            continue
         kind = cls.__dict__.get("KIND")
         if kind is not None:
             kernels[kind] = cls.op
     return kernels
 
 
-_KERNELS: dict[str, Callable] = _collect_kernels()
-# ``powc`` is a kernel-internal variant of ``PowerNode`` (a *constant* exponent
-# kept static for AD finiteness -- see _k_powc); it has no node of its own.
-_KERNELS["powc"] = _k_powc
+def _build_kernel_table() -> dict[str, Callable]:
+    """The kernel table: every node's ``KIND`` plus the kernel-only variants."""
+    kernels = _collect_kernels()
+    # ``powc`` is a kernel-internal variant of ``PowerNode`` (a *constant*
+    # exponent kept static for AD finiteness -- see _k_powc); it has no node of
+    # its own, so it is added here rather than discovered.
+    kernels["powc"] = _k_powc
+    kernels.update(_EXTRA_KERNELS)
+    return kernels
+
+
+_KERNELS: dict[str, Callable] = _build_kernel_table()
+
+
+def refresh_kernels() -> None:
+    """Rebuild :data:`_KERNELS` from the current node hierarchy.
+
+    The table is built once at import, so a node class defined *later* -- a
+    user-registered rate function (:func:`aquakin.register_rate_function`) --
+    would raise :class:`UnsupportedNode` and drop the whole model to the scalar
+    path. Rebuilding is all it takes: the interner already derives its operand
+    order from ``KIND`` / ``children()`` / ``EXTRA_CONDITIONS`` on the node
+    type, so a registered function reaches the batched kernel on exactly the
+    same terms as a built-in, and is bit-identical to its own scalar closure
+    for the same reason they are (one ``op``, two call sites).
+
+    Rebinding the module global is enough because the table is looked up when a
+    kernel program is built, not captured at import.
+    """
+    global _KERNELS
+    _KERNELS = _build_kernel_table()
 
 
 # --- interning compiler ------------------------------------------------------

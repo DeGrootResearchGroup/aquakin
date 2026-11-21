@@ -248,6 +248,77 @@ rate: "k * [O3] * 10 ** ({pH} - 14)"                  # OH- catalysed
 rate: "{OH_scavenging} * [OH]"                        # lumped sink
 ```
 
+### Rate functions of your own
+
+When your rate law needs a function none of the above provides, register one
+instead of folding the term into a precomputed condition field — a coefficient
+hidden in a condition field is outside the parameter vector, and so outside
+calibration, sensitivity and identifiability.
+
+A rate function is a node class: a frozen dataclass whose fields are its
+arguments, carrying the call spelling (`FUNCTION_NAME`), a kernel key (`KIND`)
+and the arithmetic itself (`op`), written with `jax.numpy` so it differentiates.
+
+```python
+from dataclasses import dataclass
+import jax.numpy as jnp
+import aquakin
+from aquakin.core.nodes import ASTNode, _OperatorNode
+
+@dataclass(frozen=True)
+class HillNode(_OperatorNode):
+    X: ASTNode
+    K: ASTNode
+    n: ASTNode
+
+    KIND = "hill"            # the batched kernel's key for this node type
+    FUNCTION_NAME = "hill"   # how it is spelled in a rate expression
+
+    @staticmethod
+    def op(o):               # ONE tuple: the fields in order
+        x, k, n = o
+        return x**n / (k**n + x**n)
+
+aquakin.register_rate_function(HillNode)
+```
+
+`hill(X, K, n)` is now callable in any rate expression, and its constants are
+ordinary model parameters:
+
+```yaml
+rate: "k * hill([S], K_h, n_h) * [S]"
+```
+
+A registered function is not second class. It parses, evaluates, reaches the
+same batched rate kernel (bit-identically to its own scalar path), and
+differentiates exactly as a built-in does.
+
+Two things to know:
+
+- **Register before loading.** A model compiles its rate expressions when it is
+  built and `load_model` caches the result, so registration has to happen
+  before the model that uses the function is loaded. A model file naming an
+  unregistered function fails at load, listing what is available.
+- **Names cannot shadow a built-in.** Registering `monod` is refused, because it
+  would change what every existing model file using that name means. Defining a
+  node class is never on its own enough to add a function — only
+  `register_rate_function` is.
+
+Optionally, declare how the result's dimension follows from the arguments', so
+`check_units` can check expressions using it. Without this the dimension is
+simply unknown and the check is skipped for that subexpression:
+
+```python
+    @staticmethod
+    def DIMENSION(args):          # args: each argument's Dimension, or None
+        from aquakin.utils.units import DIMENSIONLESS
+        return DIMENSIONLESS      # a Hill term is a saturation fraction
+```
+
+`aquakin.registered_rate_functions()` lists what is registered, and
+`aquakin.core.registry.unregister_rate_function(name)` removes one — useful
+when iterating in a notebook.
+
 ## Checking units
 
 The `units:` strings on species, parameters and conditions are not used to

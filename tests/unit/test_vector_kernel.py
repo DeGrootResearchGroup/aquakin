@@ -214,15 +214,24 @@ def test_kernel_table_is_derived_from_the_nodes():
     while stack:
         cls = stack.pop()
         stack.extend(cls.__subclasses__())
+        # Discovery covers the nodes defined in ``core/nodes.py``. A node
+        # defined anywhere else reaches the table only by explicit
+        # registration (see test_rate_function_registry.py), so that merely
+        # defining a class cannot change how a rate expression evaluates.
+        if cls.__module__ != N.ASTNode.__module__:
+            continue
         kind = cls.__dict__.get("KIND")
         if kind is not None:
             kinds.add(kind)
             # the vectorized kernel is literally the node's scalar op
             assert _KERNELS[kind] is cls.op, kind
-    # every node KIND has a kernel; the only extra key is the ``powc`` variant
-    # (a constant-exponent PowerNode kept static for AD finiteness -- no node).
+    # every built-in node KIND has a kernel; the only extra key is the ``powc``
+    # variant (a constant-exponent PowerNode kept static for AD finiteness --
+    # no node), plus anything a test registered and has not yet removed.
+    from aquakin.core.vector_kernel import _EXTRA_KERNELS
+
     assert kinds <= set(_KERNELS)
-    assert set(_KERNELS) - kinds == {"powc"}
+    assert set(_KERNELS) - kinds == {"powc"} | set(_EXTRA_KERNELS)
 
 
 def test_unsupported_node_falls_back_to_scalar():
