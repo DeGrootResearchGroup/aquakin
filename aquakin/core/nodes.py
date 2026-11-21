@@ -83,7 +83,7 @@ def _safe_sqrt(x):
     common case rather than a corner one. The double-where keeps the value
     exact (``sqrt(0) == 0``) while the derivative at and below zero is 0 rather
     than ``inf``. This is the same reasoning as the constant-exponent ``powc``
-    kernel, which keeps ``[X]^0.5`` differentiable at ``X == 0``; a transiently
+    kernel, which keeps ``[X] ** 0.5`` differentiable at ``X == 0``; a transiently
     negative state returns 0 rather than NaN.
     """
     positive = x > 0.0
@@ -565,7 +565,7 @@ class LogNode(_OperatorNode):
 class SqrtNode(_OperatorNode):
     """Square root ``sqrt(x)`` -- the ``sqrt(x)`` rate function.
 
-    Half-order kinetics, written as what it is rather than as ``[X]^0.5``.
+    Half-order kinetics, written as what it is rather than as ``[X] ** 0.5``.
     Dimensionally it halves the argument's units, so ``sqrt`` of a
     concentration is a valid (if unusual) rate factor and ``check_units``
     checks it as such.
