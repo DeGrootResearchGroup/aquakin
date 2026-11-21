@@ -51,7 +51,7 @@ Claude-facing files** at the end.
 | `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
 | `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog, the schema rules, and the `_make_*` generators |
 | `.claude/rules/study.md` | `aquakin/study/**` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
-| `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `ui-widget/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules |
+| `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `tests/browser/**`, `ui-widget/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules |
 
 **On-demand docs (read when needed):**
 
@@ -227,6 +227,7 @@ pytest tests/unit tests/integration tests/ui -m "not validation and not slow"   
 pytest -m slow                             # the multi-minute stiff/plant solves
 pytest -m validation                       # validation suite (published data)
 pytest                                     # everything
+pytest tests/browser                       # the editor in Chromium (no CI job; needs playwright)
 ```
 
 A test under `tests/validation/` must carry `@pytest.mark.validation`, or no CI

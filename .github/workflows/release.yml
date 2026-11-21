@@ -100,6 +100,9 @@ jobs:
               print(f"{label}: {len(yaml)} yaml, {len(csv)} csv")
           PY
 
+      - name: Verify the editor's widget bundle and icons landed in the wheel
+        run: python scripts/check_ui_package.py dist/*.whl
+
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:

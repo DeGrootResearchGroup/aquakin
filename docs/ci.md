@@ -117,6 +117,16 @@ nor concentrating it in a few files makes the whole suite fast.
   that survives shard-count changes, so **branch protection requires
   `fast gate`**, not the per-shard `unit tests (...)` / `integration tests (...)`
   jobs.
+- The **`widget`** job (**`widget bundle and package`**) checks the editor's
+  canvas: it rebuilds `aquakin_ui/widget/serve/` from `ui-widget/src` with the
+  locked npm dependencies (`npm ci && npm run build`) and fails if the result
+  differs from the committed bundle, then builds the wheel and runs
+  `scripts/check_ui_package.py` (the bundle and every icon in the wheel, byte
+  for byte). It is path-filtered (`ui-widget/`, `aquakin_ui/widget/`,
+  `aquakin_ui/icons/`, `pyproject.toml`, the script, this workflow): on any other
+  change its steps are skipped and it passes. It is **not** part of `fast gate`
+  and not a required check. The release build runs the same package check on
+  the wheel it publishes. The Playwright tests in `tests/browser/` run in no job.
 - The **`slow`** job (`pytest -m "slow and not validation and not heavy"`,
   3.11/3.12) and **`validation`** job (`pytest -m "validation and not heavy"`,
   3.12) run **only on push to `main`** (`if: github.event_name == 'push'`). They carry the multi-minute

@@ -92,7 +92,9 @@ than copying it.
   selects by marker. Mark every test there (a module-level
   `pytestmark = pytest.mark.validation` is simplest).
 - `tests/ui/` runs in the fast gate as its own unsharded `ui` job, the only job
-  that imports the editor and measures `aquakin_ui` coverage.
+  that imports the editor and measures `aquakin_ui` coverage. `tests/browser/`
+  (the editor driven in Chromium with Playwright) runs in **no** CI job; run it
+  by hand when a change touches the canvas or the form (`.claude/rules/ui.md`).
 - Keep the fast gate meaningful: a feature whose only tests are `slow` is
   unprotected on a normal PR. Give it a small-plant or unit-level test in the
   fast tier that exercises the same code path, and keep the full-scale one slow.
