@@ -778,3 +778,50 @@ def test_a_channel_of_your_own_is_written_from_the_study_dialog(tmp_path):
         ]
     finally:
         ed.worker.stop()
+
+
+def test_errors_reach_the_page_without_class_names_and_simulate_reports_a_broken_study(
+    tmp_path,
+):
+    """The worker sends an error's message and its class apart, so what the page
+    shows is the message alone; a Simulate study whose study.yaml cannot be read
+    is reported with the reason aquakin gives, and a frozen study without
+    results is unfrozen without asking (there is nothing to delete)."""
+    project = _study_project(tmp_path)
+    worker = _Failing()
+    worker.fail = {"check_spec", "check_unit"}
+    server = get_server(name="aquakin-ui-plain-errors-test", client_type="vue3")
+    ed = Editor(server, worker=worker, path=project / "flowsheet.yaml")
+    try:
+        assert ed._check_unit("tank") == "check_unit failed"
+        assert ed._check_plant() == {"ok": False, "error": "check_spec failed"}
+        ed.publish(checks=False)
+        assert ed.state.errors == ["tank: check_unit failed"]  # a unit's error first
+        worker.fail = set()
+        ed._unit_checks.clear()
+        assert ed._check_unit("tank") is None
+        ed.publish(checks=False)
+        assert ed.state.errors == ["plant: check_spec failed"]
+
+        missing = tmp_path / "nowhere.yaml"
+        ed.state.spec_path = str(missing)
+        ed.request_open()
+        assert ed.state.message.startswith(f"could not open {missing}: ")
+        assert "No such file" in ed.state.message and "Error" not in ed.state.message
+
+        ed.refresh_studies()
+        ed.freeze_study("short")
+        assert ed._study("short") == {**ed._study("short"), "frozen": True, "has_results": False}
+        ed.unfreeze_study("short")
+        assert not ed.state.study_confirm_open and not ed._study("short")["frozen"]
+
+        broken = project / "studies" / "simulation"
+        broken.mkdir()
+        (broken / "study.yaml").write_text("study: {kind: survey}\n")
+        ed.simulate()
+        assert ed.state.message.startswith("could not set up the simulation: ")
+        assert "kind: Input should be 'simulate'" in ed.state.message
+        assert "ValidationError" not in ed.state.message and "simulation" not in ed._runs
+    finally:
+        ed.stop_runs()
+        ed.worker.stop()
