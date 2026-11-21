@@ -482,9 +482,11 @@ class IFASUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
         return out
 
     def set_temperature(self, temperature_K: float) -> None:
-        """Set the static operating temperature (Kelvin) for the bulk + biofilm."""
-        if "T" not in self.model.conditions_required:
-            return
+        """Set the static operating temperature (Kelvin) for the bulk + biofilm.
+
+        A no-op for a model without a ``T`` condition: the conditions are then
+        unchanged, and the biofilm's are rebuilt from them as at construction.
+        """
         super().set_temperature(temperature_K)
         self._biofilm.conditions = SpatialConditions.uniform(
             **{k: float(v) for k, v in self.conditions.items()}

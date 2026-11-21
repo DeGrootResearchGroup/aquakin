@@ -32,6 +32,7 @@ from aquakin.plant import (
 from aquakin.plant.bsm.bsm2 import bsm2_asm1_model
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.streams import Stream
+from tests.conftest import FIXTURES
 
 _ASM1_PARTS = ["XI", "XS", "XB_H", "XB_A", "XP", "XND"]
 
@@ -281,3 +282,93 @@ def test_mass_balance_reaction_term_is_the_units_reaction_term(asm2d):
     got = _reaction_term(plant, "tank", C, params)
     expected = asm2d.dCdt(C, asm2d.default_parameters(), conditions, 0)
     np.testing.assert_allclose(got, expected, rtol=1e-12, atol=0.0)
+
+
+# ----- models without a T condition, and the IFAS set_temperature -----------
+
+@pytest.fixture
+def no_t_model(tmp_path):
+    """The co-stripping toy model with its (unused) ``T`` condition removed and
+    no ``V_liq`` parameter: a model the temperature can never reach."""
+    text = (FIXTURES / "stripped_gas_model.yaml").read_text()
+    start = text.index("conditions:")
+    end = text.index("reactions:")
+    path = tmp_path / "no_t_model.yaml"
+    path.write_text(text[:start] + text[end:])
+    model = aquakin.load_model_from_file(path)
+    assert list(model.conditions_required) == []
+    assert "V_liq" not in model.param_index
+    return model
+
+
+def test_model_without_t_runs_kinetics_static_and_aeration_at_the_inlet_T(no_t_model):
+    """A model with no ``T`` condition keeps its static rate conditions whatever
+    the inlet temperature, while the aeration correction still follows the inlet
+    temperature; ``set_temperature`` is a no-op for it."""
+    from aquakin.plant import CSTRUnit
+    from aquakin.plant.cstr import aeration_transfer
+
+    m = no_t_model
+    tank = CSTRUnit("tank", m, volume=1000.0, input_port_names=["in"],
+                    aeration=Aeration(kla=100.0, temperature_correction=True))
+    params = m.default_parameters()
+    C = m.default_concentrations()
+    C_in = m.concentrations({"SS": 200.0})
+    Q, V = 500.0, 1000.0
+
+    def rhs_at(T):
+        s = Stream(Q=jnp.asarray(Q), C=C_in, model=m, scalars={"T": jnp.asarray(T)})
+        return tank.rhs(jnp.asarray(0.0), C, {"in": s}, params)
+
+    for T in (283.15, 303.15):
+        expected = ((Q / V) * (C_in - C) + m.dCdt(C, params, {}, 0)
+                    + aeration_transfer(tank._av, C, jnp.asarray(T), None, m))
+        np.testing.assert_allclose(rhs_at(T), expected, rtol=1e-12, atol=1e-12)
+    # The aeration correction must actually respond for the check to discriminate.
+    assert float(jnp.max(jnp.abs(rhs_at(283.15) - rhs_at(303.15)))) > 1e-3
+
+    before = rhs_at(293.15)
+    tank.set_temperature(300.0)
+    assert tank.conditions == {}
+    np.testing.assert_array_equal(rhs_at(293.15), before)
+
+
+def test_digester_without_v_liq_leaves_the_parameters_alone(no_t_model):
+    """A digester model with no ``V_liq`` parameter: its reaction term is the
+    plain ``model.dCdt`` at the given parameters, plus the dilution."""
+    from aquakin.plant import ADM1DigesterUnit
+
+    m = no_t_model
+    dig = ADM1DigesterUnit(name="dig", model=m, volume=800.0)
+    params = m.default_parameters()
+    C = m.default_concentrations()
+    C_in = m.concentrations({"SS": 120.0, "SN2O": 3.0})
+    s = Stream(Q=jnp.asarray(100.0), C=C_in, model=m)
+    got = dig.rhs(jnp.asarray(0.0), C, {"inlet": s}, params)
+    expected = m.dCdt(C, params, {}, 0) + (100.0 / 800.0) * (C_in - C)
+    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_plant_set_temperature_reaches_ifas_bulk_and_biofilm(asm1):
+    """``Plant.set_temperature`` sets an IFAS tank's ``T`` for the bulk and the
+    biofilm: its derivative then equals that of a tank built at that
+    temperature, and differs from the one at its old temperature."""
+    ifas = _ifas(asm1)
+    plant = Plant("one", time_unit="d")
+    plant.add_unit(ifas)
+    plant.add_influent("feed", InfluentSeries.constant(asm1, SS=300.0, Q=1000.0), to="ifas.in")
+    params = asm1.default_parameters()
+    state = ifas.initial_state().at[asm1.species_index["XB_A"]].set(150.0)
+    feed = Stream(Q=jnp.asarray(1000.0), C=asm1.concentrations({"SS": 300.0}), model=asm1)
+    t = jnp.asarray(0.0)
+    before = ifas.rhs(t, state, {"in": feed}, params)
+
+    plant.set_temperature(10.0)
+    assert ifas.conditions["T"] == pytest.approx(283.15)
+    assert float(ifas._biofilm.conditions.fields["T"][0]) == pytest.approx(283.15)
+
+    ref_built = dataclasses.replace(_ifas(asm1), conditions={"T": 283.15})
+    after = ifas.rhs(t, state, {"in": feed}, params)
+    np.testing.assert_allclose(after, ref_built.rhs(t, state, {"in": feed}, params),
+                               rtol=1e-12, atol=1e-12)
+    assert float(jnp.max(jnp.abs(after - before))) > 1e-3
