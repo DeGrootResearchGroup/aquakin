@@ -30,7 +30,7 @@ from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
 from aquakin_ui.jobs import StudyRun
-from aquakin_ui.results import analysis_view, channels_of, line_chart, steady_table
+from aquakin_ui.results import SIMULATE, analysis_view, channels_of, line_chart, steady_table
 from aquakin_ui.settings import Settings
 from aquakin_ui.study_form import draft_for, fields_for, missing, study_from
 from aquakin_ui.widget import Flowsheet as FlowsheetCanvas
@@ -82,12 +82,21 @@ def simulation_name(spec: Path) -> str:
     return SIMULATION + "_" + re.sub(r"[^A-Za-z0-9_-]", "_", spec.stem)
 
 
-def flowsheet_entry(spec: Path) -> dict:
-    """The ``flowsheet:`` setting a study of ``spec`` needs (none for flowsheet.yaml)."""
-    return {} if spec.name == DEFAULT_SPEC else {"flowsheet": f"../../{spec.name}"}
-
-
-_ERROR_NAME = re.compile(r"^(?:[A-Z]\w*(?:Error|Exception|Warning): )+")
+#: The state the worker gives a study whose ``study.yaml`` it cannot read.
+UNREADABLE = "unreadable"
+#: The colour of a study's state chip, for every state the worker reports (``None``
+#: is the chip's own). The states are aquakin's (``check_study``, plus
+#: ``UNREADABLE`` from ``list_studies``); ``tests/ui/test_protocol.py`` pins that
+#: this lists exactly those, since the two sides share no import.
+STATE_COLOURS = {
+    "fresh": "success",
+    "stale": "warning",
+    "not run": None,
+    "cancelled": None,
+    "damaged": "error",
+    "failed": "error",
+    UNREADABLE: "error",
+}
 
 
 def _needs_python(kind: dict) -> bool:
@@ -96,11 +105,14 @@ def _needs_python(kind: dict) -> bool:
     return any(s["required"] and s["type"] in ("unsupported", "reagent") for s in kind["settings"])
 
 
-def _plain_error(exc) -> str:
-    """An error as the page says it: without the exception class names in front
-    ("ValueError: ...", "WorkerError: FileNotFoundError: ..."), which mean nothing
-    to a user."""
-    return _ERROR_NAME.sub("", str(exc))
+def _js(value) -> str:
+    """``value`` (plain names: no quotes inside) as a JavaScript literal for a
+    template expression. Single quotes, since the expression sits in a
+    double-quoted HTML attribute, which a double quote would end."""
+    text = json.dumps(value)
+    if "'" in text:
+        raise ValueError(f"{text} holds a quote and cannot go in a template")
+    return text.replace('"', "'")
 
 
 # Rows are added to and removed from the study draft in place, which the page
@@ -195,9 +207,9 @@ class Editor:
         try:
             out = self.worker.request("check_unit", **request)
         except WorkerError as exc:
-            return _plain_error(exc)
+            return str(exc)
         if not out["ok"]:
-            return _plain_error(out["error"])
+            return out["error"]
         if (out["inputs"], out["outputs"]) != ports:
             return f"aquakin built ports {out['inputs']} -> {out['outputs']}, not the drawn ones"
         return None
@@ -218,7 +230,7 @@ class Editor:
         try:
             return self.worker.request("check_spec", spec=spec, base_dir=base)
         except WorkerError as exc:
-            return {"ok": False, "error": _plain_error(exc)}
+            return {"ok": False, "error": str(exc)}
 
     def _check_plant(self) -> dict | None:
         key, spec, base = self._plant_request()
@@ -312,7 +324,7 @@ class Editor:
         errors = [f"{uid}: {e}" for uid, e in unit_errors.items()]
         errors += [f"{uid}.{p} is not fed" for uid, ps in unfed.items() for p in ps]
         if plant and not plant.get("ok"):
-            errors.append(f"plant: {_plain_error(plant['error'])}")
+            errors.append(f"plant: {plant['error']}")
         self.state.errors = errors
         self.state.products = [f"{uid}.{p}" for uid, ps in dangling.items() for p in ps]
         self.state.n_recycles = len(back)
@@ -564,7 +576,7 @@ class Editor:
                     raise data
                 doc = Flowsheet.from_spec(self.catalog, data, base_dir=path.parent)
             except Exception as exc:
-                self.say(f"could not open {path}: {_plain_error(exc)}")
+                self.say(f"could not open {path}: {exc}")
                 return
             self.doc = doc
             self._opened = (path, _digest(path))
@@ -682,7 +694,7 @@ class Editor:
 
         def done(written):
             if isinstance(written, Exception):
-                self.say(f"could not save {path}: {_plain_error(written)}")
+                self.say(f"could not save {path}: {written}")
                 return
             # Copied files are now referenced inside the project; an edit made
             # while saving is kept rather than replaced by what was written.
@@ -755,7 +767,7 @@ class Editor:
             # A live study runs the flowsheet's file: bring it up to the drawing.
             self.save(then=lambda: self.run_study(name), path=self._spec_file())
             return
-        if study["state"] not in ("fresh", "stale", "damaged"):
+        if not study["has_results"]:
             # Not run, failed or cancelled: no results to replace.
             self._start_run(study, replace=False)
             return
@@ -775,7 +787,7 @@ class Editor:
         study = self._study(name)
         if study is None:
             return
-        if study["state"] == "not run":
+        if not study["has_results"]:  # nothing to delete
             self._worker_study("unfreeze_study", study, discard_results=True)
             return
         self._ask(
@@ -835,34 +847,32 @@ class Editor:
         spec = self._spec_file()
         project = spec.parent
         name = simulation_name(spec)
-        folder = project / "studies" / name
 
         def work():
-            if not (folder / "study.yaml").is_file():
+            listed = self.worker.request("list_studies", project=str(project))
+            study = next((st for st in listed if st["name"] == name), None)
+            if study is None:
                 settings = self.worker.request("simulation_study", spec=str(spec))
                 self.worker.request(
                     "create_study",
                     project=str(project),
                     name=name,
-                    study={**settings, **flowsheet_entry(spec)},
+                    study={**settings, "flowsheet": str(spec)},
                 )
-            else:
+            elif study["flowsheet"] is None:  # its study.yaml cannot be read
+                raise ValueError("; ".join(study["reasons"]))
+            elif not study["frozen"] and Path(study["flowsheet"]).resolve() != spec.resolve():
                 # The study must follow this spec: a copy or a hand edit may point
-                # it at another file of the folder.
-                settings = self.worker.request("read_study", path=str(folder))
-                follows = folder / settings.get("flowsheet", f"../../{DEFAULT_SPEC}")
-                if follows.resolve() != spec:
-                    settings = {k: v for k, v in settings.items() if k != "flowsheet"}
-                    self.worker.request(
-                        "update_study",
-                        path=str(folder),
-                        study={**settings, **flowsheet_entry(spec)},
-                    )
+                # it at another file of the folder. (A frozen one is refused below.)
+                settings = self.worker.request("read_study", path=study["path"])
+                self.worker.request(
+                    "update_study", path=study["path"], study={**settings, "flowsheet": str(spec)}
+                )
             return self.worker.request("list_studies", project=str(project))
 
         def done(studies):
             if isinstance(studies, Exception):
-                self.say(f"could not set up the simulation: {_plain_error(studies)}")
+                self.say(f"could not set up the simulation: {studies}")
                 return
             self.state.studies = [{**st, "running": st["name"] in self._runs} for st in studies]
             self.state.panel = "studies"
@@ -877,34 +887,32 @@ class Editor:
 
         self._off_page(work, done)
 
-    def show_results(self, name: str, state: str | None = None) -> None:
-        """Open a study's results: a steady state as tables, a run in time as a
-        chart per channel, any other kind as the list of its result files.
-
-        ``state`` is where the study stands when the caller knows better than
-        the listing (a run that just finished, before the list is refreshed).
-        """
+    def show_results(self, name: str) -> None:
+        """Open a study's results: a simulation at steady state as tables, a run
+        in time as a chart per channel, any other kind as its own view
+        (``results.ANALYSIS_VIEWS``). Where the study stands comes with the
+        results, so a run that just finished is shown as it ended."""
         study = self._study(name)
         if study is None:
             return
-        state = state or study["state"]
 
         def done(results):
             if isinstance(results, Exception):
-                self.say(f"could not read the results of {name}: {_plain_error(results)}")
+                self.say(f"could not read the results of {name}: {results}")
                 return
             s = self.state
             self._results = results
             s.results_title = f"Results of {name}"
             s.results_folder = str(Path(study["path"]) / "results")
             s.results_files = results["files"]
+            reasons = results["reasons"]
             s.results_note = (
-                "The flowsheet has changed since this ran; run it again for the plant as drawn."
-                if state == "stale"
+                f"Run the study again for up-to-date results: {'; '.join(reasons)}."
+                if reasons
                 else ""
             )
             units = results.get("units") or {}
-            if results["kind"] != "simulate":
+            if results["kind"] != SIMULATE:
                 s.results_mode = "analysis"
                 view = analysis_view(results)
                 s.results_lines = view["lines"]
@@ -1057,7 +1065,7 @@ class Editor:
                 study["flowsheet"] = self._study_flowsheet
             work = lambda: self.worker.request("update_study", path=editing, study=study)
         else:
-            study.update(flowsheet_entry(self._spec_file()))
+            study["flowsheet"] = str(self._spec_file())
             project = str(self._project())
             work = lambda: self.worker.request(
                 "create_study", project=project, name=name, study=study
@@ -1065,7 +1073,7 @@ class Editor:
 
         def done(result):
             if isinstance(result, Exception):
-                self.state.study_error = _plain_error(result)
+                self.state.study_error = str(result)
                 return
             self.state.study_dialog_open = False
             self.say(f"{'updated' if editing else 'created'} study {name}", error=False)
@@ -1172,9 +1180,9 @@ class Editor:
             show = name in self._show_when_done
             self._show_when_done.discard(name)
             if event["event"] == "done":
-                self.say(f"{name}: {event['state']}", error=event["state"] != "fresh")
-                if show and event["state"] in ("fresh", "stale"):
-                    self.show_results(name, state=event["state"])
+                self.say(f"{name}: {event['state']}", error=bool(event["reasons"]))
+                if show and event["has_results"]:
+                    self.show_results(name)
             elif event["event"] == "cancelled":
                 self.say(f"{name}: cancelled", error=False)
             else:
@@ -1504,8 +1512,8 @@ class Editor:
                         "{{ st.running ? 'running' : st.state }}",
                         size="x-small",
                         color=(
-                            "st.running ? 'primary' : ({fresh: 'success', stale: 'warning', "
-                            "'not run': undefined, cancelled: undefined}[st.state] ?? 'error')",
+                            f"st.running ? 'primary' : "
+                            f"({_js(STATE_COLOURS)}[st.state] ?? undefined)",
                         ),
                     )
                 html.Div(
@@ -1544,7 +1552,7 @@ class Editor:
                     "Run",
                     v_if="!st.running",
                     size="small",
-                    disabled=("st.state === 'unreadable'",),
+                    disabled=(f"st.state === {_js(UNREADABLE)}",),
                     click=(self.run_study, "[st.name, sel_dirty ? sel_rows : null]"),
                 )
                 v3.VBtn(
@@ -1556,7 +1564,7 @@ class Editor:
                 )
                 v3.VBtn(
                     "Results",
-                    v_if="!st.running && ['fresh', 'stale'].includes(st.state)",
+                    v_if="!st.running && st.has_results",
                     size="small",
                     color="primary",
                     click=(self.show_results, "[st.name]"),
@@ -1578,7 +1586,7 @@ class Editor:
                 v3.VBtn(
                     "Edit",
                     size="small",
-                    disabled=("st.running || st.state === 'unreadable'",),
+                    disabled=(f"st.running || st.state === {_js(UNREADABLE)}",),
                     click=(self.edit_study, "[st.name]"),
                 )
                 v3.VBtn("Copy", size="small", click=(self.copy_study, "[st.name]"))

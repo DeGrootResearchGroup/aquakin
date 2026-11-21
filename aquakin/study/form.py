@@ -13,10 +13,39 @@ inputs.
 from __future__ import annotations
 
 import math
+import os
 import shutil
 from pathlib import Path
 
 import yaml
+
+from aquakin.study.files import read_matrix, read_named_values, read_table, read_trajectory
+from aquakin.study.study import (
+    _REQUIRED,
+    FISHER_FILE,
+    FISHER_SUMMARY_FILE,
+    FIT_FILE,
+    FITTED_FILE,
+    MEASURED_FILE,
+    MEASURED_STEADY_FILE,
+    PROFILE_FILE,
+    PROFILE_SUMMARY_FILE,
+    RANKING_FILE,
+    RESULTS,
+    STREAMS_FILE,
+    STREAMS_STEADY_FILE,
+    STUDIES_DIR,
+    STUDY_FILE,
+    StudyError,
+    _channel_names,
+    _channels,
+    _check_kind,
+    _flowsheet,
+    _folder,
+    _Study,
+    check_study,
+    load_study,
+)
 
 __all__ = [
     "create_study",
@@ -263,7 +292,6 @@ def study_form() -> dict:
         "fields": {name: {"type", "label", "help", "default", "choices"}}}``.
         ``fields`` of a kind are in the order a form shows them.
     """
-    from aquakin.study.study import _REQUIRED
 
     kinds = [
         {
@@ -363,7 +391,6 @@ def simulation_study(spec, *, base_dir=None) -> dict:
         If no stream leaves the plant and none is named.
     """
     from aquakin.plant import Plant
-    from aquakin.study.study import StudyError
 
     plant = Plant.from_spec(spec, base_dir=base_dir)
     fed = {f"{c.from_unit}.{c.from_port}" for c in plant.connections if c.from_unit is not None}
@@ -414,7 +441,6 @@ def _units(folder: Path, study, streams: list[str]) -> tuple[dict, str | None]:
     """Each stream's units by channel, and the plant's clock; empty when the
     plant no longer builds (the results are shown without units then)."""
     from aquakin.plant import Plant
-    from aquakin.study.study import _flowsheet
 
     try:
         plant = Plant.from_spec(_flowsheet(folder, study))
@@ -461,101 +487,143 @@ def study_results(path) -> dict:
     Returns
     -------
     dict
-        ``{"kind", "files"}`` (the result file names) and, for a ``simulate``
-        study, ``"steady"`` and per stream its values by channel:
-        ``"streams"`` (flow, species, temperature) and ``"measured"`` (the
-        observables' channels), each ``{stream: {channel: value}}`` at a steady
-        state or ``{stream: {channel: [values]}}`` with ``"t"`` and
-        ``"time_unit"`` for a run in time; ``"units"`` gives
-        ``{stream: {channel: unit}}`` where known. Temperature is in °C (the
-        files keep the plant's kelvin). A value that is not finite is ``None``.
+        ``{"kind", "files"}`` (the result file names), the study's standing as
+        :func:`~aquakin.study.check_study` gives it (``"state"``,
+        ``"has_results"``, ``"reasons"``, ``"notes"``), and what its kind's
+        reader finds (``_READERS``). A ``simulate`` study gives ``"steady"`` and
+        per stream its values by channel: ``"streams"`` (flow, species,
+        temperature) and ``"measured"`` (the observables' channels), each
+        ``{stream: {channel: value}}`` at a steady state or
+        ``{stream: {channel: [values]}}`` with ``"t"`` and ``"time_unit"`` for a
+        run in time; ``"units"`` gives ``{stream: {channel: unit}}`` where known.
+        Temperature is in °C (the files keep the plant's kelvin). Fisher, rank,
+        calibrate and profile studies give their summaries, tables and matrices
+        (see :func:`_read_fisher` and its neighbours). A value that is not finite
+        is ``None``.
 
     Raises
     ------
     StudyError
         If the study has no results.
     """
-    from aquakin.study.files import read_named_values, read_trajectory
-    from aquakin.study.study import RESULTS, StudyError, _folder, load_study
-
     folder = _folder(path)
     study = load_study(folder)
     out = folder / RESULTS
     if not out.is_dir():
         raise StudyError(f"study {folder.name} has no results; run it first")
-    result: dict = {"kind": study.kind, "files": sorted(p.name for p in out.iterdir())}
-    if study.kind != "simulate":
-        result.update(_analysis_results(folder, study, out))
-        return result
-    streams = [*study.streams, *(o.stream for o in study.observables)]
-    units, clock = _units(folder, study, list(dict.fromkeys(streams)))
-    result["units"] = units
-    result["steady"] = study.time is None
-    for key in ("streams", "measured"):
-        if study.time is None:
-            file = out / f"{key}.yaml"
-            if file.is_file():
-                result[key] = _finite(read_named_values(file))
-        else:
-            file = out / f"{key}.csv"
-            if file.is_file():
-                t, columns = read_trajectory(file)
-                result["t"] = _finite(list(t))
-                result[key] = _by_stream(
-                    {name: _finite(list(v)) for name, v in columns.items()}, streams
-                )
-    for key in ("streams", "measured"):
-        for channels in (result.get(key) or {}).values():
-            if "T" in channels:
-                channels["T"] = _celsius(channels["T"])
-    if study.time is not None:
-        result["time_unit"] = study.time.time_unit or clock
+    status = check_study(folder)
+    result: dict = {
+        "kind": study.kind,
+        "files": sorted(p.name for p in out.iterdir()),
+        "state": status.state,
+        "has_results": status.has_results,
+        "reasons": status.reasons,
+        "notes": status.notes,
+    }
+    result.update(_reader(study.kind)(folder, study, out))
     return result
 
 
-def _analysis_results(folder: Path, study, out: Path) -> dict:
-    """What a Fisher, rank, calibrate or profile study found, as plain data."""
-    from aquakin.study.files import read_matrix, read_table, read_trajectory
-    from aquakin.study.study import _channel_names, _channels
+def _reader(kind: str):
+    """The function that reads a ``kind`` study's results (``_READERS``)."""
+    try:
+        return _READERS[kind]
+    except KeyError:
+        raise StudyError(f"no result reader for a {kind!r} study") from None
 
-    def yaml_file(name):
-        path = out / name
-        return _finite_tree(yaml.safe_load(path.read_text())) if path.is_file() else None
 
-    found: dict = {}
-    if study.kind == "fisher":
-        found["summary"] = yaml_file("summary.yaml")
-        if (out / "fisher.csv").is_file():
-            matrix, rows, _ = read_matrix(out / "fisher.csv")
-            found["matrix"] = {"names": rows, "rows": _finite(matrix.tolist())}
-    elif study.kind == "rank":
-        if (out / "ranking.csv").is_file():
-            found["table"] = _finite_tree(read_table(out / "ranking.csv"))
-        found["criterion"] = study.criterion
-    elif study.kind == "calibrate":
-        found["summary"] = yaml_file("fit.yaml")
-        names = [f"{o.stream}.{n}" for o in study.observables for n in _channel_names(_channels(o))]
-        streams = [o.stream for o in study.observables]
-        if (out / "fitted.csv").is_file():
-            t, columns = read_trajectory(out / "fitted.csv")
-            found["fitted"] = {
-                "t": _finite(list(t)),
-                "values": _by_stream({n: _finite(list(v)) for n, v in columns.items()}, streams),
-            }
-        data = folder / (study.data or "")
-        if study.data and data.is_file():
-            t, columns = read_trajectory(data)
-            found["data"] = {
-                "t": _finite(list(t)),
-                "values": _by_stream(
-                    {n: _finite(list(v)) for n, v in columns.items() if n in names}, streams
-                ),
-            }
-    else:  # profile, the last kind with results to read
-        found["summary"] = yaml_file("profile.yaml")
-        if (out / "profile.csv").is_file():
-            found["table"] = _finite_tree(read_table(out / "profile.csv"))
+def _yaml_file(path: Path):
+    return _finite_tree(yaml.safe_load(path.read_text())) if path.is_file() else None
+
+
+def _read_simulate(folder: Path, study, out: Path) -> dict:
+    """A simulation's streams and measured channels, by stream, with their units."""
+    streams = [*study.streams, *(o.stream for o in study.observables)]
+    units, clock = _units(folder, study, list(dict.fromkeys(streams)))
+    found: dict = {"units": units, "steady": study.time is None}
+    files = (
+        {"streams": STREAMS_STEADY_FILE, "measured": MEASURED_STEADY_FILE}
+        if study.time is None
+        else {"streams": STREAMS_FILE, "measured": MEASURED_FILE}
+    )
+    for key, name in files.items():
+        file = out / name
+        if not file.is_file():
+            continue
+        if study.time is None:
+            found[key] = _finite(read_named_values(file))
+        else:
+            t, columns = read_trajectory(file)
+            found["t"] = _finite(list(t))
+            found[key] = _by_stream(
+                {name: _finite(list(v)) for name, v in columns.items()}, streams
+            )
+    for key in ("streams", "measured"):
+        for channels in (found.get(key) or {}).values():
+            if "T" in channels:
+                channels["T"] = _celsius(channels["T"])
+    if study.time is not None:
+        found["time_unit"] = study.time.time_unit or clock
     return found
+
+
+def _read_fisher(folder: Path, study, out: Path) -> dict:
+    """The Fisher summary (values, standard deviations, criteria) and its matrix."""
+    found: dict = {"summary": _yaml_file(out / FISHER_SUMMARY_FILE)}
+    if (out / FISHER_FILE).is_file():
+        matrix, rows, _ = read_matrix(out / FISHER_FILE)
+        found["matrix"] = {"names": rows, "rows": _finite(matrix.tolist())}
+    return found
+
+
+def _read_rank(folder: Path, study, out: Path) -> dict:
+    """The ranking table and the criterion it was ranked by."""
+    found: dict = {"criterion": study.criterion}
+    if (out / RANKING_FILE).is_file():
+        found["table"] = _finite_tree(read_table(out / RANKING_FILE))
+    return found
+
+
+def _read_calibrate(folder: Path, study, out: Path) -> dict:
+    """The fit's summary, and the fitted and the observed channels by stream."""
+    found: dict = {"summary": _yaml_file(out / FIT_FILE)}
+    names = [f"{o.stream}.{n}" for o in study.observables for n in _channel_names(_channels(o))]
+    streams = [o.stream for o in study.observables]
+    if (out / FITTED_FILE).is_file():
+        t, columns = read_trajectory(out / FITTED_FILE)
+        found["fitted"] = {
+            "t": _finite(list(t)),
+            "values": _by_stream({n: _finite(list(v)) for n, v in columns.items()}, streams),
+        }
+    data = folder / (study.data or "")
+    if study.data and data.is_file():
+        t, columns = read_trajectory(data)
+        found["data"] = {
+            "t": _finite(list(t)),
+            "values": _by_stream(
+                {n: _finite(list(v)) for n, v in columns.items() if n in names}, streams
+            ),
+        }
+    return found
+
+
+def _read_profile(folder: Path, study, out: Path) -> dict:
+    """The profile's summary (best value, interval) and its table."""
+    found: dict = {"summary": _yaml_file(out / PROFILE_SUMMARY_FILE)}
+    if (out / PROFILE_FILE).is_file():
+        found["table"] = _finite_tree(read_table(out / PROFILE_FILE))
+    return found
+
+
+#: Each kind's result reader, ``(folder, study, results folder) -> dict``; one per
+#: entry of :data:`~aquakin.study.study.KINDS`, like ``_RUNNERS``.
+_READERS = {
+    "simulate": _read_simulate,
+    "fisher": _read_fisher,
+    "calibrate": _read_calibrate,
+    "profile": _read_profile,
+    "rank": _read_rank,
+}
 
 
 def _finite_tree(value):
@@ -580,8 +648,6 @@ def _bring_in(folder: Path, study: dict, key: str, project: Path) -> None:
     value = study.get(key)
     if not value or (key == "initial_state" and value in ("default", "steady")):
         return
-    from aquakin.study.study import StudyError
-
     source = Path(value)
     if not source.is_absolute():
         inside = folder / source
@@ -597,10 +663,25 @@ def _bring_in(folder: Path, study: dict, key: str, project: Path) -> None:
     study[key] = source.name
 
 
+def _relative_flowsheet(folder: Path, study: dict) -> None:
+    """Store an absolute ``flowsheet`` relative to the study folder, and leave it
+    out when it is the default, so a front end can name the spec file it has
+    open without knowing where studies sit in a project."""
+    value = study.get("flowsheet")
+    if not value or not Path(value).is_absolute():
+        return
+    try:
+        relative = Path(os.path.relpath(Path(value).resolve(), folder.resolve())).as_posix()
+    except ValueError:  # another drive (Windows): keep the absolute path
+        return
+    if relative == _Study.model_fields["flowsheet"].default:
+        del study["flowsheet"]
+    else:
+        study["flowsheet"] = relative
+
+
 def _write(folder: Path, study: dict, project: Path) -> Path:
     from pydantic import ValidationError
-
-    from aquakin.study.study import STUDY_FILE, StudyError, _check_kind, _Study
 
     study = dict(study)
     try:
@@ -614,6 +695,7 @@ def _write(folder: Path, study: dict, project: Path) -> Path:
     _check_kind(checked, "the study")
     for key in ("data", "initial_state"):
         _bring_in(folder, study, key, project)
+    _relative_flowsheet(folder, study)
     folder.mkdir(parents=True, exist_ok=True)
     text = yaml.safe_dump({"study": study}, sort_keys=False, allow_unicode=True)
     (folder / STUDY_FILE).write_text(text)
@@ -635,7 +717,9 @@ def create_study(project, name: str, study: dict) -> Path:
         The study's folder name (letters, digits, ``_`` and ``-``).
     study : dict
         The ``study:`` settings (see :func:`study_form`). A relative file path
-        is read from the project folder.
+        is read from the project folder. An absolute ``flowsheet`` is stored
+        relative to the study folder (and left out when it is the project's
+        ``flowsheet.yaml``).
 
     Returns
     -------
@@ -649,7 +733,6 @@ def create_study(project, name: str, study: dict) -> Path:
         or a file it names does not exist.
     """
     from aquakin.plant.errors import NAME_PATTERN
-    from aquakin.study.study import StudyError
 
     project = Path(project)
     if not NAME_PATTERN.match(name):
@@ -657,7 +740,7 @@ def create_study(project, name: str, study: dict) -> Path:
             f"study name {name!r} must start with a letter or '_' and hold only letters, "
             f"digits, '_' and '-'"
         )
-    folder = project / "studies" / name
+    folder = project / STUDIES_DIR / name
     if folder.exists():
         raise StudyError(f"a study named {name} already exists")
     try:
@@ -679,15 +762,14 @@ def update_study(path, study: dict) -> Path:
     path : str or pathlib.Path
         The study folder.
     study : dict
-        The new ``study:`` settings.
+        The new ``study:`` settings; an absolute ``flowsheet`` is stored as for
+        :func:`create_study`.
 
     Returns
     -------
     pathlib.Path
         The study folder.
     """
-    from aquakin.study.study import _folder, load_study
-
     folder = _folder(path)
     load_study(folder)  # it is a study
     return _write(folder, study, folder.parent.parent)
@@ -705,7 +787,5 @@ def read_study(path) -> dict:
     -------
     dict
     """
-    from aquakin.study.study import load_study
-
     study = load_study(path)
     return {"kind": study.kind, **study.model_dump(mode="json", exclude_defaults=True)}

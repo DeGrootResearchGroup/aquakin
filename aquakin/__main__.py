@@ -28,7 +28,14 @@ channels a study of it may name), ``read_study`` (``path``), ``create_study``
 and ``study_results`` (``path``: the results as plain data). A study is run in a process of its
 own, ``aquakin study run --json <path>``, which streams progress events.
 A failed request is answered
-``{"id": ..., "ok": false, "error": message}`` and the worker keeps serving.
+``{"id": ..., "ok": false, "error": message, "type": class name}`` (the message
+without the class name in front, see :func:`aquakin.plant.errors.error_reply`;
+no ``type`` for a request that is not JSON or names no known command) and the
+worker keeps serving. Each study listed carries its ``state`` (one of
+:data:`aquakin.study.study.STATES`, or ``"unreadable"``), ``has_results``, its
+folder (``path``) and the spec it builds its plant from (``flowsheet``: the
+snapshot's for a frozen study), so a front end never rebuilds study paths or
+decides from a state's name what it implies.
 Standard output carries replies only; anything else goes to standard error.
 """
 
@@ -40,16 +47,22 @@ import json
 import os
 import sys
 
+#: The state of a listed study whose ``study.yaml`` cannot be read (beside
+#: :data:`aquakin.study.study.STATES`, which a readable study is in).
+UNREADABLE = "unreadable"
+
 
 def _list_studies(project) -> list[dict]:
     """Every study under ``<project>/studies/`` with where it stands."""
     from pathlib import Path
 
     from aquakin import study as st
+    from aquakin.plant.errors import error_reply
+    from aquakin.study.study import STUDIES_DIR, STUDY_FILE, _flowsheet
 
     out = []
-    folder = Path(project) / "studies"
-    for path in sorted(folder.glob(f"*/{st.study.STUDY_FILE}")) if folder.is_dir() else []:
+    folder = Path(project) / STUDIES_DIR
+    for path in sorted(folder.glob(f"*/{STUDY_FILE}")) if folder.is_dir() else []:
         entry = {"name": path.parent.name, "path": str(path.parent)}
         try:
             spec = st.load_study(path.parent)
@@ -58,17 +71,21 @@ def _list_studies(project) -> list[dict]:
                 "kind": spec.kind,
                 "description": spec.description or "",
                 "state": status.state,
+                "has_results": status.has_results,
                 "frozen": status.frozen,
+                "flowsheet": str(_flowsheet(path.parent, spec)),
                 "reasons": status.reasons,
                 "notes": status.notes,
             }
-        except Exception as exc:
+        except Exception as exc:  # one broken study is listed as such, not the listing lost
             entry |= {
                 "kind": "",
                 "description": "",
-                "state": "unreadable",
+                "state": UNREADABLE,
+                "has_results": False,
                 "frozen": False,
-                "reasons": [f"{type(exc).__name__}: {exc}"],
+                "flowsheet": None,
+                "reasons": [error_reply(exc)["error"]],
                 "notes": [],
             }
         out.append(entry)
@@ -149,13 +166,15 @@ def _answer(handlers, line: str) -> dict:
             "ok": False,
             "error": f"unknown command {command!r}; known: {sorted(handlers)}",
         }
+    from aquakin.plant.errors import error_reply
+
     try:
         # A unit or model may print while it is built; keep stdout for replies.
         with contextlib.redirect_stdout(sys.stderr):
             result = handlers[command](req)
         return {"id": rid, "ok": True, "result": result}
     except Exception as exc:
-        return {"id": rid, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"id": rid, "ok": False, **error_reply(exc)}
 
 
 def serve(stdin=None, stdout=None) -> None:
@@ -196,12 +215,15 @@ def _study_job(path, replace: bool) -> int:
 
     Events: ``{"event": "progress", "stage", "done", "total", "fraction",
     "message"}`` while it runs, then one of ``{"event": "done", "state",
-    "reasons", "notes"}``, ``{"event": "cancelled"}`` or ``{"event": "error",
-    "error"}``. Standard output carries events only (as for ``serve``).
+    "has_results", "reasons", "notes"}``, ``{"event": "cancelled"}`` or
+    ``{"event": "error", "error", "type"}`` (as a refused request's, see
+    :func:`aquakin.plant.errors.error_reply`). Standard output carries events
+    only (as for ``serve``).
     """
     import threading
 
     from aquakin import study as st
+    from aquakin.plant.errors import error_reply
     from aquakin.progress import Cancelled
 
     sys.stdout.flush()
@@ -242,9 +264,17 @@ def _study_job(path, replace: bool) -> int:
         emit({"event": "cancelled"})
         return 1
     except Exception as exc:
-        emit({"event": "error", "error": f"{type(exc).__name__}: {exc}"})
+        emit({"event": "error", **error_reply(exc)})
         return 2
-    emit({"event": "done", "state": status.state, "reasons": status.reasons, "notes": status.notes})
+    emit(
+        {
+            "event": "done",
+            "state": status.state,
+            "has_results": status.has_results,
+            "reasons": status.reasons,
+            "notes": status.notes,
+        }
+    )
     return 0
 
 

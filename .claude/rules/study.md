@@ -56,8 +56,21 @@ results. The design and the owner's decisions are in
   base by an unambiguous species match (`_base_by_species`); keep that working
   when changing `aquakin/utils/composition.py`, or measured channels (TN, COD)
   break in frozen studies.
-- Kinds (`_RUNNERS`, each `_run_<kind>(plant, folder, study, params, y0, out,
-  progress)`; required fields in `_REQUIRED`):
+- **A kind is one entry in each registry**, all keyed by `KINDS` (which
+  `_Study.kind` accepts): its runner in `_RUNNERS` (`_run_<kind>(plant, folder,
+  study, params, y0, out, progress)`), its required fields in `_REQUIRED`
+  (`simulate`'s are `()`: it needs streams or observables, checked in
+  `_check_kind`), its form entry in `form._KINDS`, its result reader in
+  `form._READERS`, and its view in `aquakin_ui/results.py` (`ANALYSIS_VIEWS`, or
+  the editor's own for `SIMULATE`). `tests/unit/test_study_kinds.py` and
+  `tests/ui/test_protocol.py` pin that each registry holds exactly `KINDS`. Never
+  dispatch on a kind with an if / elif whose last branch assumes one: an unknown
+  kind raises (`form._reader`, `results.analysis_view`).
+- **Result file names are the module constants** in `study.py`
+  (`PARAMETERS_FILE`, `FISHER_FILE`, `FIT_FILE`, ...; `STUDIES_DIR`,
+  `STUDY_FILE`, `SPEC_FILE`), used by both the runner that writes a file and the
+  reader that reads it; never a bare literal. The names on disk are the stored
+  format and do not change (a test pins their spelling). Kinds and their files:
   - `simulate`: no `time` → steady state (`streams.yaml`, `measured.yaml`);
     with `time` → `streams.csv` / `measured.csv`; always `final_state.yaml`
     and `parameters.yaml`.
@@ -73,8 +86,8 @@ results. The design and the owner's decisions are in
   - `rank`: `candidates` (named sensor sets) and optional `base`;
     `ranking.csv`.
   Data and initial-state files are part of the study's fingerprint.
-  A new kind adds a runner, its required fields, and a test in
-  `tests/integration/test_study.py`.
+  A new kind adds a runner, its required fields, a form entry, a reader, a view
+  in `aquakin_ui`, and a test in `tests/integration/test_study.py`.
 - **Progress and cancel** (`aquakin/progress.py`): `run_study(progress=)` passes
   the callable to the analysis; `Cancelled` (a `BaseException`) stops it and
   the run is recorded with outcome `cancelled` (state `"cancelled"`).
@@ -92,11 +105,23 @@ results. The design and the owner's decisions are in
   keywords. `study_results(path)` reads results for a front end: every kind
   gives its file names; Fisher, rank, calibrate and profile their summaries,
   tables, matrix, and (calibrate) the fitted and the data trajectories by stream
-  (`_analysis_results`); `simulate` also its values by stream and channel
+  (`_read_<kind>` in `_READERS`); `simulate` also its values by stream and channel
   (`_by_stream` splits `<stream>.<channel>` columns by the study's own stream
   names, since a stream name may hold a dot), non-finite values as `None`, and
   temperature converted to °C (the files keep kelvin), and
   units built from the plant when it still builds (`_measure_units` reads the
-  measurement keywords' units off the species'). The worker answers all of them.
+  measurement keywords' units off the species'). Every reply also carries where
+  the study stands (`state`, `has_results`, `reasons`, `notes`). The worker
+  answers all of them.
+- **States**: `STATES` lists every state `check_study` reports (and
+  `RESULT_STATES` those with results, `StudyStatus.has_results`); the worker adds
+  `UNREADABLE` (`aquakin/__main__.py`) for a listed study whose `study.yaml`
+  cannot be read. A new state goes in `STATES` and in `aquakin_ui`'s
+  `STATE_COLOURS` (`tests/ui/test_protocol.py` pins the match). Front ends read
+  `has_results` rather than deciding from a state's name.
+- **A `flowsheet:` given as an absolute path** (as the editor sends the spec it
+  has open) is stored relative to the study folder by `create_study` /
+  `update_study`, and left out when it is the default; a relative one is kept as
+  written.
 - The editor drives studies through the job worker (`aquakin/__main__.py`'s
   `start_study` / `cancel_study`); see `.claude/rules/ui.md`.

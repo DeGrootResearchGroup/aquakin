@@ -81,7 +81,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from aquakin.plant.errors import NAME_PATTERN
+from aquakin.plant.errors import NAME_PATTERN, error_reply
 
 __all__ = [
     "SPEC_FORMAT",
@@ -1374,7 +1374,8 @@ def check_spec(spec, *, base_dir=None) -> dict:
     dict
         ``{"ok": True, "unfed": [...], "dangling": [...], "recycles": [...]}``
         when the plant builds (``unfed`` input ports are the errors), or
-        ``{"ok": False, "error": message}`` when it does not.
+        ``{"ok": False, "error": message, "type": class name}`` when it does
+        not (see :func:`~aquakin.plant.errors.error_reply`).
     """
     from aquakin.plant.plant import Plant
 
@@ -1383,8 +1384,7 @@ def check_spec(spec, *, base_dir=None) -> dict:
             warnings.simplefilter("ignore", SpecWarning)
             result = Plant.from_spec(spec, base_dir=base_dir).check()
     except Exception as exc:
-        message = str(exc) if isinstance(exc, SpecError) else f"{type(exc).__name__}: {exc}"
-        return {"ok": False, "error": message}
+        return {"ok": False, **error_reply(exc)}
     return {
         "ok": True,
         "unfed": list(result.unfed_ports),
