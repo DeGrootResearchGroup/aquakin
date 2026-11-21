@@ -595,3 +595,71 @@ def test_math_function_arity_is_checked(expr, arity):
     wrong = "[A], [B], [A]" if arity == 1 else "[A]"
     with pytest.raises(ParseError, match="argument"):
         parse_rate_expression(f"{expr}({wrong})")
+
+
+# --- the power guard -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "base,exp",
+    [
+        (b, e)
+        for b in (0.0, -0.0, 1e-300, -1e-300, 0.5, 2.0, 4.0, -2.0, -8.0, 1.0)
+        for e in (-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0)
+    ],
+)
+def test_the_power_guard_changes_no_value(base, exp):
+    """``_safe_pow`` moves the derivative at a singular point, never a value.
+
+    Every combination must equal plain ``**`` exactly, including the sign of a
+    signed zero (``(-0.0) ** -1`` is ``-inf``, not ``inf``) and a NaN for a
+    negative base under a fractional exponent, which has no real value and must
+    stay a NaN rather than being quietly turned into a number.
+    """
+    guarded = PowerNode.op((jnp.array(base), jnp.array(exp)))
+    plain = jnp.array(base) ** jnp.array(exp)
+    if jnp.isnan(plain):
+        assert jnp.isnan(guarded)
+    else:
+        assert float(guarded) == float(plain)
+        assert jnp.signbit(guarded) == jnp.signbit(plain)
+
+
+@pytest.mark.parametrize("exp", [-1.0, -0.5, 0.0, 0.5, 1.5, 2.0, 3.0])
+def test_the_power_gradient_is_finite_at_a_zero_base(exp):
+    """``d/dx x**e = e * x**(e-1)`` is infinite at zero for ``e < 1``; a zero
+    tangent through it is ``0 * inf = nan``. Both are guarded away."""
+
+    def f(x):
+        return PowerNode.op((x, jnp.array(exp)))
+
+    assert jnp.isfinite(jax.jvp(f, (0.0,), (0.0,))[1])
+    assert jnp.isfinite(jax.grad(f)(0.0))
+
+
+def test_the_power_gradient_is_untouched_where_it_was_already_finite():
+    """The guard fires only where it is needed, so an exponent of 1 keeps its
+    derivative of 1 rather than being flattened to 0 along with the singular
+    cases."""
+
+    def f(x):
+        return PowerNode.op((x, jnp.array(1.0)))
+
+    assert float(jax.grad(f)(0.0)) == 1.0
+    assert float(jax.grad(f)(3.0)) == 1.0
+
+    def g(x):
+        return PowerNode.op((x, jnp.array(2.0)))
+
+    assert float(jax.grad(g)(3.0)) == pytest.approx(6.0)
+
+
+def test_a_calibrated_exponent_over_a_zero_base_is_finite():
+    """The exponent may itself be a parameter (the WATS sewer models calibrate
+    one), so the guard has to hold with it traced as well as constant."""
+
+    def f(x, p):
+        return PowerNode.op((x, p))
+
+    assert jnp.isfinite(jax.jvp(f, (0.0, 0.5), (0.0, 0.0))[1])
+    assert jnp.all(jnp.isfinite(jnp.array(jax.grad(f, argnums=(0, 1))(0.0, 0.5))))
