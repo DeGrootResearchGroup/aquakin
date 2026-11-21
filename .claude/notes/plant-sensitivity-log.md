@@ -13,7 +13,7 @@
 >
 > **Lives in `.claude/notes/`, outside the auto-loaded `.claude/rules/` tree, so it
 > never auto-loads.** It holds the dated measurements behind the
-> `Plant.solve_sensitivity` bullet of `.claude/rules/integration.md` (issue #654) and
+> `Plant.solve_sensitivity` bullet of `.claude/rules/integration-differentiation.md` (issue #654) and
 > the stage-Newton investigation of `aquakin/integrate/forward_solve.py`. The rules
 > file carries the current, load-bearing status; numbers here carry the
 > configuration they were measured under — check it against the source before
