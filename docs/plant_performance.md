@@ -4,7 +4,7 @@ The stiffness-bound dynamic-solve regime and its levers: decoupled-Newton root
 finder, `Kvaerno3`/`factormax`, colored Jacobian, cached recycle/flow maps,
 `forward_fast`, PTC algebraic steady state, and the experiments that were tested
 and rejected. Loaded on demand; the actionable plant guidance is in
-`.claude/rules/plant.md`.
+`.claude/rules/plant.md` and `.claude/rules/plant-solve.md`.
 
 
 Profiling the long dynamic BSM2 run (the JRN-056 609-day simulation) established

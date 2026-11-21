@@ -3,6 +3,8 @@ paths:
   - "aquakin/study/**"
   - "tests/integration/test_study.py"
   - "tests/unit/test_study_files.py"
+  - "tests/integration/test_study_form.py"
+  - "tests/ui/test_study_form.py"
 ---
 
 # Rules — `aquakin/study/` (studies)

@@ -9,7 +9,7 @@ paths:
 
 A local browser flowsheet editor: palette, Vue Flow canvas, a unit form generated
 from aquakin's unit catalogue, aquakin's checks, and Open/Save of flowsheet specs
-(`Plant.to_spec` / `Plant.from_spec`, see `.claude/rules/plant.md`). trame +
+(`Plant.to_spec` / `Plant.from_spec`, see `.claude/rules/plant-spec.md`). trame +
 Vuetify, the same stack as aquaflux's `aquaflux-ui`. `ui` extra; entry point
 `aquakin-ui [flowsheet.yaml] [--port] [--no-browser]` (`aquakin_ui.__main__:main`).
 
@@ -19,8 +19,15 @@ Vuetify, the same stack as aquaflux's `aquaflux-ui`. `ui` extra; entry point
 `aquakin_ui`.** Everything about units, models and plants comes from one
 long-lived `python -m aquakin serve` worker (`aquakin/__main__.py`, client
 `aquakin_ui/worker.py`). Pinned by `tests/ui/test_independence.py`
-(fresh-interpreter import of every module + AST scan of `aquakin/`). Tests may
-import aquakin (to build expected values).
+(a fresh-interpreter import of the modules it lists + an AST scan of `aquakin/`).
+A new `aquakin_ui` module must be added to that import list, since the test
+does not discover modules itself. Tests may import aquakin (to build expected
+values).
+
+**No CI job collects `tests/ui/` yet** (the fast gate runs `tests/unit` and
+`tests/integration` only), so run `pytest tests/ui` locally for every change
+under `aquakin_ui/`, `ui-widget/` or `aquakin/__main__.py`, and report the
+result.
 
 ## Structure
 
@@ -138,7 +145,7 @@ that imports both. Keep it that way rather than copying knowledge across:
   refused (it would run its snapshot, not the drawing). The study dialog sends
   a new study's `flowsheet:` as the open spec's path and keeps an edited
   study's own (the form has no such field, so `study_from` would drop it). **A measured channel may be a measure
-  expression** (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, see `.claude/rules/plant.md`):
+  expression** (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, see `.claude/rules/plant-analysis.md`):
   the channels widget is a `VCombobox`, not a `VSelect`, so free text becomes a
   chip and travels as a plain string the draft must not touch — aquakin reads it
   when the study is written (`create_study` / `update_study`), and the refusal
