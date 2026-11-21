@@ -33,15 +33,15 @@ import jax.numpy as jnp
 from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import Aeration, AerationUnit, aeration_transfer
+from aquakin.plant.kinetic import AdjustableTemperatureUnit
 from aquakin.plant.streams import Stream, mixed_scalars
-from aquakin.plant.units import ModelTimeScaling
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
 
 
 @dataclass
-class MBRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
+class MBRUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
     """A membrane bioreactor: high-MLSS aerated reactor with membrane separation.
 
     Parameters
@@ -116,12 +116,7 @@ class MBRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
             )
         if self.waste_flow < 0.0:
             raise ValueError(f"MBRUnit '{self.name}' waste_flow must be >= 0.")
-        missing = [c for c in self.model.conditions_required if c not in self.conditions]
-        if missing:
-            raise ValueError(
-                f"MBRUnit '{self.name}' is missing condition values for: "
-                f"{missing}. Provided: {list(self.conditions)}."
-            )
+        self._init_conditions(self.conditions)
         for s in self.particulate_species:
             if s not in self.model.species_index:
                 raise ValueError(
@@ -139,7 +134,6 @@ class MBRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         # Aeration vectors via the AerationUnit mixin (the same CSTR machinery,
         # incl. auto-wired DO control).
         self._setup_aeration()
-        self._condition_arrays = {k: jnp.asarray([float(v)]) for k, v in self.conditions.items()}
 
     # ----- protocol: identity / layout -----------------------------------
     @property
@@ -262,21 +256,11 @@ class MBRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         # concentrates -- the defining MBR behaviour, SRT = V / Q_waste.
         convection = (q_in * s_in.C - q_perm * (self._perm_mult * C) - q_waste * C) / self.volume
 
-        # Use the flow-weighted inlet temperature (seasonal influent) for both the
-        # kinetics and the aeration, exactly as the CSTR does; fall back to the
-        # static condition when no inlet carries a temperature.
-        T_in = self._mixed_inlet_T(inputs)
-        if T_in is not None and "T" in self._condition_arrays:
-            conditions = {**self._condition_arrays, "T": jnp.reshape(T_in, (1,))}
-        else:
-            conditions = self._condition_arrays
-
-        stoich = self.model.compute_stoich(params)
-        rates = self.model.rates(C, params, conditions, 0)
-        chemistry = self._scale_rates(stoich.T @ rates)
-
-        T_eff = T_in if T_in is not None else self.conditions.get("T")
-        aeration = aeration_transfer(self._av, C, T_eff, signals, self.model)
+        # Kinetics and aeration at the operating temperature (under a heat-balance
+        # model the tank's own temperature state), exactly as the CSTR does.
+        conditions, T_op = self._operating_conditions(inputs, signals)
+        chemistry = self._reaction(C, params, conditions)
+        aeration = aeration_transfer(self._av, C, T_op, signals, self.model)
 
         dC = convection + chemistry + aeration
 

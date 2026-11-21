@@ -926,6 +926,24 @@ parentheses, flows and times per day as aquakin runs them on the plant's clock
 shows that unit beside the field (on the plant's clock). Give each setting its
 own entry (a shared `Kp, Ti, Tt : float` cannot name one unit each).
 
+**Kinetic units share one reaction term (`plant/kinetic.py`).** Every unit
+that evaluates a model in its `rhs` inherits `KineticUnit` (CSTR, MBR, SBR,
+IFAS, ADM1 digester): `_init_conditions(conditions)` checks and builds
+`_condition_arrays`, `_reaction(C, params, conditions)` is the reaction term
+(`model.dCdt`, so the clip and positivity limiter apply, scaled to the plant
+clock), and `_operating_conditions(inputs, signals)` gives the conditions at the
+operating temperature (the plant's `OPERATING_T_SIGNAL` under a heat-balance
+model, else the flow-weighted inlet, else static) plus the temperature the
+aeration correction uses. Never write `stoich.T @ rates` in a unit or in
+`balance.py`: `_reaction_term` calls `unit._reaction` so the balance integrates
+what the unit integrates. A unit whose `_reaction` needs extra parameter
+handling overrides it (the digester slaves `V_liq`). `AdjustableTemperatureUnit`
+adds `set_temperature`; the heated digester uses `KineticUnit` alone, so
+`Plant.set_temperature` leaves it alone. Deliberate exceptions, stated in the
+unit: the SBR runs at its static `T` (intermittent feed, variable volume, not
+heat-balance tracked), and IFAS evaluates its reaction per compartment inside
+the biofilm RHS (which also calls `model.dCdt`).
+
 **Sizes are checked at construction.** Every unit with a volume calls
 `_constants.check_positive(name, "volume", value)` first in `__post_init__`
 (zero, negative and infinite volumes are refused: they used to build, and a

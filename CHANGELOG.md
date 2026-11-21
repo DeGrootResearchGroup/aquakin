@@ -477,6 +477,24 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- The membrane bioreactor (`MBRUnit`) and sequencing batch reactor (`SBRUnit`)
+  now apply a model's positivity limiter, as the CSTR, IFAS/MBBR tank and
+  digester already did. They computed the raw reaction term, so for a model
+  that declares `positivity_limiter:` (ASM2d, for example) a nearly
+  exhausted species such as oxygen or nitrate kept its full consumption rate and
+  could go negative. Results change only for such models, and only where a
+  species is near zero. `plant.mass_balance()` now integrates the same limited
+  reaction term the reactors do.
+- Under a heat-balance temperature model (`HeatBalanceTemperature`), an MBR and
+  an IFAS/MBBR tank now run their kinetics and aeration at their own lagged
+  temperature state. They used the inlet temperature, so the plant tracked a
+  temperature for them that their kinetics ignored. Plants on the default
+  algebraic temperature are unchanged.
+- `Plant.set_temperature()` now sets the temperature of MBR and SBR units too;
+  it skipped them before. An SBR's kinetics run at this static temperature: it
+  does not follow its inlet temperature and a heat-balance model does not track
+  it, since its volume changes over the cycle.
+
 - `Plant.run_to_steady_state()` no longer reports convergence in silence when its
   default `criterion="norm"` has stopped early. That test compares `||dy/dt||`
   with `ss_atol + ss_rtol*||y||`, so every state inflates the tolerance that
