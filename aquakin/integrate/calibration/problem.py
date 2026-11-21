@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import diffrax
 import jax.numpy as jnp
@@ -290,38 +290,31 @@ def _predict(problem: _CalibrationProblem, fm: _ReactorForwardModel, p, ic_theta
     return preds
 
 
-def _resolve_problem(
-    model,
-    C0,
-    observations,
-    t_obs,
-    free_params,
-    *,
-    transforms,
-    initial_params,
-    observed_species,
-    time_unit,
-    loss,
-    sigma,
-    priors,
-    use_priors,
-    free_ic,
-    ic_bounds,
-    ic_prior_log_std,
-    param_halfwidth,
-    observation_fn=None,
-    ic_fixed_total=False,
-    bounds=None,
-    use_model_bounds=True,
-) -> _CalibrationProblem:
-    """Validate and coerce the ``calibrate`` arguments into a
-    :class:`_CalibrationProblem`. Everything here is done once, up front; the
-    result is held constant through the objective / multistart / Laplace passes."""
+def _check_start_in_domain(free_params, transforms, p0_full, param_index) -> None:
+    """Refuse a starting value outside its transform's domain (``<= 0`` for
+    ``positive_log``, outside ``(0, 1)`` for ``logit``)."""
+    for name, t in zip(free_params, transforms):
+        v = float(p0_full[param_index[name]])
+        if t == "positive_log" and v <= 0.0:
+            raise ValueError(
+                f"Parameter '{name}' has transform 'positive_log' but initial value {v} <= 0."
+            )
+        if t == "logit" and not (0.0 < v < 1.0):
+            raise ValueError(
+                f"Parameter '{name}' has transform 'logit' but initial value {v} is not in (0, 1)."
+            )
+
+
+def _resolve_rate_params(model, free_params, transforms, initial_params):
+    """``(transforms, p0_full, free_indices)`` for the free rate parameters.
+
+    Each free parameter takes its explicit ``transforms`` entry, else the
+    model-declared one, else ``"none"``; the start is ``initial_params`` (or the
+    model defaults) and must lie in each transform's domain."""
     for name in free_params:
         if name not in model.param_index:
             raise KeyError(f"Unknown parameter '{name}'. Available: {model.parameters}")
 
-    # Resolve transforms per free param.
     transforms = dict(transforms or {})
     resolved_transforms: list[str] = []
     for name in free_params:
@@ -335,28 +328,65 @@ def _resolve_problem(
         jnp.asarray(initial_params) if initial_params is not None else model.default_parameters()
     )
     free_indices = jnp.asarray([model.param_index[n] for n in free_params])
+    _check_start_in_domain(free_params, resolved_transforms, p0_full, model.param_index)
+    return resolved_transforms, p0_full, free_indices
 
-    # Validate initial physical values against their transforms.
-    for name, t in zip(free_params, resolved_transforms):
-        v = float(p0_full[model.param_index[name]])
-        if t == "positive_log" and v <= 0.0:
-            raise ValueError(
-                f"Parameter '{name}' has transform 'positive_log' but initial value {v} <= 0."
-            )
-        if t == "logit" and not (0.0 < v < 1.0):
-            raise ValueError(
-                f"Parameter '{name}' has transform 'logit' but initial value {v} is not in (0, 1)."
-            )
 
-    # --- Datasets (one or several batches sharing the parameter vector) ---
-    def _is_multi(x) -> bool:
-        return (
-            isinstance(x, (list, tuple))
-            and len(x) > 0
-            and isinstance(x[0], (list, tuple, np.ndarray, jnp.ndarray))
+def _is_multi_dataset(x) -> bool:
+    """Whether ``x`` is a list of per-dataset arrays (several batches sharing
+    the parameter vector) rather than one dataset's array."""
+    return (
+        isinstance(x, (list, tuple))
+        and len(x) > 0
+        and isinstance(x[0], (list, tuple, np.ndarray, jnp.ndarray))
+    )
+
+
+def _observed_columns(model, observed_species, observation_fn, C0_first, p0_full, tobs_first):
+    """``(obs_species_indices, n_observed, what)``: the species the observations
+    are taken from, the number of observed columns, and how that number was set
+    (for the column-count error)."""
+    if observation_fn is not None:
+        if observed_species is not None:
+            raise ValueError("Pass observed_species or observation_fn, not both.")
+        n_observed = observation_size(
+            observation_fn, C0_first, p0_full, t0=float(np.asarray(tobs_first).reshape(-1)[0])
         )
+        return jnp.arange(model.n_species), n_observed, "outputs were returned by observation_fn"
+    if observed_species is None:
+        return jnp.arange(model.n_species), model.n_species, "species were specified"
+    obs_species_indices = jnp.asarray([model.species_index[s] for s in observed_species])
+    return obs_species_indices, len(observed_species), "species were specified"
 
-    multi = _is_multi(C0)
+
+class _ResolvedDatasets(NamedTuple):
+    """What :func:`_resolve_datasets` returns."""
+
+    datasets: list
+    obs_times: tuple
+    digest_parts: list
+    n_seen_per_output: np.ndarray
+    obs_species_indices: jnp.ndarray
+    n_observed: int
+
+
+def _resolve_datasets(
+    model,
+    C0,
+    observations,
+    t_obs,
+    *,
+    sigma,
+    loss,
+    time_unit,
+    observed_species,
+    observation_fn,
+    p0_full,
+) -> _ResolvedDatasets:
+    """Validate the dataset(s) and build each one's
+    ``(C0, t_eval, t_span, loss, residual)`` tuple, with ``t_eval`` in the model's
+    native time unit."""
+    multi = _is_multi_dataset(C0)
     C0_list = list(C0) if multi else [C0]
     obs_list = list(observations) if multi else [observations]
     tobs_list = list(t_obs) if multi else [t_obs]
@@ -367,25 +397,10 @@ def _resolve_problem(
             f"equal length; got {n_datasets}, {len(obs_list)}, {len(tobs_list)}."
         )
     sigma_list = _sigma_per_dataset(sigma, n_datasets)
+    obs_species_indices, n_observed, what = _observed_columns(
+        model, observed_species, observation_fn, C0_list[0], p0_full, tobs_list[0]
+    )
 
-    if observation_fn is not None:
-        if observed_species is not None:
-            raise ValueError("Pass observed_species or observation_fn, not both.")
-        obs_species_indices = jnp.arange(model.n_species)
-        n_observed = observation_size(
-            observation_fn, C0_list[0], p0_full, t0=float(np.asarray(tobs_list[0]).reshape(-1)[0])
-        )
-        what = "outputs were returned by observation_fn"
-    elif observed_species is None:
-        obs_species_indices = jnp.arange(model.n_species)
-        n_observed = model.n_species
-        what = "species were specified"
-    else:
-        obs_species_indices = jnp.asarray([model.species_index[s] for s in observed_species])
-        n_observed = len(observed_species)
-        what = "species were specified"
-
-    # Validate each dataset and build its (C0, t_eval, t_span, loss) tuple.
     datasets = []
     tobs_user = []
     digest_parts = []
@@ -434,15 +449,25 @@ def _resolve_problem(
                 _build_residual(loss, obs_i, sig_arr),
             )
         )
+    return _ResolvedDatasets(
+        datasets,
+        tuple(tobs_user),
+        digest_parts,
+        n_seen_per_output,
+        obs_species_indices,
+        n_observed,
+    )
 
-    # Resolve Gaussian priors for the free parameters. Model-declared priors
-    # apply by default (use_priors); the explicit ``priors`` overrides per param.
+
+def _resolve_priors(declared_priors, free_params, priors, use_priors):
+    """``(active_priors, prior_mean, prior_std, prior_mask)`` over the free
+    parameters: the declared priors when ``use_priors``, each overridden by an
+    explicit ``priors`` entry."""
     active_priors: dict[str, tuple[float, float]] = {}
     if use_priors:
-        net_priors = getattr(model, "parameter_priors", {})
         for name in free_params:
-            if name in net_priors:
-                active_priors[name] = net_priors[name]
+            if name in declared_priors:
+                active_priors[name] = declared_priors[name]
     if priors:
         for name, ms in priors.items():
             if name in free_params:
@@ -450,32 +475,86 @@ def _resolve_problem(
     prior_mean = jnp.asarray([active_priors.get(n, (0.0, 1.0))[0] for n in free_params])
     prior_std = jnp.asarray([active_priors.get(n, (0.0, 1.0))[1] for n in free_params])
     prior_mask = jnp.asarray([1.0 if n in active_priors else 0.0 for n in free_params])
-    has_priors = bool(active_priors)
-    n_rate = len(free_params)
+    return active_priors, prior_mean, prior_std, prior_mask
 
-    # --- Free initial conditions (optional) ----------------------------
+
+def _resolve_free_ic(model, free_ic, ic_bounds, ic_fixed_total, C0s):
+    """``(species, ic_species_idx, ic_bounds, ic_center_full, ic_fixed_total)``
+    for the fitted initial pools (none when ``free_ic`` is empty); ``C0s`` are
+    the per-dataset initial states the pools start from."""
     free_ic_list = list(free_ic or [])
     for s in free_ic_list:
         if s not in model.species_index:
             raise KeyError(f"Unknown free_ic species '{s}'. Available: {model.species}")
-    m_ic = len(free_ic_list)
     ic_np_idx = [model.species_index[s] for s in free_ic_list]
     ic_species_idx = jnp.asarray(ic_np_idx, dtype=int)
     ic_bounds, ic_center_full, ic_fixed_total = _resolve_ic_coords(
         free_ic_list,
         ic_bounds,
         ic_fixed_total,
-        [np.asarray(C0_i, dtype=float)[ic_np_idx] for (C0_i, *_rest) in datasets],
+        [np.asarray(C0_i, dtype=float)[ic_np_idx] for C0_i in C0s],
+    )
+    return free_ic_list, ic_species_idx, ic_bounds, ic_center_full, ic_fixed_total
+
+
+def _resolve_problem(
+    model,
+    C0,
+    observations,
+    t_obs,
+    free_params,
+    *,
+    transforms,
+    initial_params,
+    observed_species,
+    time_unit,
+    loss,
+    sigma,
+    priors,
+    use_priors,
+    free_ic,
+    ic_bounds,
+    ic_prior_log_std,
+    param_halfwidth,
+    observation_fn=None,
+    ic_fixed_total=False,
+    bounds=None,
+    use_model_bounds=True,
+) -> _CalibrationProblem:
+    """Validate and coerce the ``calibrate`` arguments into a
+    :class:`_CalibrationProblem`. Everything here is done once, up front; the
+    result is held constant through the objective / multistart / Laplace passes."""
+    resolved_transforms, p0_full, free_indices = _resolve_rate_params(
+        model, free_params, transforms, initial_params
+    )
+    data = _resolve_datasets(
+        model,
+        C0,
+        observations,
+        t_obs,
+        sigma=sigma,
+        loss=loss,
+        time_unit=time_unit,
+        observed_species=observed_species,
+        observation_fn=observation_fn,
+        p0_full=p0_full,
+    )
+    datasets = data.datasets
+    active_priors, prior_mean, prior_std, prior_mask = _resolve_priors(
+        getattr(model, "parameter_priors", {}), free_params, priors, use_priors
+    )
+    C0_base = tuple(C0_i for (C0_i, *_rest) in datasets)
+    free_ic_list, ic_species_idx, ic_bounds, ic_center_full, ic_fixed_total = _resolve_free_ic(
+        model, free_ic, ic_bounds, ic_fixed_total, C0_base
     )
 
     sigma_estimate = _is_sigma_estimate(sigma)
     # Each output's noise is estimated from its observed (non-NaN) entries.
-    n_obs_per_output = _n_obs_per_output(sigma_estimate, n_seen_per_output)
+    n_obs_per_output = _n_obs_per_output(sigma_estimate, data.n_seen_per_output)
     rate_bounds = _resolve_rate_bounds(
         model, free_params, resolved_transforms, bounds, use_model_bounds
     )
 
-    C0_base = tuple(C0_i for (C0_i, *_rest) in datasets)
     dataset_static = [
         (tobs_i, tspan_i, loss_fn_i, resid_fn_i)
         for (_C0, tobs_i, tspan_i, loss_fn_i, resid_fn_i) in datasets
@@ -486,32 +565,32 @@ def _resolve_problem(
         free_params=list(free_params),
         free_indices=free_indices,
         transforms=resolved_transforms,
-        n_rate=n_rate,
+        n_rate=len(free_params),
         p0_full=p0_full,
         param_halfwidth=param_halfwidth,
         datasets=datasets,
         dataset_static=dataset_static,
         C0_base=C0_base,
-        n_datasets=n_datasets,
-        obs_species_indices=obs_species_indices,
-        n_observed=n_observed,
+        n_datasets=len(datasets),
+        obs_species_indices=data.obs_species_indices,
+        n_observed=data.n_observed,
         active_priors=active_priors,
         prior_mean=prior_mean,
         prior_std=prior_std,
         prior_mask=prior_mask,
-        has_priors=has_priors,
+        has_priors=bool(active_priors),
         free_ic=free_ic_list,
-        m_ic=m_ic,
+        m_ic=len(free_ic_list),
         ic_species_idx=ic_species_idx,
         ic_center_full=ic_center_full,
         ic_prior_log_std=ic_prior_log_std,
         ic_bounds=ic_bounds,
         observation_fn=observation_fn,
-        obs_times=tuple(tobs_user),
+        obs_times=data.obs_times,
         sigma_estimate=sigma_estimate,
         n_obs_per_output=n_obs_per_output,
         ic_fixed_total=ic_fixed_total,
-        data_key=(loss, _array_digest(*digest_parts)),
+        data_key=(loss, _array_digest(*data.digest_parts)),
         rate_bounds=rate_bounds,
     )
 
