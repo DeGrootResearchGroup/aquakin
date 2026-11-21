@@ -259,6 +259,21 @@ def _number(text: str):
     return text.lower() if text.lower() in ("inf", "-inf") else _finite(text)
 
 
+def _scheduled(text: str):
+    """A value that may be a number or an expression of time.
+
+    A number stays a number, so a constant feed is written to the spec exactly
+    as it was before expressions existed; anything else is kept as the text the
+    user typed, for aquakin to read (``aquakin_ui`` cannot read it -- the
+    independence rule -- so an unreadable expression is reported by the check or
+    by Save, not here).
+    """
+    try:
+        return _number(text)
+    except ValueError:
+        return text
+
+
 def _parse(s: dict, text):
     """A field's text back to plain data, by setting type (empty means unset)."""
     t = s["type"]
@@ -278,6 +293,16 @@ def _parse(s: dict, text):
         if isinstance(text, list):
             return list(text)
         return [p.strip() for p in text.split(",") if p.strip()]
+    if t == "scheduled_number":
+        return _scheduled(text)
+    if t == "scheduled_species_values":
+        out = {}
+        for pair in (p for p in text.split(",") if p.strip()):
+            name, colon, value = pair.partition(":")
+            if not colon or not name.strip():
+                raise ValueError(f"write each entry as 'name: value' (not {pair.strip()!r})")
+            out[name.strip()] = _scheduled(value.strip())
+        return out
     if t in ("port_map", "species_values", "number_map"):
         out = {}
         for pair in (p for p in text.split(",") if p.strip()):

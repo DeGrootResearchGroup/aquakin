@@ -196,3 +196,28 @@ def test_units_on_the_plants_clock_follow_it(ui_catalog):
     assert named[("cstr", "volume")] == "m³" and named[("influent", "Q")] == "m³/d"
     assert named[("ideal_clarifier", "underflow_Q")] == "m³/d"
     assert named[("dosing", "flow")] == "m³/d" and named[("pi_controller", "Ti")] == "d"
+
+
+def test_a_scheduled_value_keeps_a_number_a_number_and_an_expression_text():
+    """An influent's Q, T and composition may each be a number or an expression
+    of time. A number has to stay a number, so a constant feed is written to the
+    spec exactly as it was before expressions existed."""
+    from aquakin_ui.forms import _parse
+
+    number = {"type": "scheduled_number"}
+    assert _parse(number, "2000") == 2000.0
+    assert _parse(number, " 2000 ") == 2000.0
+    assert _parse(number, "1e4") == 1e4
+    assert _parse(number, "") is None
+    # Anything that is not a number is kept verbatim for aquakin to read --
+    # aquakin_ui cannot read it (the independence rule), so it does not try.
+    assert _parse(number, "2000 + 500*sin(2*pi*t)") == "2000 + 500*sin(2*pi*t)"
+    assert _parse(number, "wobble(t)") == "wobble(t)"
+
+    composition = {"type": "scheduled_species_values"}
+    assert _parse(composition, "SS: 60, SNH: 30 + 10*sin(2*pi*t)") == {
+        "SS": 60.0,
+        "SNH": "30 + 10*sin(2*pi*t)",
+    }
+    with pytest.raises(ValueError, match="write each entry as 'name: value'"):
+        _parse(composition, "SS 60")

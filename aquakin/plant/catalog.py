@@ -79,6 +79,14 @@ SETTING_TYPES = {
     "species": "one species name of the unit's model",
     "species_list": "a list of species names of the unit's model",
     "species_values": "a mapping of species name to a number (a composition)",
+    "scheduled_number": (
+        "a real number, or an expression of time as a string "
+        "(``'18446 + 4000*sin(2*pi*t)'``; see :mod:`aquakin.plant.time_expr`)"
+    ),
+    "scheduled_species_values": (
+        "a mapping of species name to a number or an expression of time (a composition "
+        "that may follow a schedule)"
+    ),
     "conditions": "a mapping of condition name to a number (e.g. temperature)",
     "aeration": "``None`` or a mapping of :class:`Aeration` arguments",
     "port_name": "the name of one port",
@@ -413,7 +421,8 @@ def _influent_kind() -> UnitKind:
         category="boundary",
         summary=(
             "A plant inflow, wired to one unit input with Plant.add_influent: constant "
-            "(Q, T, composition) or a time series read from a table file (series)."
+            "(Q, T, composition), a pattern written as expressions of time, or a time "
+            "series read from a table file (series)."
         ),
         python_class="aquakin.plant.influent.InfluentSeries.constant",
         settings=(
@@ -422,28 +431,36 @@ def _influent_kind() -> UnitKind:
             ),
             Setting(
                 "Q",
-                "number",
+                "scheduled_number",
                 False,
                 None,
                 optional=True,
-                help="Volumetric flow rate of the constant feed (m³/d).",
+                help=(
+                    "Volumetric flow rate of the feed (m³/d). A number, or an expression "
+                    "of time for a feed that follows a pattern: "
+                    "'18446 + 4000*sin(2*pi*t)', with t the plant's clock."
+                ),
             ),
             Setting(
                 "T",
-                "number",
+                "scheduled_number",
                 False,
                 None,
                 optional=True,
-                help="Influent temperature (K); unset leaves the feed temperature-agnostic.",
+                help=(
+                    "Influent temperature (K), a number or an expression of time; unset "
+                    "leaves the feed temperature-agnostic."
+                ),
             ),
             Setting(
                 "composition",
-                "species_values",
+                "scheduled_species_values",
                 False,
                 {},
                 help=(
                     "Feed concentration of each species, in that species' unit (g/m³ for "
-                    "most); species not listed are absent."
+                    "most); species not listed are absent. Each may be a number or an "
+                    "expression of time, so part of a feed can follow a pattern."
                 ),
             ),
             Setting(
@@ -734,6 +751,22 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
         t = s.type
         if t in ("number",):
             ok = _is_number(value)
+        elif t == "scheduled_number":
+            ok = _is_scheduled(name, value)
+        elif t == "scheduled_species_values":
+            # Checked key by key rather than through _check_map, so an
+            # unreadable expression names the species that holds it.
+            if not isinstance(value, dict):
+                raise ValueError(f"'{name}' must be a mapping, got {type(value).__name__}")
+            for species, entry in value.items():
+                if not isinstance(species, str):
+                    raise ValueError(f"'{name}' key {species!r} must be a string (a species)")
+                if not _is_scheduled(f"{name}.{species}", entry):
+                    raise ValueError(
+                        f"'{name}.{species}' must be "
+                        f"{SETTING_TYPES['scheduled_number'].split(' (')[0]}, got {entry!r}"
+                    )
+            ok = True
         elif t == "integer":
             ok = isinstance(value, int) and not isinstance(value, bool)
         elif t == "boolean":
@@ -763,6 +796,25 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
             raise ValueError(f"'{name}' ({s.python_type}) can only be set from Python for now")
         if not ok:
             raise ValueError(f"'{name}' must be {SETTING_TYPES[t].split(' (')[0]}, got {value!r}")
+
+
+def _is_scheduled(name: str, value) -> bool:
+    """Whether a value is a number or a readable expression of time.
+
+    An expression is checked here, as the spec is read, so a typo names the
+    setting that holds it rather than failing inside the first solve.
+    """
+    from aquakin.plant.time_expr import TimeExpressionError, compile_time_expression
+
+    if _is_number(value):
+        return True
+    if not isinstance(value, str):
+        return False
+    try:
+        compile_time_expression(value, what=f"'{name}'")
+    except TimeExpressionError as exc:
+        raise ValueError(exc.args[0]) from None
+    return True
 
 
 def _check_aeration(name: str, value: dict) -> None:
@@ -896,6 +948,7 @@ def _influent(args: dict, base_dir):
     from pathlib import Path
 
     from aquakin.plant.influent import InfluentSeries, read_influent_table
+    from aquakin.plant.time_expr import is_time_expression
 
     if args.get("series") is not None:
         if args.get("T") is not None or args.get("composition"):
@@ -904,9 +957,17 @@ def _influent(args: dict, base_dir):
         if not path.is_absolute() and base_dir is not None:
             path = Path(base_dir) / path
         return read_influent_table(path, args["model"])
-    return InfluentSeries.constant(
-        args["model"], Q=args["Q"], T=args.get("T"), **args.get("composition", {})
-    )
+    composition = args.get("composition", {})
+    # Any expression among the values makes the whole feed a pattern; a feed of
+    # plain numbers keeps building the sampled constant series it always did, so
+    # every existing spec is read bit-identically.
+    if any(is_time_expression(v) for v in (args["Q"], args.get("T"), *composition.values())):
+        from aquakin.plant.influent import InfluentExpression
+
+        return InfluentExpression(
+            args["model"], Q=args["Q"], composition=composition, T=args.get("T")
+        )
+    return InfluentSeries.constant(args["model"], Q=args["Q"], T=args.get("T"), **composition)
 
 
 def _model_name(model) -> str:

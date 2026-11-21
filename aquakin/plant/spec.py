@@ -711,6 +711,20 @@ def _influent_entry(name, series, refs) -> tuple[dict, dict]:
     """An influent's unit entry, and ``{absolute table path: sha256}`` for a series."""
     import numpy as np
 
+    from aquakin.plant.influent import InfluentExpression
+
+    if isinstance(series, InfluentExpression):
+        # A pattern is already the settings it was built from -- nothing is
+        # sampled, so there is no table to write beside the spec.
+        return {
+            "kind": "influent",
+            "model": refs(series.model),
+            "Q": _scheduled(name, "Q", series.Q),
+            "T": None if series.T is None else _scheduled(name, "T", series.T),
+            "composition": {sp: _scheduled(name, sp, v) for sp, v in series.composition.items()},
+            "series": None,
+        }, {}
+
     Q, C = np.asarray(series.Q), np.asarray(series.C)
     T = None if series.T is None else np.asarray(series.T)
     constant = np.all(Q[0] == Q) and np.all(C[0] == C) and (T is None or np.all(T[0] == T))
@@ -744,6 +758,17 @@ def _influent_entry(name, series, refs) -> tuple[dict, dict]:
         "composition": {},
         "series": str(source[1]) if files else None,
     }, files
+
+
+def _scheduled(name: str, key: str, value):
+    """One value of a patterned influent, as a spec holds it: an expression stays
+    the text it was written as, a number is written as a float."""
+    if isinstance(value, str):
+        return value
+    value = float(value)
+    if not math.isfinite(value):
+        raise SpecError(f"influent '{name}' holds a value that is not finite ({key})")
+    return value
 
 
 def _translator_spec(t, where) -> dict:
