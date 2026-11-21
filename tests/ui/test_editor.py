@@ -803,6 +803,11 @@ def test_errors_reach_the_page_without_class_names_and_simulate_reports_a_broken
         ed.publish(checks=False)
         assert ed.state.errors == ["plant: check_spec failed"]
 
+        worker.fail = {"write_spec"}
+        ed.save(path=project / "flowsheet.yaml")
+        assert ed.state.message == f"could not save {project / 'flowsheet.yaml'}: write_spec failed"
+        worker.fail = set()
+
         missing = tmp_path / "nowhere.yaml"
         ed.state.spec_path = str(missing)
         ed.request_open()

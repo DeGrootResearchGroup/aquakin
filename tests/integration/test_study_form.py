@@ -138,6 +138,23 @@ def test_an_absolute_flowsheet_is_stored_relative_to_the_study(project):
     assert read_study(other)["flowsheet"] == "../../plant.yaml"
 
 
+def test_a_flowsheet_on_another_drive_is_kept_absolute(project, monkeypatch):
+    """Windows has no relative path between drives (``os.path.relpath`` raises
+    ``ValueError``); the study then keeps the absolute path it was given."""
+    import aquakin.study.form as form
+
+    def across_drives(path, start):
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(form.os.path, "relpath", across_drives)
+    elsewhere = str(project / "plant.yaml")
+    (project / "plant.yaml").write_text((project / "flowsheet.yaml").read_text())
+    folder = create_study(
+        project, "elsewhere", {"kind": "simulate", "streams": ["effluent"], "flowsheet": elsewhere}
+    )
+    assert read_study(folder)["flowsheet"] == elsewhere
+
+
 def test_an_initial_state_from_another_study_is_copied_in(project):
     first = create_study(project, "first", {"kind": "simulate", "streams": ["effluent"]})
     run_study(first)
