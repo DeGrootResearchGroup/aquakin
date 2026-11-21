@@ -25,6 +25,7 @@ from aquakin.core.nodes import (
     SpeciesNode,
     SqrtNode,
     SubtractNode,
+    _OperatorNode,
     pHInhibitNode,
     pHSwitchNode,
 )
@@ -128,6 +129,16 @@ def to_latex(node: ASTNode) -> str:
     if isinstance(node, MonodInhibitionRatioNode):
         ratio = rf"{to_latex(node.A)}/{to_latex(node.B)}"
         return rf"\frac{{{to_latex(node.K)}}}{{{to_latex(node.K)} + {ratio}}}"
+    # Generic fallback: any operator node that declares a call spelling renders
+    # as that call. This is what makes a user-registered rate function
+    # (``aquakin.register_rate_function``) printable, and it also means a
+    # future built-in added without a branch above renders plainly instead of
+    # crashing export -- a rendering that is merely unpolished, rather than a
+    # model that cannot be written up.
+    name = getattr(node, "FUNCTION_NAME", None)
+    if name and isinstance(node, _OperatorNode):
+        args = ", ".join(to_latex(c) for c in node.children())
+        return rf"\mathrm{{{_escape_latex(name)}}}\!\left({args}\right)"
     raise TypeError(f"No LaTeX renderer for node type {type(node).__name__}")
 
 

@@ -56,21 +56,18 @@ from aquakin.integrate.calibrate import (
     _build_residual,
     _CalibrationProblem,
     _check_sigma_arg,
-    _check_start_gradient,
+    _check_start_args,
     _coerce_sigma,
     _convert_observations,
-    _fit_result,
     _FitConfig,
     _free_ic_fields,
-    _ic_theta_from_pools,
-    _initial_point,
     _is_sigma_estimate,
     _n_obs_per_output,
     _observation_unit_factors,
     _observed_counts,
     _resolve_ic_coords,
-    _resolve_laplace,
     _resolve_rate_bounds,
+    _run_fit,
     _run_multistart,
     _sigma_per_dataset,
 )
@@ -827,16 +824,21 @@ def calibrate_plant(
     if not free_params:
         raise ValueError("free_params must be non-empty.")
     _check_sigma_arg(sigma, loss)
-    if optimizer.n_starts < 1:
-        raise ValueError(f"optimizer.n_starts must be >= 1; got {optimizer.n_starts}.")
-    if optimizer.starts is not None and optimizer.n_starts > 1:
-        raise ValueError(
-            "Pass optimizer.starts (an explicit start list) or optimizer.n_starts > 1 "
-            "(jittered restarts), not both."
-        )
+    _check_start_args(optimizer)
 
-    # Unpack the config objects into the internal scalar knobs.
-    laplace_on, lap = _resolve_laplace(laplace)
+    # Unpack the config objects into the internal knobs. The fit always takes a
+    # reverse-mode gradient through ``plant.solve``; ``diff`` picks the backend
+    # (the config owns the method -> backend decode), and the plant forward model
+    # manages that adjoint itself, so the reactor stable-adjoint fields stay unset.
+    diff.validated()
+    cfg = _FitConfig.from_configs(
+        optimizer,
+        laplace,
+        gradient=diff.gradient_backend(),
+        ad_mode="reverse",
+        check_finite=check_finite,
+        compiled_cache=_compiled_cache,
+    )
     ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic)
 
     observable_specs = _normalize_observables(observables, target, observed_channels)
@@ -876,32 +878,6 @@ def calibrate_plant(
         use_model_bounds=optimizer.use_model_bounds,
     )
 
-    # Label the (fixed, single-solve) problem's gradient path from the plant
-    # DifferentiationConfig so the generic layer's finite-path reasoning is right
-    # (the config owns the method -> backend decode).
-    diff.validated()
-    gradient = diff.gradient_backend()
-    cfg = _FitConfig(
-        gradient=gradient,
-        ad_mode="reverse",
-        check_finite=check_finite,
-        stable_adjoint_max_steps=0,
-        stable_adjoint_low_memory=False,
-        optimizer=optimizer.method,
-        max_iter=optimizer.max_iter,
-        tol=optimizer.tol,
-        n_starts=optimizer.n_starts,
-        jitter=optimizer.jitter,
-        jitter_schedule=optimizer.jitter_schedule,
-        seed=optimizer.seed,
-        laplace=laplace_on,
-        laplace_method=lap.method,
-        laplace_ridge=lap.ridge,
-        laplace_fd_step=lap.fd_step,
-        laplace_dtmax=lap.dtmax,
-        compiled_cache=_compiled_cache,
-        laplace_include_ic=lap.include_ic,
-    )
     fm = _PlantForwardModel(
         plant=plant,
         observables=resolved_observables,
@@ -914,18 +890,15 @@ def calibrate_plant(
         use_c0_as_y0=use_c0_as_y0,
     )
 
-    bundle = _build_objective(problem, fm, cfg)
-
-    # The pools start at their values in ``y0`` unless a separate start is given
-    # (a profile sweep warm-starts them from a neighbouring fit).
-    ic_theta0 = problem.ic_center_full
-    if _ic_start is not None and problem.m_ic:
-        ic_theta0 = _ic_theta_from_pools(problem, _ic_start)
-    theta0, opt_bounds, starts = _initial_point(problem, optimizer.starts, ic_theta0)
-
-    if cfg.check_finite:
-        _check_start_gradient(cfg, bundle, theta0)
-
-    extra = {} if progress is None else {"progress": progress}
-    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts, **extra)
-    return _fit_result(problem, fm, cfg, bundle, result, opt_bounds)
+    # The stages are passed by the names imported here, which is where the plant
+    # tests stub the objective build and the optimiser out.
+    return _run_fit(
+        problem,
+        fm,
+        cfg,
+        optimizer,
+        _ic_start,
+        progress,
+        build_objective=_build_objective,
+        run_multistart=_run_multistart,
+    )

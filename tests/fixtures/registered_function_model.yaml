@@ -1,0 +1,42 @@
+model:
+  name: registered_function
+  version: "1.0"
+  description: >
+    Uses a rate function that is NOT built in: `hill(X, K, n)`, registered by
+    the test through aquakin.register_rate_function before the model is loaded.
+    Loading this file without registering first is a parse error, which is
+    itself part of what the test pins.
+  references: []
+
+species:
+  - name: S
+    description: "Substrate"
+    units: mol/L
+    default_concentration: 2.0
+  - name: P
+    description: "Product"
+    units: mol/L
+    default_concentration: 0.0
+
+conditions:
+  - name: T
+    description: "Temperature (K), unused in the rates."
+    default: 293.15
+
+reactions:
+  - name: cooperative
+    description: "Cooperative (Hill) uptake of S."
+    rate: "k * hill([S], K_h, n_h) * [S]"
+    parameters:
+      k:
+        value: 0.5
+        units: "1/s"
+      K_h:
+        value: 1.0
+        units: "mol/L"
+      n_h:
+        value: 2.0
+        units: "-"
+    stoichiometry:
+      S: -1
+      P: +1
