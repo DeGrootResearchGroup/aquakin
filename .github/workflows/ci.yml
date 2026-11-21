@@ -300,10 +300,63 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+  # The editor's tests (tests/ui). One job per Python version, not sharded: the
+  # set is small (~90 tests, about a minute and a half on two workers) and starts
+  # its own `python -m aquakin serve` worker processes rather than compiling many
+  # solves in the test process, so memory is not the constraint that shards
+  # `integration`. Unsharded, it needs no recorded durations (nothing in
+  # `refresh-fast-durations`). It measures `aquakin_ui` as well as `aquakin`: the
+  # editor is covered only here.
+  ui:
+    name: ui tests (py${{ matrix.python-version }})
+    # Same triggers as `unit` (see there).
+    if: >-
+      github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+      && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        # The `test` extra pulls in the `ui` extra (trame, Vuetify) the editor needs.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" -c constraints.txt
+
+      - name: Run ui tests
+        # See the same flags in `unit`.
+        run: >-
+          pytest tests/ui -m "$FAST_MARKERS" -q -rs -n 2
+          --cov=aquakin --cov=aquakin_ui --cov-report=xml
+          --durations=15 --timeout=600 --timeout-method=thread
+          --max-worker-restart=0
+
+      - name: Keep the coverage for the fast-coverage upload
+        # See the same step in `unit`.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-fast-ui-py${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 3
+
   # ---- Fast-tier coverage: ONE Codecov upload after every fast shard -----------
   # Each fast shard keeps its coverage.xml as an artifact and this job uploads
-  # them all to Codecov in a single call, once the unit and integration matrices
-  # have finished. Codecov builds its PR comment and patch status from the
+  # them all to Codecov in a single call, once the unit, integration and ui
+  # matrices have finished. Codecov builds its PR comment and patch status from the
   # uploads it has when it processes one, so per-shard uploads made it report
   # after the first few shards: lines only a still-running shard covers showed as
   # missing (63.6 % patch coverage on a PR that was fully covered). Codecov's
@@ -316,7 +369,7 @@ jobs:
   # runs only the fast tier -- still show slow/validation coverage from main.
   fast-coverage:
     name: fast-tier coverage upload
-    needs: [unit, integration]
+    needs: [unit, integration, ui]
     if: >-
       always() && github.event_name != 'schedule'
       && github.event_name != 'workflow_dispatch'
@@ -352,15 +405,15 @@ jobs:
 
   # ---- Fast-gate aggregator: the single required status check ------------------
   # Sharding renames the per-shard jobs (and their count may change), so make ONE
-  # stable job the required check. It succeeds iff every unit and integration
-  # shard succeeded (or was skipped -- a bare `labeled` event skips the gate,
+  # stable job the required check. It succeeds iff every unit, integration and
+  # ui job succeeded (or was skipped -- a bare `labeled` event skips the gate,
   # which must not block). `needs.<job>.result` is the aggregate of a matrix:
   # success only if all its shards pass, failure/cancelled if any did. Always runs
   # on push/PR (never schedule/dispatch) so it always reports a concrete status
   # for branch protection.
   fast-gate:
     name: fast gate
-    needs: [unit, integration]
+    needs: [unit, integration, ui]
     if: >-
       always() && github.event_name != 'schedule'
       && github.event_name != 'workflow_dispatch'
@@ -370,7 +423,8 @@ jobs:
         run: |
           status=0
           for pair in "unit=${{ needs.unit.result }}" \
-                      "integration=${{ needs.integration.result }}"; do
+                      "integration=${{ needs.integration.result }}" \
+                      "ui=${{ needs.ui.result }}"; do
             job="${pair%%=*}"; result="${pair#*=}"
             echo "$job matrix result: $result"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then

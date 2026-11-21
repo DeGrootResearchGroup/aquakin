@@ -82,7 +82,7 @@ than copying it.
 
 | Tier | Selected by | Runs |
 |---|---|---|
-| fast | `tests/unit` and `tests/integration`, `-m "not validation and not slow"` | every PR (the merge gate) |
+| fast | `tests/unit`, `tests/integration` and `tests/ui`, `-m "not validation and not slow"` | every PR (the merge gate) |
 | slow | `@pytest.mark.slow`, or use of a fixture named in `_SLOW_PLANT_FIXTURES` (`conftest.py`) | merge to `main`, and `full-ci` PRs |
 | validation | `@pytest.mark.validation` | merge to `main`, and `full-ci` PRs |
 | heavy / xheavy | `@pytest.mark.heavy` (`xheavy` too for the one test over 16 GB) | path-filtered, one test per process |
@@ -91,8 +91,8 @@ than copying it.
   job**: the fast gate does not look in that directory and the validation job
   selects by marker. Mark every test there (a module-level
   `pytestmark = pytest.mark.validation` is simplest).
-- **No CI job collects `tests/ui/`.** Run `pytest tests/ui` locally for editor
-  changes (see `.claude/rules/ui.md`).
+- `tests/ui/` runs in the fast gate as its own unsharded `ui` job, the only job
+  that imports the editor and measures `aquakin_ui` coverage.
 - Keep the fast gate meaningful: a feature whose only tests are `slow` is
   unprotected on a normal PR. Give it a small-plant or unit-level test in the
   fast tier that exercises the same code path, and keep the full-scale one slow.

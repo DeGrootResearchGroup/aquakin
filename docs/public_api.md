@@ -27,6 +27,7 @@ from `aquakin` directly. Reactors are **stateless after construction** —
 | Load a model from a YAML file | `load_model_from_file` |
 | Reset the model cache | `clear_model_cache` |
 | Work with a loaded model | `CompiledModel` (its methods: `summary`, `species`, `default_concentrations`, `default_parameters`, `default_conditions`, `concentrations`, `influent`, `parameter_values`, `units_of`, `check_units`, `check_conservation`, …) |
+| Add a rate function aquakin does not ship | `register_rate_function` (before loading the model), `registered_rate_functions` |
 
 ## Conditions
 

@@ -151,6 +151,15 @@ class OptimizerConfig:
     bounds: dict | None = None
     use_model_bounds: bool = True
 
+    def __post_init__(self):
+        # Validated here, not by each entry point, so no caller (calibrate,
+        # Plant.calibrate, a profile sweep) can reach the optimiser dispatch with
+        # a method it does not know.
+        if self.method not in _VALID_OPTIMIZERS:
+            raise ValueError(
+                f"optimizer.method must be one of {_VALID_OPTIMIZERS}; got {self.method!r}."
+            )
+
 
 @dataclass(frozen=True)
 class LaplaceConfig:
@@ -1542,6 +1551,68 @@ class _FitConfig:
     compiled_cache: dict | None
     laplace_include_ic: bool = False
 
+    @classmethod
+    def from_configs(
+        cls,
+        optimizer: OptimizerConfig,
+        laplace,
+        *,
+        gradient: str,
+        ad_mode: str,
+        check_finite: bool,
+        compiled_cache: dict | None,
+        stable_adjoint_max_steps: int = 0,
+        stable_adjoint_low_memory: bool = False,
+    ) -> _FitConfig:
+        """Build the fit configuration from the public config objects.
+
+        Parameters
+        ----------
+        optimizer : OptimizerConfig
+            Optimiser backend and multistart settings.
+        laplace : bool or LaplaceConfig
+            The ``laplace=`` argument, normalized by :func:`_resolve_laplace`.
+        gradient : {"jax_adjoint", "stable_adjoint"}
+            The gradient backend, from ``DifferentiationConfig.gradient_backend``.
+        ad_mode : {"auto", "forward", "reverse"}
+            The AD direction of the residual Jacobian.
+        check_finite : bool
+            Whether to check the start-point gradient for non-finite values.
+        compiled_cache : dict, optional
+            The shared compiled-objective cache (a profile sweep passes one).
+        stable_adjoint_max_steps : int
+            Saved-trajectory length of a reactor's stable adjoint. A plant
+            manages its own adjoint through its forward model, so it leaves 0.
+        stable_adjoint_low_memory : bool
+            Whether a reactor's stable adjoint recomputes its stages.
+
+        Returns
+        -------
+        _FitConfig
+        """
+        laplace_on, lap = _resolve_laplace(laplace)
+        return cls(
+            gradient=gradient,
+            ad_mode=ad_mode,
+            check_finite=check_finite,
+            stable_adjoint_max_steps=int(stable_adjoint_max_steps),
+            stable_adjoint_low_memory=bool(stable_adjoint_low_memory),
+            optimizer=optimizer.method,
+            max_iter=optimizer.max_iter,
+            tol=optimizer.tol,
+            n_starts=optimizer.n_starts,
+            jitter=optimizer.jitter,
+            jitter_schedule=optimizer.jitter_schedule,
+            seed=optimizer.seed,
+            laplace=laplace_on,
+            laplace_method=lap.method,
+            laplace_ridge=lap.ridge,
+            laplace_fd_step=lap.fd_step,
+            laplace_dtmax=lap.dtmax,
+            compiled_cache=compiled_cache,
+            laplace_include_ic=lap.include_ic,
+        )
+
 
 def _forward_jac(cfg: _FitConfig, fm: _ReactorForwardModel) -> bool:
     """Whether to form the residual Jacobian by forward-mode AD (jacfwd).
@@ -2872,17 +2943,7 @@ def calibrate(
     if loss not in _VALID_LOSSES:
         raise ValueError(f"loss must be one of {_VALID_LOSSES}; got {loss!r}.")
     _check_sigma_arg(sigma, loss)
-    if optimizer.n_starts < 1:
-        raise ValueError(f"optimizer.n_starts must be >= 1; got {optimizer.n_starts}.")
-    if optimizer.starts is not None and optimizer.n_starts > 1:
-        raise ValueError(
-            "Pass optimizer.starts (an explicit start list) or optimizer.n_starts > 1 "
-            "(jittered restarts), not both."
-        )
-    if optimizer.method not in _VALID_OPTIMIZERS:
-        raise ValueError(
-            f"optimizer.method must be one of {_VALID_OPTIMIZERS}; got {optimizer.method!r}."
-        )
+    _check_start_args(optimizer)
     if ad_mode == "forward" and gradient == "stable_adjoint":
         raise ValueError(
             "diff=DifferentiationConfig(mode='forward', method='stable') is "
@@ -2901,8 +2962,17 @@ def calibrate(
             f"without one ({type(reactor).__name__})."
         )
 
-    # Unpack the config objects into the internal scalar knobs.
-    laplace_on, lap = _resolve_laplace(laplace)
+    # Unpack the config objects into the internal knobs.
+    cfg = _FitConfig.from_configs(
+        optimizer,
+        laplace,
+        gradient=gradient,
+        ad_mode=ad_mode,
+        check_finite=diff.check_finite,
+        compiled_cache=_compiled_cache,
+        stable_adjoint_max_steps=diff.adjoint_max_steps,
+        stable_adjoint_low_memory=diff.adjoint_low_memory,
+    )
     ic_species, ic_bounds, ic_prior_log_std = _free_ic_fields(free_ic)
 
     if observation_units:
@@ -2917,8 +2987,8 @@ def calibrate(
             observations, sigma, _observation_unit_factors(columns, observation_units)
         )
 
-    # Resolve the arguments once into the static problem + the fit config, then
-    # build the compiled objective on the reactor forward-model seam.
+    # Resolve the arguments once into the static problem, then run the fit on the
+    # reactor forward-model seam.
     problem = _resolve_problem(
         reactor.model,
         C0,
@@ -2942,43 +3012,92 @@ def calibrate(
         bounds=optimizer.bounds,
         use_model_bounds=optimizer.use_model_bounds,
     )
-    cfg = _FitConfig(
-        gradient=gradient,
-        ad_mode=ad_mode,
-        check_finite=diff.check_finite,
-        stable_adjoint_max_steps=int(diff.adjoint_max_steps),
-        stable_adjoint_low_memory=bool(diff.adjoint_low_memory),
-        optimizer=optimizer.method,
-        max_iter=optimizer.max_iter,
-        tol=optimizer.tol,
-        n_starts=optimizer.n_starts,
-        jitter=optimizer.jitter,
-        jitter_schedule=optimizer.jitter_schedule,
-        seed=optimizer.seed,
-        laplace=laplace_on,
-        laplace_method=lap.method,
-        laplace_ridge=lap.ridge,
-        laplace_fd_step=lap.fd_step,
-        laplace_dtmax=lap.dtmax,
-        compiled_cache=_compiled_cache,
-        laplace_include_ic=lap.include_ic,
-    )
     fm = _ReactorForwardModel(
         reactor, gradient, cfg.stable_adjoint_max_steps, cfg.stable_adjoint_low_memory
     )
-    bundle = _build_objective(problem, fm, cfg)
+    return _run_fit(problem, fm, cfg, optimizer, _ic_start)
 
-    # --- Run the optimiser in unconstrained space ----------------------
-    # The pools start at C0 (the prior centre) unless a separate start is given.
+
+def _check_start_args(optimizer: OptimizerConfig) -> None:
+    """Check the multistart settings of an :class:`OptimizerConfig`.
+
+    Shared by :func:`calibrate` and :meth:`Plant.calibrate`.
+
+    Raises
+    ------
+    ValueError
+        If ``n_starts < 1``, or an explicit ``starts`` list is combined with
+        ``n_starts > 1``.
+    """
+    if optimizer.n_starts < 1:
+        raise ValueError(f"optimizer.n_starts must be >= 1; got {optimizer.n_starts}.")
+    if optimizer.starts is not None and optimizer.n_starts > 1:
+        raise ValueError(
+            "Pass optimizer.starts (an explicit start list) or optimizer.n_starts > 1 "
+            "(jittered restarts), not both."
+        )
+
+
+def _run_fit(
+    problem: _CalibrationProblem,
+    fm,
+    cfg: _FitConfig,
+    optimizer: OptimizerConfig,
+    ic_start,
+    progress=None,
+    *,
+    build_objective=None,
+    run_multistart=None,
+) -> CalibrationResult:
+    """Run a resolved fit and assemble its result.
+
+    The part of a fit that does not depend on what is being fitted, shared by
+    :func:`calibrate` and :meth:`Plant.calibrate`: build the compiled objective
+    on the forward model, place the start (the fitted pools start from their
+    prior centre unless ``ic_start`` gives them), check the start-point
+    gradient, run the multistart optimiser, and assemble the
+    :class:`CalibrationResult`.
+
+    Parameters
+    ----------
+    problem : _CalibrationProblem
+        The resolved problem.
+    fm : forward model
+        The forward-solve seam (``_ReactorForwardModel`` or the plant's).
+    cfg : _FitConfig
+        The fit configuration.
+    optimizer : OptimizerConfig
+        The optimiser settings; only its explicit ``starts`` list is read here
+        (the rest is already in ``cfg``).
+    ic_start : list, optional
+        Starting pools, one per dataset, in place of the prior centre (a
+        profile sweep warm-starts them from a neighbouring fit).
+    progress : callable, optional
+        Passed to the multistart runner when given.
+    build_objective, run_multistart : callable, optional
+        The objective builder and the multistart runner. ``None`` uses
+        :func:`_build_objective` and :func:`_run_multistart`. A caller in
+        another module passes the names it imported, so they stay the place its
+        tests stub the solve out.
+
+    Returns
+    -------
+    CalibrationResult
+    """
+    build_objective = _build_objective if build_objective is None else build_objective
+    run_multistart = _run_multistart if run_multistart is None else run_multistart
+    bundle = build_objective(problem, fm, cfg)
+
     ic_theta0 = problem.ic_center_full
-    if _ic_start is not None and problem.m_ic:
-        ic_theta0 = _ic_theta_from_pools(problem, _ic_start)
+    if ic_start is not None and problem.m_ic:
+        ic_theta0 = _ic_theta_from_pools(problem, ic_start)
     theta0, opt_bounds, starts = _initial_point(problem, optimizer.starts, ic_theta0)
 
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
 
-    result = _run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts)
+    extra = {} if progress is None else {"progress": progress}
+    result = run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts, **extra)
     return _fit_result(problem, fm, cfg, bundle, result, opt_bounds)
 
 

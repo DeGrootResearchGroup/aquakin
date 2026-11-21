@@ -223,8 +223,7 @@ The markers are `validation`, `slow`, `heavy` and `xheavy` (definitions in
 `pyproject.toml`; the CI jobs that run each are in `docs/ci.md`).
 
 ```bash
-pytest tests/unit tests/integration -m "not validation and not slow"   # the PR merge gate
-pytest tests/ui                            # the editor's tests (no CI job runs these yet)
+pytest tests/unit tests/integration tests/ui -m "not validation and not slow"   # the PR merge gate
 pytest -m slow                             # the multi-minute stiff/plant solves
 pytest -m validation                       # validation suite (published data)
 pytest                                     # everything
