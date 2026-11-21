@@ -890,7 +890,13 @@ and `power := primary ('**' unary)?`. Both parsers were changed together in
 #699 — they had bound a sign tighter, which nobody predicts; keep them in step.
 New functions go in `FUNCTIONS`
 (name → `(callable, arities)`), which the parser, the arity check and the
-error messages all read, so they cannot drift.
+error messages all read, so they cannot drift. A function that is associative is
+named in `core/precedence.ASSOCIATIVE_CALLS` rather than given a second arity: a
+call carrying more arguments than it declares then folds left, so `max(a, b, c)`
+is `max(max(a, b), c)` in **both** languages. The whole Python-agreement
+contract — what matches and what deliberately does not — is pinned by
+`tests/unit/test_python_consistency.py`; add to its corpus rather than writing a
+one-off test when you touch the grammar.
 
 **Influents: a record or a pattern.** `InfluentSeries` is sampled data
 (`at(t)` interpolates); **`InfluentExpression`** is the same feed written as

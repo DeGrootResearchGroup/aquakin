@@ -142,20 +142,29 @@ def tokenize(text: str, *, error: type[Exception] = ValueError, offset: int = 0)
 def _scan_number(text: str, i: int, n: int) -> int:
     """Where the number starting at ``i`` ends.
 
-    Digits and dots, then an exponent **only when a digit follows** it
-    (optionally after a sign). So ``1e`` ends at the ``e``, leaving it to be
+    Digits, dots and underscores, then an exponent **only when a digit follows**
+    it (optionally after a sign). So ``1e`` ends at the ``e``, leaving it to be
     read as a name: the caller then reports a parse error naming the token,
     instead of this raising on a malformed float.
+
+    Underscores are taken in and left to ``float()`` to judge, which applies
+    Python's rule that one may only sit between digits -- so ``18446_000``
+    reads as a number and ``1__0`` is reported as one that cannot be read. The
+    run is scanned permissively rather than validated here because a caller
+    writing ``1_000`` as a whole value never reaches the tokenizer: it is read
+    as a plain constant by ``float()``, and the two have to agree about what a
+    number is.
     """
     j = i
-    while j < n and (text[j].isdigit() or text[j] == "."):
+    while j < n and (text[j].isdigit() or text[j] in "._"):
         j += 1
     if j < n and text[j] in "eE":
         k = j + 1
         if k < n and text[k] in "+-":
             k += 1
+        # Python allows no underscore straight after the 'e' or its sign.
         if k < n and text[k].isdigit():
             j = k
-            while j < n and text[j].isdigit():
+            while j < n and (text[j].isdigit() or text[j] == "_"):
                 j += 1
     return j

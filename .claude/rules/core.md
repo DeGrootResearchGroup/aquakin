@@ -228,6 +228,25 @@ right-associative and its exponent may carry a sign. All three had this
 backwards until #699 and it had to be fixed in each by hand — which is the whole
 reason it is written down once.
 
+`arglist()` is here too, for the same reason: a call's arguments are read the
+same way in every language that has calls, **including the trailing comma**
+Python allows (`monod([SS], KS,)`). A function that is associative is named in
+`ASSOCIATIVE_CALLS` and accepts more arguments than it declares, folding left
+— `max(a, b, c)` is `max(max(a, b), c)` — so `max` and `min` behave as Python's
+variadic builtins do. `accepts()` and `spell_arity()` keep the check and its
+message in step; a language calls both rather than comparing lengths itself.
+
+**The contract is that an expression means what a Python reader thinks it
+means**, and every departure is deliberate and written down.
+`tests/unit/test_python_consistency.py` is where that line is drawn: it hands
+the same text to Python's own `eval` and to the time language and compares,
+corpus by corpus, and lists separately the Python-legal text aquakin refuses
+with the reason for each (no comparisons, no `if`/`else`, no `%` or `//`, and
+`^` refused rather than quietly read as exclusive-or). The one place aquakin is
+the *more* permissive is `007`, which Python 3 rejects outright. **Touch the
+grammar, add to that corpus** — it is cheaper than discovering a divergence the
+way `-2**2` was discovered.
+
 **Changing either shared file is a `full-ci` change.** Guard it the way those
 two were: re-parse every expression in every shipped model, fixture and example
 and compare the ASTs (845 of them; the throwaway script is in the #699 / lexer

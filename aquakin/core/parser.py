@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import fields
+from functools import reduce
 
 from aquakin.core.lexer import Token
 from aquakin.core.nodes import (
@@ -39,7 +40,7 @@ from aquakin.core.nodes import (
     SpeciesNode,
     SubtractNode,
 )
-from aquakin.core.precedence import PrecedenceParser
+from aquakin.core.precedence import PrecedenceParser, accepts, spell_arity
 
 
 def _build_function_registry() -> dict:
@@ -162,7 +163,7 @@ class _Parser(PrecedenceParser):
             name = tok.value
             if self.peek().kind == "LPAREN":
                 self._eat("LPAREN")
-                args = self._arglist()
+                args = self.arglist()
                 self._eat("RPAREN")
                 return self._make_function_call(name, args)
             return ParamNode(name)
@@ -210,23 +211,22 @@ class _Parser(PrecedenceParser):
             prev_end = tok.pos + len(tok.value)
         return "".join(parts)
 
-    def _arglist(self) -> list[ASTNode]:
-        args = [self.expression()]
-        while self.peek().kind == "COMMA":
-            self._eat("COMMA")
-            args.append(self.expression())
-        return args
-
     def _make_function_call(self, name: str, args: list[ASTNode]) -> ASTNode:
         spec = _FUNCTIONS.get(name)
         if spec is None:
             raise ParseError(f"Unknown function '{name}'. Built-ins are: {', '.join(_FUNCTIONS)}.")
         node_cls, arg_names = spec
-        if len(args) != len(arg_names):
+        arities = (len(arg_names),)
+        if not accepts(name, arities, len(args)):
             raise ParseError(
-                f"{name}() takes {len(arg_names)} argument(s) "
+                f"{name}() takes {spell_arity(name, arities)} argument(s) "
                 f"({', '.join(arg_names)}), got {len(args)}"
             )
+        if len(args) > len(arg_names):
+            # An associative built-in called on more than it is defined for:
+            # fold left, so max(a, b, c) builds max(max(a, b), c). Exact, since
+            # only associative functions reach here.
+            return reduce(node_cls, args)
         return node_cls(*args)
 
 

@@ -159,7 +159,8 @@ def test_it_is_jit_grad_and_vmap_clean():
         ("1e+", "expected an operator"),
         # Arity is checked against the table, so a typo'd call is caught here.
         ("sin(t, 1)", "sin() takes 1 argument(s), got 2"),
-        ("min(t)", "min() takes 2 argument(s), got 1"),
+        ("min(t)", "min() takes 2 or more argument(s), got 1"),
+        ("clip(t, 1, 2, 3)", "clip() takes 3 argument(s), got 4"),
         ("clip(t, 1)", "clip() takes 3 argument(s), got 2"),
     ],
 )

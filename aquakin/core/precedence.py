@@ -34,7 +34,33 @@ from typing import ClassVar
 
 from aquakin.core.lexer import Token, spell, tokenize
 
-__all__ = ["PrecedenceParser"]
+__all__ = ["ASSOCIATIVE_CALLS", "PrecedenceParser", "accepts", "spell_arity"]
+
+
+#: Built-ins that are associative, so a call may carry more arguments than the
+#: two they are defined on and fold left -- ``max(a, b, c)`` is
+#: ``max(max(a, b), c)``. Python's own ``max`` and ``min`` take any number of
+#: arguments, and someone writing a three-way bound expects the same here. It is
+#: a fact about the functions rather than about any one language, so every
+#: language that offers them reads it from here instead of keeping its own list.
+ASSOCIATIVE_CALLS = frozenset({"min", "max"})
+
+
+def accepts(name: str, arities: tuple[int, ...], n: int) -> bool:
+    """Whether a call of ``name`` with ``n`` arguments is allowed.
+
+    ``arities`` is what the function declares. An associative built-in declared
+    on two arguments also accepts more; everything else takes what it declares.
+    """
+    if n in arities:
+        return True
+    return n > 2 and 2 in arities and name in ASSOCIATIVE_CALLS
+
+
+def spell_arity(name: str, arities: tuple[int, ...]) -> str:
+    """How many arguments a message should say ``name`` takes."""
+    wanted = " or ".join(str(a) for a in arities)
+    return f"{wanted} or more" if 2 in arities and name in ASSOCIATIVE_CALLS else wanted
 
 
 class PrecedenceParser:
@@ -136,6 +162,21 @@ class PrecedenceParser:
             # sign and ``2**3**2`` groups to the right, as in Python.
             return self.power(base, self.unary(), operator)
         return base
+
+    def arglist(self):
+        """The arguments of a call, between an already-read ``(`` and its ``)``.
+
+        A trailing comma is allowed, as Python allows one, so a call written
+        across several lines does not make its last argument special. Two commas
+        in a row are not: the comma is read and an argument is then required.
+        """
+        args = [self.expression()]
+        while self.peek().kind == "COMMA":
+            self.advance()
+            if self.peek().kind == "RPAREN":
+                break
+            args.append(self.expression())
+        return args
 
     # --- what each language supplies --------------------------------------
 

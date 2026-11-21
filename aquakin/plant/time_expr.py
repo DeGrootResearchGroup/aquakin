@@ -32,11 +32,12 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from functools import reduce
 
 import jax.numpy as jnp
 
 from aquakin.core.lexer import Token
-from aquakin.core.precedence import PrecedenceParser
+from aquakin.core.precedence import PrecedenceParser, accepts, spell_arity
 
 __all__ = [
     "CONSTANTS",
@@ -164,16 +165,17 @@ class _Parser(PrecedenceParser):
             )
         func, arities = spec
         self.expect("LPAREN")
-        args = [self.expression()]
-        while self.peek().kind == "COMMA":
-            self.advance()
-            args.append(self.expression())
+        args = self.arglist()
         self.expect("RPAREN")
-        if len(args) not in arities:
-            wanted = " or ".join(str(a) for a in arities)
+        if not accepts(name, arities, len(args)):
             raise TimeExpressionError(
-                f"{name}() takes {wanted} argument(s), got {len(args)} (at position {token.pos})"
+                f"{name}() takes {spell_arity(name, arities)} argument(s), got {len(args)} "
+                f"(at position {token.pos})"
             )
+        if len(args) > max(arities):
+            # An associative built-in called on more than it is defined for:
+            # fold left, as max(a, b, c) means max(max(a, b), c).
+            return reduce(lambda x, y, f=func: lambda t: f(x(t), y(t)), args)
         return lambda t, f=func, a=tuple(args): f(*(x(t) for x in a))
 
 
