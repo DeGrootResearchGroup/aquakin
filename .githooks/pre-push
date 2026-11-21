@@ -24,13 +24,13 @@ fi
 
 fail=0
 
-echo "pre-push: ruff check aquakin" >&2
+echo "pre-push: ruff check aquakin aquakin_ui tests scripts examples" >&2
 if ! ruff check aquakin aquakin_ui tests scripts examples; then
   echo "pre-push: 'ruff check aquakin aquakin_ui tests scripts examples' reported errors (see above)." >&2
   fail=1
 fi
 
-echo "pre-push: ruff format --check aquakin" >&2
+echo "pre-push: ruff format --check aquakin aquakin_ui" >&2
 if ! ruff format --check aquakin aquakin_ui; then
   echo "pre-push: files are not formatted -- run 'ruff format aquakin aquakin_ui', commit, and re-push." >&2
   fail=1

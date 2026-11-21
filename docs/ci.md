@@ -19,9 +19,9 @@ nor concentrating it in a few files makes the whole suite fast.
   is the cheapest signal in the matrix. It installs only the `lint` extra (`pip install -e ".[lint]"`, which pins
   `ruff>=0.15,<0.16` so a new ruff release cannot redden the gate without a
   deliberate bump). The rule set and the per-file ignores live in `[tool.ruff]` in
-  `pyproject.toml`: `select = E,F,W,I,B,RUF` at `line-length = 100` (the width the
-  package is written to), with `UP` (pyupgrade) deliberately deferred and several
-  families `ignore`d against dedicated audit issues so each can be tackled — and
+  `pyproject.toml`: the `E,F,W,I,B,RUF,NPY,PIE,ICN,FA,UP` families plus `C420`
+  and `SIM300` at `line-length = 100` (the width the package is written to), with
+  several rules `ignore`d against dedicated audit issues so each can be tackled — and
   its ignore removed — in its own PR. **`ruff format` owns line width**, so `E501`
   is ignored (the formatter reflows all code to the line length and leaves only
   un-splittable lines — long string literals, refs in comments — over it, where
@@ -284,9 +284,8 @@ names/count change when the shard count is tuned) and **not** `slow`/`validation
 the same gate with a stable name. (When the fast gate was sharded, the old
 required checks `fast tests (py3.11)` / `(py3.12)` ceased to exist; branch
 protection must be repointed to `fast gate` or merges block forever waiting on
-checks that never report.) The **`lint (ruff)`** job has a stable name and can be
-added as a second required check once the lint debt tracked in the audit issues is
-burned down enough to keep it reliably green.
+checks that never report.) The **`lint (ruff)`** job is also a required check,
+under that stable name.
 
 A green fast gate is the merge gate. The package requires Python 3.11 or later
 (`requires-python >= 3.11`), because the dependency floors (jax/jaxlib 0.10,

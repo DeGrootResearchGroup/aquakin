@@ -146,11 +146,13 @@ omit = ["aquakin/models/_make_*.py"]
 show_missing = false
 
 # ---------------------------------------------------------------------------
-# ruff -- linter (and formatter config). The CI `lint` job runs both `ruff check`
-# and `ruff format --check` over `aquakin/` as a required gate. The 100-column
-# width matches how the package is already written. The repo-wide format has been
-# applied, so keep files formatted: run `ruff format aquakin` before pushing (a
-# `ruff format --check` mismatch fails the lint gate).
+# ruff -- linter (and formatter config). The CI `lint` job is a required gate: it
+# runs `ruff check` over `aquakin/`, `aquakin_ui/`, `tests/`, `scripts/` and
+# `examples/`, and `ruff format --check` over the two packages. The 100-column
+# width matches how the packages are written. Keep them formatted: run
+# `ruff format aquakin aquakin_ui` before pushing (a `ruff format --check`
+# mismatch fails the lint gate). `tests/`, `scripts/` and `examples/` are not
+# formatted yet; do not format them as part of an unrelated change.
 [tool.ruff]
 line-length = 100
 target-version = "py311"
