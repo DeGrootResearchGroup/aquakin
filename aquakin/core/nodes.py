@@ -12,7 +12,7 @@ import jax.numpy as jnp
 
 from aquakin.core.context import CompileContext
 from aquakin.core.hints import did_you_mean
-from aquakin.core.kernels import _safe_log, _safe_sqrt
+from aquakin.core.kernels import _safe_log, _safe_pow, _safe_sqrt
 
 RateCallable = Callable[
     [jnp.ndarray, jnp.ndarray, dict[str, jnp.ndarray], int | jnp.ndarray], jnp.ndarray
@@ -315,8 +315,15 @@ class DivideNode(_BinaryNode):
 
 
 class PowerNode(_BinaryNode):
+    """``base ** exponent``.
+
+    Guarded by :func:`~aquakin.core.kernels._safe_pow`, so a fractional
+    exponent over a zero base has a finite derivative. Values are unchanged;
+    see that function for what it does and does not cover.
+    """
+
     KIND = "pow"
-    op = staticmethod(lambda o: o[0] ** o[1])
+    op = staticmethod(lambda o: _safe_pow(o[0], o[1]))
 
 
 @dataclass(frozen=True)

@@ -146,6 +146,8 @@ it looks like it means:
 - A call may carry a trailing comma, `monod([SS], KS,)`, so a long one written
   across lines does not make its last argument special.
 - `max` and `min` take any number of arguments, as Python's do: `max(a, b, c)`.
+- `[X] ** 0.5` and `sqrt([X])` are the same thing, guard included: a fractional
+  power of a species that can reach zero stays differentiable there.
 
 What is deliberately *not* there is anything that cannot be differentiated or
 traced: there are no comparisons, no `if`/`else`, and no `%` or `//`. `^` is not

@@ -97,6 +97,18 @@ adopt and inventing one would silently change the model. So `log`'s guard
 protects the gradient only, and its caller still has to keep the argument
 positive.
 
+`_safe_pow` guards the **`**` operator** for the same reason, since `[X] ** 0.5`
+is the other spelling of `sqrt([X])` and the two must agree: `d/dx x**e` is
+infinite at zero whenever `e < 1`. It fires only at an exactly-zero base with
+an exponent below one, computes that branch under `stop_gradient` so the value
+is exactly what plain `**` gave (signed zeros and all), and therefore changes
+**no** value in any shipped model — verified across all 40 at four states.
+`PowerNode.op` is shared with the vectorized kernel, so the scalar and batched
+paths stay bit-identical by construction. Note the `powc` kernel in
+`core/vector_kernel.py` does *not* cover this: it keeps a constant exponent
+static to prune the generic `pow` JVP's `log(base)` term, which is a different
+NaN (#703).
+
 The second consumer is real: **`plant/time_expr.py` binds `sqrt` and `log` to
 these**, not to `jnp`. A clock is the harshest case for them — every solve
 starts at `t = 0`, exactly where their derivative is infinite — and the failure
