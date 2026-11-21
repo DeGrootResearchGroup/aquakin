@@ -761,3 +761,82 @@ def test_the_fit_is_given_one_error_per_channel_or_estimates_it():
     per_channel = _fit_sigma(_Study.model_validate(base))
     assert isinstance(per_channel, np.ndarray) and per_channel.tolist() == [0.05, 0.5]
     assert _fit_sigma(_Study.model_validate({**base, "sigma": 0.2})) == 0.2
+
+
+def test_a_study_measures_a_channel_of_its_own(project):
+    """A measure expression in a study file is a results column of its own name,
+    weighing the stream as it says."""
+    folder = _study(
+        project,
+        "custom",
+        {
+            "kind": "simulate",
+            "observables": [
+                {
+                    "stream": "effluent",
+                    "channels": [
+                        "SNH",
+                        "BOD5 = 0.65*[SS] + 0.65*[XS]",
+                        "sTN = TN - [XS]",
+                        # The structured form keeps working, now with keywords.
+                        {"measure": "half_TN", "keywords": {"TN": 0.5}},
+                    ],
+                }
+            ],
+        },
+    )
+    run_study(folder)
+    measured = read_named_values(folder / "results" / "measured.yaml")["effluent"]
+    state = read_named_values(folder / "results" / "final_state.yaml")["tank"]
+    # Reported under the name, not the text that defines it.
+    assert set(measured) == {"SNH", "BOD5", "sTN", "half_TN"}
+    assert measured["BOD5"] == pytest.approx(0.65 * (state["SS"] + state["XS"]))
+    assert measured["half_TN"] == pytest.approx(0.5 * (measured["sTN"] + state["XS"]))
+
+
+def test_a_dynamic_study_names_its_custom_columns(project):
+    folder = _study(
+        project,
+        "custom_dynamic",
+        {
+            **DYNAMIC,
+            "observables": [{"stream": "effluent", "channels": ["BOD5 = 0.65*[SS] + 0.65*[XS]"]}],
+        },
+    )
+    run_study(folder)
+    _, measured = read_trajectory(folder / "results" / "measured.csv")
+    assert list(measured) == ["effluent.BOD5"]
+
+
+@pytest.mark.parametrize(
+    ("channel", "message"),
+    [
+        # Read when the study is written: it needs no flowsheet.
+        ("BOD5 = 0.65*[SS] *", "expected a number"),
+        ("x = [SS]*[XS]", "cannot multiply two measured quantities"),
+        ("x = 2", "no constant term"),
+    ],
+)
+def test_an_unreadable_measure_is_refused_as_the_study_is_written(project, channel, message):
+    folder = _study(
+        project,
+        "bad",
+        {"kind": "simulate", "observables": [{"stream": "effluent", "channels": [channel]}]},
+    )
+    with pytest.raises(StudyError, match=message):
+        run_study(folder)
+
+
+def test_a_measure_naming_an_unknown_species_says_so_at_the_run(project):
+    """The species are resolved against the model of the stream, so they can only
+    be checked once the flowsheet is built -- reported as a ``KeyError`` naming
+    the stream, exactly as an unknown plain channel already is."""
+    folder = _study(
+        project,
+        "unknown_species",
+        {"kind": "simulate", "observables": [{"stream": "effluent", "channels": ["x = [NOPE]"]}]},
+    )
+    with pytest.raises(KeyError, match="not a species of model"):
+        run_study(folder)
+    with pytest.raises(KeyError, match="stream 'effluent'"):
+        run_study(folder)

@@ -171,3 +171,42 @@ def test_an_unknown_field_type_is_refused_and_an_empty_number_left_out():
     assert study_from(
         {**form, "kinds": [{"kind": "k", "fields": ["n"], "required": []}]}, "k", {"n": " "}
     ) == {"kind": "k"}
+
+
+def test_a_measure_expression_rides_through_the_draft_as_typed():
+    """A channel of the user's own is typed into the channels combobox, so it
+    travels as a plain string -- the draft must not mistake it for a name it
+    does not know and drop it."""
+    study = {
+        "kind": "simulate",
+        "observables": [
+            {"stream": "effluent", "channels": ["SNH", "BOD5 = 0.65*[SS] + 0.65*[XS]"]}
+        ],
+    }
+    draft = draft_for(FORM, "simulate", study)
+    assert draft["observables"][0]["channels"] == ["SNH", "BOD5 = 0.65*[SS] + 0.65*[XS]"]
+    assert study_from(FORM, "simulate", draft) == study
+
+
+def test_a_structured_measure_keeps_its_keywords_through_the_draft():
+    """The dialog shows a stored measure as its name and carries the rest in
+    ``measures``; a measure built on a keyword must survive that round trip."""
+    study = {
+        "kind": "simulate",
+        "observables": [
+            {
+                "stream": "effluent",
+                "channels": [{"measure": "half_TN", "keywords": {"TN": 0.5}, "weights": {}}],
+            }
+        ],
+    }
+    draft = draft_for(FORM, "simulate", study)
+    assert draft["observables"][0]["channels"] == ["half_TN"]
+    assert study_from(FORM, "simulate", draft) == study
+
+
+def test_the_channels_help_says_a_channel_can_be_written_out():
+    """The dialog renders each field's help above it, so this is where a user
+    learns the expression form exists."""
+    [field] = [f for f in fields_for(FORM, "simulate") if f["name"] == "observables"]
+    assert "0.65*[SS]" in field["help"]

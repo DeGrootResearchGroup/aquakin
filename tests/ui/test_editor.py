@@ -725,3 +725,49 @@ def test_an_unreadable_influent_pattern_is_refused_by_the_form(tmp_path):
         assert "wobble" in problem and "'Q'" in problem
     finally:
         ed.worker.stop()
+
+
+def test_a_channel_of_your_own_is_written_from_the_study_dialog(tmp_path):
+    """The channels combobox takes free text, so a measure expression reaches
+    aquakin as a plain channel; an unreadable one is refused with its reason
+    beside the buttons, before anything is written."""
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-measure-expression-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        ed.new_study()
+        s = ed.state
+        draft = dict(s.study_draft)
+        draft["streams"] = ["tank.out"]
+        draft["observables"] = [
+            {
+                "stream": "tank.out",
+                "channels": ["SNH", "BOD5 = 0.65*[SS] + 0.65*[XS]"],
+                "measures": {},
+            }
+        ]
+
+        # An expression that cannot be read never reaches the file.
+        bad = [{**draft["observables"][0], "channels": ["x = [SS]*[XS]"]}]
+        ed.save_study_dialog("custom", "simulate", {**draft, "observables": bad})
+        assert s.study_dialog_open
+        assert "cannot multiply two measured quantities" in s.study_error
+        assert not (project / "studies" / "custom").exists()
+
+        ed.save_study_dialog("custom", "simulate", draft)
+        assert not s.study_dialog_open
+        written = yaml.safe_load((project / "studies" / "custom" / "study.yaml").read_text())
+        assert written["study"]["observables"] == [
+            {"stream": "tank.out", "channels": ["SNH", "BOD5 = 0.65*[SS] + 0.65*[XS]"]}
+        ]
+
+        # It reopens as typed (the dialog shows the expression, not a resolved
+        # measure), on a dialog cleared of the earlier refusal.
+        ed.edit_study("custom")
+        assert not s.study_error
+        assert s.study_draft["observables"][0]["channels"] == [
+            "SNH",
+            "BOD5 = 0.65*[SS] + 0.65*[XS]",
+        ]
+    finally:
+        ed.worker.stop()

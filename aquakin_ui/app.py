@@ -1585,7 +1585,13 @@ class Editor:
 
     @staticmethod
     def _observables_editor(rows: str) -> None:
-        """Rows of ``{stream, channels}`` bound to the client expression ``rows``."""
+        """Rows of ``{stream, channels}`` bound to the client expression ``rows``.
+
+        A channel is a name the plant offers or a measure expression the user
+        types; both travel as plain strings, and a structured measure read from
+        a study file rides along in ``o.measures`` (see
+        :mod:`aquakin_ui.study_form`).
+        """
         with html.Div(v_for=f"(o, oi) in {rows}", key="oi", classes="d-flex ga-2 mb-1"):
             v3.VCombobox(
                 **_bound("o.stream"),
@@ -1596,10 +1602,13 @@ class Editor:
                 hide_details=True,
                 style="max-width: 220px;",
             )
+            # A combobox, not a select: a channel of the user's own is typed in
+            # as a weighted sum ("BOD5 = 0.65*[SS] + 0.65*[XS]") and aquakin
+            # reads it when the study is saved. The field's help says so.
             v3.VCombobox(
                 **_bound("o.channels"),
                 items=("study_choices.channels[o.stream] || []",),
-                label="Channels (all species when empty)",
+                label="Channels (all species when empty; or type a sum of your own)",
                 multiple=True,
                 chips=True,
                 closable_chips=True,
