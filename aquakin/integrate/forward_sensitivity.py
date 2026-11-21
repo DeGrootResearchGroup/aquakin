@@ -58,6 +58,12 @@ import diffrax
 import jax
 import jax.numpy as jnp
 
+from aquakin.integrate._common import (
+    build_implicit_solver,
+    build_step_controller,
+    validate_C0_params,
+)
+
 # Floor on the per-parameter error-control scale ``|theta_k|`` so a parameter
 # that happens to pass through zero does not blow the sensitivity tolerance up
 # to infinity. Far below any physical rate constant, so it never bites a
@@ -96,6 +102,44 @@ def resolve_sens_indices(model, sens_params) -> jnp.ndarray:
                 )
             idx.append(i)
     return jnp.asarray(idx, dtype=jnp.int64 if jax.config.x64_enabled else jnp.int32)
+
+
+def prepare_sensitivity(model, C0, params, sens_params, shared_factor):
+    """Shared preamble for the flat-state reactors' ``solve_sensitivity``.
+
+    ``BatchReactor`` and ``PlugFlowReactor`` open their forward-sensitivity solve
+    with the same four steps: coerce ``C0`` / ``params`` to arrays and validate
+    their shapes against the model, resolve the ``sens_params`` names/indices to
+    a flat index array, and auto-select the ``shared_factor`` linear-solve
+    strategy when the caller left it ``None`` (the CVODES simultaneous corrector
+    pays off only for more than one sensitivity parameter). (``BiofilmReactor``
+    coerces its *layered* ``(n_comp, n_species)`` state differently and so keeps
+    its own preamble.)
+
+    Parameters
+    ----------
+    model : CompiledModel
+        The reactor's model, for the shape validation and index resolution.
+    C0, params : jnp.ndarray
+        Initial state and full parameter vector (coerced here).
+    sens_params : list of str or int
+        Namespaced parameter names, or integer indices into ``params``.
+    shared_factor : bool or None
+        The caller's ``shared_factor``; ``None`` auto-selects.
+
+    Returns
+    -------
+    tuple
+        ``(C0, params, free_idx, shared_factor)`` -- the coerced arrays, the
+        resolved ``(n_sens,)`` index array, and the resolved boolean.
+    """
+    C0 = jnp.asarray(C0)
+    params = jnp.asarray(params)
+    validate_C0_params(model, C0, params)
+    free_idx = resolve_sens_indices(model, sens_params)
+    if shared_factor is None:
+        shared_factor = free_idx.shape[0] > 1
+    return C0, params, free_idx, shared_factor
 
 
 def sensitivity_atol(atol_y, theta, *, sens_atol=None, param_scale=None) -> jnp.ndarray:
@@ -272,8 +316,6 @@ def augmented_forward_sensitivity(
     # the forward / discrete-adjoint paths use and cannot drift from them. ``order``
     # selects the ESDIRK (5 for the reactors, 3 for the stiff plant); the block-arrow
     # SimultaneousCorrector is the per-stage linear solver when shared_factor.
-    from aquakin.integrate._common import build_implicit_solver, build_step_controller
-
     solver = build_implicit_solver(rtol, atol_aug, order=order, linear_solver=sc)
     controller = build_step_controller(rtol_aug, atol_aug, factormax=factormax, dtmax=dtmax)
 

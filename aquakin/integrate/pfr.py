@@ -21,12 +21,12 @@ from aquakin.integrate._common import (
     cached_jitted_solver,
     friendly_solve_errors,
     init_solver_settings,
-    prepare_sensitivity,
     reactor_settings_key,
     resolve_state_atol,
     solve_chemistry,
     validate_C0_params,
 )
+from aquakin.integrate.forward_sensitivity import prepare_sensitivity, run_forward_sensitivity
 
 
 @dataclass
@@ -240,8 +240,6 @@ class PlugFlowReactor(GradientCheckMixin):
             Sensitivity ``dC/dtheta`` at the axial output points, shape
             ``(n_points, n_species, n_sens_params)``.
         """
-        from aquakin.integrate.forward_sensitivity import run_forward_sensitivity
-
         C0, params, free_idx, shared_factor = prepare_sensitivity(
             self.model, C0, params, sens_params, shared_factor
         )

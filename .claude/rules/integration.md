@@ -10,6 +10,16 @@ ODE integration strategy: solver choice, differentiating stiff models
 located events, and compiled-solve caching. Loaded automatically when editing
 files under `aquakin/integrate/`.
 
+## Layering
+
+`integrate` must not import `plant` or `study`, not even inside a function
+body (`tests/unit/test_layering.py` checks every import). Solvers generic in
+the right-hand side that the plant also uses live here: the PTC steady-state
+kernel and the continuation drivers are in `integrate/steady.py`, which
+`plant/steady.py` re-exports. Within `integrate`, `_common.py` imports no other
+`integrate` module; the sensitivity preamble (`prepare_sensitivity`,
+`resolve_sens_indices`) lives in `forward_sensitivity.py`.
+
 ## ODE Integration Strategy
 
 ### Solver

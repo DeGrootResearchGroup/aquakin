@@ -48,7 +48,12 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.hints import did_you_mean
-from aquakin.integrate._common import DifferentiationConfig, check_finite_gradient, to_native_time
+from aquakin.integrate._common import (
+    DifferentiationConfig,
+    IntegratorConfig,
+    check_finite_gradient,
+    to_native_time,
+)
 from aquakin.integrate._transforms import dphysical_dunconstrained
 from aquakin.integrate.calibrate import FreeICConfig, OptimizerConfig, _sigma_per_dataset
 from aquakin.integrate.experiment_design import (
@@ -431,8 +436,6 @@ class _PlantDesign:
         if not free_params:
             raise ValueError("free_params must be non-empty.")
         if integrator is None:
-            from aquakin.plant.plant import IntegratorConfig
-
             integrator = IntegratorConfig()
         self.mode = mode
         self.integrator = integrator

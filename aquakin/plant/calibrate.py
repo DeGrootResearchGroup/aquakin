@@ -44,7 +44,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.hints import did_you_mean
-from aquakin.integrate._common import DifferentiationConfig
+from aquakin.integrate._common import DifferentiationConfig, IntegratorConfig
 from aquakin.integrate.calibrate import (
     CalibrationResult,
     FreeICConfig,
@@ -79,10 +79,6 @@ from aquakin.plant.measures import channel_name, measure_map
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
-
-# ``IntegratorConfig`` lives in ``plant.plant``, which imports *this* module at
-# class-definition time -- so it is imported lazily (at call time) to avoid the
-# import cycle.
 
 
 # --- Public observable specification -----------------------------------
@@ -820,8 +816,6 @@ def calibrate_plant(
     call.
     """
     if integrator is None:
-        from aquakin.plant.plant import IntegratorConfig
-
         integrator = IntegratorConfig()
 
     if not free_params:

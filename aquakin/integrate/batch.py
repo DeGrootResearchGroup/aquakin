@@ -23,7 +23,6 @@ from aquakin.integrate._common import (
     friendly_solve_errors,
     init_solver_settings,
     make_chemistry_rhs,
-    prepare_sensitivity,
     reactor_settings_key,
     require_increasing_t_span,
     resolve_state_atol,
@@ -33,6 +32,7 @@ from aquakin.integrate._common import (
     validate_t_eval,
 )
 from aquakin.integrate.events import Event, events_to_native_time, solve_with_events
+from aquakin.integrate.forward_sensitivity import prepare_sensitivity, run_forward_sensitivity
 
 
 @dataclass
@@ -372,8 +372,6 @@ class BatchReactor(GradientCheckMixin):
             Sensitivity ``dC/dtheta`` at the saved times, shape
             ``(n_t, n_species, n_sens_params)``.
         """
-        from aquakin.integrate.forward_sensitivity import run_forward_sensitivity
-
         C0, params, free_idx, shared_factor = prepare_sensitivity(
             self.model, C0, params, sens_params, shared_factor
         )

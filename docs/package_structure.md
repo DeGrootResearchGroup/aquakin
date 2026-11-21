@@ -36,6 +36,9 @@ aquakin/
 │   │   ├── precipitation_equilibrium.py # mode: equilibrium -> algebraic equilibrium solve
 │   │   │                            #   (MINEQL/PHREEQC: log-free-ion + phase amounts, smoothed-FB
 │   │   │                            #   complementarity; IFT-differentiable; -> Xeq_/projection)
+│   │   ├── tolerance.py             # default_atol: the per-component solver noise floor
+│   │   │                            #   (CompiledModel.atol and every integrator; re-exported
+│   │   │                            #   from integrate/_common.py)
 │   │   └── units.py                 # prettify_units: plain-ASCII unit exponents -> Unicode superscripts
 │   │
 │   ├── schema/
@@ -57,6 +60,10 @@ aquakin/
 │   │   │                            #   to_dataframe/to_csv) + build_dataframe/require_pandas
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
 │   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)
+│   │   ├── steady.py                # pseudo-transient continuation steady solver +
+│   │   │                            #   continuation / arclength drivers, generic in the RHS
+│   │   │                            #   (Plant.steady_state, BiofilmReactor.steady_state;
+│   │   │                            #   plant/steady.py re-exports the public names)
 │   │   ├── pfr.py                   # PlugFlowReactor, PFRSolution
 │   │   ├── particle.py              # Track, ParticleTrackReactor, integrate_ensemble
 │   │   ├── cfd.py                   # CFDReactor (Option C runtime coupling)
@@ -75,6 +82,7 @@ aquakin/
 │   │   ├── forward_sensitivity.py   # solve_sensitivity / forward_sensitivity:
 │   │   │                            #   augmented [y; S] variational solve giving
 │   │   │                            #   cap-free exact stiff sensitivities
+│   │   │                            #   (prepare_sensitivity: the reactors' shared preamble)
 │   │   ├── _simultaneous_corrector.py # CVODES simultaneous-corrector lineax
 │   │   │                            #   solver (shared_factor=True, Option A):
 │   │   │                            #   factorise the shared diagonal block once
