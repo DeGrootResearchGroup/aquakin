@@ -47,10 +47,6 @@ class Catalog:
         """A kind's settings, in constructor order."""
         return self.kinds[kind]["settings"]
 
-    def setting(self, kind: str, name: str) -> dict:
-        """One setting of a kind."""
-        return next(s for s in self.settings(kind) if s["name"] == name)
-
     def defaults(self, kind: str) -> dict:
         """The value of every setting of a kind when it is not given."""
         return {s["name"]: s["default"] for s in self.settings(kind)}
