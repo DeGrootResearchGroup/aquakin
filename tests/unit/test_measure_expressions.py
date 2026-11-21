@@ -88,8 +88,8 @@ def test_every_keyword_is_a_term(keyword):
         ("x = [SS] )", "expected '+' or '-'"),
         ("x = + ", "expected a number"),
         ("x = [SS] +", "expected a number"),
-        ("x = [2]", "expected 'name'"),
-        ("x = [SS] @ 2", "unexpected character '@'"),
+        ("x = [2]", "expected a name"),
+        ("x = [SS] @ 2", "Unexpected character '@'"),
     ],
 )
 def test_what_is_refused(text, message):
