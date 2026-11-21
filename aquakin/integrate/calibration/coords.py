@@ -17,7 +17,7 @@ from aquakin.integrate._transforms import (
 from aquakin.integrate.calibration.config import FreeICConfig
 
 if TYPE_CHECKING:
-    from aquakin.integrate.calibrate import _CalibrationProblem
+    from aquakin.integrate.calibration.problem import _CalibrationProblem
 
 
 _DEFAULT_IC_BOUNDS = (1e-3, 1e4)
