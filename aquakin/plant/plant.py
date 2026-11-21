@@ -4155,7 +4155,7 @@ class Plant:
         stops once the scaled residual with floor ``scale_floor`` is at most
         ``tol``. Returns ``(event, floor)``.
         """
-        from aquakin.integrate.steady import _scaled_residual_event
+        from aquakin.integrate.steady import scaled_residual_event
 
         if criterion not in ("norm", "scaled_residual"):
             raise ValueError(f"criterion must be 'norm' or 'scaled_residual'; got {criterion!r}.")
@@ -4163,7 +4163,7 @@ class Plant:
         if criterion == "norm":
             event = diffrax.Event(diffrax.steady_state_event(rtol=ss_rtol, atol=ss_atol))
         else:
-            event = diffrax.Event(_scaled_residual_event(tol, floor))
+            event = diffrax.Event(scaled_residual_event(tol, floor))
         return event, floor
 
     def _steady_forward_result(
@@ -4176,9 +4176,9 @@ class Plant:
         ``max_time``; with ``"scaled_residual"``, that the residual is at most
         ``tol``.
         """
-        from aquakin.integrate.steady import _scaled_resnorm
+        from aquakin.integrate.steady import scaled_resnorm
 
-        residual = float(_scaled_resnorm(F, state, floor))
+        residual = float(scaled_resnorm(F, state, floor))
         if criterion == "norm":
             converged = bool(t_final < float(max_time))
             if converged:
