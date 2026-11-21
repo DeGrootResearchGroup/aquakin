@@ -2109,8 +2109,7 @@ class Plant:
         self._build_parameter_layout()
         params_full = self.default_parameters() if params is None else self._coerce_params(params)
         states = self._split_state(jnp.asarray(state_full))
-        recycle_map = self._recycle._maybe_recycle_map(jnp.asarray(t), states, params_full)
-        flow_map = self._recycle._maybe_flow_map(jnp.asarray(t), states, params_full)
+        recycle_map, flow_map = self._recycle.cached_maps(jnp.asarray(t), states, params_full)
         all_outputs, _ = self._resolve_streams(
             jnp.asarray(t), states, params_full, recycle_map=recycle_map, flow_map=flow_map
         )
@@ -2151,10 +2150,7 @@ class Plant:
         # state-coupled (the resolver then probes per call). Built from
         # params_full so a differentiated reconstruction still flows the gradient
         # through M (the vmap below is traced when params_full is a tracer).
-        recycle_map = self._recycle._maybe_recycle_map(
-            ts[0], self._split_state(states_flat[0]), params_full
-        )
-        flow_map = self._recycle._maybe_flow_map(
+        recycle_map, flow_map = self._recycle.cached_maps(
             ts[0], self._split_state(states_flat[0]), params_full
         )
 
@@ -3651,13 +3647,7 @@ class Plant:
         ``None`` (the probe path) when the map is state-coupled or the constancy
         check has not run.
         """
-        recycle_map = self._recycle._maybe_recycle_map(
-            jnp.asarray(t0), self._split_state(y0), params
-        )
-        flow_map = self._recycle._maybe_flow_map(jnp.asarray(t0), self._split_state(y0), params)
-
-        def rhs(t, y, args):
-            return self._rhs(t, y, args, recycle_map=recycle_map, flow_map=flow_map)
+        rhs, _ = self._recycle.cached_rhs(jnp.asarray(t0), self._split_state(y0), params)
 
         with friendly_solve_errors(max_steps, what="plant solve"):
             res = solve_with_events(
@@ -3720,13 +3710,7 @@ class Plant:
         t0_arr = jnp.asarray(float(t0))
 
         def make_rhs(y0, params):
-            states0 = self._split_state(y0)
-            recycle_map = self._recycle._maybe_recycle_map(t0_arr, states0, params)
-            flow_map = self._recycle._maybe_flow_map(t0_arr, states0, params)
-
-            def rhs(t, y, args):
-                return self._rhs(t, y, args, recycle_map=recycle_map, flow_map=flow_map)
-
+            rhs, _ = self._recycle.cached_rhs(t0_arr, self._split_state(y0), params)
             return rhs
 
         kw = dict(
@@ -3794,11 +3778,7 @@ class Plant:
 
         @jax.jit
         def _solve(y0, params, t_eval):
-            rmap = self._recycle._maybe_recycle_map(t0a, self._split_state(y0), params)
-            fmap = self._recycle._maybe_flow_map(t0a, self._split_state(y0), params)
-
-            def rhs(t, y, args):
-                return self._rhs(t, y, args, recycle_map=rmap, flow_map=fmap)
+            rhs, _ = self._recycle.cached_rhs(t0a, self._split_state(y0), params)
 
             ys = forward_solve(
                 rhs,
@@ -3905,21 +3885,17 @@ class Plant:
         def rhs(t, y, args):
             return self._rhs(t, y, args)
 
-        rmap = self._recycle._maybe_recycle_map(jnp.asarray(t0), self._split_state(y0), params)
-        fmap = self._recycle._maybe_flow_map(jnp.asarray(t0), self._split_state(y0), params)
+        # Both cached maps (M and the flow map A) are params-derived values;
+        # stop_gradient them before closing over them -- their parameter
+        # dependence is the param-vjp's job, which keeps the map-recomputing
+        # `rhs` (both maps left None) so a flow-setpoint gradient still captures
+        # dM/dtheta and dA/dtheta. The cached primal is used only when M is
+        # cached: a constant A alone does not switch it on.
+        primal_rhs, (rmap, _) = self._recycle.cached_rhs(
+            jnp.asarray(t0), self._split_state(y0), params, stop_gradient=True
+        )
         if rmap is None:
             primal_rhs = None
-        else:
-            rmap = jax.lax.stop_gradient(rmap)
-            # The cached flow map A is a params-derived value (it depends on the
-            # flow-setpoint block); stop_gradient it before closing over it -- its
-            # parameter dependence is the param-vjp's job, which keeps the
-            # map-recomputing `rhs` (flow_map left None) so a flow-setpoint
-            # gradient still captures dA/dtheta.
-            fmap = None if fmap is None else jax.lax.stop_gradient(fmap)
-
-            def primal_rhs(t, y, args):
-                return self._rhs(t, y, args, recycle_map=rmap, flow_map=fmap)
 
         return esdirk_adjoint_solve(
             rhs,
@@ -4732,12 +4708,11 @@ class Plant:
             if design is None and concrete:
                 self._recycle._check_recycle_map_constant(t, y0, params)
                 self._recycle._check_flow_map_constant(t, y0, params)
-                rmap = self._recycle._maybe_recycle_map(t, self._split_state(y0), params)
-                fmap = self._recycle._maybe_flow_map(t, self._split_state(y0), params)
+                cached, (rmap, _) = self._recycle.cached_rhs(t, self._split_state(y0), params)
                 if rmap is not None:
 
                     def primal_rhs(y, theta):
-                        return self._rhs(t, y, theta, recycle_map=rmap, flow_map=fmap)
+                        return cached(t, y, theta)
 
                     jac_fn = self._colored.steady_jacobian_builder(primal_rhs, y0, theta, tol=tol)
             if jac_fn is None:

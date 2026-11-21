@@ -1107,14 +1107,11 @@ def _build_sensitivity_solve(
         # parameters and closed over, so the sensitivity linearization w.r.t. the
         # wrt parameters drops ``dM/dtheta`` -- exact for kinetic parameters (M
         # depends only on the flow setpoints).
-        states0 = plant._split_state(y0)
-        p = theta[:n_params]
-        rmap = plant._recycle._maybe_recycle_map(t0, states0, p)
-        fmap = plant._recycle._maybe_flow_map(t0, states0, p)
+        cached, _ = plant._recycle.cached_rhs(t0, plant._split_state(y0), theta[:n_params])
 
         def rhs(t, y, th):
             design = plant._operating_design(op_meta, th[n_params:]) if op_meta else None
-            return plant._rhs(t, y, th[:n_params], recycle_map=rmap, flow_map=fmap, design=design)
+            return cached(t, y, th[:n_params], design=design)
 
         return rhs
 
