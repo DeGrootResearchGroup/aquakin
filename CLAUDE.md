@@ -18,13 +18,22 @@ When you change a subsystem, the matching rule below is the authoritative
 guidance for it — keep it updated as part of the change (this file's Post-Change
 Checklist still governs).
 
+> **A path-scoped rule only loads for its own paths.** Writing
+> `aquakin/plant/measures.py` loads `plant.md` and *not* `core.md`, so guidance
+> that is really cross-cutting can sit unread in a neighbouring file. Before
+> adding machinery that feels generic — a parser, a tokenizer, a units
+> conversion, a cache, a numeric guard — **search for an existing one first**
+> (`grep` the package, not just the directory you are in) and read the rule
+> that owns it. Three copies of one tokenizer got written this way (#699); the
+> cure is `core/lexer.py` plus the pointer now in `plant.md`.
+
 ## Index — where the detail lives
 
 **Path-scoped rules (auto-load on matching files):**
 
 | Rule | Loads for | Covers |
 |---|---|---|
-| `.claude/rules/core.md` | `aquakin/core/**` | AST rate evaluation, parser, vectorized kernel, `SpatialConditions`, parameter namespacing, charge-balance pH / `speciation:`, mineral `precipitation:` |
+| `.claude/rules/core.md` | `aquakin/core/**` | AST rate evaluation, parser, **the one expression tokenizer (`core/lexer.py`) every expression language shares**, vectorized kernel, `SpatialConditions`, parameter namespacing, charge-balance pH / `speciation:`, mineral `precipitation:` |
 | `.claude/rules/integration.md` | `aquakin/integrate/**` | solver choice, differentiating stiff models (`dtmax`, adjoints, discrete adjoint), operator splitting, located events, compiled-solve caching |
 | `.claude/rules/schema.md` | `aquakin/schema/**`, `**/*.yaml` | YAML model format + Pydantic schema rules (stoichiometry expressions, `extends:`, `auto`, `composition:`, `speciation:`, `precipitation:`) |
 | `.claude/rules/plant.md` | `aquakin/plant/**` | plant-wide simulation: units, recycle resolution, BSM1/BSM2/A²O builders, control, dosing, design, evaluation |

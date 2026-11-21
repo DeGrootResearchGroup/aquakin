@@ -31,11 +31,11 @@ grammar), so the two languages never disagree about the same text.
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Callable
-from dataclasses import dataclass
 
 import jax.numpy as jnp
+
+from aquakin.core.lexer import Token, spell, tokenize
 
 __all__ = [
     "CONSTANTS",
@@ -80,63 +80,6 @@ FUNCTIONS: dict[str, tuple[Callable, tuple[int, ...]]] = {
 #: The named constants an expression may use.
 CONSTANTS: dict[str, float] = {"pi": math.pi, "e": math.e}
 
-_PUNCTUATION = "+-*/(),"
-_NAME = re.compile(r"[A-Za-z_]\w*\Z")
-
-
-@dataclass(frozen=True)
-class _Token:
-    kind: str  # "number", "name", "pow", "end", or the punctuation character
-    text: str
-    pos: int
-
-
-def _tokenize(text: str) -> list[_Token]:
-    tokens: list[_Token] = []
-    i, n = 0, len(text)
-    while i < n:
-        c = text[i]
-        if c.isspace():
-            i += 1
-        elif c == "*" and i + 1 < n and text[i + 1] == "*":
-            tokens.append(_Token("pow", "**", i))
-            i += 2
-        elif c in _PUNCTUATION:
-            tokens.append(_Token(c, c, i))
-            i += 1
-        elif c.isdigit() or (c == "." and i + 1 < n and text[i + 1].isdigit()):
-            j = i
-            while j < n and (text[j].isdigit() or text[j] == "."):
-                j += 1
-            # An exponent only when a digit follows it (optionally after a sign),
-            # so "1e" stays a number followed by a name and reads as a clean error.
-            if j < n and text[j] in "eE":
-                k = j + 1
-                if k < n and text[k] in "+-":
-                    k += 1
-                if k < n and text[k].isdigit():
-                    j = k
-                    while j < n and text[j].isdigit():
-                        j += 1
-            try:
-                float(text[i:j])
-            except ValueError:
-                raise TimeExpressionError(
-                    f"'{text[i:j]}' at position {i} is not a number"
-                ) from None
-            tokens.append(_Token("number", text[i:j], i))
-            i = j
-        elif c.isalpha() or c == "_":
-            j = i
-            while j < n and (text[j].isalnum() or text[j] == "_"):
-                j += 1
-            tokens.append(_Token("name", text[i:j], i))
-            i = j
-        else:
-            raise TimeExpressionError(f"unexpected character {c!r} at position {i}")
-    tokens.append(_Token("end", "", n))
-    return tokens
-
 
 class _Parser:
     """Recursive descent over an expression of time, building a callable.
@@ -153,36 +96,36 @@ class _Parser:
 
     def __init__(self, text: str) -> None:
         self.text = text
-        self.tokens = _tokenize(text)
+        self.tokens = tokenize(text, error=TimeExpressionError)
         self.i = 0
 
-    def _peek(self) -> _Token:
+    def _peek(self) -> Token:
         return self.tokens[self.i]
 
-    def _take(self, kind: str) -> _Token:
+    def _take(self, kind: str) -> Token:
         token = self._peek()
         if token.kind != kind:
-            raise TimeExpressionError(self._unexpected(token, f"expected {kind!r}"))
+            raise TimeExpressionError(self._unexpected(token, f"expected {spell(kind)}"))
         self.i += 1
         return token
 
-    def _unexpected(self, token: _Token, expected: str) -> str:
-        what = "the end of the expression" if token.kind == "end" else f"{token.text!r}"
+    def _unexpected(self, token: Token, expected: str) -> str:
+        what = spell("EOF") if token.kind == "EOF" else f"{token.value!r}"
         return f"{expected}, got {what} at position {token.pos}"
 
     def parse(self) -> Callable:
-        if self._peek().kind == "end":
+        if self._peek().kind == "EOF":
             raise TimeExpressionError("the expression is empty")
         fn = self._expression()
         token = self._peek()
-        if token.kind != "end":
+        if token.kind != "EOF":
             raise TimeExpressionError(self._unexpected(token, "expected an operator"))
         return fn
 
     def _expression(self) -> Callable:
         fn = self._term()
-        while self._peek().kind in "+-":
-            plus = self._peek().kind == "+"
+        while self._peek().kind in ("PLUS", "MINUS"):
+            plus = self._peek().kind == "PLUS"
             self.i += 1
             right = self._term()
             left = fn
@@ -195,8 +138,8 @@ class _Parser:
 
     def _term(self) -> Callable:
         fn = self._unary()
-        while self._peek().kind in "*/":
-            times = self._peek().kind == "*"
+        while self._peek().kind in ("STAR", "SLASH"):
+            times = self._peek().kind == "STAR"
             self.i += 1
             right = self._unary()
             left = fn
@@ -214,15 +157,15 @@ class _Parser:
         ``-(2**t)``.
         """
         token = self._peek()
-        if token.kind in "+-":
+        if token.kind in ("PLUS", "MINUS"):
             self.i += 1
             fn = self._unary()
-            return fn if token.kind == "+" else (lambda t, a=fn: -a(t))
+            return fn if token.kind == "PLUS" else (lambda t, a=fn: -a(t))
         return self._power()
 
     def _power(self) -> Callable:
         fn = self._primary()
-        if self._peek().kind == "pow":
+        if self._peek().kind == "POW":
             self.i += 1
             # Right-associative, and the exponent may carry its own sign, so
             # ``2**-1`` and ``2**3**2`` both read as they do in Python.
@@ -232,22 +175,22 @@ class _Parser:
 
     def _primary(self) -> Callable:
         token = self._peek()
-        if token.kind == "number":
+        if token.kind == "NUMBER":
             self.i += 1
-            return lambda t, v=float(token.text): v
-        if token.kind == "(":
+            return lambda t, v=float(token.value): v
+        if token.kind == "LPAREN":
             self.i += 1
             fn = self._expression()
-            self._take(")")
+            self._take("RPAREN")
             return fn
-        if token.kind == "name":
+        if token.kind == "IDENT":
             self.i += 1
             return self._name(token)
         raise TimeExpressionError(self._unexpected(token, "expected a number, 't' or '('"))
 
-    def _name(self, token: _Token) -> Callable:
-        name = token.text
-        if self._peek().kind == "(":
+    def _name(self, token: Token) -> Callable:
+        name = token.value
+        if self._peek().kind == "LPAREN":
             return self._call(token)
         if name == "t":
             return lambda t: t
@@ -260,8 +203,8 @@ class _Parser:
             f"{', '.join(sorted(FUNCTIONS))}.{_hint(name, known)}"
         )
 
-    def _call(self, token: _Token) -> Callable:
-        name = token.text
+    def _call(self, token: Token) -> Callable:
+        name = token.value
         spec = FUNCTIONS.get(name)
         if spec is None:
             raise TimeExpressionError(
@@ -270,12 +213,12 @@ class _Parser:
                 f"{_hint(name, list(FUNCTIONS))}"
             )
         func, arities = spec
-        self._take("(")
+        self._take("LPAREN")
         args = [self._expression()]
-        while self._peek().kind == ",":
+        while self._peek().kind == "COMMA":
             self.i += 1
             args.append(self._expression())
-        self._take(")")
+        self._take("RPAREN")
         if len(args) not in arities:
             wanted = " or ".join(str(a) for a in arities)
             raise TimeExpressionError(

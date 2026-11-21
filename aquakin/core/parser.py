@@ -23,8 +23,9 @@ respective domain nodes. Any other identifier with parentheses is rejected.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, fields
+from dataclasses import fields
 
+from aquakin.core.lexer import Token, tokenize
 from aquakin.core.nodes import (
     AddNode,
     ASTNode,
@@ -72,93 +73,13 @@ class ParseError(ValueError):
 # --- Tokenizer ---------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class Token:
-    kind: str
-    value: str
-    pos: int
-
-
-_SINGLE_CHAR_TOKENS = {
-    "+": "PLUS",
-    "-": "MINUS",
-    "*": "STAR",  # may be promoted to "POW" if doubled
-    "/": "SLASH",
-    "(": "LPAREN",
-    ")": "RPAREN",
-    ",": "COMMA",
-    "[": "LBRACK",
-    "]": "RBRACK",
-    "{": "LBRACE",
-    "}": "RBRACE",
-}
-
-
-def _tokenize(text: str) -> list[Token]:
-    tokens: list[Token] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        c = text[i]
-        if c.isspace():
-            i += 1
-            continue
-        if c == "*" and i + 1 < n and text[i + 1] == "*":
-            tokens.append(Token("POW", "**", i))
-            i += 2
-            continue
-        if c in _SINGLE_CHAR_TOKENS:
-            tokens.append(Token(_SINGLE_CHAR_TOKENS[c], c, i))
-            i += 1
-            continue
-        if c.isdigit() or (c == "." and i + 1 < n and text[i + 1].isdigit()):
-            j = i
-            saw_dot = False
-            saw_exp = False
-            while j < n:
-                cj = text[j]
-                if cj.isdigit():
-                    j += 1
-                elif cj == "." and not saw_dot and not saw_exp:
-                    saw_dot = True
-                    j += 1
-                elif cj in ("e", "E") and not saw_exp:
-                    # Only an exponent if a digit follows (optionally after a
-                    # sign). Otherwise leave the 'e' for the identifier scanner
-                    # so a malformed number like "1e" or "1e+" surfaces as a
-                    # clean ParseError rather than a bare float() ValueError.
-                    k = j + 1
-                    if k < n and text[k] in "+-":
-                        k += 1
-                    if k < n and text[k].isdigit():
-                        saw_exp = True
-                        j = k
-                    else:
-                        break
-                else:
-                    break
-            tokens.append(Token("NUMBER", text[i:j], i))
-            i = j
-            continue
-        if c.isalpha() or c == "_":
-            j = i
-            while j < n and (text[j].isalnum() or text[j] == "_"):
-                j += 1
-            tokens.append(Token("IDENT", text[i:j], i))
-            i = j
-            continue
-        raise ParseError(f"Unexpected character {c!r} at position {i}")
-    tokens.append(Token("EOF", "", n))
-    return tokens
-
-
 # --- Parser ------------------------------------------------------------
 
 
 class _Parser:
     def __init__(self, text: str) -> None:
         self.text = text
-        self.tokens = _tokenize(text)
+        self.tokens = tokenize(text, error=ParseError)
         self.i = 0
 
     def _peek(self) -> Token:

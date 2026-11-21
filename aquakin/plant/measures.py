@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from aquakin.core.hints import did_you_mean
+from aquakin.core.lexer import Token, spell, tokenize
 
 __all__ = [
     "KEYWORDS",
@@ -168,64 +169,7 @@ class MeasureSyntaxError(ValueError):
     """
 
 
-_PUNCTUATION = "+-*/()[]"
 _NAME = re.compile(r"[A-Za-z_]\w*\Z")
-
-
-@dataclass(frozen=True)
-class _Token:
-    kind: str  # "number", "name", "end", or the punctuation character itself
-    text: str
-    pos: int
-
-
-def _tokenize(text: str, offset: int = 0) -> list[_Token]:
-    """The tokens of ``text``, each positioned ``offset`` further along.
-
-    The offset carries the ``"name = "`` the caller has already taken off, so a
-    position in a message points into the expression the user wrote.
-    """
-    tokens: list[_Token] = []
-    i, n = 0, len(text)
-    while i < n:
-        c = text[i]
-        if c.isspace():
-            i += 1
-        elif c in _PUNCTUATION:
-            tokens.append(_Token(c, c, i + offset))
-            i += 1
-        elif c.isdigit() or (c == "." and i + 1 < n and text[i + 1].isdigit()):
-            j = i
-            while j < n and (text[j].isdigit() or text[j] == "."):
-                j += 1
-            # An exponent only when a digit follows it (optionally after a sign),
-            # so "1e" stays a number followed by a name and reads as a clean error.
-            if j < n and text[j] in "eE":
-                k = j + 1
-                if k < n and text[k] in "+-":
-                    k += 1
-                if k < n and text[k].isdigit():
-                    j = k
-                    while j < n and text[j].isdigit():
-                        j += 1
-            try:
-                float(text[i:j])
-            except ValueError:
-                raise MeasureSyntaxError(
-                    f"'{text[i:j]}' at position {i + offset} is not a number"
-                ) from None
-            tokens.append(_Token("number", text[i:j], i + offset))
-            i = j
-        elif c.isalpha() or c == "_":
-            j = i
-            while j < n and (text[j].isalnum() or text[j] == "_"):
-                j += 1
-            tokens.append(_Token("name", text[i:j], i + offset))
-            i = j
-        else:
-            raise MeasureSyntaxError(f"unexpected character {c!r} at position {i + offset}")
-    tokens.append(_Token("end", "", n + offset))
-    return tokens
 
 
 @dataclass
@@ -274,47 +218,47 @@ class _ExpressionParser:
 
     def __init__(self, text: str, offset: int = 0) -> None:
         self.text = text
-        self.tokens = _tokenize(text, offset)
+        self.tokens = tokenize(text, error=MeasureSyntaxError, offset=offset)
         self.i = 0
 
-    def _peek(self) -> _Token:
+    def _peek(self) -> Token:
         return self.tokens[self.i]
 
-    def _take(self, kind: str) -> _Token:
+    def _take(self, kind: str) -> Token:
         token = self._peek()
         if token.kind != kind:
-            raise MeasureSyntaxError(self._unexpected(token, f"expected {kind!r}"))
+            raise MeasureSyntaxError(self._unexpected(token, f"expected {spell(kind)}"))
         self.i += 1
         return token
 
-    def _unexpected(self, token: _Token, expected: str) -> str:
-        what = "the end of the expression" if token.kind == "end" else f"{token.text!r}"
+    def _unexpected(self, token: Token, expected: str) -> str:
+        what = spell("EOF") if token.kind == "EOF" else f"{token.value!r}"
         return f"{expected}, got {what} at position {token.pos}"
 
     def parse(self) -> _Terms:
-        if self._peek().kind == "end":
+        if self._peek().kind == "EOF":
             raise MeasureSyntaxError("the expression is empty")
         terms = self._expression()
         token = self._peek()
-        if token.kind != "end":
+        if token.kind != "EOF":
             raise MeasureSyntaxError(self._unexpected(token, "expected '+' or '-'"))
         return terms
 
     def _expression(self) -> _Terms:
         terms = self._term()
-        while self._peek().kind in "+-":
-            sign = 1.0 if self._peek().kind == "+" else -1.0
+        while self._peek().kind in ("PLUS", "MINUS"):
+            sign = 1.0 if self._peek().kind == "PLUS" else -1.0
             self.i += 1
             terms = terms.added(self._term(), sign)
         return terms
 
     def _term(self) -> _Terms:
         terms = self._factor()
-        while self._peek().kind in "*/":
+        while self._peek().kind in ("STAR", "SLASH"):
             operator = self._peek()
             self.i += 1
             right = self._factor()
-            if operator.kind == "*":
+            if operator.kind == "STAR":
                 if not terms.measured:
                     terms = right.scaled(terms.constant)
                 elif not right.measured:
@@ -338,36 +282,36 @@ class _ExpressionParser:
 
     def _factor(self) -> _Terms:
         token = self._peek()
-        if token.kind in "+-":
+        if token.kind in ("PLUS", "MINUS"):
             self.i += 1
             factor = self._factor()
-            return factor if token.kind == "+" else factor.scaled(-1.0)
+            return factor if token.kind == "PLUS" else factor.scaled(-1.0)
         return self._primary()
 
     def _primary(self) -> _Terms:
         token = self._peek()
-        if token.kind == "number":
+        if token.kind == "NUMBER":
             self.i += 1
-            return _Terms(constant=float(token.text))
-        if token.kind == "[":
+            return _Terms(constant=float(token.value))
+        if token.kind == "LBRACK":
             self.i += 1
-            name = self._take("name").text
-            self._take("]")
+            name = self._take("IDENT").value
+            self._take("RBRACK")
             return _Terms(species={name: 1.0})
-        if token.kind == "(":
+        if token.kind == "LPAREN":
             self.i += 1
             terms = self._expression()
-            self._take(")")
+            self._take("RPAREN")
             return terms
-        if token.kind == "name":
+        if token.kind == "IDENT":
             self.i += 1
-            if token.text not in KEYWORDS:
-                hint = did_you_mean(token.text, list(KEYWORDS))
+            if token.value not in KEYWORDS:
+                hint = did_you_mean(token.value, list(KEYWORDS))
                 raise MeasureSyntaxError(
-                    f"'{token.text}' at position {token.pos} is not one of {KEYWORDS}; "
-                    f"write a species in brackets, as '[{token.text}]'.{hint}"
+                    f"'{token.value}' at position {token.pos} is not one of {KEYWORDS}; "
+                    f"write a species in brackets, as '[{token.value}]'.{hint}"
                 )
-            return _Terms(keywords={token.text: 1.0})
+            return _Terms(keywords={token.value: 1.0})
         raise MeasureSyntaxError(self._unexpected(token, "expected a number, '[species]' or '('"))
 
 

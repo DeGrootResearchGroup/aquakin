@@ -151,7 +151,7 @@ def test_it_is_jit_grad_and_vmap_clean():
         ("sin(", "expected a number, 't' or '('"),
         ("(t", "expected ')'"),
         ("t 2", "expected an operator"),
-        ("t @ 2", "unexpected character '@'"),
+        ("t @ 2", "Unexpected character '@'"),
         ("1.2.3", "is not a number"),
         # "1e" is deliberately the number 1 followed by the name "e", so it
         # reads as a parse error rather than a bare float() failure.

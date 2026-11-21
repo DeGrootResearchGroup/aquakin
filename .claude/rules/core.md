@@ -187,6 +187,30 @@ models, where the suite hurts most. Runtime is unchanged. Regression-guarded
 (bit-identicality on randomized states, op-count reduction, AD parity, and the
 unsupported-node fallback) in `tests/unit/test_vector_kernel.py`.
 
+### One tokenizer, three languages (`core/lexer.py`)
+
+aquakin reads **three** small expression languages — rate expressions
+(`core/parser.py`), expressions of time (`plant/time_expr.py`) and measure
+expressions (`plant/measures.py`). Their grammars and their leaf rules differ on
+purpose; **how text becomes tokens does not**. `core/lexer.py` holds the only
+tokenizer: `tokenize(text, error=, offset=)` → `Token(kind, value, pos)`, with
+`SYMBOLS` for the symbol kinds and `spell(kind)` for how a kind is written in a
+message (`RPAREN` → `')'`, not the internal name).
+
+**A new expression language reuses it.** Writing another tokenizer is the
+mistake this file exists to stop: there were three near-identical copies until
+#699, and the same subtle rule — an exponent is taken **only when a digit
+follows** it, so `1e` is `1` then the name `e` rather than a `float()` crash —
+was written and separately tested three times. A precedence bug then had to be
+fixed in two of them, by hand, from memory.
+
+Each language keeps its own error class (a message should name the language the
+reader is writing in), which is why `tokenize` takes the class to raise rather
+than owning one.
+
+Precedence is shared too, and `core/parser.py` and `plant/time_expr.py` must
+stay in step: `unary := ('+'|'-') unary | power`, `power := primary ('**' unary)?`.
+
 ### Parser
 
 Recursive descent parser. No external parser dependencies. Operator precedence

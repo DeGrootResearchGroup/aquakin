@@ -868,6 +868,12 @@ cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic eff
 means within 0.07% of Takács, the constant-influent steady state identical (layers
 2–5 equal there, where the rules agree).
 
+**Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and
+`plant/measures.py` are expression languages whose grammars are their own but
+whose *tokenizer* is not: both call `aquakin.core.lexer.tokenize`. Do not write
+another one — see the "One tokenizer, three languages" note in
+`.claude/rules/core.md`, which `aquakin/plant/**` does not auto-load.
+
 **Expressions of time (`plant/time_expr.py`).** An operating value that varies on
 a schedule — an influent's flow, a setpoint — may be written as a function of the
 plant clock (`"18446 + 4000*sin(2*pi*t)"`). `compile_time_expression(value,
