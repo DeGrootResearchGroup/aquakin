@@ -300,6 +300,12 @@ log-removal — see `plant/disinfection.py`), `SBRUnit`
 variable volume and a pluggable settling model — see
 `plant/sbr.py`), and `TakacsClarifier` (10-layer 1-D Takács 1991 model); see `.claude/rules/plant-settling.md`).
 
+**Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and
+`plant/measures.py` are expression languages whose grammars are their own but
+whose *tokenizer* is not: both call `aquakin.core.lexer.tokenize`. Do not write
+another one — see the "One tokenizer, three languages" note in
+`.claude/rules/core.md`, which `aquakin/plant/**` does not auto-load.
+
 **Units in the help.** A setting's numpydoc entry names its unit in
 parentheses, flows and times per day as aquakin runs them on the plant's clock
 (`Volume (m³).`, `Fixed dose flow (m³/d).`, `Integral time (d).`); the editor

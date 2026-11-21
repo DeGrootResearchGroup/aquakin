@@ -97,6 +97,15 @@ adopt and inventing one would silently change the model. So `log`'s guard
 protects the gradient only, and its caller still has to keep the argument
 positive.
 
+The second consumer is real: **`plant/time_expr.py` binds `sqrt` and `log` to
+these**, not to `jnp`. A clock is the harshest case for them — every solve
+starts at `t = 0`, exactly where their derivative is infinite — and the failure
+is quiet, because the forward solve stays correct and only the gradient breaks,
+surfacing as an exhausted solver step budget that points at the integrator.
+`core/lexer.py`, `core/precedence.py` and `core/kernels.py` are now the three
+things the expression languages share; a fourth divergence between them is a
+bug, not a difference of taste.
+
 The four Monod nodes and `SafeDivideNode` all evaluate their `num/denom` through
 `_safe_ratio` (`core/nodes.py`), a **double-where** guard returning 0 (with a
 finite gradient) where the denominator is exactly zero — for the Monod nodes the
@@ -195,6 +204,71 @@ speedup of ~1.15x (asm1) / 1.5x (adm1) / 3.4x (wats) — larger on the bigger
 models, where the suite hurts most. Runtime is unchanged. Regression-guarded
 (bit-identicality on randomized states, op-count reduction, AD parity, and the
 unsupported-node fallback) in `tests/unit/test_vector_kernel.py`.
+
+### One tokenizer, three languages (`core/lexer.py`)
+
+aquakin reads **three** small expression languages — rate expressions
+(`core/parser.py`), expressions of time (`plant/time_expr.py`) and measure
+expressions (`plant/measures.py`). Their grammars and their leaf rules differ on
+purpose; **how text becomes tokens does not**. `core/lexer.py` holds the only
+tokenizer: `tokenize(text, error=, offset=)` → `Token(kind, value, pos)`, with
+`SYMBOLS` for the symbol kinds and `spell(kind)` for how a kind is written in a
+message (`RPAREN` → `')'`, not the internal name).
+
+**A new expression language reuses it.** Writing another tokenizer is the
+mistake this file exists to stop: there were three near-identical copies until
+#699, and the same subtle rule — an exponent is taken **only when a digit
+follows** it, so `1e` is `1` then the name `e` rather than a `float()` crash —
+was written and separately tested three times. A precedence bug then had to be
+fixed in two of them, by hand, from memory.
+
+Each language keeps its own error class (a message should name the language the
+reader is writing in), which is why `tokenize` takes the class to raise rather
+than owning one.
+
+### One precedence, three languages (`core/precedence.py`)
+
+The same applies a level up. `PrecedenceParser` holds the grammar all three
+share — `expression := term (('+'|'-') term)*`, `term := unary (('*'|'/')
+unary)*`, `unary := ('+'|'-') unary | power`, `power := primary ('**' unary)?`
+— and a language subclasses it, supplies `primary()` for its own leaves, and
+implements one hook per operation (`add`, `subtract`, `multiply`, `divide`,
+`negate`, `power`), each given the operator token so it can name a position.
+
+**A language that does not allow an operation raises in its hook**, rather than
+having a grammar of its own: that is how a measure expression stays affine
+(`multiply` refuses two measured operands, `power` refuses outright). The base's
+`power` already refuses, so a new language is safe before it has thought about
+powers.
+
+A sign binds **looser** than a power (`-2**2` is `-(2**2)`), `**` is
+right-associative and its exponent may carry a sign. All three had this
+backwards until #699 and it had to be fixed in each by hand — which is the whole
+reason it is written down once.
+
+`arglist()` is here too, for the same reason: a call's arguments are read the
+same way in every language that has calls, **including the trailing comma**
+Python allows (`monod([SS], KS,)`). A function that is associative is named in
+`ASSOCIATIVE_CALLS` and accepts more arguments than it declares, folding left
+— `max(a, b, c)` is `max(max(a, b), c)` — so `max` and `min` behave as Python's
+variadic builtins do. `accepts()` and `spell_arity()` keep the check and its
+message in step; a language calls both rather than comparing lengths itself.
+
+**The contract is that an expression means what a Python reader thinks it
+means**, and every departure is deliberate and written down.
+`tests/unit/test_python_consistency.py` is where that line is drawn: it hands
+the same text to Python's own `eval` and to the time language and compares,
+corpus by corpus, and lists separately the Python-legal text aquakin refuses
+with the reason for each (no comparisons, no `if`/`else`, no `%` or `//`, and
+`^` refused rather than quietly read as exclusive-or). The one place aquakin is
+the *more* permissive is `007`, which Python 3 rejects outright. **Touch the
+grammar, add to that corpus** — it is cheaper than discovering a divergence the
+way `-2**2` was discovered.
+
+**Changing either shared file is a `full-ci` change.** Guard it the way those
+two were: re-parse every expression in every shipped model, fixture and example
+and compare the ASTs (845 of them; the throwaway script is in the #699 / lexer
+PR description). A refactor that changes no AST changes no model.
 
 ### Parser
 

@@ -19,6 +19,15 @@ guidance for it — keep it updated as part of the change (this file's Post-Chan
 Checklist still governs). How to keep these files useful is in **Maintaining the
 Claude-facing files** at the end.
 
+> **A path-scoped rule only loads for its own paths.** Writing
+> `aquakin/plant/measures.py` loads `plant.md` and *not* `core.md`, so guidance
+> that is really cross-cutting can sit unread in a neighbouring file. Before
+> adding machinery that feels generic — a parser, a tokenizer, a units
+> conversion, a cache, a numeric guard — **search for an existing one first**
+> (`grep` the package, not just the directory you are in) and read the rule
+> that owns it. Three copies of one tokenizer got written this way (#699); the
+> cure is `core/lexer.py` plus the pointer now in `plant.md`.
+
 ## Index — where the detail lives
 
 **Path-scoped rules (auto-load on matching files):**
@@ -26,7 +35,7 @@ Claude-facing files** at the end.
 | Rule | Loads for | Covers |
 |---|---|---|
 | `.claude/rules/tests.md` | `tests/**` | what makes a test able to fail, gradient tests, shared fixtures, the tiers and what CI actually runs |
-| `.claude/rules/core.md` | `aquakin/core/**` | AST rate evaluation, parser, vectorized kernel, `SpatialConditions`, parameter namespacing |
+| `.claude/rules/core.md` | `aquakin/core/**` | AST rate evaluation, parser, **the one expression tokenizer (`core/lexer.py`) every expression language shares**, vectorized kernel, `SpatialConditions`, parameter namespacing |
 | `.claude/rules/core-speciation.md` | `core/ph_solver.py`, `core/speciation.py` | charge-balance pH solver, derived conditions, the `speciation:` block |
 | `.claude/rules/core-precipitation.md` | `core/precipitation*.py` | mineral precipitation: rate law, the `precipitation:` block, the algebraic equilibrium mode |
 | `.claude/rules/integration.md` | `aquakin/integrate/**` | solver choice, operator splitting, located events, compiled-solve caching |
@@ -352,8 +361,9 @@ codebase something; the examples are real.
   `integrate/_common.py` (solver / controller builders, atol, validation, the
   solution mixins), `integrate/_transforms.py`, `plant/_constants.py`,
   `plant/_builder_support.py`, `plant/units.py` (the `Unit` contract and
-  capability Protocols), `core/kernels.py` (guarded numerics) and
-  `tests/conftest.py`.
+  capability Protocols), `core/lexer.py` and `core/precedence.py` (the one
+  tokenizer and precedence table for every expression language),
+  `core/kernels.py` (guarded numerics) and `tests/conftest.py`.
 - **A second caller means a shared function, in the same change.** Do not copy
   a block and adapt it. If the two callers live in different packages, put the
   shared piece in the lower one (`core` < `schema` < `integrate` < `plant` <
@@ -362,8 +372,9 @@ codebase something; the examples are real.
   by a comment. Reactor and plant calibration, the scalar and vectorized rate
   evaluators, the rate-expression and time-expression languages, a spec reader
   and its writer: when you change one, find the other. (`plant/time_expr.py`
-  maps `sqrt` / `log` to the bare `jnp` functions although `core/kernels.py`
-  exists so that both languages share one guarded version.)
+  once bound `sqrt` / `log` to the bare `jnp` functions while the rate language
+  used the guarded ones in `core/kernels.py`, and three tokenizers were written
+  before `core/lexer.py` replaced them.)
 - **Units compose the canonical term rather than re-deriving it.** A reactor
   unit's reaction term is `model.dCdt(...)`, which applies the negative-state
   clip and the positivity limiter; writing `stoich.T @ rates` in a unit drops
