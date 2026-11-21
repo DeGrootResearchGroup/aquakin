@@ -9,6 +9,15 @@ AST rate evaluation, parser, vectorized kernel, conditions, parameter
 namespacing, the charge-balance pH solver / speciation, and mineral
 precipitation. Loaded automatically when editing files under `aquakin/core/`.
 
+**Topic rules split out of this file** (each auto-loads for its own files; read
+it on demand when a change elsewhere, e.g. the wiring in `core/model.py` or the
+schema in `schema/model_spec.py`, touches the topic):
+
+| Rule | Loads for | Covers |
+|---|---|---|
+| `core-speciation.md` | `core/ph_solver.py`, `core/speciation.py` | the charge-balance pH solver, derived conditions, the `speciation:` block |
+| `core-precipitation.md` | `core/precipitation.py`, `core/precipitation_equilibrium.py` | the precipitation rate law, the `precipitation:` block, the algebraic equilibrium mode |
+
 ## Layering
 
 `core` must not import `schema`, `integrate`, `plant` or `study`, not even
@@ -97,6 +106,15 @@ one: `_safe_ratio` and `_safe_sqrt` return the physical limit 0, while
 adopt and inventing one would silently change the model. So `log`'s guard
 protects the gradient only, and its caller still has to keep the argument
 positive.
+
+The second consumer is real: **`plant/time_expr.py` binds `sqrt` and `log` to
+these**, not to `jnp`. A clock is the harshest case for them — every solve
+starts at `t = 0`, exactly where their derivative is infinite — and the failure
+is quiet, because the forward solve stays correct and only the gradient breaks,
+surfacing as an exhausted solver step budget that points at the integrator.
+`core/lexer.py`, `core/precedence.py` and `core/kernels.py` are now the three
+things the expression languages share; a fourth divergence between them is a
+bug, not a difference of taste.
 
 The four Monod nodes and `SafeDivideNode` all evaluate their `num/denom` through
 `_safe_ratio` (`core/nodes.py`), a **double-where** guard returning 0 (with a
@@ -197,6 +215,71 @@ models, where the suite hurts most. Runtime is unchanged. Regression-guarded
 (bit-identicality on randomized states, op-count reduction, AD parity, and the
 unsupported-node fallback) in `tests/unit/test_vector_kernel.py`.
 
+### One tokenizer, three languages (`core/lexer.py`)
+
+aquakin reads **three** small expression languages — rate expressions
+(`core/parser.py`), expressions of time (`plant/time_expr.py`) and measure
+expressions (`plant/measures.py`). Their grammars and their leaf rules differ on
+purpose; **how text becomes tokens does not**. `core/lexer.py` holds the only
+tokenizer: `tokenize(text, error=, offset=)` → `Token(kind, value, pos)`, with
+`SYMBOLS` for the symbol kinds and `spell(kind)` for how a kind is written in a
+message (`RPAREN` → `')'`, not the internal name).
+
+**A new expression language reuses it.** Writing another tokenizer is the
+mistake this file exists to stop: there were three near-identical copies until
+#699, and the same subtle rule — an exponent is taken **only when a digit
+follows** it, so `1e` is `1` then the name `e` rather than a `float()` crash —
+was written and separately tested three times. A precedence bug then had to be
+fixed in two of them, by hand, from memory.
+
+Each language keeps its own error class (a message should name the language the
+reader is writing in), which is why `tokenize` takes the class to raise rather
+than owning one.
+
+### One precedence, three languages (`core/precedence.py`)
+
+The same applies a level up. `PrecedenceParser` holds the grammar all three
+share — `expression := term (('+'|'-') term)*`, `term := unary (('*'|'/')
+unary)*`, `unary := ('+'|'-') unary | power`, `power := primary ('**' unary)?`
+— and a language subclasses it, supplies `primary()` for its own leaves, and
+implements one hook per operation (`add`, `subtract`, `multiply`, `divide`,
+`negate`, `power`), each given the operator token so it can name a position.
+
+**A language that does not allow an operation raises in its hook**, rather than
+having a grammar of its own: that is how a measure expression stays affine
+(`multiply` refuses two measured operands, `power` refuses outright). The base's
+`power` already refuses, so a new language is safe before it has thought about
+powers.
+
+A sign binds **looser** than a power (`-2**2` is `-(2**2)`), `**` is
+right-associative and its exponent may carry a sign. All three had this
+backwards until #699 and it had to be fixed in each by hand — which is the whole
+reason it is written down once.
+
+`arglist()` is here too, for the same reason: a call's arguments are read the
+same way in every language that has calls, **including the trailing comma**
+Python allows (`monod([SS], KS,)`). A function that is associative is named in
+`ASSOCIATIVE_CALLS` and accepts more arguments than it declares, folding left
+— `max(a, b, c)` is `max(max(a, b), c)` — so `max` and `min` behave as Python's
+variadic builtins do. `accepts()` and `spell_arity()` keep the check and its
+message in step; a language calls both rather than comparing lengths itself.
+
+**The contract is that an expression means what a Python reader thinks it
+means**, and every departure is deliberate and written down.
+`tests/unit/test_python_consistency.py` is where that line is drawn: it hands
+the same text to Python's own `eval` and to the time language and compares,
+corpus by corpus, and lists separately the Python-legal text aquakin refuses
+with the reason for each (no comparisons, no `if`/`else`, no `%` or `//`, and
+`^` refused rather than quietly read as exclusive-or). The one place aquakin is
+the *more* permissive is `007`, which Python 3 rejects outright. **Touch the
+grammar, add to that corpus** — it is cheaper than discovering a divergence the
+way `-2**2` was discovered.
+
+**Changing either shared file is a `full-ci` change.** Guard it the way those
+two were: re-parse every expression in every shipped model, fixture and example
+and compare the ASTs (845 of them; the throwaway script is in the #699 / lexer
+PR description). A refactor that changes no AST changes no model.
+
 ### Parser
 
 Recursive descent parser. No external parser dependencies. Operator precedence
@@ -280,381 +363,3 @@ edit-from-defaults pattern is `model.default_conditions().with_(T=283.15)`
 returns the base `SpatialConditions` type.
 
 ---
-
-
-## Speciation / state-derived pH
-
-Some models couple rates to pH, but pH is not an independent state — it is
-fixed by acid/base speciation through electroneutrality. `aquakin` can solve
-pH from the instantaneous state and expose it to rate expressions as an
-ordinary condition field.
-
-### Charge-balance solver (`core/ph_solver.py`)
-
-`solve_ph(...)` returns pH given the total molar concentrations of the
-carbonate, acetate, ammonia, phosphate and sulfide systems, plus strong-anion
-charge equivalents, a net fixed cation charge, and temperature. It runs a
-**safeguarded Newton-bisection** on the electroneutrality residual in
-`u = ln[H+]` space. The residual is strictly monotone with a unique, trivially
-bracketable root, so each step takes a Newton step but falls back to bisection
-(via the non-strict rtsafe product test) whenever Newton would leave the bracket
-— making the iteration **globally convergent**. This matters: a bare Newton step
-from the fixed pH-7 start **overshoots to `exp(u) = inf` (NaN), or silently to an
-absurd pH that saturates the `pH_switch` rate terms**, when the strong-ion charge
-exceeds the buffering (e.g. a weakly buffered transient, or a calibration that
-pushes the `S_cat`/`S_an` states) — the bracketed scheme stays finite and correct
-there.
-
-**Adaptive iteration + implicit-function-theorem AD (the ideal hot path).** On
-the default `activity_model="none"` path the iteration is an **adaptive
-`jax.lax.while_loop`** that stops as soon as a Newton step near the root falls
-below tolerance (a handful of steps in the buffered regime — measured 5–6 to
-machine precision across pH 5.4–8.8) and is **capped at `n_iter`** for the
-bisection worst case, wrapped in **`jax.lax.custom_root`** so the **pH
-sensitivity is the analytic IFT tangent** (one scalar solve of `df/d[H+]` at the
-root). The iteration count therefore never enters the AD graph: `jax.jvp` /
-`jacfwd` (forward, the per-step Jacobian-materialisation path) and `jax.grad`
-(reverse, the calibration-gradient path) through `solve_ph` are **O(1) in the
-iteration count** instead of differentiating through every Newton step. The root
-is the same one the old fixed scan converged to, so **every steady state is
-unchanged** (validated: BSM2 steady state and the ADM1 digester reproduce
-bit-for-bit). The convergence criterion is `in_bracket AND |Newton step| ≤ tol`
-— a *bisection* step can be spuriously small far from the root, so the step size
-alone is not a safe criterion, but a tiny in-bracket Newton step `|f/f'|` (with
-`|f'| ≥ 1`) means a tiny residual, i.e. the root. *Why this is the lever:* a
-Step-0 profile of the BSM2 plant found the pH solve was **~35% of the Jacobian
-materialisation** purely because `n_iter` was 40 while it converges in ~6; the
-adaptive + IFT rewrite drops the pH share to **~8%** (per-tangent pH cost
-O(40)→O(1)) and the whole 20-day BSM2 transient by **~20–25%** (default solver),
-with bit-identical results. The opt-in **activity-corrected path** uses the same
-adaptive + IFT scheme lifted to a **2-variable coupled root**: its conditional
-constants couple `[H+]` and the ionic strength `I`, so it solves the joint fixed
-point `(f1 = charge balance, f2 = I − I(h)) = 0` with an adaptive coupled
-`while_loop` wrapped in `custom_root` over the pair `(h, I)`, and the sensitivity
-is the exact IFT tangent via a **2×2 linear solve** of the joint Jacobian at the
-root (so it too is O(1) in the iteration count, forward and reverse). Equilibrium
-constants are temperature-corrected via van't Hoff. The chemistry mirrors the
-WATS reference pH solver. **The coupled path is also extreme-safe**: a transient
-far-overshoot trial `[H+]` makes the water self-ionisation term `½(h + Kw/h)`
-explode the ionic strength to ~1e20, where `g = 10^(…)` overflows to `inf` and
-the `inf/inf` activity-coefficient ratios become `NaN` — which the bracketing
-could then never recover from. The ionic strength fed to the activity models is
-clamped to a physical ceiling (`_I_MAX = 10 M`, far above any digester/sewer
-~0.01–0.2 M and the models' ~0.5 M validity), so every conditional constant stays
-finite and the bracket pulls `[H+]` back to the root, where `I ≪ _I_MAX` makes the
-clamp exactly identity (bit-identical converged pH; issue #382). The IFT 2×2
-tangent solve floors `|det|` for the same finiteness at a degenerate
-(all-zero-totals) input. Validated against an independent bisection root finder;
-the weak-buffer / extreme-charge regime that broke the old bare-Newton scheme, the
-activity path's extreme-input finiteness and degenerate-point gradient (#382), the
-cap-independence of the adaptive loop, and forward-vs-reverse AD agreement (both
-the IFT tangent) are regression-tested in `tests/unit/test_ph_solver.py`.
-
-**Ionic-strength activity corrections (`activity_model`).** By default the solver
-uses molar **concentrations** directly with thermodynamic equilibrium constants
-(all activity coefficients γ = 1) — the published ADM1/BSM2 convention, and the
-behaviour every validated BSM2/WATS result is pinned to. Commercial simulators
-(SUMO, BioWin, GPS-X) instead apply an ionic-strength activity correction, which
-at digester/sewer ionic strengths (I ≈ 0.05–0.2 M) shifts pH by ~0.1–0.3 units.
-`solve_ph(..., activity_model=...)` adds this as an **opt-in** static option:
-`"none"` (default, the γ = 1 path — a trace-time Python branch, so it is
-**bit-identical** to the historic solver), `"davies"` (the Davies equation, valid
-to I ≈ 0.5 M), or `"debye_huckel"` (extended Debye–Hückel / Güntelberg, to
-I ≈ 0.1 M). With a non-`none` model the dissociation constants become *conditional*
-(concentration-basis) constants `Kc = K·γ_acid/(γ_H·γ_base)` at the
-**self-consistent** ionic strength — the coupled `I`↔`[H+]` fixed point is solved
-*inside* the same bracketed scan by carrying `I` (it converges together with
-`[H+]`), and the returned pH is the **measurable** `−log10(a_H) = −log10(γ_H·[H+])`
-(which reduces to `−log10[H+]` at γ = 1). The Debye–Hückel `A(T)` comes from the
-water dielectric (`debye_huckel_A`). NH₄⁺/NH₃ is charge-symmetric so its Ka is
-unchanged; the strong-ion contribution to `I` (`½Σc z²`) is supplied by the
-speciation layer, which holds each strong ion's charge. The whole path stays
-`jit`/`vmap`/`grad`-clean (the IFT pH sensitivity flows through it). Decisive
-correctness check: pure water in an inert salt stays at the neutral pH for any
-`I` (`tests/unit/test_ph_solver.py`). Exposed two ways: the `speciation:` block's
-`activity_model:` field (per-model YAML), and a load-time override
-`load_model("adm1", activity_model="davies")` (and `load_model_from_file(...,
-activity_model=...)`) to run a *shipped* model with activities without editing
-its YAML.
-
-### Derived conditions (the wiring)
-
-`CompiledModel` carries an optional `derived_condition_fn(C, params,
-condition_arrays, loc_idx) -> {field: scalar}` and a `derived_fields` list.
-`CompiledModel.rates()` evaluates it once per RHS call and merges the result
-into `condition_arrays` (broadcast across locations) **before** the rate
-callables run — so existing `{pH}` / `pH_switch(pKa)` machinery sees the
-derived value unchanged, and every reactor (batch/PFR/particle/CFD) gets it
-for free. Derived fields are *produced*, so they are added to the AST's valid
-condition set but are **not** in `conditions_required` (the user never
-supplies them).
-
-### `speciation:` block (`core/speciation.py`, schema in `schema/model_spec.py`)
-
-```yaml
-speciation:
-  field: pH                 # produced condition field (default "pH")
-  temperature_field: T      # condition giving temperature
-  temperature_units: celsius # or "kelvin"
-  z_cation_eq: 3.28e-3      # net fixed cation-charge OFFSET (eq/L); literal or {condition: name}
-  n_iter: 40
-  activity_model: none      # ionic-strength correction: none (default) | davies | debye_huckel
-  totals:                   # species -> acid/base total (molar_mass converts mg/L -> mol/L)
-    carbonate: {species: S_CO2, molar_mass: 12000}
-    acetate:   {species: S_VFA, molar_mass: 64000}
-    ammonia:   {species: S_NH,  molar_mass: 14000}
-    phosphate: {species: S_PO4, molar_mass: 31000}
-    sulfide:   {species: sumS,  molar_mass: 32000}
-  strong_anions:            # fully dissociated: charge * conc/molar_mass eq/L
-    - {species: S_SO4, molar_mass: 32000, charge: 2}
-    - {species: S_NO,  molar_mass: 14000, charge: 1}
-  strong_cations:           # same form; summed into the net cation charge
-    - {species: S_cat, molar_mass: 1.0, charge: 1}
-```
-
-`build_ph_derived_fn` (in `core/speciation.py`, no Pydantic) turns the
-validated declaration plus `species_index` into the derived-condition
-callable. Negative concentrations are clamped to zero before conversion
-(mirrors the reference). Valid `totals` keys: `carbonate`, `acetate`,
-`propionate`, `butyrate`, `valerate`, `ammonia`, `phosphate`, `sulfide`
-(`propionate`/`butyrate`/`valerate` are the additional monoprotic ADM1
-volatile fatty acids, treated exactly like `acetate`). The net cation charge
-passed to the solver is `z_cation_eq` (a literal/condition *offset*, default
-0) **plus** the `strong_cations` sum — so a strong-cation *state* (e.g. ADM1's
-`S_cat`, paired with `S_an` in `strong_anions`) drives pH dynamically, the same
-way `strong_anions` already does for anions.
-
----
-
-
-## Mineral precipitation / state-derived saturation
-
-`aquakin` can model **kinetic mineral precipitation and dissolution** —
-struvite, calcite, the calcium phosphates — driven by the aqueous
-supersaturation. Like pH, the saturation state is not an independent state: it
-is computed from the instantaneous composition and exposed to rate expressions
-as ordinary condition fields. The framework is the generalised
-precipitation approach of Kazadi Mbamba et al. (2015).
-
-### The rate law (`core/precipitation.py`)
-
-Each mineral precipitates (or dissolves) at
-
-```
-R = k_cryst · X_cryst · sign(σ) · |σ|^n
-```
-
-driven by the relative supersaturation `σ = (IAP/Ksp)^(1/ν) − 1`
-(`SI = log10(IAP/Ksp)` is the saturation index), where
-`IAP = Π aᵢ^countᵢ` is the ion-activity product over the mineral's
-constituent ions, `Ksp` its solubility product, `ν = Σ countᵢ` the number of
-ions, and `aᵢ` the free-ion **activities** at the system pH. A small non-zero
-`X_cryst` seed lets precipitation self-nucleate; `sign(σ)` makes the same law
-describe dissolution when the phase is undersaturated (`σ < 0`). The kinetic
-`power` form requires **`order >= 1`** (validated at load): its rate gradient
-`order·|σ|^(order-1)` is infinite at `SI = 0` (saturation) for `order < 1`, so a
-sensitivity through the equilibrium would be non-finite; the `bounded` (tanh)
-form carries no such restriction.
-
-The aqueous chemistry — the temperature-corrected dissociation constants, the
-free-ion fractions of the carbonate/phosphate/ammonia/sulfide acid-base
-systems, and the Davies / Debye-Hückel activity coefficients — is **shared with
-the charge-balance pH solver** (`core/ph_solver.py`): the module reuses
-`equilibrium_constants`, `_log10_gamma`, `debye_huckel_A`. Free Ca/Mg are taken
-as the full declared total (ion-pairing not yet subtracted — a documented
-simplification of the source aqueous model). AD-clean (no data-dependent control
-flow), so it composes inside a Diffrax RHS and `jax.grad` flows through it.
-
-### `precipitation:` block (`core/precipitation.py`, schema in `schema/model_spec.py`)
-
-```yaml
-precipitation:
-  pH_field: pH               # condition giving pH (a fixed condition, or produced by speciation:)
-  temperature_field: T
-  temperature_units: kelvin  # or "celsius"
-  activity_model: davies     # "none" | "davies" | "debye_huckel"
-  ionic_strength_offset: 0.1 # background electrolyte (mol/L); OR ionic_strength_field: I_aq (see below)
-  minerals:
-    - name: struvite
-      pKsp: 13.26            # at the reference temperature (25 C)
-      order: 3               # supersaturation exponent n
-      dH_sp: 0.0             # enthalpy of dissolution (J/mol); van't Hoff Ksp(T), 0 = T-independent
-      solid: X_struvite      # precipitate species -> the reaction is AUTO-DERIVED
-      rate_constant: {value: 100.0, units: "1/d", bounds: [1.0, 1000.0], transform: positive_log}
-      ions:                  # molar_mass converts the state's units -> mol/L (Ksp basis)
-        - {species: S_Mg,  molar_mass: 1000, count: 1, charge: 2}                       # free cation
-        - {species: S_NH,  molar_mass: 1000, count: 1, charge: 1, fraction: ammonia}    # NH4+ fraction at pH
-        - {species: S_PO4, molar_mass: 1000, count: 1, charge: 3, fraction: phosphate}  # PO4^3- fraction at pH
-    - name: calcite
-      pKsp: 8.48
-      order: 2
-      solid: X_calcite
-      rate_constant: {value: 10.0, units: "1/d"}
-      ions:
-        - {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}
-        - {species: S_IC, molar_mass: 1000, count: 1, charge: 2, fraction: carbonate}
-```
-
-`build_precipitation_derived_fn` (in `core/precipitation.py`, no Pydantic) turns
-the validated declaration plus `species_index` into a derived-condition callable
-that produces `SI_<name>` and `R_<name>` per mineral.
-
-**Auto-derived reactions.** A mineral declaring `solid` (the precipitate
-species) + `rate_constant` **auto-derives its precipitation reaction**: the
-schema's `_synthesize_precipitation_reactions` emits `<name>_precipitation` with
-rate `k * [solid] * {R_<name>}` and stoichiometry that consumes each ion's
-`species` at `-count` and produces `solid` at `+1` (species-less `proton`/
-`hydroxide` ions carry no mass term). This removes the old duplication of
-re-writing the stoichiometry in a separate `reactions:` block (and the risk of it
-drifting from the ion counts — vivianite Fe₃(PO₄)₂ correctly gets `-3`/`-2`). The
-rate constant is namespaced `<name>_precipitation.k`. A model whose only
-processes are precipitation may omit `reactions:` entirely; omitting `solid`/
-`rate_constant` falls back to a hand-written reaction referencing `{R_<name>}`.
-
-**Ksp(T).** `pKsp` is the value at the reference temperature (25 °C); `dH_sp`
-(enthalpy of dissolution, J/mol) van't Hoff-corrects it,
-`Ksp(T) = Ksp(Tref)·exp(dH_sp/R·(1/Tref − 1/T))` — the same form and reference as
-the dissociation constants. `dH_sp = 0` (default) leaves Ksp temperature-
-independent (backward compatible).
-
-**Shared ionic strength.** When precipitation composes with a `speciation:`
-block, set `ionic_strength_field: I_aq` on **both** blocks: `solve_ph` optionally
-returns the self-consistent solution ionic strength (strong ions + weak-acid
-speciation + water), speciation exposes it as the `I_aq` condition field, and
-precipitation reads it for its Davies/Debye-Hückel coefficients — so the pH and
-the saturation indices use the **same** ionic strength. Without it, precipitation
-falls back to `ionic_strength_offset` + its own mineral ions (which misses the
-bulk electrolyte), the right choice for a standalone fixed-pH model. The mineral
-ions are de-duplicated on `(species, fraction)` across every mineral of the
-block (`ionic_strength_ions`), so an ion shared by several minerals counts once.
-Both modes build `I` the same way: kinetic minerals from the current state
-(`mineral_ionic_strength`), equilibrium minerals from the *equilibrium*
-dissolved ions inside the Newton residual (self-consistent; a pre-precipitation
-`I` can flip a near-threshold phase), and both read `ionic_strength_field` when
-set. `speciation:` exports the real `I` even with `activity_model: none` (it is
-evaluated at the root but does not feed back into the ideal pH). When the pH
-comes from `speciation:`, `CompiledModel.precipitation_equilibrium()` runs the
-speciation step first (`_project_after_speciation`).
-
-An ion's `fraction` selects how its free
-activity is obtained: an acid/base system key — `carbonate`, `phosphate`,
-`ammonia`, `sulfide` (the species total times its de/protonated fraction at pH)
-— a pH/water special (`proton`, H⁺ activity `10^-pH`; or `hydroxide`, OH⁻
-activity `Kw/[H+]`, both with `species` omitted), or omitted for a fully-free
-cation (the species total taken as the free ion). The `hydroxide` fraction is
-what lets metal hydroxides (Fe(OH)₃, Al(OH)₃) and hydroxide-bearing minerals
-(hydroxylapatite) be declared. `VALID_PRECIP_FRACTIONS` in
-`core/precipitation.py` is the single source of truth (with `_PH_SPECIALS` the
-`species`-optional subset), imported by the Pydantic schema so an unknown
-`fraction` (or an undeclared `species`) is a load-time error.
-
-**Composition with speciation.** `precipitation:` is wired in a `_compile_precipitation`
-stage in `core/model.py` *after* `_compile_speciation`, so when both blocks
-are present the precipitation reads the **charge-balance pH** the speciation
-block produces (the two derived functions compose via `_compose_derived`:
-speciation runs, its pH is broadcast into the conditions, then precipitation
-runs and both results merge). The shipped
-[`precipitation_struvite_calcite.yaml`](aquakin/models/precipitation_struvite_calcite.yaml)
-is the worked example (digester supernatant, struvite + calcite, fixed
-operating pH); the test suite also exercises the speciation→precipitation
-composition.
-
-**Units.** The worked model uses **mol/m³ (= mmol/L)** for the ions and
-solids so the precipitation stoichiometry is exact (one mole of mineral consumes
-one mole of each constituent ion), with the per-ion `molar_mass: 1000`
-converting mol/m³ → the mol/L the IAP/Ksp use. `clip_negative_states: true`
-protects the supersaturation term from a transiently-negative ion state.
-
-**Chemical-P removal model + AD limitation at extreme supersaturation.**
-[`precipitation_metal_phosphate.yaml`](aquakin/models/precipitation_metal_phosphate.yaml)
-is the second worked model: ferric / aluminium dosing precipitates
-orthophosphate as the very insoluble phosphates FePO₄ / AlPO₄ (after the
-plant-wide P/S/Fe extension of Flores-Alsina et al. 2016), while the same dosed
-metal competes to form the hydroxides Fe(OH)₃ / Al(OH)₃ (the `hydroxide`
-fraction). The metal hydroxide buffers the free metal, so it sets a
-**pH-dependent floor** on the achievable phosphate — chemical-P removal worsens
-at higher pH (more OH⁻) and needs a metal dose in excess of stoichiometric. Its
-forward behaviour is exact (P removal, the pH trend, machine-precision Fe/Al/P
-conservation), but the metal phosphates are so insoluble that a far-from-
-equilibrium dose sits at `SI ~ 14`, where the SI-driven rate Jacobian is `~1e13`:
-the L-stable `Kvaerno5` damps this so the **forward solve is fine**, but **no
-sensitivity method survives the initial transient** (reverse adjoint, even with a
-`dtmax` cap; and the cap-free `forward_sensitivity`/`DirectAdjoint` — all return
-non-finite). This is the extreme end of the documented stiff-AD spectrum and is
-intrinsic to the chemistry (lowering `order` 2→1 cuts the Jacobian ~7 decades and
-still fails). So with the **default power-law** kinetics this model is a
-forward-simulation demonstration; `precipitation_struvite_calcite` (modest
-`SI ~ 1–3`) remains the differentiable / calibratable power-law example. The
-`hydroxide` *engine* path is itself AD-clean at moderate supersaturation
-(verified on a mild `M(OH)₂` toy in the test suite — `jax.grad` through the solve
-is finite).
-
-### Differentiable ultra-insoluble precipitation — algebraic equilibrium + bounded driver (#295)
-
-The `~1e13` power-law Jacobian is **not** the documented `dtmax`/`stable_adjoint`
-overflow (where the per-step operator `I − γ·dt·J` stays well-conditioned): here
-that operator is genuinely **near-singular** (cond `~1e13` even at tiny `dt`), so
-*every* sensitivity path fails — including the hand-written discrete adjoint
-(`stable_adjoint`), which NaNs on the multi-mineral model. The lesson (verified
-numerically): you must **reduce the primal stiffness**, not swap the adjoint; the
-true sensitivity is tame (finite differences on the finite forward solve give an
-`O(0.01)` gradient), so the pathology is purely the through-the-transient AD.
-Grounded in what geochemistry codes do, two opt-in fixes restore
-differentiability while the default power law is **unchanged**:
-
-**(A) Algebraic equilibrium — `mode: equilibrium`**
-([`core/precipitation_equilibrium.py`](aquakin/core/precipitation_equilibrium.py)).
-Solve the precipitation *equilibrium* algebraically instead of integrating the
-stiff kinetics — the geochemistry-standard equilibrium-phase problem: find the
-phase amounts and dissolved ions that satisfy mass balance **and** the mineral
-complementarity (every precipitated mineral on its solubility `IAP = Ksp`, every
-absent one undersaturated, coupled across the shared ions). It is the MINEQL /
-PHREEQC structure — unknowns are log-free-ion + phase amounts, the complementarity
-written with a smoothed Fischer–Burmeister function — solved by a **fixed-iteration
-safeguarded Newton scan** (the `solve_ph` pattern): ε-continuation on the
-complementarity smoothing, residual-adaptive Levenberg–Marquardt damping, and a
-bounded log-free-ion step make it globally convergent even when a component is
-driven to near-complete consumption (free ion `~1e-18` mol/L). The converged
-solution is **differentiated via the implicit function theorem** (the forward
-scan runs under `stop_gradient`; one Newton step on the converged residual
-attaches the exact `−(∂G/∂w)⁻¹∂G/∂θ` sensitivity in a single linear solve — *not*
-a backprop through the iterations, which is huge and unnecessary), and the
-algebraic Jacobian it inverts is well-conditioned, so the `1e13` stiffness is
-gone. A mineral declares `mode: equilibrium` + a `solid:` species; the engine
-exposes `Xeq_<name>` (the equilibrium phase amount) and
-**`CompiledModel.precipitation_equilibrium(C, conditions)`** returns the
-equilibrium-projected state (each equilibrium solid set to `Xeq`, dissolved ions
-rebalanced — mass-conserving). Verified on the metal-phosphate: equilibrium P
-removal reproduces the kinetic `t→∞` limit, mass closes exactly, the pH trend is
-right, and `jax.grad` (w.r.t. dose, pH) is finite. **This is "solve, don't
-integrate":** it covers the equilibrium-outcome sensitivity / calibration use
-(#295's impact list) but is not an in-ODE reaction (embedding the per-RHS Newton
-solve inside the time integration is impractically slow — a documented future
-optimization needing solver warm-starting). The solver van't Hoff-corrects each
-`Ksp` with temperature (the per-mineral `dH_sp`, same form / reference temperature
-as the kinetic engine), so the equilibrium tracks `T` consistently with the
-kinetic path. Kinetic minerals in the same block are untouched
-(`build_precipitation_derived_fn` skips `mode: equilibrium` minerals; the
-equilibrium engine handles them and composes after the speciation pH like the
-kinetic one).
-
-**(B) Bounded-driver kinetics — `supersaturation_form: bounded`**
-([`core/precipitation.py`](aquakin/core/precipitation.py)). For a differentiable
-*dynamic* solve, replace the power-law factor `sign(σ)·|σ|^order` with the
-thermodynamically-grounded **bounded driver** `R = tanh(SI/(2ν)·ln10) =
-(Ω^{1/ν}−1)/(Ω^{1/ν}+1)` (bounded in `(−1, 1)`, `0` at `SI = 0`, `±1` far from
-saturation). The rate Jacobian is then `~k` (non-stiff), so a reverse gradient
-through the *time integration* of the ultra-insoluble model is finite, and the
-steady state (`R = 0` ⇔ `SI = 0`) is the same equilibrium the projection gives —
-verified to agree. The driver is a per-mineral `supersaturation_form: bounded`
-flag (default `power`); the reaction expression `k·X·{R}` is unchanged, so it is a
-drop-in. The trade-off is a slower precipitation *rate* far from saturation (the
-*endpoint* is unchanged); raise `k` to reach equilibrium faster.
-[`precipitation_metal_phosphate_equilibrium.yaml`](aquakin/models/precipitation_metal_phosphate_equilibrium.yaml)
-(A) and
-[`precipitation_metal_phosphate_bounded.yaml`](aquakin/models/precipitation_metal_phosphate_bounded.yaml)
-(B) are the worked examples; `tests/integration/test_precipitation_equilibrium.py`
-covers both plus the solver complementarity and the schema validation.
-
----
-

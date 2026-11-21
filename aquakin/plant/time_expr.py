@@ -22,6 +22,15 @@ functions in :data:`FUNCTIONS` -- with no comparison or conditional. A value
 that has to switch is written with ``clip`` or ``step``, which stay
 differentiable, rather than an ``if`` that a traced value cannot take.
 
+``sqrt`` and ``log`` are the guarded ones from :mod:`aquakin.core.kernels`, the
+same definitions the rate language uses -- a name must not mean two things
+depending on which language it was written in. A clock is where that guard
+matters most: every solve starts at ``t = 0``, which is exactly where their
+derivative is infinite, so an unguarded ``sqrt(t)`` breaks the gradient of every
+run while leaving the forward solve looking correct. ``log``'s guard protects
+the gradient only -- its value at zero is still ``-inf``, so write ``log(1 + t)``
+rather than ``log(t)``.
+
 Precedence follows Python and ordinary mathematical notation throughout,
 including that a sign binds **looser** than a power: ``-2**t`` is ``-(2**t)``.
 A rate expression reads the same way (:mod:`aquakin.core.parser` shares the
@@ -31,11 +40,14 @@ grammar), so the two languages never disagree about the same text.
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from functools import reduce
 
 import jax.numpy as jnp
+
+from aquakin.core.kernels import _safe_log, _safe_sqrt
+from aquakin.core.lexer import Token
+from aquakin.core.precedence import PrecedenceParser, accepts, spell_arity
 
 __all__ = [
     "CONSTANTS",
@@ -59,15 +71,25 @@ def _step(x):
     return jnp.heaviside(x, 1.0)
 
 
+def _safe_log10(x):
+    """``log10(x)``, guarded exactly as :func:`~aquakin.core.kernels._safe_log`.
+
+    Written as the natural logarithm over ``ln(10)`` rather than ``jnp.log10``
+    so there is one guarded logarithm rather than two, and the value off the
+    domain stays ``-inf``.
+    """
+    return _safe_log(x) / math.log(10.0)
+
+
 #: The functions an expression may call, by name and arity.
 FUNCTIONS: dict[str, tuple[Callable, tuple[int, ...]]] = {
     "sin": (jnp.sin, (1,)),
     "cos": (jnp.cos, (1,)),
     "tan": (jnp.tan, (1,)),
     "exp": (jnp.exp, (1,)),
-    "log": (jnp.log, (1,)),
-    "log10": (jnp.log10, (1,)),
-    "sqrt": (jnp.sqrt, (1,)),
+    "log": (_safe_log, (1,)),
+    "log10": (_safe_log10, (1,)),
+    "sqrt": (_safe_sqrt, (1,)),
     "abs": (jnp.abs, (1,)),
     "floor": (jnp.floor, (1,)),
     "min": (jnp.minimum, (2,)),
@@ -80,174 +102,66 @@ FUNCTIONS: dict[str, tuple[Callable, tuple[int, ...]]] = {
 #: The named constants an expression may use.
 CONSTANTS: dict[str, float] = {"pi": math.pi, "e": math.e}
 
-_PUNCTUATION = "+-*/(),"
-_NAME = re.compile(r"[A-Za-z_]\w*\Z")
 
+class _Parser(PrecedenceParser):
+    """The shared precedence, building a callable of ``t``.
 
-@dataclass(frozen=True)
-class _Token:
-    kind: str  # "number", "name", "pow", "end", or the punctuation character
-    text: str
-    pos: int
-
-
-def _tokenize(text: str) -> list[_Token]:
-    tokens: list[_Token] = []
-    i, n = 0, len(text)
-    while i < n:
-        c = text[i]
-        if c.isspace():
-            i += 1
-        elif c == "*" and i + 1 < n and text[i + 1] == "*":
-            tokens.append(_Token("pow", "**", i))
-            i += 2
-        elif c in _PUNCTUATION:
-            tokens.append(_Token(c, c, i))
-            i += 1
-        elif c.isdigit() or (c == "." and i + 1 < n and text[i + 1].isdigit()):
-            j = i
-            while j < n and (text[j].isdigit() or text[j] == "."):
-                j += 1
-            # An exponent only when a digit follows it (optionally after a sign),
-            # so "1e" stays a number followed by a name and reads as a clean error.
-            if j < n and text[j] in "eE":
-                k = j + 1
-                if k < n and text[k] in "+-":
-                    k += 1
-                if k < n and text[k].isdigit():
-                    j = k
-                    while j < n and text[j].isdigit():
-                        j += 1
-            try:
-                float(text[i:j])
-            except ValueError:
-                raise TimeExpressionError(
-                    f"'{text[i:j]}' at position {i} is not a number"
-                ) from None
-            tokens.append(_Token("number", text[i:j], i))
-            i = j
-        elif c.isalpha() or c == "_":
-            j = i
-            while j < n and (text[j].isalnum() or text[j] == "_"):
-                j += 1
-            tokens.append(_Token("name", text[i:j], i))
-            i = j
-        else:
-            raise TimeExpressionError(f"unexpected character {c!r} at position {i}")
-    tokens.append(_Token("end", "", n))
-    return tokens
-
-
-class _Parser:
-    """Recursive descent over an expression of time, building a callable.
-
-    Each rule returns ``f(t) -> value``; the tree is built once at load and the
-    leaves close over constants, so evaluating it is plain JAX arithmetic::
-
-        expr    := term (('+' | '-') term)*
-        term    := unary (('*' | '/') unary)*
-        unary   := ('+' | '-') unary | power
-        power   := primary ('**' unary)?         # right-associative
-        primary := number | 't' | constant | name '(' args ')' | '(' expr ')'
+    Each rule returns ``f(t) -> value``; the leaves close over their constants,
+    so evaluating the result is plain JAX arithmetic.
     """
 
-    def __init__(self, text: str) -> None:
-        self.text = text
-        self.tokens = _tokenize(text)
-        self.i = 0
-
-    def _peek(self) -> _Token:
-        return self.tokens[self.i]
-
-    def _take(self, kind: str) -> _Token:
-        token = self._peek()
-        if token.kind != kind:
-            raise TimeExpressionError(self._unexpected(token, f"expected {kind!r}"))
-        self.i += 1
-        return token
-
-    def _unexpected(self, token: _Token, expected: str) -> str:
-        what = "the end of the expression" if token.kind == "end" else f"{token.text!r}"
-        return f"{expected}, got {what} at position {token.pos}"
+    error = TimeExpressionError
 
     def parse(self) -> Callable:
-        if self._peek().kind == "end":
+        if self.peek().kind == "EOF":
             raise TimeExpressionError("the expression is empty")
-        fn = self._expression()
-        token = self._peek()
-        if token.kind != "end":
-            raise TimeExpressionError(self._unexpected(token, "expected an operator"))
-        return fn
+        return super().parse()
 
-    def _expression(self) -> Callable:
-        fn = self._term()
-        while self._peek().kind in "+-":
-            plus = self._peek().kind == "+"
-            self.i += 1
-            right = self._term()
-            left = fn
-            fn = (
-                (lambda t, a=left, b=right: a(t) + b(t))
-                if plus
-                else (lambda t, a=left, b=right: a(t) - b(t))
-            )
-        return fn
+    def trailing_message(self, token) -> str:
+        return f"expected an operator, got {self.describe(token)} at position {token.pos}"
 
-    def _term(self) -> Callable:
-        fn = self._unary()
-        while self._peek().kind in "*/":
-            times = self._peek().kind == "*"
-            self.i += 1
-            right = self._unary()
-            left = fn
-            fn = (
-                (lambda t, a=left, b=right: a(t) * b(t))
-                if times
-                else (lambda t, a=left, b=right: a(t) / b(t))
-            )
-        return fn
+    # --- the arithmetic, as closures --------------------------------------
 
-    def _unary(self) -> Callable:
-        """A sign, or a power.
+    def add(self, left, right, token):
+        return lambda t, a=left, b=right: a(t) + b(t)
 
-        A sign binds **looser** than ``**``, as in Python: ``-2**t`` is
-        ``-(2**t)``.
-        """
-        token = self._peek()
-        if token.kind in "+-":
-            self.i += 1
-            fn = self._unary()
-            return fn if token.kind == "+" else (lambda t, a=fn: -a(t))
-        return self._power()
+    def subtract(self, left, right, token):
+        return lambda t, a=left, b=right: a(t) - b(t)
 
-    def _power(self) -> Callable:
-        fn = self._primary()
-        if self._peek().kind == "pow":
-            self.i += 1
-            # Right-associative, and the exponent may carry its own sign, so
-            # ``2**-1`` and ``2**3**2`` both read as they do in Python.
-            right = self._unary()
-            return lambda t, a=fn, b=right: a(t) ** b(t)
-        return fn
+    def multiply(self, left, right, token):
+        return lambda t, a=left, b=right: a(t) * b(t)
 
-    def _primary(self) -> Callable:
-        token = self._peek()
-        if token.kind == "number":
-            self.i += 1
-            return lambda t, v=float(token.text): v
-        if token.kind == "(":
-            self.i += 1
-            fn = self._expression()
-            self._take(")")
+    def divide(self, left, right, token):
+        return lambda t, a=left, b=right: a(t) / b(t)
+
+    def negate(self, operand, token):
+        return lambda t, a=operand: -a(t)
+
+    def power(self, base, exponent, token):
+        return lambda t, a=base, b=exponent: a(t) ** b(t)
+
+    # --- its leaves -------------------------------------------------------
+
+    def primary(self) -> Callable:
+        token = self.peek()
+        if token.kind == "NUMBER":
+            self.advance()
+            return lambda t, v=float(token.value): v
+        if token.kind == "LPAREN":
+            self.advance()
+            fn = self.expression()
+            self.expect("RPAREN")
             return fn
-        if token.kind == "name":
-            self.i += 1
+        if token.kind == "IDENT":
+            self.advance()
             return self._name(token)
-        raise TimeExpressionError(self._unexpected(token, "expected a number, 't' or '('"))
+        raise TimeExpressionError(
+            f"expected a number, 't' or '(', got {self.describe(token)} at position {token.pos}"
+        )
 
-    def _name(self, token: _Token) -> Callable:
-        name = token.text
-        if self._peek().kind == "(":
+    def _name(self, token: Token) -> Callable:
+        name = token.value
+        if self.peek().kind == "LPAREN":
             return self._call(token)
         if name == "t":
             return lambda t: t
@@ -260,8 +174,8 @@ class _Parser:
             f"{', '.join(sorted(FUNCTIONS))}.{_hint(name, known)}"
         )
 
-    def _call(self, token: _Token) -> Callable:
-        name = token.text
+    def _call(self, token: Token) -> Callable:
+        name = token.value
         spec = FUNCTIONS.get(name)
         if spec is None:
             raise TimeExpressionError(
@@ -270,17 +184,18 @@ class _Parser:
                 f"{_hint(name, list(FUNCTIONS))}"
             )
         func, arities = spec
-        self._take("(")
-        args = [self._expression()]
-        while self._peek().kind == ",":
-            self.i += 1
-            args.append(self._expression())
-        self._take(")")
-        if len(args) not in arities:
-            wanted = " or ".join(str(a) for a in arities)
+        self.expect("LPAREN")
+        args = self.arglist()
+        self.expect("RPAREN")
+        if not accepts(name, arities, len(args)):
             raise TimeExpressionError(
-                f"{name}() takes {wanted} argument(s), got {len(args)} (at position {token.pos})"
+                f"{name}() takes {spell_arity(name, arities)} argument(s), got {len(args)} "
+                f"(at position {token.pos})"
             )
+        if len(args) > max(arities):
+            # An associative built-in called on more than it is defined for:
+            # fold left, as max(a, b, c) means max(max(a, b), c).
+            return reduce(lambda x, y, f=func: lambda t: f(x(t), y(t)), args)
         return lambda t, f=func, a=tuple(args): f(*(x(t) for x in a))
 
 

@@ -13,6 +13,18 @@ editing files under `aquakin/plant/`.
 > levers — colored Jacobian, cached recycle/flow maps, forward_fast, PTC steady
 > state, etc.) lives in `docs/plant_performance.md` (read on demand).
 
+**Topic rules split out of this file** (each auto-loads for its own files; read
+it on demand when a change elsewhere touches the topic):
+
+| Rule | Loads for | Covers |
+|---|---|---|
+| `plant-solve.md` | `plant.py`, `recycle.py`, `colored.py`, `solve_cache.py`, `steady.py` | the coloured Jacobian, the parameter-slice and compiled-solve caches, recycle resolution and the cached recycle / flow maps |
+| `plant-analysis.md` | `calibrate.py`, `identifiability.py`, `measures.py`, `sensitivity.py` | `Plant.calibrate`, Fisher / profile / sensor ranking, measured channels and measure expressions |
+| `plant-audits.md` | `units_check.py`, `balance.py`, `metrics.py` | `plant.check_units()` and `plant.mass_balance()` |
+| `plant-ifas.md` | `ifas.py`, `integrate/biofilm*.py` | the IFAS / MBBR biofilm unit |
+| `plant-settling.md` | `takacs.py`, `settling.py`, the clarifier / separator modules | the Takács clarifier (soluble holdup, composition mode, interface flux), shared separator helpers |
+| `plant-spec.md` | `spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | time expressions, influent records / patterns, the unit catalogue, the flowsheet spec |
+
 ## Plant-Wide Simulation
 
 `aquakin.plant` composes kinetic reactors with non-reactive unit ops into
@@ -76,369 +88,10 @@ Key types:
   [`plant/sensitivity.py`](aquakin/plant/sensitivity.py) as free functions taking
   the plant, bound onto `Plant` as methods (the public `plant.steady_state_dgsm(...)`
   API is unchanged); that layer only *consumes* the public solve API.
-  **Calibration** — `plant.calibrate(observations, t_obs, free_params, target=,
-  observed_channels=, y0=, ...)` ([`plant/calibrate.py`](aquakin/plant/calibrate.py),
-  bound as a method) MAP-fits by-name plant parameters (`"<model>.<param>"`)
-  against an output stream. It **reuses the reactor-calibration machinery**
-  (`integrate/calibrate.py`: `_CalibrationProblem`, `_build_objective`,
-  `_run_multistart`, `_laplace_posterior`) through the forward-model seam — the
-  plant supplies a `_PlantForwardModel` (`plant.solve` + stream reconstruction; the
-  cap-free stable adjoint by default, so the reverse gradient is finite) and a
-  `_PlantParamNamespace` (adapts `plant.parameter_index` / per-model transforms &
-  priors to the `model` interface the generic layer expects). Fits kinetic
-  parameters against **one or more output streams** — `observables=[PlantObservable(
-  stream, channels), ...]` (exported `aquakin.plant.PlantObservable`; the
-  `_PlantForwardModel` reconstructs each stream and concatenates the observed
-  channels, so the observation columns run in observable order), or the single
-  `target=`/`observed_channels=` sugar. **Assembled-state initial conditions** can
-  be fit alongside the parameters via `free_ic=FreeICConfig(species=["unit.species",
-  ...])` (species also accept `(unit, species)` pairs) — each names a slot of `y0`
-  on a concentration unit
-  (CSTR / digester), resolved to a flat-state index (`_state_layout[unit][0] +
-  species_index`) and fit in log space through the *same* reactor free-IC machinery
-  (`m_ic`/`ic_species_idx`/`ic_center_full` on `_CalibrationProblem`); the fitted
-  state comes back as `result.C0_fitted[0]` / `result.ic_named[0]`, and the
-  `_PlantForwardModel` uses the per-dataset `C0` as `y0` when `use_c0_as_y0` (free
-  ICs *or* multi-batch). A **joint multi-batch fit** — several plant runs from
-  different initial states sharing the parameters, list-valued `observations` /
-  `t_obs` / `y0`, data terms summed — is the plant analogue of the reactor
-  multi-batch and reuses the generic multi-dataset machinery (n_datasets > 1,
-  per-dataset `C0_base`); `free_ic` + multi-batch are not yet combinable, and
-  `predictive_band` remains reactor-only. The rate bounds (model-declared via
-  `_PlantParamNamespace.parameter_bounds`, `OptimizerConfig(bounds=,
-  param_halfwidth=)`), per-pool free-IC bounds and `fixed_total`, `sigma=
-  "estimate"` and `at_bound` all go through the same shared helpers as
-  `aquakin.calibrate` (`_resolve_rate_bounds`, `_resolve_ic_coords`,
-  `_initial_point`, `_fit_result`, ...), so they behave identically. Covered by
-  `tests/integration/test_plant_calibrate.py` (single- and multi-stream synthetic
-  recovery, a joint rate + initial-condition recovery, a multi-batch shared-rate
-  recovery, a full **BSM1** muH recovery through the stiff recycled plant, an
-  `at_bound` + `sigma="estimate"` fit and a `fixed_total` split recovery (slow),
-  stubbed-runner checks of the bounds / free-IC / sigma wiring, and the
-  finite-through-the-plant gradient in the fast gate).
-  **Identifiability** — `plant_fisher_information` / `plant_profile_likelihood`
-  ([`plant/identifiability.py`](aquakin/plant/identifiability.py), exported from
-  `aquakin.plant`) are the plant versions of the reactor tools. Observables are
-  resolved by `plant/calibrate.py`'s `_resolve_observable_columns` (shared with
-  `_resolve_plant_problem`), free names by `_check_free_params`. **Measured
-  channels** (`plant/measures.py`): a channel is a species, a keyword (`Q`, `T`,
-  `COD`, `TKN`, `NOx`, `TN`, `TP`, `TSS`), a `Measure` (species weights,
-  `keywords=` weights on those measurements, `flow`, `temperature`) or a
-  **measure expression** — the same weighted sum as text, `"BOD5 = 0.65*[SS] +
-  0.65*[XS]"`, so a custom channel fits in a study file and in the editor's
-  study dialog (typed into the channels combobox, which takes free text).
-  `parse_measure` reads one (`MeasureSyntaxError`, a `ValueError`, with the
-  position in the text the user wrote, not in the body after the name);
-  `measure_map` calls `as_measure` on every channel **once**, up front, so every
-  consumer below — and the `dW` probe, which re-weighs the same channels — works
-  on resolved `Measure`s. `channel_name` is the results column (the name, never
-  the defining text); use it anywhere channels are named, not `isinstance(c,
-  Measure)`. The grammar is deliberately **affine**: `*` needs a number on one
-  side, `/` a number on the right, and a constant term is refused — the
-  ranking's `y @ M` and `_union_columns` are only valid because a channel is
-  linear in the stream, so **do not relax this**. A `Measure`'s keywords resolve
-  through `_keyword` (not `_channel`, so a keyword is never shadowed by a
-  same-named species) and therefore ride the existing `theta0`/`dW`
-  central-difference probe — a channel built on `TN` follows `i_XB` exactly as
-  `TN` does (`_follows_composition` is what arms the probe; extend it alongside
-  any new parameter-dependent keyword). Syntax is validated in the study schema
-  (`_Observable._readable_measures`) when the study is **written**; species are
-  resolved against the stream's model at **run** time, as an unknown plain
-  channel already is (a `KeyError` naming the stream). `measure_map(model,
-  channels)` gives a `MeasureMap` (`W`, `q`, `t`, and the composition parameters
-  the weights depend on with `theta0`/`dW`: a central-difference probe, exact for
-  the affine content fractions, linearized otherwise, e.g. ASM2d's
-  `fMeP_PO4_MW`). `_resolve_observable_columns` turns it into `(endpoint,
-  _Measurement)` with the parameters addressed in the plant flat vector, and
-  every consumer reads `measured(C, Q, T, measurement, p) = C @ W(p) + Q q + T t`
-  (`W(p)` follows the run's parameters, so a free `i_XB` is seen through TN's
-  weights as well as the state). Temperature comes from the stream's `T` scalar
-  (`StreamSeries.T`, filled by `_stream_sweep` in the same pass as `(Q, C)`); a
-  `T` channel on a stream with none raises `ValueError`. The ranking's
-  `_union_columns` observes each stream whole (species, flow, temperature when
-  any set reads it) with per-set maps `(M, idx, theta0, dM)`; `_set_channels`
-  adds `y_all @ dM` for a free composition parameter. Classification:
-  COD clips negative (electron acceptor) entries and drops `S_h2`/`S_ch4`;
-  `SN2`, `SN2O` and `SNO` when `SNO3` exists (nitric oxide) are in no nitrogen
-  channel; `S_gas_*` is in nothing. TSS is a model's `XTSS`/`XSS` species or
-  the ASM1 `0.75 × ASM1_TSS_SPECIES`; a model with neither raises. A species
-  named like a keyword raises (use a `Measure`). `composition_table` follows a
-  file model's `extends:` chain (`composition_base`, via `_aquakin_source`) to a
-  shipped table when the species match, including its unit factors (ADM1's
-  kg-based contents). Unknown-channel errors keep the historic "Unknown observed
-  channel" wording. The Fisher
-  forward mode takes `S` from `Plant.solve_sensitivity` and maps it through the
-  stream reconstruction (`outputs_at`, vmapped) with one `jax.linearize`, so it
-  includes the reconstruction's direct `dg/dθ`; the reverse mode is `jacrev` of
-  `_PlantForwardModel.solve_trajectory` — the solve `Plant.calibrate`
-  differentiates, which is why it equals the Gauss-Newton Laplace Hessian at a
-  `loss="nll"` fit (pinned to 1e-8). Multi-run designs follow the calibrate
-  multi-batch convention (list-valued `t_obs` selects it); `plant` may also be a
-  list, one per run, for runs at different influents. The profile wraps
-  `calibrate_plant` per grid point through the private `_compiled_cache` /
-  `_ic_start` hooks (now on `calibrate_plant` as on `calibrate`); for that the
-  plant problem's `data_key` fingerprints the loss, sigma, observations and
-  times. `plant_rank_sensor_sets` (with `SensorSet`) is the plant
-  `rank_experiments`: `_union_columns` resolves every candidate's streams to one
-  union, observed whole (all species, then the flow), keyed by the parsed
-  `(unit, port)` so two spellings share columns; one `_PlantDesign.sensitivity`
-  call per run per parameter draw then serves every candidate through its own
-  linear map `M` (`y @ M`, `einsum("tok,os->tsk", dy, M)`), exact because every
-  measured channel is linear in the stream. It reuses
-  `experiment_design.py`'s `_criterion` / `_subset_indices` /
-  `_LARGER_IS_BETTER` / `CandidateScore`. `_PlantDesign` (runs, free parameters,
-  transforms, priors, the forward/reverse dispatch) and `_scaled_rows` (noise,
-  mask, relative sigma, transform chain) are shared with
-  `plant_fisher_information`, so a candidate's score is exactly the criterion
-  of its own `plant_fisher_information`. Covered by
-  `tests/integration/test_plant_identifiability.py` (closed-form CSTR
-  information in both modes, the hand-built `solve_sensitivity` Jacobian on the
-  CSTR and on BSM1 (slow), forward = reverse, the Laplace-Hessian equality,
-  identified / flat profiles (slow), the profile's per-point wiring into
-  `calibrate_plant` with it stubbed, and each ranking score equal to its own
-  set's `plant_fisher_information` criterion from one counted solve) plus `tests/unit/test_identifiability_helpers.py`
-  (the shared sweep / polish / noise helpers on stub fits).
-  **Colored Jacobian** — the graph-coloring / Jacobian-sparsity subsystem
-  (`_structural_plant_pattern` + the forward / adjoint / steady builders and their
-  caches) lives in a [`ColoredJacobianManager`](aquakin/plant/colored.py)
-  collaborator (`plant._colored`), mirroring `RecycleResolver`: it back-references
-  the `Plant` for the state layout, unit couplings and RHS, and exposes
-  `forward_root_finder` (the guarded forward colored root finder, or `None`;
-  `forward_fast` and the staggered `solve_sensitivity` materialize their per-step
-  `J` from it via `colored_jacobian.state_jacobian`) / `jacobian_solver` (a diffrax
-  solver configured with it), `adjoint_jacobian_builder`
-  (`stable_adjoint` backward `df/dy`) and `steady_jacobian_builder` (PTC steady
-  `dF/dy`). All three share one probe→structural-union→build→guard scaffold
-  (`_build_and_guard` / `_colored_from_probe`); each caches its result and
-  `plant._colored.reset()` clears them when the state length changes (a
-  temperature block). The size-based *decision* to use the colored backward
-  (`Plant._COLORED_BACKWARD_MIN_STATES` / `colored_jacobian_decision`) stays on the
-  plant's solve routing. The performance rationale is in `docs/plant_performance.md`.
-  The structural assembly places a source block for **every** stateful unit that
-  emits a stream, composed with that unit's `CouplingPattern.output_pattern` (which
-  state entries its outlets read: Takács by AD, IFAS the bulk row; undeclared →
-  identity / head + trailing scalars / dense by layout, `_output_state_pattern`).
-  It does **not** model flow-path couplings (TSS-dependent thickener/dewatering
-  flows, the interface pH feedback); those come from the probe, whose threshold is
-  **per row**. Because a miss corrupts gradients there, the `stable_adjoint` builder
-  fails closed: `pattern_coverage_misses` must find no uncovered entry at the
-  default state, three perturbed copies and the concrete solve `y0`, or it falls
-  back to dense (#647).
-  **Parameter-slice cache** — `_params_for_unit` retains only concrete slices.
-  A concrete parameter vector closed over by `jax.jit` can still produce traced
-  slices; those must not be stored on the plant or reused by another trace.
-  **Compiled-solve caches** — the jitted forward + PTC steady solves (the
-  `solve_sensitivity` solves sit in `.jit` under a `"solve_sensitivity"` key) and the
-  continuation / arclength kernels (all solver-run memoization, keyed by
-  settings, that bake in the reactor conditions) live in a
-  [`SolveCache`](aquakin/plant/solve_cache.py) value object (`plant._solve_cache`,
-  `.jit` / `.steady_jit` / `.continuation_kernels` / `.arclength_kernels`; the
-  `plant._jit_cache` / `_steady_jit_cache` properties are thin views). Every
-  condition/topology mutator calls the single **`plant._solve_cache.invalidate()`**
-  rather than hand-clearing named dicts — so a mutator can't clear one cache and
-  leave another stale (`set_temperature` clears all four; the old code left the
-  continuation/arclength kernels stale). `set_temperature_model` also changes the
-  state length, so it additionally calls `plant._colored.reset()` (the structural
-  colored builders), which `set_temperature` deliberately does not (its pattern
-  stays valid).
-  **Recycle resolution** — the methods named below (`_resolve_flows`,
-  `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
-  `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)
-  and the tri-state map-constant caches — lives in a
-  [`RecycleResolver`](aquakin/plant/recycle.py) collaborator
-  (`plant._recycle`), which keeps a back-reference to its `Plant` for the
-  topology, state layout, signal bus and output sweep. Both layers are kept out of
-  the assembly code below. Recycles are resolved **exactly and
-  gain-independently** per RHS, in two decoupled steps that both use the same
-  affine-probe + linear-solve trick (no iterate-to-tolerance — the RHS is
-  jitted/differentiated):
-  - **Flows** — `_resolve_flows` probes the (affine) recycle-flow map and solves
-    `(I − A)x = b` for the back-edge flows.
-  - **Concentrations** — `_resolve_recycle_concentrations` does the same for the
-    recycle-edge *concentrations*. One forward output sweep at fixed flows is an
-    affine map `c → M·c + d` (mixers/splitters/clarifiers are linear in
-    concentration; stateful units output their state, a constant), so it probes
-    `M`/`d` (one pass at `c=0`, one per recycle edge set to a unit concentration)
-    and solves `(I − M)c = d`. The map is **species-decoupled** (the only
-    species-coupling unit, an ASM↔ADM translator, is fed by a digester *state* so
-    never enters the cyclic map), so one probe per edge yields its whole column
-    across all species — `n_recycle_edges + 1` cheap passes, like the flow probe.
-    Edges of **different models** don't couple (the translator that would couple
-    them is broken by the digester state), so the solve is grouped by model;
-    **temperature**, when an influent carries it, is one more decoupled scalar
-    channel. Exact and gain-independent: a recycle loop whose bare Gauss-Seidel
-    would need thousands of passes (a clarifier in a high-capture stateless loop)
-    is solved in one linear solve. Validated as a fixed point on BSM1, the
-    multi-model BSM2, and a temperature-carrying loop (residual ~1e-12).
-  The exact concentration solve **seeds** the `recycle_passes` Gauss-Seidel
-  mop-up (default 3), which therefore does no work for any linear topology (every
-  shipped plant) and only refines a genuinely *non-affine* in-cycle unit (a
-  translator inside a pure-stateless loop — not constructible from the shipped
-  units). A one-time `_check_recycle_convergence` diagnostic (concrete-only,
-  skipped under tracing, skipped without recycle edges) warns if even that has
-  not converged — the backstop for the non-affine case.
-  - **Adaptive AD-safe recycle convergence (`recycle_tol`).** The fixed
-    `recycle_passes` count is a *diagnostic-backed default*, not a general
-    convergence guarantee: the mop-up converges geometrically in
-    `log(tol)/log(rho)` passes, where `rho` is the spectral radius of the
-    nonlinear flow↔concentration coupling Jacobian (the reject loop). For BSM2 the
-    only iterating stream is the front mixer (influent + reject recycle) and
-    `rho ≈ 0.0066`, so 3 passes leaves ~1e-6 residual — but `rho` is
-    topology-dependent and **not bounded below 1**: a recycle-heavy plant with a
-    strong concentration-dependent in-loop flow (e.g. a high-capture
-    thickener/dewatering `%TSS` underflow on a tight reject loop) can have `rho`
-    near 1, where the fixed 3 passes leaves residual `rho³` — a **silently wrong
-    steady state** (measured on a synthetic map: 13% error at `rho=0.5`, 73% at
-    `rho=0.9`, 97% at `rho=0.99`). `Plant(..., recycle_tol=...)` (**on by
-    default, `1e-8`**) replaces the fixed mop-up with an **adaptive solve to that
-    relative tolerance**, mirroring the charge-balance pH solver
-    ([`core/ph_solver.py`](aquakin/core/ph_solver.py)): the recycle back-edge
-    **streams** — flow `Q`, concentration `C`, and (when carried) temperature `T`
-    — are the fixed point `x = G(x)` of one forward output sweep
-    (`RecycleResolver._recycle_context`'s `forward_full`, which lets `Q` vary so the true
-    `Q↔C` reject-loop coupling is captured; iterating `C` alone solves the wrong
-    problem), warm-started from the exact affine seed and iterated by a
-    `jax.lax.while_loop` that **stops once the actual residual clears** (capped at
-    `recycle_max_passes`, default 100), wrapped in `jax.lax.custom_root` so the
-    sensitivity is the exact **implicit-function-theorem tangent** — a small dense
-    solve of the linearised recycle-edge operator (the recycle edges are few ×
-    ~tens of channels), the vector generalisation of the pH solver's scalar
-    `y / g(1)`. AD (forward and reverse) is therefore **O(1) in the iteration
-    count** rather than differentiating through every sweep
-    (`RecycleResolver._adaptive_recycle_refine`). It converges for any `rho < 1`, stops
-    early on a low-gain plant, and is **on by default** at `1e-8` (well below the
-    typical solver `rtol`, a strict improvement on the old fixed-3-pass ~1e-6 at
-    ~neutral cost — ~3 iterations from the affine seed for BSM); `recycle_tol=None`
-    falls back to the fixed `recycle_passes` mop-up (the bit-identical historic
-    behaviour). **The validated BSM steady states are reproduced** with the
-    default on (the published BSM2 / ADM1 / Takács validations pass unchanged) —
-    the adaptive path converges to the *same* recycle fixed point the fixed-pass
-    mop-up approximates, only tighter. **Verified** (`tests/integration/
-    test_adaptive_recycle.py`): on a synthetic tunable-`rho` map the adaptive
-    solve reaches tolerance for `rho` up to 0.99 where the fixed 3-pass leaves
-    13–97%, and its IFT gradient matches central finite differences to ~2e-10; on
-    the real BSM2 reject loop the adaptive forward fixed point matches a 14-pass
-    deep sweep to ~4e-15, its IFT tangent matches the deep-sweep gradient to
-    ~6e-19, and a short BSM2 solve matches the fixed-pass trajectory to ~3e-8
-    (within the solver tolerance — the adaptive path is the more-converged of the
-    two). `recycle_tol` is read inside `_resolve_recycle_concentrations`, so it
-    reaches every solve path automatically (no per-path threading); the cached
-    affine `recycle_map` still supplies the warm-start seed. Because the default
-    routes every plant solve through `jax.lax.custom_root`, the
-    `gradient="stable_adjoint"` discrete adjoint composes with the recycle IFT
-    tangent (verified exact: the cached/probed `dM/dθ` gradient agrees to ~1e-13,
-    and the cross-interface gradient matches finite differences to the FD floor);
-    with the adaptive default `M` is only the warm-start seed (the fixed point is
-    M-independent), so the `#366` cached/probed-map gradient distinction now agrees
-    to float rounding rather than bit-for-bit.
-  - **Cached recycle map (per-RHS speedup).** The concentration map `M` is fixed
-    by the recycle flows + topology, so for a **fixed-pump** plant (every BSM
-    plant — the recycle pumps are constant) it is **invariant to the state and
-    time**; only `d = forward(0)` varies. The `n_recycle_edges` per-species
-    `M`-probe sweeps are therefore recomputing a constant on every one of the
-    ~17 RHS calls per implicit step. `_compute_recycle_map` precomputes `M`
-    **once per solve** (from the runtime `params`, so the gradient still flows
-    and a parameter sweep stays correct) and `_build_jitted_solve` threads it into
-    every RHS as `recycle_map=`; the per-RHS recycle resolution then computes only
-    `d` (one sweep) + the cached `(I−M)` solve. Profiling located the per-RHS cost
-    as ~88% the recycle resolution and the per-step cost as ~RHS-evaluation-bound,
-    so this is a real dynamic-solve win. The **temperature** map `MT` is cached
-    too **when it is state-invariant**, which depends on the temperature model:
-    in **heat-balance** mode the reactor temperature is a *state* (it breaks the
-    loop coupling at reactors, exactly as concentration does) so `MT` is constant
-    and cached → full win; in **algebraic** mode temperature *passes through*
-    reactors (no thermal mass) so `MT` rides on the concentration-dependent
-    recycle flows and is **not** constant → it is re-probed every RHS (a cheap
-    scalar T-only sweep, its per-species part CSE-shared with `d`), while `M`
-    stays cached. Net measured speedup on the dynamic BSM2 (algebraic):
-    ~recycle-resolution 2.4× → ~1.18× wall; larger (full ~5.6× recycle) for
-    heat-balance / no-temperature plants. **Exactness:** the cached and probed
-    paths produce a **bit-identical RHS** (the cached `M` *is* the probed `M`);
-    the dynamic trajectory shows only ~1e-3 floating-point operation-order drift
-    over multi-day runs (the cached `M` is formed once outside the integration
-    loop vs per-call inside), within the solver tolerance, and the validated
-    steady states are preserved. A one-time concrete guard
-    (`_check_recycle_map_constant`, set per instance) compares each map at three
-    materially-different states and **falls back to per-RHS probing** for any
-    topology whose `M` is genuinely state-coupled — so the optimization is safe
-    for arbitrary plants.
-    The cached map is built once from `params` by `_maybe_recycle_map` (the
-    shared helper) and reused by **four** paths: the forward `jax_adjoint` solve,
-    the located-event segmented solve (`events=`, reused across every segment),
-    the single-instant `outputs_at`, and the whole-trajectory stream
-    reconstruction (`_cached_streams` / `plant.stream`, the `evaluate_bsm*`
-    evaluation path — measured ~1.16×, bit-identical). The events path needed the
-    one-time constancy check hoisted *above* the events branch in `solve` so an
-    events-only plant (SBR / control study) still gets the cached map (and the
-    affinity/convergence diagnostics). The reconstruction win confirms its
-    per-time cost was also recycle-resolution-dominated. **`gradient=
-    "stable_adjoint"` also uses the cached map (#366)**, via a *primal/param RHS
-    split* of the discrete-adjoint kernel. `esdirk_adjoint_solve` forms `∂f/∂θ` by
-    differentiating the per-call `rhs(t, y, params)`, so a precomputed `M` closed
-    over as a constant would be invisible to that vjp and a gradient w.r.t. a
-    **flow-setpoint param** (RAS/`Qw`/`f_PS`, the only params `M` depends on) would
-    silently drop its `∂M/∂θ` term. The kernel therefore takes an optional
-    `primal_rhs=`: the forward solve and the backward **`∂f/∂y`** stage Jacobians
-    use the cached-`M` `primal_rhs` (the recycle probe hoisted out of the hot
-    loop), while the **`∂f/∂θ`** vjp keeps the map-recomputing `rhs` — so `∂M/∂θ`
-    is captured exactly. Because the discrete adjoint draws its *entire* parameter
-    gradient from that vjp and uses the stages/Jacobians only to propagate the
-    *state* cotangent, and the cached `M` *is* the probed `M`, the result is
-    **bit-identical** to probing every call, just faster (the gradient w.r.t. a
-    kinetic *and* a flow-setpoint param both match the per-call-probe gradient
-    bit-for-bit). The cached map must be `stop_gradient`'d before being closed over
-    (it is a params-derived value inside the `custom_vjp`; its parameter dependence
-    is the vjp's job). Both the cached jitted forward and the under-trace
-    calibration-gradient path go through the shared `Plant._esdirk_stable_adjoint`.
-    Falls back to per-call probing when `M` is not state-invariant
-    (`_recycle_map_constant` not True). **Measured (clean serial min-of-8 timing):
-    a modest reverse-gradient win where the recycle probe is non-trivial — BSM2
-    `value+grad` ~1.15× (14.7→12.8 s, the ASM↔ADM-interface probe hoisted out of
-    the backward) — and neutral on BSM1** (whose probe is cheap, so its gradient is
-    unchanged). The one-time map build makes the *forward* marginally slower (BSM2
-    ~0.95→1.09 s), but `stable_adjoint` exists for gradients, where the net is
-    positive. *(Historical note: when this was measured the backward's dominant
-    cost was the per-step `n≈167` **dense stage Jacobian builds** — ~82% of the
-    backward — because it recomputed every ESDIRK stage by Newton; the saved-stage
-    backward later removed that recompute, dropping the builds to ~7/step (~24%),
-    so the cached-map win and the colored-build win are both proportionally
-    different now — see the stage-saving and colored-backward bullets for the
-    re-measured numbers.)*
-    Covered by
-    `tests/integration/test_recycle_cached_map.py` and the bit-identical
-    flow-setpoint `∂M/∂θ` guard
-    `test_plant_stable_adjoint.py::test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta`.
-  - **Cached recycle *flow* map (the analogue, #397).** The recycle *flow* solve
-    `_resolve_flows` is the same `(I−A)x=b` affine structure as the concentration
-    solve: the `n×n` back-edge flow-response `A` is fixed by the recycle flows +
-    topology (so constant for a fixed-pump plant), while only `b` (the
-    influent-driven constant) varies per RHS. The per-RHS flow probe therefore
-    re-derives a constant `A` (the `n` per-back-edge `one_pass(eye[i])` column
-    passes) on every RHS. `_compute_flow_map` precomputes `A` **once per solve**
-    (from `params`, gradient-preserving — `A` depends on the flow-setpoint block,
-    so it is coerced in and `stop_gradient`'d on the `stable_adjoint` primal like
-    `M`), threaded into every RHS as `flow_map=` by `_maybe_flow_map`; the flow
-    resolution then computes only `b` (one pass) + the cached `(I−A)` solve,
-    skipping the `n` column probes. State-invariance is detected once by
-    `_check_flow_map_constant` (compares `A` at three states; falls back to per-RHS
-    probing for a state-coupled split like a level-gated storage bypass), wired
-    into the same four paths as `M` (`make_rhs` forward, events, `outputs_at`,
-    `_cached_streams`) plus the `forward_fast`, steady-state-PTC, and
-    `stable_adjoint` builders. **Correctness:** the cached-`A` RHS *and Jacobian*
-    are **bit-identical** to the probe (`A` is state-invariant, so `dA/dy=0` in
-    both), and every steady state (constant influent → convergent dynamics) is
-    bit-identical — so all validations are preserved. On a **sensitive
-    time-varying** run the cached and probe solves can separate (measured ~9.5e-3
-    rel over a dynamic BSM2), because the probe recomputes
-    `A = one_pass(eye)−one_pass(0)` each step and the varying influent perturbs
-    that cancellation's rounding by ~1e-16 each step, while the cache holds `A` at
-    its exact constant value — the cached path is the **cleaner** of the two valid
-    solves, and the divergence cannot amplify at a fixed point (hence the
-    bit-identical steady state). **Measured 1.076× (7.6%)** on the 60-day dynamic
-    BSM2 forward solve. Covered by the flow-map tests in
-    `tests/integration/test_recycle_cached_map.py` (constancy detection,
-    bit-identical RHS + Jacobian, bit-identical steady state, the no-recycle case,
-    and a gradient through the cached path).
+  Calibration, identifiability and measured channels are in
+  `.claude/rules/plant-analysis.md`; the coloured Jacobian, the caches and recycle
+  resolution in `.claude/rules/plant-solve.md`; the unit audit and the mass
+  balance in `.claude/rules/plant-audits.md`.
   - **Wiring API.** `plant.connect(source, dest)` takes two `"unit.port"`
     endpoint strings, read as `source -> dest`. The port may be omitted
     (bare `"unit"`) when the unit has exactly one port for that role — a
@@ -517,73 +170,6 @@ Key types:
     when the models disagree. The builders (`build_bsm1/2`, `build_a2o`) pass
     `"d"`. A new unit with a built-in time constant implements
     `set_time_unit`, not `assumed_units`.
-  - **Unit audit — `plant.check_units()` (`plant/units_check.py`).** Stream
-    concentrations cross units unconverted (beyond the translators below), so a
-    concentration mismatch inside a unit is silent; the audit compares *declared* units on static metadata only (never
-    the jitted solve) and returns a `PlantUnitsReport` (`errors` / `warnings`
-    of `PlantUnitIssue`). Checks: on a plant without `time_unit`, every model's
-    `time_unit` agrees; a unit implementing the `AssumedUnits` hook
-    (`assumed_units() -> {species: unit}`) gets them — only *fixed* internal
-    concentration-basis assumptions belong there, never a user-supplied number
-    in any consistent unit. The thickener and Takács convert a mass-per-volume
-    solids unit (below) and list only the species they could not convert;
-    each model's own
-    `check_units()` is rolled up as warnings. All comparisons go through the
-    scale-aware `aquakin.units_match` (`mg/L` = `g/m3` ≠ `kg/m3`; a currency is
-    compared only when both sides state one). `plant.check()` carries the
-    findings (`PlantCheck.unit_issues` / `.unit_errors`; unit errors make `.ok`
-    false and `raise_on_error` raises `UnitsError`).
-    `connect` / `add_influent` also reject an explicit translator whose
-    `source_model` / `target_model` species list differs from the endpoint's
-    (`WiringError`; a different instance with the same species is accepted).
-    When a new unit's internals hard-code a concentration basis (a `g/m3`
-    constant), prefer converting: fold `_constants.grams_per_m3_factors(model,
-    species)` into the species' weights at construction, as `IdealThickener`
-    (its `_tss_vec`) and `TakacsClarifier` (its `_part_tss_factors`, only
-    while `settling_params` are the BSM defaults and only for species with a
-    nonzero TSS factor) do — the per-species flux split and the lumped-TSS
-    inventory are ratios, so the species stay in the model's units. A factor
-    of exactly 1 is not applied (bit-identical). A unit that is not a mass per
-    volume (moles; the schema default `mol/L` of a toy model) gets factor 1 and
-    is returned by the unit's `assumed_units` (its `_unconverted_tss`), so the
-    audit reports it instead of the unit refusing to build. `assumed_units` is
-    for what cannot be converted. **Same species,
-    different units:** `_default_translator` (behind `connect` /
-    `add_influent`) inserts a `translators.UnitScalingTranslator` (diagonal
-    per-species `unit_scaling` factors, `None` when all are 1) when
-    `_same_species_other_units` holds (identical species lists, some unit
-    string differs), raising `WiringError` on an unconvertible pair; identical
-    units on two instances still hit the "different instances" error. It is
-    diagonal, so inside a recycle loop the per-model grouping of the affine
-    seed is only approximate across models and the adaptive `recycle_tol`
-    solve converges it. **Translators convert instead of
-    being checked:** `ASM1toADM1` / `ADM1toASM1` (`plant/interfaces.py`) keep
-    their equations in fixed *working units* (`_ASM1_UNITS`: g/m3, SALK mol/m3;
-    `_ADM1_UNITS`: kg/m3, kmol/m3) and `_unit_scales` derives per-species
-    factors from the models' declared `species_units` via
-    `utils.units.conversion_factor` at construction (`x_working = f·x_model`;
-    applied on the way in, divided out on the way out). It returns `None` when
-    every factor is exactly 1 (every shipped model), so `translate` skips the
-    multiply and stays bit-identical; an unconvertible unit (mass vs moles, two
-    different currencies) raises `ValueError` at construction, an unreadable
-    one warns and is taken to be the working unit. Because the factors come
-    from the models a translator was *built* with, `connect` also requires
-    those models to declare the same units as the endpoints'
-    (`_check_translator_endpoints`). A new translator should follow the same
-    pattern rather than hard-code a model's scale. **Influents convert too:**
-    `InfluentSeries.__post_init__` (`_convert_to_model_units`) converts declared
-    `units` to the model's — `t` to `model.time_unit`, `Q` to `m3/<time>`, `T`
-    to K (a `utils.units.CELSIUS_SPELLINGS` spelling is offset by 273.15), each
-    species to `model.species_units` — via `conversion_factor`, multiplying only
-    when a factor differs from 1 (so the BSM loaders, already in ASM1 units, stay
-    bit-identical). A different quantity or an unreadable unit raises; a target
-    the model leaves unknown (blank/unreadable species unit, no inferable time
-    unit) keeps the declared unit and the data unchanged. `units` afterwards
-    records the converted units, so `dataclasses.replace` is idempotent. The
-    audit therefore has no influent check. The plant then moves each series
-    onto its clock with `InfluentSeries.in_time_unit` (built via
-    `dataclasses.replace(..., units=None)` so construction does not convert
-    back to the model's time unit).
   - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
     `T` condition of every temperature-bearing reactor in one call (°C → K),
     leaving a heated fixed-`T` unit like the digester untouched; clears the
@@ -685,107 +271,12 @@ Key types:
     `.methane_production()` time-averaged kg CH₄/d), reusing the OCI biogas
     formula (`evaluate_bsm2`'s `_methane_production` now delegates to it). Raises
     if the plant has no ADM1 digester.
-  - **Results-level mass-balance closure — `plant.mass_balance(sol, …)` (#150).**
-    The first thing an engineer does with a result: *does what went in equal what
-    came out + what left as gas + what accumulated?* Returns a `MassBalance`
-    (`aquakin.plant.balance`, exported as `aquakin.MassBalance` /
-    `aquakin.ComponentBalance` / `aquakin.mass_balance`) with, per component (COD
-    / N / P), the **inflow** (influents), **outflow** (terminal/dangling material
-    streams — effluent, wasted sludge, disposal cake), **gas** (O₂ transferred in
-    by aeration, the digester biogas, denitrification N₂, and any gas co-stripped
-    by `Aeration(stripped=...)` (`gas_detail["stripped_<q>"]`, the stripped
-    species' transfer dotted with their content) — computed from the
-    aeration term and a reaction-production integral over the reactive units, with
-    the digester deliberately excluded from the N gas term since it has no N gas
-    phase) and **accumulation** (ΔInventory across every unit — reactor / clarifier
-    / digester liquid+headspace at `V_liq`/`V_gas` / storage / Takács blanket).
-    `_unit_inventory` **dispatches on unit-implemented contracts, never on private
-    state layout** (#505): a unit whose state layout is non-trivial declares
-    **`component_inventory(state, content, params)`** returning its own
-    `{component: grams}` — the layered **`TakacsClarifier`** (blanket summed over
-    layers, both `composition_mode`s + `soluble_holdup`) and the
-    **`ADM1DigesterUnit`** (liquid states at `V_liq`, the three gas-headspace states
-    at `V_gas`, via its own `_state_volume_vector(params)` which `_reaction_volume`
-    also reuses for the reaction integral). A unit holding a single well-mixed
-    liquid volume (`StorageTank` / `MBRUnit` / `SBRUnit`, whose states are
-    `[C…, scalar(s)]`) instead declares that volume through **`liquid_volume(state)`**,
-    so its inventory is `V·C` (`PrimaryClarifier` too, returning its fixed `volume`,
-    since its filter state trails the concentrations); a plain concentration-vector
-    unit (`CSTRUnit`) falls through to the generic `volume·C`. This completes the
-    inversion `liquid_volume` started — the balance no longer reaches into
-    `_part_block_size` / `_n_part` / `param_index["V_gas"]` etc., and a unit with a
-    new state representation participates by implementing `component_inventory`
-    rather than editing the balance helper. Contract covered by
-    `test_mass_balance_plant.py::test_stateful_units_own_their_component_inventory`.
-    `imbalance = in − out − gas − accumulation` is the closure; `mb["N"]`,
-    `mb.closed(rtol)`, `mb.summary()`, `mb[q].relative_imbalance`. Everything is on
-    one canonical g basis (g COD / g N / g P), so the ASM water line (g/m³) and the
-    ADM digester (kg/m³, kmol/m³) sum via `aquakin.composition_table` /
-    `aquakin.canonical_content` (the shipped per-species COD/N/P content tables;
-    `composition_table(net, electron_acceptor_cod=False)` = lab COD, the default
-    `True` = the electron-equivalent convention `check_conservation` wants;
-    `params=` reads a calibrated/BSM-specific composition such as `i_XB`). Closes
-    BSM1 to ~1e-7 and BSM2 (two models, biogas, recycles) to COD ~0.08% / N
-    ~0.03% at steady state; the gas integrals are exact at steady state and
-    otherwise accurate to the `t_eval` sampling. **This is the tool that found the
-    ADM1 nitrogen transcription error** (see the `adm1` model note).
-
-**IFAS / MBBR biofilm (`plant/ifas.py`).** Three things about this unit are
-load-bearing and easy to get wrong.
-
-- **Layer count.** The depth discretization is **first order**, and its error is
-  set by the penetration ratio `L_f/delta`, `delta = sqrt(D_eff*K_s/(k*X_f))` —
-  not by thickness alone. At `L_f/delta = 4`, four layers put the substrate flux
-  **26%** high; sixteen (the default since the BM1 validation) give ~6% there and
-  ~2% at `L_f/delta = 2`. `IFASUnit.layer_resolution(state)` reads the achieved
-  resolution off a solved state (largest fractional soluble drop across one
-  layer); a few per cent is fine, near 1 means the substrate dies inside one
-  cell. The error table is in the class docstring and pinned by
-  `tests/validation/test_biofilm_analytical.py`.
-- **Steady state.** `run_to_steady_state`'s default `criterion="norm"` is
-  **unreliable for this unit**: the held-fixed attached biomass adds
-  `n_layers * density` to `||y||` and nothing to `||dy/dt||`, inflating the
-  tolerance every other state is held to. On BM1 it stopped with the bulk moving
-  at -22 g/(m3 d) and reported convergence, 6% wrong in flux. It now warns when
-  the result's componentwise scaled residual exceeds
-  `NORM_RESIDUAL_WARN_FACTOR * ss_rtol` (100x; BSM1 sits at ~4x with either
-  clarifier). Use `criterion="scaled_residual"` for an IFAS plant.
-- **Growing the film (`dynamic_thickness=True`).** Thickness becomes the final
-  state entry (`L_f`) instead of a fixed parameter, implementing Wanner & Gujer
-  (1986) via `integrate/biofilm_growth.py`: incompressibility fixes the
-  displacement velocity `u(z)` from the production integrated below `z`, species
-  advect on a grid that stretches with the film, and `dL_f/dt = u(L_f) - u_det`.
-  Two things the arbitrary Lagrangian–Eulerian form makes exact and must stay
-  that way: the wall face is impermeable and the surface face carries exactly the
-  detachment velocity. **The grid-dilation term `-X*(dL_f/dt)/L_f` is not
-  optional** — the fluxes govern the mass in a cell, so recovering a
-  concentration from them must account for the cell's own changing volume;
-  without it a uniform film drifts off its own density (measured 2%) and the
-  incompressibility the velocity was derived from is violated. A growing film
-  **freezes nothing** (`biofilm_fixed_mask` is refused), since its inventory is
-  what the balance solves for. The thickness row/column of the coupling pattern
-  is declared **dense**, because those couplings run through saturated Monod
-  terms an AD probe cannot see. Validated against `L_f = mu_net/lambda` for a
-  fully penetrated film and against BM1 cases 2 and 5, where the benchmark lets
-  thickness be an output of the growth/lysis balance (`detachment_rate=0`, so the
-  film settles where net production integrates to zero).
-  **The thickness is either specified or predicted, chosen by `detachment_law`.**
-  `"balance"` pins it: detachment is set to the velocity arriving at the surface
-  (`balanced_detachment_velocity`), so `dL_f/dt` is **exactly** zero — not zero to
-  a tolerance, which matters because a specified thickness must not drift over a
-  long solve — while the species still advect, stratify and shed at the surface.
-  It takes no `detachment_rate` and refuses one, since the velocity is not a free
-  parameter under that law. The power laws (`"quadratic"`, `"linear"`,
-  `"constant"`, via `DETACHMENT_POWERS`) instead let the thickness follow from
-  the physics. A benchmark that fixes the film at a stated thickness (BM3, and
-  BM1 cases 1, 3, 4) wants `"balance"`; one that lets lysis thin it (BM1 cases 2
-  and 5) wants a rate-driven law with `detachment_rate=0`.
 
 Shipped units: `CSTRUnit` (kinetics + aeration), `IFASUnit` / `MBBRUnit`
 (an IFAS/MBBR tank: a CSTR bulk coupled to a depth-resolved attached biofilm —
-see below), `MBRUnit` (membrane bioreactor: a high-MLSS aerated reactor whose
+see `.claude/rules/plant-ifas.md`), `MBRUnit` (membrane bioreactor: a high-MLSS aerated reactor whose
 membrane retains the solids into a near-solids-free permeate, with fouling/TMP —
-see *Membrane bioreactor* below), `MixerUnit`,
+see `plant/mbr.py`), `MixerUnit`,
 `RatioSplitter` / `SetpointSplitter` / `ThresholdSplitter`,
 `IdealClarifier` (fast, stateless separator),
 `PrimaryClarifier` (BSM2 Otterpohl–Freund: a well-mixed holding tank split by
@@ -802,105 +293,18 @@ separator, concentration-dependent underflow flow), `ADM1DigesterUnit`
 (continuously-fed ADM1 CSTR with gas headspace, dilution masked to the liquid
 states), `DosingUnit` (chemical dosing: injects a `Reagent` — a fixed
 composition, e.g. metal salt / acid-base / external carbon — into a stream at a
-fixed or feedback-controlled flow; see *Chemical dosing* below), `UVUnit` /
+fixed or feedback-controlled flow; see `plant/dosing.py`), `UVUnit` /
 `ChlorineContactUnit` (disinfection: UV dose-response and chlorine CT /
-log-removal — see *Disinfection* below), `SBRUnit`
+log-removal — see `plant/disinfection.py`), `SBRUnit`
 (sequencing batch reactor: one tank cycling fill/react/settle/decant/idle with
-variable volume and a pluggable settling model — see *Sequencing batch reactor*
-below), and `TakacsClarifier` (10-layer 1-D Takács 1991 model). With
-`interface_flux="takacs"` its settling physics are the benchmark's, verified in
-isolation at BSM1 solids loading: the clarification-zone flux limiting (above the feed, the downward flux is
-limited by the layer below only when that layer exceeds `X_threshold`) and
-the per-species flux apportioning (each species settles at the bulk
-velocity, `flux_tss · X_k/TSS`, conserving total settleable solids) produce
-a monotone sludge blanket, a strongly clarified effluent, a thickened
-underflow, and tight solids mass balance (verified to machine precision
-against an independent port of the reference BSM1 settler derivative in
-`tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1(use_takacs=
-True)` selects it in the full plant (both clarifiers expose the same ports),
-and `Plant.solve` takes `max_steps`. By default a bare `TakacsClarifier` does not
-hold the **soluble** species in the settler — they pass straight through (overflow = underflow = feed,
-no holdup), the common simplification. The opt-in **`soluble_holdup=True`** makes
-each soluble a per-layer well-mixed state advected by the bulk flow (convection
-only, no settling), so the clarifier's liquid volume (~`area·height`) damps the
-soluble effluent signal — the ten-layer soluble model of the BSM1 reference
-`settler1dv4` (`MODELTYPE=0`, verified against its source: each soluble is
-advected layer to layer, no settling), which the BSM2 `settler1dv5_bsm2` has
-too (`SNH_1..SNH_10` etc. per layer, also `MODELTYPE=0`). It is **independent**
-of `composition_mode`. **Both reference settlers are `"lumped_tss"`**: 10 TSS
-states, outlet particulates = feed composition × `gamma = x_boundary/TSS_feed`
-(checked in both `settler1dv4.c` and `settler1dv5_bsm2.c`, R2019b; the latter
-has 120 states = 10 TSS + 10×10 solubles + 10 temperature). `"per_species"`
-(per-layer composition memory) has no reference counterpart. `build_bsm2` and
-`build_bsm1` both default to the reference (`"lumped_tss"` with
-`soluble_holdup=True`) **except for the interface flux** (Godunov, below);
-`build_bsm2` defaulted to `"per_species"` without holdup before v0.2.0. Earlier docs said `per_species` "matches settler1dv5"; it
-does not. The soluble holdup is a tail block of shape
-`(n_layers, n_soluble)` appended to the state (so the particulate layout /
-`state_size` are unchanged when off), orthogonal to `composition_mode`. **It
-leaves every steady state unchanged** — a non-reacting soluble's only transport
-is convection, whose fixed point is the uniform feed concentration (overflow =
-underflow = feed), verified in `tests/integration/test_takacs.py` — so it only
-matters under a dynamic influent, where it smooths the effluent ammonia
-peaks/troughs. This is the structural cause of aquakin's wider dynamic-BSM2
-effluent-NH4 distribution vs the reference: the reactors agree to corr 0.99 but
-the pass-through settler does not damp the soluble signal the way BSM2's
-soluble-carrying settler does (the JRN-056 dynamic validation). `build_bsm2`
-enables it by default (`settler_soluble_holdup=False` turns it off).
-**`interface_flux`** (`"godunov"` default | `"takacs"`; builders
-`settler_interface_flux`, BSM1 and BSM2) picks the settling flux between layers
-(`TakacsClarifier._interface_flux`). **The Godunov default is a deliberate,
-documented departure from the benchmark settlers** (project owner's decision,
-2026-11-02; stated in the `TakacsClarifier` / `build_bsm1` / `build_bsm2`
-docstrings, `docs/plants.md` "The secondary clarifier and the benchmark", the
-README and the CHANGELOG); `"takacs"` reproduces them, and the reference-port
-validation `test_takacs_vs_bsm1_reference.py` pins it. `"godunov"` is the Godunov flux of the settling
-conservation law for the unimodal `F(X) = v_s(X)·X` (Bürger, Diehl & Nopens 2011),
-at every interface (no `X_threshold`): equal to the Takács minimum when the upper
-layer is the more dilute, the maximum of `F` between the two concentrations when it
-is the denser (`F` at its peak, located by `_flux_peak`'s ternary search, when they
-straddle it). In BSM2's blanket, layers 2–5 sit within ~1% of each other on the
-rising branch of `F` and swap order hundreds of times a day; the Takács rule
-switches flux at every swap (kinks, pulses ±10–15%, solver failures), the Godunov
-flux is the upper layer's either way. Measured (`scripts/probe_settler_accuracy.py`,
-8-day dynamic BSM2, `rtol = 1e-4`, 2026-11-02): lean-loop attempts 8901 → 3177,
-cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic effluent
-means within 0.07% of Takács, the constant-influent steady state identical (layers
-2–5 equal there, where the rules agree).
+variable volume and a pluggable settling model — see
+`plant/sbr.py`), and `TakacsClarifier` (10-layer 1-D Takács 1991 model); see `.claude/rules/plant-settling.md`).
 
-**Expressions of time (`plant/time_expr.py`).** An operating value that varies on
-a schedule — an influent's flow, a setpoint — may be written as a function of the
-plant clock (`"18446 + 4000*sin(2*pi*t)"`). `compile_time_expression(value,
-time_scale=, what=)` reads one into a callable; a plain number compiles to a
-constant, so a value that does not vary costs nothing. It compiles to plain JAX
-arithmetic with **no Python control flow**, so it traces, differentiates and
-batches inside the RHS; there is deliberately **no comparison or conditional**
-(a value that switches uses `clip` or `step`), because an `if` on a traced value
-cannot run. `time_scale` is the factor from the caller's clock to the clock the
-expression was written on. **The grammar is shared in spirit with
-`core/parser.py` and follows Python's precedence**, including that a sign binds
-*looser* than a power (`-2**2` is `-(2**2)`): `unary := ('+'|'-') unary | power`
-and `power := primary ('**' unary)?`. Both parsers were changed together in
-#699 — they had bound a sign tighter, which nobody predicts; keep them in step.
-New functions go in `FUNCTIONS`
-(name → `(callable, arities)`), which the parser, the arity check and the
-error messages all read, so they cannot drift.
-
-**Influents: a record or a pattern.** `InfluentSeries` is sampled data
-(`at(t)` interpolates); **`InfluentExpression`** is the same feed written as
-expressions of time, for a load that follows a shape rather than a measurement.
-Both satisfy the only seam the plant uses — `at(t)`, `.model`,
-`in_time_unit(tu)` — so nothing in `plant.py` / `recycle.py` branches on which it
-is. Differences to keep in mind: a declared unit is applied **as the expression
-is evaluated** (folded into the compiled callable) rather than to stored arrays,
-since a string cannot be scaled in place; and `in_time_unit` converts the `t` the
-expressions are *given* and the flow they *return*, never the expression, so one
-written in days still means days on an hourly plant. The catalogue's `Q`, `T` and
-`composition` are `scheduled_number` / `scheduled_species_values`: `_influent`
-builds an `InfluentExpression` when **any** value is an expression and otherwise
-the sampled constant series exactly as before, so every existing spec reads back
-bit-identically. `spec._influent_entry` writes a pattern straight back as its own
-settings (no `data/` table).
+**Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and
+`plant/measures.py` are expression languages whose grammars are their own but
+whose *tokenizer* is not: both call `aquakin.core.lexer.tokenize`. Do not write
+another one — see the "One tokenizer, three languages" note in
+`.claude/rules/core.md`, which `aquakin/plant/**` does not auto-load.
 
 **Units in the help.** A setting's numpydoc entry names its unit in
 parentheses, flows and times per day as aquakin runs them on the plant's clock
@@ -914,87 +318,6 @@ own entry (a shared `Kp, Ti, Tt : float` cannot name one unit each).
 steady-state solve then never ended). A new unit with a volume, area or
 other size does the same.
 
-**Unit catalogue (`plant/catalog.py`, the `aquakin` command).** Front ends
-(the flowsheet editor prototype) learn the unit types from
-`aquakin.plant.catalog`, never by importing unit classes. A kind's *settings* are
-read from the class: constructor signature (types mapped to front-end types
-such as `number`, `port_name`, `aeration`, `unsupported`), dataclass default
-factories, and the docstring's `Parameters` section for help. Only what the
-signature cannot say is declared per kind in `_build_kinds`: label, category,
-port rules beyond the naming convention (`input_port`/`input_port_names` are
-inputs, every other `*_port` and the port-keyed mappings are outputs, in
-constructor order; fixed ports such as the splitters' `in`, the mixer's `out`,
-the storage tank's `out`/`bypass` are `PortRule(form="fixed")`), GUI-friendly
-defaults for required port settings, and `exactly_one_of` groups.
-`check_unit` builds the real unit and is the authority. **When adding a unit
-class or changing a unit's ports**, add or update its kind:
-`tests/unit/test_plant_catalog.py` builds every kind and compares the
-rule-derived ports with the built unit's, and fails if an exported unit class
-has no kind. `aquakin serve` (`aquakin/__main__.py`) is a JSON-lines worker
-(`catalog`, `models`, `model`, `check_unit`, `check_spec`, `fingerprint`,
-`read_spec`, `write_spec`, `ping`).
-Replies go to a private duplicate of the process's stdout and descriptor 1 is
-pointed at stderr while serving (plus a Python-level redirect per handler), so
-no other output can corrupt a reply; a failed request, or a reply that is not
-strict JSON (NaN), gets `{"ok": false, "error": ...}` without stopping the worker.
-
-**Flowsheet spec (`plant/spec.py`, `Plant.to_spec` / `Plant.from_spec`).** A
-plant as a file (format 2), built on the catalogue. Units are keyed by their
-stable name (the plant's unit name; `Plant.labels` holds optional display text)
-and written with **every** setting (`catalog.unit_settings(full=True)`; unit
-attributes must mirror the constructor arguments for this to work) plus the
-aquakin version, so a later change of default cannot change a saved plant.
-Connections are `"unit.port -> unit.port"` or `{from, to, translator: {kind,
-...}, seed: {Q, T, concentrations}}`; a seed is written in the **destination**
-unit's model (it stands for the stream arriving after any translator). A `kind:
-influent` unit is an `InfluentSeries` wired with `add_influent`: constant
-(`Q`/`T`/`composition`) or a `series` table file (`read_influent_table`, which
-records the file on the series; `write_influent_table` round-trips bit for bit)
-recorded under the spec's `files:` with its sha256. `to_spec(path)` refers to a
-table inside the spec's directory and otherwise writes `data/<name>.csv`; without
-a path a time-varying influent is refused. **`write_spec`** (behind `to_spec(path)`
-and the editor's Save) plans everything before touching the disk: each unit's
-settings are checked with `validate_settings` (unset required settings are allowed,
-so a draft saves) and canonicalized (`_canonical_settings`: every number a float,
-infinities `"inf"`), the output is checked as strict JSON (no NaN), and the planned
-copies are checked for conflicts (`_check_writes`); only then are files copied and
-the spec replaced atomically. A model file whose `extends:` chain leaves the
-project folder has its **whole chain** copied into `models/` (`_plan_model`: the
-model as `<name>.yaml`, each base beside it with its `extends:` line rewritten
-textually so comments survive; a project model is rewritten in place). An
-in-memory influent table is rendered to bytes first, so saving twice is
-idempotent. `spec_fingerprint(spec)` hashes what is simulated (canonical settings
-with catalogue defaults filled in, wiring, streams, endpoints, model and table
-content fingerprints) and leaves out layout, labels, name, file locations and
-the aquakin version; results should record it to detect staleness. NaN is no
-setting anywhere: `catalog._is_number` and the Pydantic schema
-(`allow_inf_nan=False`) refuse it and `_plain(nan)` raises. A file model may not
-take a shipped model's name (refused on read and write), and
-`composition_base` gives a same-named model the shipped table only when the
-species match. Parse errors from `load_spec_file` are `SpecError`s. Every
-model is listed under `models:` as `shipped` or a YAML file path relative to the
-spec, with a sha256 of its content (`extends` resolved; a mismatch on read is a
-`SpecWarning`). A model is recognised by the provenance `load_model` /
-`load_model_from_file` record on it (`_aquakin_source`, a plain attribute, so a
-`dataclasses.replace` copy such as `bsm2_asm1_model()` does not carry it and is
-refused rather than written under the shipped name); this survives
-`clear_model_cache`. Reading validates the document with Pydantic and each
-unit's settings strictly with `catalog.validate_settings` (unknown keys with a
-did-you-mean, exact types), and reads YAML with YAML 1.2 scalars
-(`_Yaml12Loader`). Controllers derived from a closed-loop `Aeration` / feedback
-`DosingUnit` are recorded in `plant._derived_units` by `_materialize_aeration` /
-`_materialize_dosing` and left out (with their measurement taps), since they are
-derived again. Every refusal is a `SpecError` naming the unit / connection.
-`check_spec(spec, base_dir=)` builds the plant and returns `Plant.check` (the
-`aquakin serve` `check_spec` command). `Plant.add_unit` / `add_influent` refuse
-names with `.`, `->` or whitespace and a unit named after one of the plant's
-models (`_check_unit_name`; such a name made `parameter_index("asm1.muH")` return
-a flow setpoint), and `_plant_param_index` raises on any duplicate key. Pinned by
-`tests/integration/test_plant_spec.py`: BSM1 (ideal and Takács) and a two-model
-plant (translators, temperature seed, reagent, influent T) rebuild with an
-identical spec, initial state and bit-identical RHS, and the
-`examples/projects/bsm2` project (its 15 °C ASM1 a model file extending `asm1`)
-rebuilds `build_bsm2`'s plant run with the BSM2 parameters bit-identically.
 **Co-stripped gases (`Aeration(stripped=...)`).** An aerated tank strips other
 dissolved gases (N₂O, NO, ...) alongside oxygen inside the solve:
 `stripped={"SN2O": ratio}` or `{sp: (ratio, sat)}`, normalized in
@@ -1034,23 +357,6 @@ content in `model.composition()` are TSS, at `ASM1_TSS_FACTOR`, the rest weight
 (else `ValueError`). Covered by `tests/unit/test_bsm1_model_solids.py`. The BSM1 metrics (`derived_TSS`, `evaluate_bsm1`'s EQI)
 still use the ASM1 species and do not yet support such models.
 
-**Shared separator/clarifier helpers.** The separator/clarifier family resolves
-its settling / particulate / TSS species lists through the shared
-[`species_mask` / `species_indices`](aquakin/plant/_constants.py) helpers, which
-enforce **one** missing-species policy: a species named in a unit's config but
-not in the model **raises** a clear `ValueError` at construction (it does *not*
-silently drop it — the old, contradictory behaviour that under-settled without
-warning). So a non-ASM1 model must name its own `settling_species` /
-`particulate_species` / `tss_species` rather than rely on the ASM1 defaults. TSS
-from a weight vector is `tss_concentration(C, tss_vec)`; the Q-weighted multi-inlet
-feed is `mixed_feed(inputs, names)` and the total inflow `total_flow(...)` (the
-flow siblings of `mixed_scalars`, in `plant/streams.py`); and the ideal secondary
-clarifier's fixed-capture-fraction partition is `split_by_capture(...)`. The
-`TakacsClarifier` keeps its own per-layer gather (a hot loop) and the
-`PrimaryClarifier` its state-partition CSTR formulation — they share the species
-policy but not the split kernel, whose physics differs. When adding a separating
-unit, reuse these rather than re-deriving a mask/split.
-
 **Shared numeric constants (`plant/_constants.py`).** Two families of magic
 number are consolidated there rather than redefined per module: `EPS_Q` (`1e-12`)
 is the one **flow-/mass-weighted division guard** — the small epsilon added to a
@@ -1064,4 +370,3 @@ floor — a minimum settler depth (`settling.py`), a minimum flow that sets a
 maximum HRT and a `log`-domain floor (`PrimaryClarifier._removal_fraction`), or a
 data-prep floor on a linearisation probe (`ifas`/`takacs`) — is a modelling choice
 with its own magnitude and is deliberately **not** folded into `EPS_Q`.
-
