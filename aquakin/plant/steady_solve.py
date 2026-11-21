@@ -854,6 +854,41 @@ def steady_state(
         if jac_fn is None:
             primal_rhs = None  # colored unavailable -> dense forward too
 
+    def finish(state, converged, iterations, residual):
+        # A concrete PTC result. A non-converged one escalates through the
+        # fallback ladder; when no rung is configured or converges (``None``),
+        # the non-converged PTC result is returned as it is.
+        if not converged:
+            fb = self._steady_fallback_ladder(
+                rhs,
+                params,
+                y0,
+                scale_floor,
+                continuation_from=continuation_from,
+                continuation_kwargs=continuation_kwargs,
+                arclength=arclength,
+                arclength_kwargs=arclength_kwargs,
+                fallback=fallback,
+                fallback_kwargs=fallback_kwargs,
+                dt0=dt0,
+                dt_max=dt_max,
+                growth_cap=growth_cap,
+                max_iter=max_iter,
+                tol=tol,
+                nonneg=nonneg,
+                influent_time=influent_time,
+                design=design,
+            )
+            if fb is not None:
+                return fb
+        return SteadyStateResult(
+            state=state,
+            converged=converged,
+            method="ptc",
+            iterations=iterations,
+            residual=residual,
+        )
+
     # Compiled-solve cache (the single-run compile lever). The eager
     # ``while_loop`` in ``ptc_forward`` re-traces and recompiles on EVERY call
     # (~12-17 s for BSM2, dominated by the plant-RHS ``jacfwd``), so a repeated
@@ -900,36 +935,7 @@ def steady_state(
             jitted = jax.jit(_fwd)
             self._steady_jit_cache[key] = jitted
         y_star, residual_a, iters_a, conv_a = jitted(y0, params, jnp.asarray(scale_floor))
-        converged = bool(conv_a)
-        if not converged:
-            fb = self._steady_fallback_ladder(
-                rhs,
-                params,
-                y0,
-                scale_floor,
-                continuation_from=continuation_from,
-                continuation_kwargs=continuation_kwargs,
-                arclength=arclength,
-                arclength_kwargs=arclength_kwargs,
-                fallback=fallback,
-                fallback_kwargs=fallback_kwargs,
-                dt0=dt0,
-                dt_max=dt_max,
-                growth_cap=growth_cap,
-                max_iter=max_iter,
-                tol=tol,
-                nonneg=nonneg,
-                influent_time=influent_time,
-            )
-            if fb is not None:
-                return fb
-        return SteadyStateResult(
-            state=y_star,
-            converged=converged,
-            method="ptc",
-            iterations=int(iters_a),
-            residual=float(residual_a),
-        )
+        return finish(y_star, bool(conv_a), int(iters_a), float(residual_a))
 
     res = solve_steady_state(
         rhs,
@@ -964,34 +970,4 @@ def steady_state(
             residual=res.residual,
         )
 
-    if not converged:
-        fb = self._steady_fallback_ladder(
-            rhs,
-            params,
-            y0,
-            scale_floor,
-            continuation_from=continuation_from,
-            continuation_kwargs=continuation_kwargs,
-            arclength=arclength,
-            arclength_kwargs=arclength_kwargs,
-            fallback=fallback,
-            fallback_kwargs=fallback_kwargs,
-            dt0=dt0,
-            dt_max=dt_max,
-            growth_cap=growth_cap,
-            max_iter=max_iter,
-            tol=tol,
-            nonneg=nonneg,
-            influent_time=influent_time,
-            design=design,
-        )
-        if fb is not None:
-            return fb
-
-    return SteadyStateResult(
-        state=res.state,
-        converged=converged,
-        method="ptc",
-        iterations=iterations,
-        residual=residual,
-    )
+    return finish(res.state, converged, iterations, residual)
