@@ -256,7 +256,7 @@ def test_branch_recorder_enabled_and_disabled():
     """The branch-recording bookkeeping factored out of the arclength loop: when
     disabled every method is a no-op and result() is None; when enabled it seeds
     with the known start and accumulates (s, y) points into (s, ys) arrays."""
-    from aquakin.plant.steady import _BranchRecorder
+    from aquakin.integrate.steady import _BranchRecorder
 
     off = _BranchRecorder(False, jnp.array([1.0, 2.0]))
     off.record(0.5, jnp.array([9.0, 9.0]))       # no-op

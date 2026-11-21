@@ -4155,7 +4155,7 @@ class Plant:
         stops once the scaled residual with floor ``scale_floor`` is at most
         ``tol``. Returns ``(event, floor)``.
         """
-        from aquakin.plant.steady import _scaled_residual_event
+        from aquakin.integrate.steady import _scaled_residual_event
 
         if criterion not in ("norm", "scaled_residual"):
             raise ValueError(f"criterion must be 'norm' or 'scaled_residual'; got {criterion!r}.")
@@ -4176,7 +4176,7 @@ class Plant:
         ``max_time``; with ``"scaled_residual"``, that the residual is at most
         ``tol``.
         """
-        from aquakin.plant.steady import _scaled_resnorm
+        from aquakin.integrate.steady import _scaled_resnorm
 
         residual = float(_scaled_resnorm(F, state, floor))
         if criterion == "norm":
@@ -4238,7 +4238,7 @@ class Plant:
         """
         if continuation_from is None:
             return None
-        from aquakin.plant.steady import continuation_solve, make_continuation_kernels
+        from aquakin.integrate.steady import continuation_solve, make_continuation_kernels
 
         pk, yk = continuation_from
         pk = self._coerce_params(pk)
@@ -4307,7 +4307,7 @@ class Plant:
         """
         if continuation_from is None:
             return None
-        from aquakin.plant.steady import arclength_continuation_solve, make_arclength_kernels
+        from aquakin.integrate.steady import arclength_continuation_solve, make_arclength_kernels
 
         pk, yk = continuation_from
         pk = self._coerce_params(pk)
@@ -4675,7 +4675,7 @@ class Plant:
         (True, 75)
         >>> g = jax.grad(lambda p: plant.steady_state(p, y0=warm).state[idx])(params)
         """
-        from aquakin.plant.steady import ptc_forward, solve_steady_state
+        from aquakin.integrate.steady import ptc_forward, solve_steady_state
 
         self._build_state_layout()
         self._build_parameter_layout()

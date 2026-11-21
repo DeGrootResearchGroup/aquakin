@@ -43,7 +43,7 @@ Claude-facing files** at the end.
 | `.claude/rules/integration-differentiation.md` | `integrate/_common.py`, the adjoint / forward-sensitivity modules, `plant/sensitivity.py`, `plant/colored.py` | differentiating stiff models (`dtmax`, adjoints, discrete adjoint, forward sensitivities) |
 | `.claude/rules/schema.md` | `aquakin/schema/**`, model `*.yaml` (shipped, fixtures, examples) | YAML model format + Pydantic schema rules (stoichiometry expressions, `extends:`, `auto`, `composition:`, `speciation:`, `precipitation:`) |
 | `.claude/rules/plant.md` | `aquakin/plant/**` | plant-wide simulation: the `Unit` contract, wiring, the plant clock, introspection, shipped units, shared helpers and constants |
-| `.claude/rules/plant-solve.md` | `plant/plant.py`, `recycle.py`, `colored.py`, `solve_cache.py`, `steady.py` | coloured Jacobian, solve caches, recycle resolution and the cached recycle / flow maps |
+| `.claude/rules/plant-solve.md` | `plant/plant.py`, `recycle.py`, `colored.py`, `solve_cache.py`, `steady.py`, `integrate/steady.py` | coloured Jacobian, solve caches, recycle resolution and the cached recycle / flow maps |
 | `.claude/rules/plant-analysis.md` | `plant/calibrate.py`, `identifiability.py`, `measures.py`, `sensitivity.py` | plant calibration, Fisher / profile / sensor ranking, measured channels |
 | `.claude/rules/plant-audits.md` | `plant/units_check.py`, `balance.py`, `metrics.py` | `plant.check_units()`, `plant.mass_balance()` |
 | `.claude/rules/plant-ifas.md` | `plant/ifas.py`, `integrate/biofilm*.py` | the IFAS / MBBR biofilm unit |

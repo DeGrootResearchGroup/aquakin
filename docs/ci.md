@@ -217,7 +217,7 @@ nor concentrating it in a few files makes the whole suite fast.
   disturbs the required checks.
   - **Convention — apply `full-ci` to any PR that touches convergence-sensitive
     code:** the integrators / adjoints, the PTC steady-state solver
-    (`plant/steady.py`), the plant assembly / recycle resolution, a model's
+    (`integrate/steady.py`), the plant assembly / recycle resolution, a model's
     stoichiometry, the pH / precipitation solvers, or the metric / mass-balance
     kernels. Those are exactly the changes whose regressions live in the `slow` /
     `validation` suites, which **do not run on the PR fast gate** — so the

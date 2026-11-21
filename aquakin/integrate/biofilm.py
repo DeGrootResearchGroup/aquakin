@@ -70,6 +70,7 @@ from aquakin.integrate._common import (
     to_native_time,
     validate_t_eval,
 )
+from aquakin.integrate.steady import solve_steady_state
 
 
 @dataclass
@@ -933,7 +934,7 @@ class BiofilmReactor(GradientCheckMixin):
         continuation (PTC) -- damped-Newton steps that ramp from a stable
         time-stepping move to a full Newton step as the residual falls, robust on
         the stiff/slow biofilm where a plain Newton / Levenberg--Marquardt
-        root-find stalls (see :func:`aquakin.plant.steady.solve_steady_state`). A
+        root-find stalls (see :func:`aquakin.integrate.steady.solve_steady_state`). A
         short forward integration to ``warmup`` seeds the iteration (the seed is
         detached from the gradient). The result is differentiable w.r.t. ``params``
         via the implicit function theorem, so it composes
@@ -973,8 +974,6 @@ class BiofilmReactor(GradientCheckMixin):
         are identically zero, making the residual Jacobian singular). Use the
         continuous feed to drive the bulk instead.
         """
-        from aquakin.plant.steady import solve_steady_state
-
         params = self._check_params(params)
         y0 = self._coerce_y0(C0)
         n = self.model.n_species
@@ -1000,7 +999,7 @@ class BiofilmReactor(GradientCheckMixin):
         # Newton overshoot into non-physical states. The per-state scaling weighs
         # the O(1e3) biomass and O(1) soluble modes comparably. The result is
         # differentiable w.r.t. ``params`` through the implicit function theorem
-        # (see :func:`aquakin.plant.steady.solve_steady_state`).
+        # (see :func:`aquakin.integrate.steady.solve_steady_state`).
         def rhs_flat(y_flat, p):
             rhs = self._make_rhs(condition_arrays, p)
             return rhs(0.0, y_flat.reshape(n_comp, n), p).reshape(-1)

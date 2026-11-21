@@ -46,6 +46,7 @@ from aquakin.integrate._transforms import (
 # Re-exported here so ``from aquakin.plant.sensitivity import _dgsm_aggregate``
 # keeps working.
 from aquakin.integrate.global_sensitivity import _dgsm_aggregate
+from aquakin.plant.results import PlantSolution
 
 logger = logging.getLogger(__name__)
 
@@ -1241,8 +1242,6 @@ def _dynamic_value_jac(
             operating=operating,
             **solve_kwargs,
         )
-
-        from aquakin.plant.plant import PlantSolution
 
         def g_of_ys(ys_traj):
             return jnp.atleast_1d(output_fn(PlantSolution(t=ts, state=ys_traj, plant=plant)))

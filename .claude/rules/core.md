@@ -18,6 +18,16 @@ schema in `schema/model_spec.py`, touches the topic):
 | `core-speciation.md` | `core/ph_solver.py`, `core/speciation.py` | the charge-balance pH solver, derived conditions, the `speciation:` block |
 | `core-precipitation.md` | `core/precipitation.py`, `core/precipitation_equilibrium.py` | the precipitation rate law, the `precipitation:` block, the algebraic equilibrium mode |
 
+## Layering
+
+`core` must not import `schema`, `integrate`, `plant` or `study`, not even
+inside a function body: `tests/unit/test_layering.py` scans every import and
+fails on one. A piece both `core` and a higher layer need lives in `core` and
+is re-exported upward (`default_atol` is in `core/tolerance.py`). The one
+sanctioned exception is `CompiledModel.influent`, which imports
+`plant.influent` because `net.influent(...)` is how plants build their feed;
+the test allows exactly that import and no other.
+
 ## AST Rate Expression Evaluation
 
 Rate expressions in YAML (e.g. `"k1 * [O3] * [Br-]"`) are parsed into an

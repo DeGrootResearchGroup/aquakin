@@ -5,6 +5,7 @@ paths:
   - "aquakin/plant/colored.py"
   - "aquakin/plant/solve_cache.py"
   - "aquakin/plant/steady.py"
+  - "aquakin/integrate/steady.py"
 ---
 
 # Rules — plant solve internals (`aquakin/plant/`)

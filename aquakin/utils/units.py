@@ -721,8 +721,9 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
     return None
 
 
-# Tokens recognised in the canonical "concentration per time" root form.
-_TIME_TOKENS = {"d", "s", "h", "min"}
+# Time tokens recognized in the canonical "concentration per time" root form.
+# Public: ``CompiledModel.time_unit`` reads the inverse-time token against it.
+TIME_TOKENS = {"d", "s", "h", "min"}
 _MASS_TOKENS = {"g", "kg", "mg", "mol", "kmol", "mmol"}
 _VOLUME_LITRE = "L"
 _LENGTH_TOKEN = "m"
@@ -738,10 +739,10 @@ def _root_issue(dim: Dimension) -> str | None:
     d = dim.as_dict()
 
     # time: exactly one time token at exponent -1.
-    time = {k: v for k, v in d.items() if k in _TIME_TOKENS}
+    time = {k: v for k, v in d.items() if k in TIME_TOKENS}
     if len(time) != 1 or next(iter(time.values())) != -1:
         return f"expected one inverse-time factor, found units {dim}"
-    rest = {k: v for k, v in d.items() if k not in _TIME_TOKENS}
+    rest = {k: v for k, v in d.items() if k not in TIME_TOKENS}
 
     # volume: either L^-1, or m^-3 (the length token to the -3).
     if rest.get(_VOLUME_LITRE, 0) == -1:
@@ -826,7 +827,7 @@ def _stoichiometry_issue(root: Dimension, species: list, species_dim: dict) -> s
     rate's unit), so this reports only when the rate matches none of them.
     Returns a message, or ``None`` when consistent or not determinable.
     """
-    time = [k for k, v in root.as_dict().items() if k in _TIME_TOKENS and v == -1]
+    time = [k for k, v in root.as_dict().items() if k in TIME_TOKENS and v == -1]
     if len(time) != 1:
         return None
     conc = root * Dimension({time[0]: 1})
@@ -898,7 +899,7 @@ def check_model_units(
         # below (reuse the same root inference; cheap and advisory).
         root = _infer(ast, _Ctx(name, species_dim, param_dim, condition_dim, []))
         if root is not None:
-            inv = [k for k, v in root.as_dict().items() if k in _TIME_TOKENS and v < 0]
+            inv = [k for k, v in root.as_dict().items() if k in TIME_TOKENS and v < 0]
             if len(inv) == 1:
                 inv_time[name] = inv[0]
             if i in unit_species:

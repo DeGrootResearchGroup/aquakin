@@ -18,6 +18,16 @@ it on demand when a change elsewhere touches the topic):
 | `integration-calibrate.md` | `calibrate.py`, `fit.py`, `fisher.py`, `profile.py`, `identifiability.py`, the experiment-design modules, and the plant calibration / identifiability modules that reuse them | `calibrate()`'s internal structure and the helpers `Plant.calibrate` shares |
 | `integration-differentiation.md` | `_common.py`, `discrete_adjoint.py`, `forward_sensitivity.py`, `forward_solve.py`, `_simultaneous_corrector.py`, `sensitivity.py`, `colored_jacobian.py`, and `plant/sensitivity.py` / `plant/colored.py` | differentiating stiff models: `dtmax`, the adjoints, the discrete adjoint, forward sensitivities |
 
+## Layering
+
+`integrate` must not import `plant` or `study`, not even inside a function
+body (`tests/unit/test_layering.py` checks every import). Solvers generic in
+the right-hand side that the plant also uses live here: the PTC steady-state
+kernel and the continuation drivers are in `integrate/steady.py`, which
+`plant/steady.py` re-exports. Within `integrate`, `_common.py` imports no other
+`integrate` module; the sensitivity preamble (`prepare_sensitivity`,
+`resolve_sens_indices`) lives in `forward_sensitivity.py`.
+
 ## ODE Integration Strategy
 
 ### Solver

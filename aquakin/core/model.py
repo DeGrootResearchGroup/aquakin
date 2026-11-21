@@ -24,6 +24,7 @@ from aquakin.core.nodes import (
 from aquakin.core.parser import parse_rate_expression
 from aquakin.core.stoich_resolve import resolve_auto_coefficients
 from aquakin.core.temperature import arrhenius_factor
+from aquakin.core.tolerance import default_atol
 from aquakin.core.units import prettify_units
 
 # Used to detect references-to-other-expressions during AST inspection.
@@ -495,6 +496,9 @@ class CompiledModel:
         >>> net.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)
         >>> net.influent(SS=400.0, Q=2.0)            # carbon dose
         """
+        # The one sanctioned upward import from ``core`` (checked by the layering
+        # test): ``net.influent(...)`` is how plant examples build their feed, so
+        # the constructor stays on the model and reaches up to the plant layer.
         from aquakin.plant.influent import InfluentSeries
 
         return InfluentSeries.constant(self, overrides, Q=Q, base=base, T=T, units=units, **kwargs)
@@ -526,7 +530,7 @@ class CompiledModel:
         when a trace species needs a tighter tolerance.
 
         ``default=None`` (the default) starts from the per-component noise floor
-        :func:`~aquakin.integrate._common.default_atol` scaled off the model's
+        :func:`~aquakin.core.tolerance.default_atol` scaled off the model's
         reference concentrations -- the same floor a reactor built with
         ``atol=None`` uses -- rather than a fixed scalar, which is ~9 orders too
         tight for g/m3 ASM/ADM states. Pass an explicit scalar ``default=`` for a
@@ -537,8 +541,6 @@ class CompiledModel:
         >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}))
         >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}, default=1e-12))
         """
-        from aquakin.integrate._common import default_atol
-
         base = (
             default_atol(self.default_concentrations())
             if default is None
@@ -858,14 +860,14 @@ class CompiledModel:
             no parameter declares a time unit, or different rate constants
             disagree.
         """
-        from aquakin.utils.units import _TIME_TOKENS, parse_units
+        from aquakin.utils.units import TIME_TOKENS, parse_units
 
         found = set()
         for unit in self.parameter_units.values():
             dim = parse_units(unit)
             if dim is None:
                 continue
-            found |= {tok for tok, exp in dim.tokens if tok in _TIME_TOKENS and exp < 0}
+            found |= {tok for tok, exp in dim.tokens if tok in TIME_TOKENS and exp < 0}
         if len(found) == 1:
             return next(iter(found))
         return None
