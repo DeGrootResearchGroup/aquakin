@@ -45,7 +45,7 @@ from functools import reduce
 
 import jax.numpy as jnp
 
-from aquakin.core.kernels import _safe_log, _safe_sqrt
+from aquakin.core.kernels import _safe_log, _safe_pow, _safe_sqrt
 from aquakin.core.lexer import Token
 from aquakin.core.precedence import PrecedenceParser, accepts, spell_arity
 
@@ -138,7 +138,7 @@ class _Parser(PrecedenceParser):
         return lambda t, a=operand: -a(t)
 
     def power(self, base, exponent, token):
-        return lambda t, a=base, b=exponent: a(t) ** b(t)
+        return lambda t, a=base, b=exponent: _safe_pow(a(t), b(t))
 
     # --- its leaves -------------------------------------------------------
 

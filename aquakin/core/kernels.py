@@ -26,8 +26,9 @@ shared and moving it would churn those nodes for no second consumer.
 from __future__ import annotations
 
 import jax.numpy as jnp
+from jax import lax
 
-__all__ = ["_safe_log", "_safe_sqrt"]
+__all__ = ["_safe_log", "_safe_pow", "_safe_sqrt"]
 
 
 def _safe_log(x):
@@ -64,8 +65,11 @@ def _safe_sqrt(x):
     exact (``sqrt(0) == 0``) while the derivative at and below zero is 0 rather
     than ``inf``; a transiently negative argument returns 0 rather than NaN.
 
-    Same reasoning as the constant-exponent ``powc`` kernel, which keeps
-    ``[X] ** 0.5`` differentiable at ``X == 0``.
+    :func:`_safe_pow` guards the same singularity reached through the ``**``
+    operator, so ``sqrt([X])`` and ``[X] ** 0.5`` agree. (The ``powc`` kernel in
+    ``core/vector_kernel.py`` does *not* help here: it keeps a constant exponent
+    static so the generic ``pow`` JVP's ``base**exp * log(base)`` term is pruned,
+    which is a different NaN and leaves the base derivative infinite.)
 
     The failure this prevents is quiet. An unguarded ``sqrt`` leaves the
     forward solve correct -- the trajectory is unchanged -- and breaks only the
@@ -77,3 +81,44 @@ def _safe_sqrt(x):
     positive = x > 0.0
     safe = jnp.where(positive, x, 1.0)
     return jnp.where(positive, jnp.sqrt(safe), 0.0)
+
+
+def _safe_pow(base, exp):
+    """``base ** exp`` whose gradient stays finite where the exponent makes it
+    infinite.
+
+    ``d/dx x**e = e * x**(e - 1)`` is infinite at ``x == 0`` whenever ``e < 1``
+    -- so ``[X] ** 0.5`` carries exactly the singularity :func:`_safe_sqrt`
+    exists for, and the two spellings of half-order kinetics have to agree.
+
+    **Every value is unchanged.** The guard fires only where the base is exactly
+    zero *and* the exponent is below one, and returns ``0.0 ** exp`` there,
+    which is what the unguarded expression already evaluated to: ``0`` for a
+    positive exponent, ``1`` for a zero one, ``inf`` for a negative one. What
+    changes is the derivative at that point, from infinite to 0 -- the same
+    compromise :func:`_safe_sqrt` makes. ``x ** 1`` therefore keeps its
+    derivative of 1 and ``x ** 2`` is untouched: neither is singular, so neither
+    is guarded.
+
+    A **negative** base with a fractional exponent still yields NaN, as it must.
+    It has no real value, and quietly turning it into a number would hide a
+    modelling error rather than report it.
+
+    A **calibrated** exponent is covered too, by the same branch: with the
+    exponent traced, ``x ** p`` at ``x == 0`` and ``p == 0.5`` gives a NaN
+    tangent unguarded and 0 here. Above one it is finite either way, since JAX's
+    own ``pow`` JVP already guards the ``log(base)`` term (measured on JAX
+    0.10.2; ``core/vector_kernel.py``'s ``powc``, which keeps a constant
+    exponent static, was written against a version that did not).
+    """
+    base = jnp.asarray(base)
+    exp = jnp.asarray(exp)
+    singular = (base == 0.0) & (exp < 1.0)
+    safe = jnp.where(singular, 1.0, base)
+    # The singular branch is a limit value and carries no gradient by design, so
+    # it is computed off the tape. That keeps the value *exactly* what the
+    # unguarded expression gave -- including the sign of a signed zero, where
+    # (-0.0) ** -1 is -inf and not inf -- without the infinite base derivative
+    # or, for a traced exponent, the 0 * -inf of the log term.
+    limit = lax.stop_gradient(base) ** lax.stop_gradient(exp)
+    return jnp.where(singular, limit, safe**exp)
