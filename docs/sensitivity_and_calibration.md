@@ -637,7 +637,8 @@ an online sensor measures:
 | `"TN"` | `TKN + NOx`; dissolved N₂, N₂O and NO are in no nitrogen channel |
 | `"TP"` | total phosphorus |
 | `"TSS"` | the model's own TSS species, or 0.75 × the particulate COD for the ASM1 family |
-| `Measure(name, weights, flow, temperature)` | any other weighted sum |
+| `Measure(name, weights, keywords, flow, temperature)` | any other weighted sum |
+| `"BOD5 = 0.65*[SS] + 0.65*[XS]"` | the same weighted sum, written out |
 
 COD, TKN, NOx, TN and TP come from the model's composition table, so their
 weights follow the composition parameters of the run (`i_XB`, `iN_BM`, ...): a
@@ -651,6 +652,41 @@ from aquakin.plant import Measure, PlantObservable, SensorSet
 
 SensorSet([PlantObservable("effluent", ("TKN", "NOx", "TSS", "Q"))], sigma=[1.0, 0.5, 2.0, 50.0])
 ```
+
+### A channel of your own
+
+A channel the table does not cover is written as a weighted sum, `name =` and
+then the sum, with the species in brackets and the measurements above named as
+they are:
+
+```python
+PlantObservable("effluent", ("SNH", "BOD5 = 0.65*[SS] + 0.65*[XS]", "sCOD = COD - [XS] - [XI]"))
+```
+
+It is the same thing as `Measure("BOD5", {"SS": 0.65, "XS": 0.65})`, in a form
+that also fits in a study file and in the flowsheet editor, where it is typed
+straight into the channels field of the study dialog. Each is reported under its
+name, so the one above gives the columns `effluent.BOD5` and `effluent.sCOD`.
+
+A channel built on `COD`, `TN`, ... carries their dependence on the composition
+parameters with it, so `"half_TN = 0.5*TN"` moves with a fitted `i_XB` exactly as
+`TN` does.
+
+The sum has to stay **linear** in the stream: `*` needs a plain number on one
+side, `/` a plain number on the right, and there is no constant term (so a
+temperature in °C is not a channel -- aquakin reports `T` in °C already). That is
+what keeps every channel a column of one measurement matrix, which is what lets
+the sensor ranking score many candidate designs from a single solve. An
+expression that breaks the rule, or that cannot be read at all, raises
+`MeasureSyntaxError` -- when the study is written, not when it runs:
+
+```text
+MeasureSyntaxError: a measure is a weighted sum, so it cannot multiply two
+measured quantities (at position 8); one side of a '*' must be a number
+```
+
+`aquakin.plant.parse_measure` reads one on its own, if you want to check an
+expression or build the `Measure` it stands for.
 
 A long fit, profile or sensor ranking reports its progress to a `progress=`
 callable, which receives an `aquakin.Progress` (`stage`, `done`, `total`,

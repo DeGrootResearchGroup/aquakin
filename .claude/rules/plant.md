@@ -122,7 +122,29 @@ Key types:
   resolved by `plant/calibrate.py`'s `_resolve_observable_columns` (shared with
   `_resolve_plant_problem`), free names by `_check_free_params`. **Measured
   channels** (`plant/measures.py`): a channel is a species, a keyword (`Q`, `T`,
-  `COD`, `TKN`, `NOx`, `TN`, `TP`, `TSS`) or a `Measure`. `measure_map(model,
+  `COD`, `TKN`, `NOx`, `TN`, `TP`, `TSS`), a `Measure` (species weights,
+  `keywords=` weights on those measurements, `flow`, `temperature`) or a
+  **measure expression** — the same weighted sum as text, `"BOD5 = 0.65*[SS] +
+  0.65*[XS]"`, so a custom channel fits in a study file and in the editor's
+  study dialog (typed into the channels combobox, which takes free text).
+  `parse_measure` reads one (`MeasureSyntaxError`, a `ValueError`, with the
+  position in the text the user wrote, not in the body after the name);
+  `measure_map` calls `as_measure` on every channel **once**, up front, so every
+  consumer below — and the `dW` probe, which re-weighs the same channels — works
+  on resolved `Measure`s. `channel_name` is the results column (the name, never
+  the defining text); use it anywhere channels are named, not `isinstance(c,
+  Measure)`. The grammar is deliberately **affine**: `*` needs a number on one
+  side, `/` a number on the right, and a constant term is refused — the
+  ranking's `y @ M` and `_union_columns` are only valid because a channel is
+  linear in the stream, so **do not relax this**. A `Measure`'s keywords resolve
+  through `_keyword` (not `_channel`, so a keyword is never shadowed by a
+  same-named species) and therefore ride the existing `theta0`/`dW`
+  central-difference probe — a channel built on `TN` follows `i_XB` exactly as
+  `TN` does (`_follows_composition` is what arms the probe; extend it alongside
+  any new parameter-dependent keyword). Syntax is validated in the study schema
+  (`_Observable._readable_measures`) when the study is **written**; species are
+  resolved against the stream's model at **run** time, as an unknown plain
+  channel already is (a `KeyError` naming the stream). `measure_map(model,
   channels)` gives a `MeasureMap` (`W`, `q`, `t`, and the composition parameters
   the weights depend on with `theta0`/`dW`: a central-difference probe, exact for
   the affine content fractions, linearized otherwise, e.g. ASM2d's
@@ -708,6 +730,57 @@ Key types:
     otherwise accurate to the `t_eval` sampling. **This is the tool that found the
     ADM1 nitrogen transcription error** (see the `adm1` model note).
 
+**IFAS / MBBR biofilm (`plant/ifas.py`).** Three things about this unit are
+load-bearing and easy to get wrong.
+
+- **Layer count.** The depth discretization is **first order**, and its error is
+  set by the penetration ratio `L_f/delta`, `delta = sqrt(D_eff*K_s/(k*X_f))` —
+  not by thickness alone. At `L_f/delta = 4`, four layers put the substrate flux
+  **26%** high; sixteen (the default since the BM1 validation) give ~6% there and
+  ~2% at `L_f/delta = 2`. `IFASUnit.layer_resolution(state)` reads the achieved
+  resolution off a solved state (largest fractional soluble drop across one
+  layer); a few per cent is fine, near 1 means the substrate dies inside one
+  cell. The error table is in the class docstring and pinned by
+  `tests/validation/test_biofilm_analytical.py`.
+- **Steady state.** `run_to_steady_state`'s default `criterion="norm"` is
+  **unreliable for this unit**: the held-fixed attached biomass adds
+  `n_layers * density` to `||y||` and nothing to `||dy/dt||`, inflating the
+  tolerance every other state is held to. On BM1 it stopped with the bulk moving
+  at -22 g/(m3 d) and reported convergence, 6% wrong in flux. It now warns when
+  the result's componentwise scaled residual exceeds
+  `NORM_RESIDUAL_WARN_FACTOR * ss_rtol` (100x; BSM1 sits at ~4x with either
+  clarifier). Use `criterion="scaled_residual"` for an IFAS plant.
+- **Growing the film (`dynamic_thickness=True`).** Thickness becomes the final
+  state entry (`L_f`) instead of a fixed parameter, implementing Wanner & Gujer
+  (1986) via `integrate/biofilm_growth.py`: incompressibility fixes the
+  displacement velocity `u(z)` from the production integrated below `z`, species
+  advect on a grid that stretches with the film, and `dL_f/dt = u(L_f) - u_det`.
+  Two things the arbitrary Lagrangian–Eulerian form makes exact and must stay
+  that way: the wall face is impermeable and the surface face carries exactly the
+  detachment velocity. **The grid-dilation term `-X*(dL_f/dt)/L_f` is not
+  optional** — the fluxes govern the mass in a cell, so recovering a
+  concentration from them must account for the cell's own changing volume;
+  without it a uniform film drifts off its own density (measured 2%) and the
+  incompressibility the velocity was derived from is violated. A growing film
+  **freezes nothing** (`biofilm_fixed_mask` is refused), since its inventory is
+  what the balance solves for. The thickness row/column of the coupling pattern
+  is declared **dense**, because those couplings run through saturated Monod
+  terms an AD probe cannot see. Validated against `L_f = mu_net/lambda` for a
+  fully penetrated film and against BM1 cases 2 and 5, where the benchmark lets
+  thickness be an output of the growth/lysis balance (`detachment_rate=0`, so the
+  film settles where net production integrates to zero).
+  **The thickness is either specified or predicted, chosen by `detachment_law`.**
+  `"balance"` pins it: detachment is set to the velocity arriving at the surface
+  (`balanced_detachment_velocity`), so `dL_f/dt` is **exactly** zero — not zero to
+  a tolerance, which matters because a specified thickness must not drift over a
+  long solve — while the species still advect, stratify and shed at the surface.
+  It takes no `detachment_rate` and refuses one, since the velocity is not a free
+  parameter under that law. The power laws (`"quadratic"`, `"linear"`,
+  `"constant"`, via `DETACHMENT_POWERS`) instead let the thickness follow from
+  the physics. A benchmark that fixes the film at a stated thickness (BM3, and
+  BM1 cases 1, 3, 4) wants `"balance"`; one that lets lysis thin it (BM1 cases 2
+  and 5) wants a rate-driven law with `detachment_rate=0`.
+
 Shipped units: `CSTRUnit` (kinetics + aeration), `IFASUnit` / `MBBRUnit`
 (an IFAS/MBBR tank: a CSTR bulk coupled to a depth-resolved attached biofilm —
 see below), `MBRUnit` (membrane bioreactor: a high-MLSS aerated reactor whose
@@ -794,6 +867,12 @@ flux is the upper layer's either way. Measured (`scripts/probe_settler_accuracy.
 cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic effluent
 means within 0.07% of Takács, the constant-influent steady state identical (layers
 2–5 equal there, where the rules agree).
+
+**Units in the help.** A setting's numpydoc entry names its unit in
+parentheses, flows and times per day as aquakin runs them on the plant's clock
+(`Volume (m³).`, `Fixed dose flow (m³/d).`, `Integral time (d).`); the editor
+shows that unit beside the field (on the plant's clock). Give each setting its
+own entry (a shared `Kp, Ti, Tt : float` cannot name one unit each).
 
 **Sizes are checked at construction.** Every unit with a volume calls
 `_constants.check_positive(name, "volume", value)` first in `__post_init__`

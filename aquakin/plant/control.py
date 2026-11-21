@@ -50,10 +50,14 @@ class PIController:
         Species read from the sensed inlet stream (e.g. ``"SO"``).
     setpoint : float
         Target value for the measured variable.
-    Kp, Ti, Tt : float
-        Proportional gain, integral time, anti-windup tracking time (Ti, Tt in
-        the plant's time unit, i.e. days for BSM). BSM2 DO loop: Kp=25,
-        Ti=0.002, Tt=0.001.
+    Kp : float
+        Proportional gain (output per unit of the measured variable). BSM2's DO
+        loop uses 25.
+    Ti : float
+        Integral time (d, on the plant's clock). BSM2's DO loop uses 0.002.
+    Tt : float
+        Anti-windup tracking time (d, on the plant's clock). BSM2's DO loop
+        uses 0.001.
     offset : float
         Output bias (the output when ``e`` and the integral are zero).
     out_min, out_max : float

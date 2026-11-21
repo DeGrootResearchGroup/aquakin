@@ -1,0 +1,143 @@
+# IWA Task Group on Biofilm Modeling -- Benchmark Problem 3 (BM3).
+#
+# A multi-species nitrifying biofilm: aerobic heterotrophs, aerobic autotrophic
+# nitrifiers and inert biomass coexisting on a flat substratum in a completely
+# mixed reactor, on the same physical domain as BM1. The point of the benchmark
+# is microbial interaction -- the three biomass types compete for space, and how
+# a model distributes them through the depth is what distinguishes it.
+#
+# Nitrifiers are treated as one species oxidising ammonia directly to nitrate,
+# with no nitrite intermediate. Neither ammonia uptake for heterotrophic
+# synthesis nor its release during respiration is included, which is why
+# nitrogen appears only in the autotroph growth reaction.
+#
+# Decay follows two paths: respiration (endogenous oxidation, consuming oxygen)
+# and inactivation (conversion to inert biomass). The inert pool neither
+# consumes substrate nor is consumed.
+#
+# Stoichiometry and kinetics are the benchmark's own tables; the physical
+# parameters (geometry, thickness, biomass density, diffusivities) belong to the
+# reactor rather than the model and are set by the test.
+model:
+  name: bm3_biofilm
+  version: "1.0"
+  description: "IWA biofilm Benchmark Problem 3: heterotrophs, nitrifiers and inert biomass."
+  references:
+    - "Rittmann, B.E., Schwarz, A.O., Eberl, H.J., Morgenroth, E., Perez, J., van Loosdrecht, M. & Wanner, O. (2004). Results from the multi-species Benchmark Problem (BM3) using one-dimensional models. Water Science and Technology 49(11-12), 163-168."
+    - "Noguera, D.R. & Morgenroth, E. (2004). Introduction to the IWA Task Group on Biofilm Modeling. Water Science and Technology 49(11-12), 131-136."
+
+species:
+  - name: SS
+    description: "Organic substrate (electron donor for the heterotrophs)"
+    units: g_COD/m3
+    default_concentration: 30.0
+  - name: SN
+    description: "Ammonia nitrogen (electron donor for the nitrifiers)"
+    units: g_N/m3
+    default_concentration: 6.0
+  - name: SO2
+    description: "Dissolved oxygen (electron acceptor for both)"
+    units: g_O2/m3
+    default_concentration: 10.0
+  - name: XH
+    description: "Active heterotrophic biomass"
+    units: g_COD/m3
+    default_concentration: 0.0
+  - name: XN
+    description: "Active autotrophic (nitrifying) biomass"
+    units: g_COD/m3
+    default_concentration: 0.0
+  - name: XI
+    description: "Inert biomass; neither consumes nor is consumed"
+    units: g_COD/m3
+    default_concentration: 0.0
+
+conditions:
+  - name: T
+    description: "Temperature (K). The benchmark declares no temperature dependence."
+    units: K
+    default: 293.15
+
+parameters:
+  # True yields. The heterotroph's maximum specific utilization rate is
+  # q_max = mu_max/Y_H = 9.52 g_CODS/(g_CODX d), and the nitrifier's
+  # q_max = mu_max/Y_N = 2.2 g_N/(g_CODX d).
+  Y_H: {value: 0.63,  units: "g_CODX/g_CODS", bounds: [0.3, 0.9]}
+  # The benchmark lists Y_N as 0.063 g_CODX/g_CODN -- per gram of the COD
+  # equivalent of the nitrogen. The stoichiometry is written against C_N, which
+  # is a nitrogen concentration (the influent and half-saturation are both given
+  # in g_N/m3), so the yield has to be carried onto that basis before it is
+  # used: 1 g N is 4.57 g COD_N, giving 0.063 * 4.57 = 0.28791 g_CODX/g_N.
+  #
+  # The benchmark's own oxygen coefficient is the check. On this basis
+  # -(4.57 - Y_N)/Y_N = -14.87, which is what oxidising the 1/Y_N = 3.47 g N
+  # takes (3.47 * 4.57 = 15.87 g O2) less the 1 g O2-equivalent retained as
+  # biomass COD. Left at 0.063 the same expression gives -71.54, which
+  # corresponds to no amount of nitrogen the reaction actually consumes.
+  Y_N: {value: 0.28791, units: "g_CODX/g_N", bounds: [0.05, 0.6]}
+  # Oxygen half-saturations are shared by each organism's growth and
+  # respiration, so they sit at the model level rather than in one reaction.
+  K_O2H: {value: 0.2, units: "g_O2/m3", bounds: [0.01, 5.0]}
+  K_O2N: {value: 0.5, units: "g_O2/m3", bounds: [0.01, 5.0]}
+
+reactions:
+  - name: heterotroph_metabolism
+    description: "Heterotrophic growth, dual Monod on organic substrate and oxygen."
+    rate: "mu_max_H * ([SS] / (K_S + [SS])) * ([SO2] / (K_O2H + [SO2])) * [XH]"
+    parameters:
+      mu_max_H: {value: 6.0, units: "1/d",      bounds: [0.1, 60.0]}
+      K_S:      {value: 4.0, units: "g_COD/m3", bounds: [0.1, 100.0]}
+    stoichiometry:
+      XH:  1
+      SS:  "-1 / Y_H"
+      SO2: "-(1 - Y_H) / Y_H"
+
+  - name: heterotroph_inactivation
+    description: "Heterotrophic decay to inert biomass."
+    rate: "b_ina_H * [XH]"
+    parameters:
+      b_ina_H: {value: 0.08, units: "1/d", bounds: [0.001, 1.0]}
+    stoichiometry:
+      XH: -1
+      XI: 1
+
+  - name: heterotroph_respiration
+    description: "Heterotrophic endogenous respiration, oxidising biomass with oxygen."
+    rate: "b_res_H * [XH] * ([SO2] / (K_O2H + [SO2]))"
+    parameters:
+      b_res_H: {value: 0.32, units: "1/d", bounds: [0.001, 2.0]}
+    stoichiometry:
+      XH:  -1
+      SO2: -1
+
+  - name: autotroph_metabolism
+    description: >-
+      Nitrifier growth, dual Monod on ammonia and oxygen. The oxygen demand
+      1/Y_N carries the 4.57 g O2 per g N of complete nitrification, less the
+      nitrogen fixed into biomass.
+    rate: "mu_max_N * ([SN] / (K_N + [SN])) * ([SO2] / (K_O2N + [SO2])) * [XN]"
+    parameters:
+      mu_max_N: {value: 0.1386, units: "1/d",     bounds: [0.001, 2.0]}
+      K_N:      {value: 1.5,    units: "g_N/m3",  bounds: [0.05, 50.0]}
+    stoichiometry:
+      XN:  1
+      SN:  "-1 / Y_N"
+      SO2: "-(4.57 - Y_N) / Y_N"
+
+  - name: autotroph_inactivation
+    description: "Nitrifier decay to inert biomass."
+    rate: "b_ina_N * [XN]"
+    parameters:
+      b_ina_N: {value: 0.03, units: "1/d", bounds: [0.001, 1.0]}
+    stoichiometry:
+      XN: -1
+      XI: 1
+
+  - name: autotroph_respiration
+    description: "Nitrifier endogenous respiration, oxidising biomass with oxygen."
+    rate: "b_res_N * [XN] * ([SO2] / (K_O2N + [SO2]))"
+    parameters:
+      b_res_N: {value: 0.12, units: "1/d", bounds: [0.001, 2.0]}
+    stoichiometry:
+      XN:  -1
+      SO2: -1

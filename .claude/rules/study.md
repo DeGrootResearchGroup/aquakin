@@ -90,7 +90,9 @@ results. The design and the owner's decisions are in
   steady state, the plant's outlets (outputs nothing is connected to, by stream
   name when they have one, else every named stream) with their measurement
   keywords. `study_results(path)` reads results for a front end: every kind
-  gives its file names; `simulate` also its values by stream and channel
+  gives its file names; Fisher, rank, calibrate and profile their summaries,
+  tables, matrix, and (calibrate) the fitted and the data trajectories by stream
+  (`_analysis_results`); `simulate` also its values by stream and channel
   (`_by_stream` splits `<stream>.<channel>` columns by the study's own stream
   names, since a stream name may hold a dot), non-finite values as `None`, and
   temperature converted to °C (the files keep kelvin), and

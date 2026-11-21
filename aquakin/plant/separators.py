@@ -53,12 +53,12 @@ class IdealThickener(StatelessUnit):
     name : str
     model : CompiledModel
     target_tss_percent : float
-        Target solids fraction of the underflow, in percent (BSM2: 7 for the
-        thickener, 28 for dewatering). The underflow is concentrated so its TSS
+        Target solids fraction of the underflow (%); BSM2 uses 7 for the
+        thickener and 28 for dewatering. The underflow is concentrated so its TSS
         equals ``target_tss_percent · 10000`` mg/L (``%`` → mg/L).
     tss_removal_percent : float
-        Fraction of inflowing solids captured to the underflow, in percent
-        (default 98 per BSM2). The remainder leaves with the overflow (reject).
+        Fraction of inflowing solids captured to the underflow (%), 98 by
+        default as in BSM2. The remainder leaves with the overflow (reject).
     settling_species : tuple[str, ...]
         Particulates that are separated (concentrated to the underflow).
         Defaults to the ASM1 settling set (includes XND).

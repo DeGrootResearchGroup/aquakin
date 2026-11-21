@@ -1,0 +1,64 @@
+# IWA Task Group on Biofilm Modeling -- Benchmark Problem 1 (BM1).
+#
+# A single-species biofilm on a flat substratum in a completely mixed reactor:
+# one particulate component (active heterotrophic biomass) growing on an organic
+# substrate (electron donor) with oxygen as the electron acceptor, plus a lysis
+# process. No conversion takes place in the bulk phase.
+#
+# Stoichiometry and kinetics are Tables 2-3 of the benchmark definition; the
+# physical parameters (reactor geometry, biofilm thickness, biomass density)
+# belong to the reactor, not the model, and are set by the test.
+model:
+  name: bm1_biofilm
+  version: "1.0"
+  description: "IWA biofilm Benchmark Problem 1: one heterotroph on substrate + oxygen."
+  references:
+    - "Morgenroth, E., Eberl, H.J., van Loosdrecht, M.C.M., Noguera, D.R., Pizarro, G.E., Picioreanu, C., Rittmann, B.E., Schwarz, A.O. & Wanner, O. (2004). Comparing biofilm models for a single species biofilm system. Water Science and Technology 49(11-12), 145-154."
+    - "Noguera, D.R. & Morgenroth, E. (2004). Introduction to the IWA Task Group on Biofilm Modeling. Water Science and Technology 49(11-12), 131-136."
+
+species:
+  - name: SS
+    description: "Organic substrate (electron donor)"
+    units: g_COD/m3
+    default_concentration: 30.0
+  - name: SO2
+    description: "Dissolved oxygen (electron acceptor)"
+    units: g_O2/m3
+    default_concentration: 10.0
+  - name: XH
+    description: "Active heterotrophic biomass"
+    units: g_COD/m3
+    # Zero: the benchmark's bulk phase is sterile (no conversion takes place in
+    # it), and the biofilm's biomass density is a physical parameter of the
+    # reactor (1e4 g_COD/m3), set on the biofilm, not a property of the model.
+    default_concentration: 0.0
+
+conditions:
+  - name: T
+    description: "Temperature (K). The benchmark declares no temperature dependence."
+    units: K
+    default: 293.15
+
+parameters:
+  Y_H: {value: 0.63, units: "g_CODX/g_CODS", bounds: [0.3, 0.9]}
+
+reactions:
+  - name: growth
+    description: "Heterotrophic growth, dual Monod on substrate and oxygen."
+    rate: "mu_max * ([SS] / (K_S + [SS])) * ([SO2] / (K_O2 + [SO2])) * [XH]"
+    parameters:
+      mu_max: {value: 6.0,  units: "1/d",     bounds: [0.1, 60.0]}
+      K_S:    {value: 4.0,  units: "g_COD/m3", bounds: [0.1, 100.0]}
+      K_O2:   {value: 0.2,  units: "g_O2/m3",  bounds: [0.01, 5.0]}
+    stoichiometry:
+      XH:  1
+      SS:  "-1 / Y_H"
+      SO2: "-(1 - Y_H) / Y_H"
+
+  - name: lysis
+    description: "Heterotrophic lysis. Produces no particulate or soluble products."
+    rate: "k_H * [XH]"
+    parameters:
+      k_H: {value: 0.4, units: "1/d", bounds: [0.01, 5.0]}
+    stoichiometry:
+      XH: -1

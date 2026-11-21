@@ -466,7 +466,11 @@ gives those settings and `study_results(path)` reads a study's results back.
 The **Studies** tab lists the project's studies and where each stands (fresh,
 stale and why, not run, failed, cancelled). Run one to watch its progress and
 cancel it; freeze, unfreeze or copy it. Running a study that has results, or
-unfreezing one, asks first and offers to keep a copy. Running a study saves the
+unfreezing one, asks first and offers to keep a copy. **Results** shows what a
+study found: a simulation's streams, a Fisher study's standard deviations,
+design criteria and information matrix, a ranking of sensor sets, a
+calibration's fitted parameters with the data against the fit, or a profile's
+curve and interval. Running a study saves the
 flowsheet's unsaved edits first, so the study runs what you see (a frozen study
 runs its snapshot). Tick **Don't ask again**
 to replace results without the question from then on; the **Ask before

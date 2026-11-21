@@ -21,6 +21,50 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `IFASUnit` / `MBBRUnit` can grow their biofilm. `dynamic_thickness=True` makes
+  the thickness `L_f` a state instead of a fixed parameter: with
+  `biofilm_density` setting the incompressible film's density and
+  `detachment_rate` / `detachment_law` closing the surface balance, the film
+  thickens as it grows,
+  thins when decay outruns growth, and sorts its species by depth. This is the
+  one-dimensional multispecies biofilm of Wanner & Gujer (1986): net production
+  anywhere inside an incompressible film has to displace material outward, and
+  that displacement carries the species with it. `L_f` is the final state entry
+  and is named `L_f` in `state_names()`. Validated against the closed form a
+  fully penetrated film must satisfy, `L_f = mu_net / lambda`, to better than
+  0.3%.
+- `detachment_law="balance"` on a growing `IFASUnit` / `MBBRUnit`: **a specified
+  total thickness.** Detachment is set to exactly the velocity arriving at the
+  surface, so `dL_f/dt` is zero by construction and the film stays at
+  `biofilm_thickness` -- while the species still grow, advect and stratify, and
+  biomass still leaves at the surface. It is what a problem means by a specified
+  average thickness "maintained by detachment", and it takes no
+  `detachment_rate`. The rate-driven laws (`"quadratic"`, `"linear"`,
+  `"constant"`) are unchanged and still let the thickness follow from the
+  physics, so a thickness can now be either specified or predicted.
+- `IFASUnit.layer_resolution(state)` reports, per soluble species, the largest
+  fractional concentration drop across one biofilm layer -- how well `n_layers`
+  resolves the gradient the substrate flux is read from. A few per cent is well
+  resolved; a value near 1 means the substrate is consumed inside a single layer
+  and `n_layers` is too low. It distinguishes a limiting substrate from one that
+  penetrates freely.
+- Measured channels of your own, written as a weighted sum: a channel may now be
+  given as the text `"BOD5 = 0.65*[SS] + 0.65*[XS]"` wherever a species or a
+  measurement keyword is accepted -- `plant.calibrate`, `plant_fisher_information`,
+  `plant_profile_likelihood`, `plant_rank_sensor_sets`, a study's `observables:`,
+  and the flowsheet editor's study dialog, where it is typed straight into the
+  channels field. Species go in brackets and the measurements (`COD`, `TKN`,
+  `NOx`, `TN`, `TP`, `TSS`, `Q`, `T`) are named as they are, so a channel can be
+  built on them as well as on species (`"sCOD = COD - [XS] - [XI]"`); their
+  weights keep following the composition parameters of the run, so a custom
+  channel built on `TN` moves with a fitted `i_XB` exactly as `TN` does. The
+  combination must stay linear -- a `*` needs a plain number on one side -- which
+  is what lets a channel remain a column of the measurement matrix. Results are
+  reported under the channel's name. `aquakin.plant.parse_measure` reads one in
+  Python, `aquakin.plant.Measure` gains a `keywords=` argument for the same thing
+  built by hand, and an unreadable expression raises
+  `aquakin.plant.MeasureSyntaxError` (a `ValueError`) when the study is written,
+  not when it runs.
 - Rate expressions gain four general math functions — `exp(x)`, `log(x)`,
   `sqrt(x)` and `min(a, b)` — for rate laws the activated-sludge vocabulary
   does not cover. `exp` and `log` matter most: a term such as a Beer–Lambert
@@ -134,7 +178,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   (one per flowsheet file in the folder) and
   shows its results, a steady state as tables of the streams leaving the plant
   and a run in time as a chart per channel (**Results** on any study shows them
-  again; temperature is shown in °C). Replacing a study's results asks first,
+  again; temperature is shown in °C). Fisher information, sensor-set ranking,
+  calibration (the data against the fit) and profile studies show their results
+  as tables and charts too. Unit forms show each setting's unit where its help
+  names one, plain help text, and an unreadable value under its field; new
+  settling units take the particulates of their model, and selecting a unit
+  opens its form. Replacing a study's results asks first,
   with a **Don't ask again** box; the Studies tab's **Ask before replacing
   results** switch turns the question back on, and the choice is kept for the
   user between sessions. **New study** and
@@ -289,6 +338,14 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Changed
 
+- `IFASUnit` / `MBBRUnit` now default to `n_layers=16`, up from 4. The biofilm
+  discretization is first order and its error is governed by the penetration
+  ratio `L_f/delta` rather than thickness alone: at `L_f/delta = 4` four layers
+  put the substrate flux 26% high, where sixteen keep a typical carrier biofilm
+  within a couple of per cent. The class docstring carries the error table; lower
+  it again for a thin, fully penetrated film, where four layers are accurate to
+  well under a per cent and cheaper.
+
 - A plant created without `time_unit` whose kinetic models use different time
   units, for example an ozonation model in seconds next to ASM1 in days, now
   raises `UnitsError` when solved; give it a `time_unit` and the models are
@@ -383,6 +440,21 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `Plant.run_to_steady_state()` no longer reports convergence in silence when its
+  default `criterion="norm"` has stopped early. That test compares `||dy/dt||`
+  with `ss_atol + ss_rtol*||y||`, so every state inflates the tolerance that
+  every other state is held to -- and an IFAS/MBBR tank defeats it, because its
+  held-fixed attached biomass contributes `n_layers * density` to `||y||` and
+  nothing to `||dy/dt||`. A solve could stop with the tank's bulk still moving by
+  70% of its own value per day and call it converged. The componentwise scaled
+  residual the result already carried is now checked against the verdict, and a
+  `RuntimeWarning` names the offending state and points at
+  `criterion="scaled_residual"`. No steady state changes: this is a check on the
+  verdict, not on the solve.
+- `plant.mass_balance()` now accounts for an IFAS/MBBR tank. Its state is a depth
+  profile rather than a single concentration vector, so the balance skipped the
+  unit outright -- its bulk liquid as well as its attached biomass -- and the
+  shortfall appeared as an imbalance the size of the whole tank.
 - Every plant unit with a volume (CSTR, MBR, IFAS/MBBR, digester, primary
   clarifier, storage tank, SBR, UV and chlorine contact) refuses a volume that
   is not a positive finite number; a zero or negative volume used to build, and

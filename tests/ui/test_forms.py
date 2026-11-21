@@ -146,3 +146,53 @@ def test_the_aerated_species_is_chosen_from_the_units_model(ui_catalog):
     _, settings = forms.read_rows(doc, uid, list(rows.values()))
     assert settings["aeration"]["species"] == "SO2" and settings["aeration"]["kla"] == 100.0
     assert forms._oxygen(["SA", "S_O2_aq"]) == "S_O2_aq" and forms._oxygen(["SA"]) is None
+
+
+def test_help_text_is_plain_and_names_the_unit(bsm1):
+    from aquakin_ui.catalog import plain
+
+    assert plain("Sums ``Q_in``, see :class:`~aquakin.plant.Aeration` and *note*.") == (
+        "Sums Q_in, see Aeration and note."
+    )
+    assert "``" not in bsm1.catalog.kind("mixer")["summary"]
+    assert forms.unit_in("Clarifier liquid volume (m³); sets the HRT.") == "m³"
+    assert forms.unit_in("Bulk liquid volume (m^3).") == "m³"
+    assert forms.unit_in("Fixed underflow flow rate, m³/d (the pump).") == "m³/d"
+    assert forms.unit_in("A ratio (e.g. 0.5).") == ""
+    rows = {r["key"]: r for r in forms.rows_for(bsm1, "tank3", _info)}
+    assert rows["volume"]["suffix"] == "m³" and rows["conditions.T"]["suffix"] == "K"
+    assert rows["aeration.value"]["suffix"] == "1/d"
+
+
+def test_a_bad_value_names_its_row(bsm1):
+    rows = forms.rows_for(bsm1, "tank3", _info)
+    next(r for r in rows if r["key"] == "volume")["value"] = "big"
+    with pytest.raises(forms.FieldError) as caught:
+        forms.read_rows(bsm1, "tank3", rows)
+    assert caught.value.key == "volume"
+
+
+def test_settling_species_follow_the_units_model():
+    asm3 = ["SO2", "SS", "XI", "XS", "XH"]
+    settling = {"name": "particulate_species", "default": ["XS", "XB_H"]}
+    assert forms.suggest_species(settling, None, asm3) == ["XI", "XS", "XH"]
+    assert forms.suggest_species(settling, ["XS"], asm3) is None  # all in the model
+    assert forms.suggest_species({**settling, "default": []}, None, asm3) == ["XI", "XS", "XH"]
+    assert forms.suggest_species({"name": "gas_species", "default": ["X"]}, None, asm3) is None
+
+
+def test_units_on_the_plants_clock_follow_it(ui_catalog):
+    assert forms.unit_in("Fixed dose flow (m³/d).", "h") == "m³/h"
+    assert forms.unit_in("Integral time (d, on the plant's clock).", "min") == "min"
+    assert forms.unit_in("Decay rate (1/d). Default 0.", "s") == "1/s"
+    assert forms.unit_in("Applied dose (g/m³, i.e. mg/L of chlorine).", "h") == "g/m³"
+    assert forms.unit_in("Surface (m²/m³: biofilm area per volume).") == "m²/m³"
+    # Every shipped unit kind names the unit of its main sizes and flows.
+    named = {
+        (k, s["name"]): forms.unit_in(s["help"])
+        for k, kind in ui_catalog.kinds.items()
+        for s in kind["settings"]
+    }
+    assert named[("cstr", "volume")] == "m³" and named[("influent", "Q")] == "m³/d"
+    assert named[("ideal_clarifier", "underflow_Q")] == "m³/d"
+    assert named[("dosing", "flow")] == "m³/d" and named[("pi_controller", "Ti")] == "d"

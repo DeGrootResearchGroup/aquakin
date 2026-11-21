@@ -27,12 +27,12 @@ import aquakin (to build expected values).
 | module | holds | notes |
 |---|---|---|
 | `worker.py` | `AquakinWorker`, `WorkerError` | one process, requests serialized by a lock, replies read on a daemon thread; a fresh worker's first reply gets `START_TIMEOUT` extra (importing JAX); reply ids checked; stderr to a per-worker log file (`mkstemp`, removed on `stop`) quoted in errors |
-| `catalog.py` | `Catalog` | the worker's catalogue reply; `ports_for` reads the catalogue's port rules (no round trip) |
+| `catalog.py` | `Catalog`, `plain` | the worker's catalogue reply, its summaries and help made plain text (`plain`: docstring ``code``, :roles: and *emphasis* lose their markup); `ports_for` reads the catalogue's port rules (no round trip) |
 | `document.py` | `Flowsheet`, `Unit`, `edge_id` | **pure**: units keyed by stable id (the plant's unit name), labels as display text; `from_spec`/`to_spec` (format 2; `from_spec` refuses a kind the catalogue lacks, which would otherwise break every redraw), `connect` (refuses with a reason), `dropped_by` (previews the connections new settings would remove) and `apply`, `remove` (also drops streams/endpoints naming the unit), `port_status`, `back_edges` (aquakin's recycles when known, else a DFS), `lanes`, `auto_layout` (wraps into bands of 7 ranks) |
-| `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. **Numbers are shown exactly** (`_float_text`, the shortest round-trip text): Apply reads every field back, so a rounded display would change values nobody edited. The aeration value is read only in the mode the form was drawn with, and a unit's conditions are kept when its model could not be described (no condition rows). Lists no setting or type of its own |
+| `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. **Numbers are shown exactly** (`_float_text`, the shortest round-trip text): Apply reads every field back, so a rounded display would change values nobody edited. The aeration value is read only in the mode the form was drawn with, and a unit's conditions are kept when its model could not be described (no condition rows). Each row carries a `suffix`, the unit its help names (`unit_in`: "(m³)", "(g/m³, i.e. mg/L)", ", m³/d"; help writes flows and times per day and they are shown on the plant's clock, m³/h on an hourly plant), a condition's model unit (T in K), kLa's 1/clock, the DO set-point's oxygen unit. An unreadable field raises `FieldError` with its row `key` (shown under the field from `sel_errors`). `suggest_species` gives settling settings the model's X species when their ASM1 default (or empty one) does not fit; new units and model changes take it. Lists no setting or type of its own (the settling settings are named by their role) |
 | `icons.py` | `ICONS`, `COLOURS`, `CATEGORY_LABELS`, `SVG`, `icon_name` | the only per-kind presentation table; an unlisted kind gets the tank icon |
 | `study_form.py` | `fields_for`, `draft_for`, `study_from`, `missing` | **pure**: the study dialog's draft from the worker's `study_form` (numbers kept as text, an even time grid as start / stop / count) and back, empty fields and defaults left out; `missing` names a kind's required fields by label. Lists no setting of its own |
-| `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`) |
+| `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart`, `xy_chart`, `analysis_view` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`). `xy_chart` is the core: a line, data points (slot-2 orange, with a fit/data legend when both) and a labelled reference hairline (a profile's threshold). `analysis_view` turns a Fisher, rank, calibrate or profile reply into notes, tables and charts |
 | `settings.py` | `Settings`, `DEFAULTS`, `settings_path` | the user's preferences, a JSON file in the configuration folder (`AQUAKIN_UI_CONFIG` overrides; `tests/ui/conftest.py` points it at a temporary file for every test, so tests never touch the user's); unknown keys and wrong types are ignored on read; a failed write keeps the value for the session |
 | `jobs.py` | `StudyRun` | one study run = one `python -m aquakin study run --json` process: JSON progress events on stdout, `cancel` on stdin (killed after `CANCEL_GRACE` if no checkpoint comes); its own temporary log |
 | `app.py` | `Editor` | the page; turns finished canvas edits into document changes; the Studies tab |
@@ -115,8 +115,16 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   refused (it would run its snapshot, not the drawing). The study dialog sets
   `flowsheet:` for a new study of a spec not named `flowsheet.yaml`
   (`flowsheet_entry`) and keeps an edited study's own (the form has no such
-  field, so `study_from` would drop it). A run started this way opens its results when it
-  finishes (`_show_when_done`). **Results** (`show_results`) asks the worker for
+  field, so `study_from` would drop it). **A measured channel may be a measure
+  expression** (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, see `.claude/rules/plant.md`):
+  the channels widget is a `VCombobox`, not a `VSelect`, so free text becomes a
+  chip and travels as a plain string the draft must not touch — aquakin reads it
+  when the study is written (`create_study` / `update_study`), and the refusal
+  shows beside the buttons like any other. Do **not** add a per-keystroke
+  validation round trip for it (the form rule above); `aquakin_ui` cannot read an
+  expression itself anyway. A structured measure read from a file still rides in
+  the row's `measures` map, keyed by name. A run started this way opens its
+  results when it finishes (`_show_when_done`). **Results** (`show_results`) asks the worker for
   `study_results`; the charts are redrawn in Python when the stream or channels
   change (`choose_results_stream` / `show_charts`).
 - **The flowsheet's file** (`_spec_file`) is the one last opened or saved here;
@@ -151,6 +159,11 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
 - **A cancelled run is reported cancelled** even when it is killed before a
   checkpoint (`StudyRun.cancelled`). "Replace results?" is asked only for a
   study with results (fresh, stale, damaged).
+- **Selecting a unit opens its form** (`on_select` sets the Unit tab). The
+  palette marks kinds with a required setting the form cannot edit
+  (`_needs_python`: an SBR's phases, a dosing unit's reagent). A new flowsheet
+  runs on days (`options: {time_unit: d}`). Errors reach the page without
+  exception class names (`_plain_error`).
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
 - Icons are sent once (`icons` prop, injected into nodes); the spec text only

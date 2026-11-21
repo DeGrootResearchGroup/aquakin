@@ -51,7 +51,7 @@ class HydraulicDelayUnit:
     model : CompiledModel
         Model of the passed stream.
     tau : float
-        Lag time constant (days). Smaller is faster (less delay).
+        Lag time constant (d). Smaller is faster (less delay).
     initial_flow : float, optional
         Initial held flow ``Q`` (m³/d) seeding the state. Default 0. **Set this
         to the expected influent flow** for a steady start: the outlet flow IS

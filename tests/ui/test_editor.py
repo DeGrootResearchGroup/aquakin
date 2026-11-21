@@ -40,9 +40,9 @@ def test_checks_come_from_aquakin(editor):
 def test_a_dropped_unit_is_built_by_aquakin_and_its_error_shown(editor):
     editor.on_dropped({"kind": "cstr", "position": {"x": 0, "y": 600}})
     uid = editor.state.selected
-    assert editor._check_unit(uid) == "ValueError: 'volume' is required"
+    assert editor._check_unit(uid) == "'volume' is required"
     editor.publish(checks=False)
-    assert f"{uid}: ValueError: 'volume' is required" in editor.state.errors
+    assert f"{uid}: 'volume' is required" in editor.state.errors
     editor.on_remove({"nodes": [uid], "edges": []})
     assert uid not in editor.doc.units
 
@@ -300,20 +300,25 @@ def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path):
         ed.set_ask_replace(False)  # no change: nothing to keep, nothing said
         assert ed.state.message == ""
 
-        # A kind other than a simulation lists its result files.
+        # A Fisher study's results are shown as tables.
         fisher = project / "studies" / "design"
         (fisher / "results").mkdir(parents=True)
         (fisher / "study.yaml").write_text(
             "study: {kind: fisher, free: [asm1.muH], observables: [{stream: tank}], "
             "t_obs: [1.0], sigma: 1.0}\n"
         )
-        (fisher / "results" / "fisher.csv").write_text("")
+        (fisher / "results" / "fisher.csv").write_text(",asm1.muH\nasm1.muH,4.0\n")
+        (fisher / "results" / "summary.yaml").write_text(
+            "values: {asm1.muH: 6.0}\nstd: {asm1.muH: 0.5}\ncriteria: {D: 1.386}\n"
+        )
         ed.state.studies = [
             *ed.state.studies,
             {"name": "design", "path": str(fisher), "state": "fresh"},
         ]
         ed.show_results("design")
-        assert ed.state.results_mode == "files" and ed.state.results_files == ["fisher.csv"]
+        assert ed.state.results_mode == "analysis"
+        assert ed.state.results_files == ["fisher.csv", "summary.yaml"]
+        assert ed.state.results_tables[0]["rows"] == [["asm1.muH", "6.000", "0.5000"]]
 
         worker.fail = {"study_form"}
         ed.new_study()
@@ -634,4 +639,78 @@ def test_toolbar_actions_apply_the_forms_edits_and_aeration_suits_the_model(tmp_
         assert ed.doc.units["tank"].settings["aeration"]["species"] == "SO2"
     finally:
         ed.stop_runs()
+        ed.worker.stop()
+
+
+def test_the_form_marks_the_bad_field_and_new_units_suit_the_model(tmp_path):
+    from aquakin_ui.app import _plain_error
+
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-usability-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        ed.state.panel = "studies"
+        ed.on_select({"nodes": ["tank"], "edges": []})
+        assert ed.state.panel == "properties"  # its form, from whichever tab was open
+        assert not ed.apply_properties(_rows_with(ed, "volume", "big"))
+        assert ed.state.sel_errors == {"volume": "'big' is not a number"}
+        assert ed.apply_properties(_rows_with(ed, "volume", "900"))
+        assert ed.state.sel_errors == {}
+
+        # A new MBR settles the model's particulates, not none.
+        ed.on_dropped({"kind": "mbr", "position": {"x": 0, "y": 300}})
+        settling = ed.doc.units[ed.state.selected].settings["particulate_species"]
+        assert settling and all(s.startswith("X") for s in settling)
+
+        kinds = {k["kind"]: k for group in ed.state.palette for k in group["kinds"]}
+        assert kinds["sbr"]["python"] and "only be set from Python" in kinds["sbr"]["summary"]
+        assert not kinds["cstr"]["python"]
+        assert _plain_error("WorkerError: FileNotFoundError: no such file") == "no such file"
+    finally:
+        ed.worker.stop()
+
+
+def test_a_channel_of_your_own_is_written_from_the_study_dialog(tmp_path):
+    """The channels combobox takes free text, so a measure expression reaches
+    aquakin as a plain channel; an unreadable one is refused with its reason
+    beside the buttons, before anything is written."""
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-measure-expression-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        ed.new_study()
+        s = ed.state
+        draft = dict(s.study_draft)
+        draft["streams"] = ["tank.out"]
+        draft["observables"] = [
+            {
+                "stream": "tank.out",
+                "channels": ["SNH", "BOD5 = 0.65*[SS] + 0.65*[XS]"],
+                "measures": {},
+            }
+        ]
+
+        # An expression that cannot be read never reaches the file.
+        bad = [{**draft["observables"][0], "channels": ["x = [SS]*[XS]"]}]
+        ed.save_study_dialog("custom", "simulate", {**draft, "observables": bad})
+        assert s.study_dialog_open
+        assert "cannot multiply two measured quantities" in s.study_error
+        assert not (project / "studies" / "custom").exists()
+
+        ed.save_study_dialog("custom", "simulate", draft)
+        assert not s.study_dialog_open
+        written = yaml.safe_load((project / "studies" / "custom" / "study.yaml").read_text())
+        assert written["study"]["observables"] == [
+            {"stream": "tank.out", "channels": ["SNH", "BOD5 = 0.65*[SS] + 0.65*[XS]"]}
+        ]
+
+        # It reopens as typed (the dialog shows the expression, not a resolved
+        # measure), on a dialog cleared of the earlier refusal.
+        ed.edit_study("custom")
+        assert not s.study_error
+        assert s.study_draft["observables"][0]["channels"] == [
+            "SNH",
+            "BOD5 = 0.65*[SS] + 0.65*[XS]",
+        ]
+    finally:
         ed.worker.stop()

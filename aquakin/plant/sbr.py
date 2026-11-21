@@ -92,11 +92,11 @@ class SBRUnit(ModelTimeScaling, CouplingAware):
     phases : sequence of SBRPhase
         One cycle, in order. The cycle repeats with period ``sum(durations)``.
     full_volume : float
-        Maximum (full) liquid volume.
+        Maximum (full) liquid volume (m³).
     feed_flow : float
-        Fill-pump flow drawn during ``feed`` phases.
+        Fill-pump flow (m³/d) drawn during ``feed`` phases.
     decant_flow : float
-        Effluent flow drawn during ``decant`` phases.
+        Effluent flow (m³/d) drawn during ``decant`` phases.
     settling : SettlingModel
         Pluggable settle/decant clarification strategy.
     particulate_species : sequence of str
@@ -108,13 +108,13 @@ class SBRUnit(ModelTimeScaling, CouplingAware):
     conditions : dict
         Per-model condition values (e.g. ``{"T": 293.15}``), as for a CSTR.
     do_sat : float
-        Oxygen saturation in the aeration term ``kLa*(do_sat - C_O2)``.
+        Oxygen saturation (g/m³) in the aeration term ``kLa*(do_sat - C_O2)``.
     oxygen_species : str
         The aerated species (default ``"SO"``); ignored if absent from the model.
     initial_concentrations : jnp.ndarray, optional
         Initial bulk concentration vector (defaults to the model defaults).
     cycle_origin : float
-        Time at which phase 0 of a cycle begins (default 0).
+        Time (d) at which phase 0 of a cycle begins (default 0).
     input_port, output_port : str
         Port names (``"feed"`` / ``"effluent"``).
     """
