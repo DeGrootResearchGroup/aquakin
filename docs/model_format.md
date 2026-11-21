@@ -182,12 +182,17 @@ heterotrophic growth in one step.
 
 ## Built-in functions
 
-The following functions may be called in any rate expression:
+The following functions may be called in any rate expression.
+
+### Domain functions
 
 - `arrhenius(A, Ea)` — `A * exp(-Ea / (R * T))`. Requires a condition field
   named `T` (Kelvin).
 - `pH_switch(pKa)` — `1 / (1 + 10^(pH - pKa))`, the protonated fraction.
   Requires a condition field named `pH`.
+- `pH_inhibit(pH_LL, pH_UL)` — lower-pH Hill inhibition, `1` at high pH and
+  `0` at low pH, spanning roughly the `[pH_LL, pH_UL]` window. Requires a
+  condition field named `pH`.
 - `monod(X, K)` — `X / (K + X)`. Saturation Monod term; the standard
   substrate-limitation form in microbial kinetics.
 - `monod_inh(X, K)` — `K / (K + X)`. Inhibition Monod; equal to
@@ -204,6 +209,36 @@ The following functions may be called in any rate expression:
   substrate-competition fraction `safe_div([A], [A] + [B])` where both
   substrates can deplete to 0 — so the rate takes its physical limit `0`
   there, without padding the denominator with a small dimensionless constant.
+
+### General math functions
+
+For rate laws the domain vocabulary above does not cover.
+
+- `exp(x)` — natural exponential. For an exponential factor that is not an
+  Arrhenius temperature correction: a Beer–Lambert attenuation
+  `exp(-alpha * {z})`, a thermal-inactivation term, an explicit sigmoid. The
+  argument must be dimensionless, which `check_units` enforces.
+- `log(x)` — natural logarithm, for a logarithmic driving force such as
+  `R*T*log([Q] / K)`. The argument must be dimensionless (take the ratio
+  first). For a base-10 logarithm, divide by `log(10)`.
+- `sqrt(x)` — square root, the clearer spelling of half-order kinetics than
+  `[X] ** 0.5`. Halves the argument's units, so a half-order rate constant
+  must carry the matching half-order units.
+- `min(a, b)` — elementwise minimum; the ceiling counterpart of `max`. A
+  two-sided clip is `min(hi, max(lo, x))`.
+- `max(a, b)` — elementwise maximum. Use it for a one-sided clip, e.g.
+  `max(0, P_gas - P_atm)` so an overpressure-driven flux only ever stops,
+  never reverses.
+
+`log` and `sqrt` are guarded so their **gradient** stays finite where the
+underlying function's is not — at a fully depleted species, which is where a
+half-order or logarithmic term routinely sits, and where an unguarded
+derivative would be `inf` and would poison the whole parameter gradient.
+`sqrt(0)` is `0`, and a (transiently) negative argument gives `0` rather than
+`NaN`. `log` is different: a logarithm has no finite limit at zero, so the
+value there is `-inf` and no stand-in is invented. A model using `log` must
+keep its argument positive — set `clip_negative_states: true`, or write the
+term so the argument cannot reach zero, e.g. `log(1 + [X]/K)`.
 
 Examples mixing all three reference forms:
 

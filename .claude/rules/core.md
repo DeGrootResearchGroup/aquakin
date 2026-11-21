@@ -48,6 +48,46 @@ tree itself is not walked repeatedly.
   overpressure-driven flux only stops (never reverses) when the driving
   difference goes negative.
 
+**General math function nodes** (plain mathematics, for rate laws the
+activated-sludge vocabulary does not cover; `exp`/`log` are the only way to
+write such a term *inside* a model file rather than precomputing it and
+injecting it as a condition field)
+
+- `ExpNode(x)` — `exp(x)`. Unguarded: finite and smooth everywhere, and an
+  overflow to `inf` is an honest report of an ill-scaled model. `check_units`
+  requires a dimensionless argument.
+- `LogNode(x)` — `log(x)` (natural). Guarded by `_safe_log`: the double-where
+  keeps the **gradient** finite at and below zero, but the *value* there stays
+  `-inf` — a logarithm has no finite limit at zero to adopt, and inventing one
+  would silently change the model. So unlike `_safe_ratio` the guard protects
+  AD only, and a model using `log` must keep its argument positive
+  (`clip_negative_states`, or write `log(1 + [X]/K)`). `check_units` requires a
+  dimensionless argument.
+- `SqrtNode(x)` — `sqrt(x)`. Guarded by `_safe_sqrt`: the value is exact
+  (`sqrt(0) == 0`) and the derivative at and below zero is 0 rather than `inf`.
+  Same reasoning as the `powc` kernel — half-order kinetics sit at `x == 0`
+  whenever the species depletes, which is the common case, not a corner one.
+  Dimensionally it halves the argument's units.
+- `MinNode(a, b)` — `min(a, b)`, the ceiling counterpart of `MaxNode`; a
+  two-sided clip is `min(hi, max(lo, x))`.
+
+`_safe_log` / `_safe_sqrt` live in **`core/kernels.py`**, not in `nodes.py`:
+`sqrt` and `log` are offered by more than one of aquakin's expression
+languages, and a function whose derivative is non-finite somewhere needs the
+same guard wherever it is evaluated — otherwise the same spelling means two
+different things depending on which language it was written in. Put a guarded
+numeric there when a second language will evaluate it; `_safe_ratio` stays in
+`nodes.py` because the Monod family and `safe_div` exist only in the rate
+language.
+
+All three use the same double-where shape. What each returns *off* the domain
+differs deliberately and is a modelling decision per function, not a mechanical
+one: `_safe_ratio` and `_safe_sqrt` return the physical limit 0, while
+`_safe_log` keeps `-inf`, since a logarithm has no finite limit at zero to
+adopt and inventing one would silently change the model. So `log`'s guard
+protects the gradient only, and its caller still has to keep the argument
+positive.
+
 The four Monod nodes and `SafeDivideNode` all evaluate their `num/denom` through
 `_safe_ratio` (`core/nodes.py`), a **double-where** guard returning 0 (with a
 finite gradient) where the denominator is exactly zero — for the Monod nodes the

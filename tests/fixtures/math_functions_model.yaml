@@ -1,0 +1,79 @@
+model:
+  name: math_functions
+  version: "1.0"
+  description: >
+    Exercises the general math rate functions (exp, log, sqrt, min) in one
+    model, for the vectorized-kernel parity and AD tests. Not a physical
+    model: each reaction is chosen to put a function somewhere the scalar and
+    batched paths must agree, including at a depleted species where the
+    exp/log/sqrt guards matter. A is attenuated through a depth z (a
+    Beer-Lambert factor written inside the model, which is the point of having
+    exp), B carries a half-order term, and C a logarithmic driving force.
+  references: []
+
+species:
+  - name: A
+    description: "Attenuated reactant"
+    units: mol/L
+    default_concentration: 1.0
+  - name: B
+    description: "Half-order reactant"
+    units: mol/L
+    default_concentration: 0.5
+  - name: C
+    description: "Product"
+    units: mol/L
+    default_concentration: 0.1
+
+conditions:
+  - name: z
+    description: "Depth (m) the light is attenuated over."
+    default: 0.25
+  - name: T
+    description: "Temperature (K), unused in the rates."
+    default: 293.15
+
+reactions:
+  # Beer-Lambert attenuation written in the model rather than precomputed and
+  # injected as a fluence-rate condition field.
+  - name: photolysis
+    description: "First-order photolysis under an exponentially attenuated field."
+    rate: "k_p * exp(-alpha * {z}) * [A]"
+    parameters:
+      k_p:
+        value: 0.4
+        units: "s-1"
+      alpha:
+        value: 2.0
+        units: "m-1"
+    stoichiometry:
+      A: -1
+      C: +1
+
+  # Half-order kinetics: sqrt sits at zero whenever B depletes.
+  - name: half_order
+    description: "Half-order consumption of B."
+    rate: "k_h * sqrt([B])"
+    parameters:
+      k_h:
+        value: 0.2
+        units: "mol0.5 L-0.5 s-1"
+    stoichiometry:
+      B: -1
+      C: +1
+
+  # A logarithmic driving force, clipped so the rate cannot run away, and
+  # floored at zero by max() when the ratio falls below one.
+  - name: log_driver
+    description: "Logarithmic driving force with a ceiling."
+    rate: "k_l * min(2.0, max(0, log(([C] + 1.0) / C_ref)))"
+    parameters:
+      k_l:
+        value: 0.05
+        units: "mol L-1 s-1"
+      C_ref:
+        value: 1.0
+        units: "mol/L"
+    stoichiometry:
+      C: -1
+      A: +1

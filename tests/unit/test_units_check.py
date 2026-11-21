@@ -537,3 +537,57 @@ def test_parse_units_accepts_display_dot():
     assert target is not None
     assert parse_units("g_COD·m⁻³·d⁻¹") == target
     assert parse_units("g_COD⋅m-3⋅d-1") == target
+
+
+# --- General math functions (exp / log / sqrt / min) -------------------
+
+
+def test_min_shared_units_passes():
+    # min of two COD concentrations is a COD concentration; * k[1/d] -> valid rate
+    assert _check("k * min([X], [Z])") == []
+
+
+def test_min_literal_operand_adopts_sibling():
+    # the bare ceiling in a ``min(c, .)`` clip adopts the sibling's dimension
+    assert _check("k * min(1000.0, [X])") == []
+
+
+def test_min_cross_currency_flagged():
+    ws = _check("k * min([X], [Y])", check_root=False)
+    assert any("'min' operands" == w.location for w in ws)
+
+
+def test_exp_of_dimensionless_passes():
+    # exp() of a ratio is dimensionless; k[1/d] * exp(-) * X -> valid rate
+    assert _check("k * exp(-[X] / K_cod) * [X]") == []
+
+
+def test_exp_of_dimensioned_argument_flagged():
+    # the check that catches an attenuation whose coefficient is in the wrong
+    # units: you cannot exponentiate a concentration
+    ws = _check("k * exp([X]) * [X]", check_root=False)
+    assert any(w.location == "'exp' argument" for w in ws)
+    assert "not dimensionless" in str(ws)
+
+
+def test_log_of_dimensioned_argument_flagged():
+    ws = _check("k * log([X]) * [X]", check_root=False)
+    assert any(w.location == "'log' argument" for w in ws)
+
+
+def test_log_of_ratio_passes():
+    assert _check("k * log([X] / K_cod) * [X]") == []
+
+
+def test_sqrt_halves_the_dimension():
+    # sqrt(g_COD/m3) * sqrt(g_COD/m3) is a COD concentration again, so
+    # k[1/d] * sqrt(X) * sqrt(X) is a valid concentration rate
+    assert _check("k * sqrt([X]) * sqrt([X])") == []
+
+
+def test_sqrt_half_order_rate_root_is_flagged():
+    # k[1/d] * sqrt(X) -> g_COD^0.5 m^-1.5 /d : not a concentration rate, so
+    # the root check still sees through sqrt (a half-order rate constant has
+    # to carry the matching half-order units)
+    ws = _check("k * sqrt([X])")
+    assert any(w.location == "rate root" for w in ws)

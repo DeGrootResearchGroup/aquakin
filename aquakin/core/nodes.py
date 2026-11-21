@@ -12,6 +12,7 @@ import jax.numpy as jnp
 
 from aquakin.core.context import CompileContext
 from aquakin.core.hints import did_you_mean
+from aquakin.core.kernels import _safe_log, _safe_sqrt
 
 RateCallable = Callable[
     [jnp.ndarray, jnp.ndarray, dict[str, jnp.ndarray], int | jnp.ndarray], jnp.ndarray
@@ -463,6 +464,109 @@ class SafeDivideNode(_OperatorNode):
     @staticmethod
     def op(o):
         return _safe_ratio(o[0], o[1])
+
+
+# --- General math function nodes ---------------------------------------
+#
+# The nodes above encode a domain idiom (a Monod saturation, a pH switch); the
+# four below are plain mathematics, for rate laws the activated-sludge
+# vocabulary does not cover -- an exponential attenuation, a free-energy or
+# logarithmic term, half-order kinetics, a two-sided clip. ``exp`` and ``log``
+# are the only way to write those inside a model file; without them the term
+# has to be computed outside and injected as a condition field.
+
+
+@dataclass(frozen=True)
+class ExpNode(_OperatorNode):
+    """Natural exponential ``exp(x)`` -- the ``exp(x)`` rate function.
+
+    For a rate law with an exponential factor that is not an Arrhenius
+    temperature correction (:class:`ArrheniusNode` already covers that): a
+    Beer--Lambert attenuation ``exp(-a * z)``, a thermal-inactivation term, a
+    sigmoid written explicitly. The argument must be dimensionless, which
+    ``check_units`` enforces.
+
+    No guard: ``exp`` is finite and smooth on the whole real line. A large
+    argument overflows to ``inf``, which is an honest report of an
+    ill-scaled model rather than something to paper over.
+    """
+
+    x: ASTNode
+
+    KIND = "exp"
+    FUNCTION_NAME = "exp"
+
+    @staticmethod
+    def op(o):
+        return jnp.exp(o[0])
+
+
+@dataclass(frozen=True)
+class LogNode(_OperatorNode):
+    """Natural logarithm ``log(x)`` -- the ``log(x)`` rate function.
+
+    For a logarithmic driving force: a free-energy term ``R*T*log(Q/K)``, a
+    logarithmic inhibition. The argument must be dimensionless (take the ratio
+    first), which ``check_units`` enforces.
+
+    Guarded by :func:`_safe_log`, which keeps the *gradient* finite at and
+    below zero but leaves the value at ``-inf`` there -- see that function for
+    why no finite stand-in value is invented. For a base-10 logarithm divide by
+    ``log(10)``.
+    """
+
+    x: ASTNode
+
+    KIND = "log"
+    FUNCTION_NAME = "log"
+
+    @staticmethod
+    def op(o):
+        return _safe_log(o[0])
+
+
+@dataclass(frozen=True)
+class SqrtNode(_OperatorNode):
+    """Square root ``sqrt(x)`` -- the ``sqrt(x)`` rate function.
+
+    Half-order kinetics, written as what it is rather than as ``[X] ** 0.5``.
+    Dimensionally it halves the argument's units, so ``sqrt`` of a
+    concentration is a valid (if unusual) rate factor and ``check_units``
+    checks it as such.
+
+    Guarded by :func:`_safe_sqrt`, so the derivative at a fully depleted
+    species is 0 rather than ``inf``.
+    """
+
+    x: ASTNode
+
+    KIND = "sqrt"
+    FUNCTION_NAME = "sqrt"
+
+    @staticmethod
+    def op(o):
+        return _safe_sqrt(o[0])
+
+
+@dataclass(frozen=True)
+class MinNode(_OperatorNode):
+    """Elementwise minimum ``min(a, b)`` -- the ``min(a, b)`` rate function.
+
+    The companion to :class:`MaxNode`: a ceiling rather than a floor, e.g. a
+    transfer limited by the smaller of two driving terms, or the two-sided clip
+    ``min(hi, max(lo, x))``. AD-safe (``jnp.minimum`` carries the active-branch
+    subgradient at the kink); identity away from it.
+    """
+
+    a: ASTNode
+    b: ASTNode
+
+    KIND = "min"
+    FUNCTION_NAME = "min"
+
+    @staticmethod
+    def op(o):
+        return jnp.minimum(o[0], o[1])
 
 
 @dataclass(frozen=True)

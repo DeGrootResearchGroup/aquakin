@@ -460,3 +460,138 @@ def test_max_node_latex():
     from aquakin.core.parser import parse_rate_expression
     from aquakin.utils.latex import to_latex
     assert "max" in to_latex(parse_rate_expression("max(0, [A])"))
+
+
+# --- General math function nodes (exp / log / sqrt / min) --------------
+#
+# These exist so a rate law outside the activated-sludge vocabulary can be
+# written inside the model file rather than precomputed and injected as a
+# condition field. The guards are the point of most of these tests: a rate
+# term sits at a depleted species often, and a non-finite derivative there
+# poisons the whole parameter gradient.
+
+
+def test_exp_node_evaluates():
+    """exp(x), including the Beer-Lambert attenuation form."""
+    from aquakin.core.parser import parse_rate_expression
+
+    assert _eval(parse_rate_expression("exp([A])"), C=(0.0, 0.0)) == 1.0
+    assert _eval(parse_rate_expression("exp([A])"), C=(1.0, 0.0)) == pytest.approx(jnp.e)
+    # exp(-a*z): the attenuation that previously had to be computed outside
+    # the model and passed in as a condition field.
+    att = parse_rate_expression("exp(-0.5 * [A])")
+    assert _eval(att, C=(2.0, 0.0)) == pytest.approx(float(jnp.exp(-1.0)))
+
+
+def test_log_node_evaluates_and_is_minus_inf_below_its_domain():
+    """log(x) is exact on its domain and -inf at/below zero -- no invented
+    finite stand-in value (see _safe_log)."""
+    from aquakin.core.parser import parse_rate_expression
+
+    lg = parse_rate_expression("log([A])")
+    assert _eval(lg, C=(1.0, 0.0)) == 0.0
+    assert _eval(lg, C=(float(jnp.e), 0.0)) == pytest.approx(1.0)
+    assert _eval(lg, C=(0.0, 0.0)) == -float("inf")
+    assert _eval(lg, C=(-1.0, 0.0)) == -float("inf")
+
+
+def test_log_node_gradient_finite_at_and_below_zero():
+    """The guard's purpose: 1/x is infinite at 0, but the gradient must stay
+    finite so a depleted species cannot poison a reverse-mode pass."""
+    from aquakin.core.parser import parse_rate_expression
+
+    fn = parse_rate_expression("log([A])").compile(_ctx())
+
+    def g(a):
+        return fn(jnp.array([a, 0.0]), jnp.zeros(4),
+                  {"pH": jnp.asarray([7.0]), "T": jnp.asarray([293.0])}, 0)
+
+    assert float(jax.grad(g)(2.0)) == pytest.approx(0.5)   # exact on the domain
+    assert jnp.isfinite(jax.grad(g)(0.0))
+    assert float(jax.grad(g)(0.0)) == 0.0
+    assert jnp.isfinite(jax.grad(g)(-1.0))
+
+
+def test_sqrt_node_evaluates_and_guards_at_zero():
+    """sqrt(x), with sqrt(0) == 0 exactly and a negative argument clamped."""
+    from aquakin.core.parser import parse_rate_expression
+
+    sq = parse_rate_expression("sqrt([A])")
+    assert _eval(sq, C=(4.0, 0.0)) == 2.0
+    assert _eval(sq, C=(0.0, 0.0)) == 0.0
+    assert _eval(sq, C=(-1.0, 0.0)) == 0.0
+
+
+def test_sqrt_node_gradient_finite_at_zero():
+    """Half-order kinetics sit at x == 0 whenever the species depletes, which
+    is the common case, not a corner one: d/dx sqrt(x) = inf there unguarded."""
+    from aquakin.core.parser import parse_rate_expression
+
+    fn = parse_rate_expression("sqrt([A])").compile(_ctx())
+
+    def g(a):
+        return fn(jnp.array([a, 0.0]), jnp.zeros(4),
+                  {"pH": jnp.asarray([7.0]), "T": jnp.asarray([293.0])}, 0)
+
+    assert float(jax.grad(g)(4.0)) == pytest.approx(0.25)  # 1/(2*sqrt(4))
+    assert jnp.isfinite(jax.grad(g)(0.0))
+    assert float(jax.grad(g)(0.0)) == 0.0
+
+
+def test_sqrt_matches_power_half_on_its_domain():
+    """sqrt(x) and x^0.5 agree where both are defined -- sqrt is the clearer
+    spelling of half-order kinetics, not different arithmetic."""
+    from aquakin.core.parser import parse_rate_expression
+
+    for a in (0.25, 1.0, 4.0, 9.0):
+        assert _eval(parse_rate_expression("sqrt([A])"), C=(a, 0.0)) == pytest.approx(
+            _eval(parse_rate_expression("[A] ** 0.5"), C=(a, 0.0))
+        )
+
+
+def test_min_node_evaluates_and_clips():
+    """min(a, b) elementwise; min(hi, x) a ceiling, the mirror of max()."""
+    from aquakin.core.parser import parse_rate_expression
+
+    m = parse_rate_expression("min([A], [B])")
+    assert _eval(m, C=(1.0, 2.0)) == 1.0
+    assert _eval(m, C=(5.0, 2.0)) == 2.0
+
+    clip = parse_rate_expression("min(3.0, [A])")
+    assert _eval(clip, C=(1.0, 0.0)) == 1.0   # below the ceiling -> passes through
+    assert _eval(clip, C=(5.0, 0.0)) == 3.0   # above -> clipped
+
+
+def test_min_node_gradient_is_subgradient():
+    """jax.grad flows through min (the active-branch subgradient)."""
+    from aquakin.core.parser import parse_rate_expression
+
+    fn = parse_rate_expression("min(3.0, [A])").compile(_ctx())
+
+    def g(a):
+        return fn(jnp.array([a, 0.0]), jnp.zeros(4),
+                  {"pH": jnp.asarray([7.0]), "T": jnp.asarray([293.0])}, 0)
+
+    assert float(jax.grad(g)(1.0)) == 1.0   # below the ceiling -> d/da a = 1
+    assert float(jax.grad(g)(5.0)) == 0.0   # above -> clipped, grad 0
+
+
+def test_math_function_latex():
+    from aquakin.core.parser import parse_rate_expression
+    from aquakin.utils.latex import to_latex
+
+    assert r"\exp" in to_latex(parse_rate_expression("exp([A])"))
+    assert r"\ln" in to_latex(parse_rate_expression("log([A])"))
+    assert r"\sqrt" in to_latex(parse_rate_expression("sqrt([A])"))
+    assert r"\min" in to_latex(parse_rate_expression("min([A], [B])"))
+
+
+@pytest.mark.parametrize("expr,arity", [("exp", 1), ("log", 1), ("sqrt", 1), ("min", 2)])
+def test_math_function_arity_is_checked(expr, arity):
+    """Arity comes off the node's dataclass fields, so a wrong call is a parse
+    error naming the arguments."""
+    from aquakin.core.parser import ParseError, parse_rate_expression
+
+    wrong = "[A], [B], [A]" if arity == 1 else "[A]"
+    with pytest.raises(ParseError, match="argument"):
+        parse_rate_expression(f"{expr}({wrong})")

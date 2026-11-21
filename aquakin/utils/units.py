@@ -37,7 +37,10 @@ from aquakin.core.nodes import (
     ConditionNode,
     ConstantNode,
     DivideNode,
+    ExpNode,
+    LogNode,
     MaxNode,
+    MinNode,
     MonodInhibitionNode,
     MonodInhibitionRatioNode,
     MonodNode,
@@ -48,6 +51,7 @@ from aquakin.core.nodes import (
     PowerNode,
     SafeDivideNode,
     SpeciesNode,
+    SqrtNode,
     SubtractNode,
     pHInhibitNode,
     pHSwitchNode,
@@ -617,10 +621,12 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
         # Result carries either side's dimension (they should agree); prefer a
         # known one so the rest of the expression can still be checked.
         return lo if lo is not None else ro
-    if isinstance(node, MaxNode):
-        # max(a, b) is dimensionally like add/subtract: the operands must share a
-        # unit and the result carries it. A bare literal (the ``0`` in a
-        # ``max(0, .)`` clip) adopts the sibling's dimension silently.
+    if isinstance(node, (MaxNode, MinNode)):
+        # max(a, b) / min(a, b) are dimensionally like add/subtract: the
+        # operands must share a unit and the result carries it. A bare literal
+        # (the ``0`` in a ``max(0, .)`` clip, the ceiling in a ``min(c, .)``)
+        # adopts the sibling's dimension silently.
+        name = "max" if isinstance(node, MaxNode) else "min"
         lo = _infer(node.a, ctx)
         ro = _infer(node.b, ctx)
         if isinstance(node.a, ConstantNode):
@@ -628,8 +634,22 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
         if isinstance(node.b, ConstantNode):
             return lo
         if lo is not None and ro is not None and lo != ro:
-            ctx.warn("'max' operands", f"max() operands differ in units: {lo} vs {ro}")
+            ctx.warn(f"'{name}' operands", f"{name}() operands differ in units: {lo} vs {ro}")
         return lo if lo is not None else ro
+    if isinstance(node, (ExpNode, LogNode)):
+        # Transcendental: the argument has to be dimensionless (you cannot
+        # exponentiate a concentration), and the result is dimensionless. This
+        # is the check that catches an attenuation written ``exp(-a * z)`` with
+        # ``a`` in the wrong units, or a free-energy term missing its RT.
+        name = "exp" if isinstance(node, ExpNode) else "log"
+        dx = _infer(node.x, ctx)
+        if dx is not None and not dx.is_dimensionless:
+            ctx.warn(f"'{name}' argument", f"{name}() argument is not dimensionless: {dx}")
+        return DIMENSIONLESS
+    if isinstance(node, SqrtNode):
+        # sqrt halves the argument's dimension, exactly as ``** 0.5`` does.
+        dx = _infer(node.x, ctx)
+        return None if dx is None else dx ** Fraction(1, 2)
     if isinstance(node, MultiplyNode):
         lo = _infer(node.left, ctx)
         ro = _infer(node.right, ctx)
