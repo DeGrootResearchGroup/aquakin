@@ -130,12 +130,27 @@ primary := number
          | '{' condition_name '}'
          | identifier ('(' arglist ')')?
          | '(' expr ')'
+arglist := expr (',' expr)* ','?
 ```
 
 Precedence follows Python and ordinary mathematical notation, so `**` is
 right-associative, a sign binds looser than it (`-k**2` is `-(k**2)`), and an
 exponent may carry its own sign (`k**-1`). Bracket the base when you mean to
 raise a negative value: `(0 - k)**2`.
+
+The rest of the syntax follows Python too, so an expression generally means what
+it looks like it means:
+
+- A number may use Python's underscore separators, `18446_000`, and scientific
+  notation, `1.5e-3`.
+- A call may carry a trailing comma, `monod([SS], KS,)`, so a long one written
+  across lines does not make its last argument special.
+- `max` and `min` take any number of arguments, as Python's do: `max(a, b, c)`.
+
+What is deliberately *not* there is anything that cannot be differentiated or
+traced: there are no comparisons, no `if`/`else`, and no `%` or `//`. `^` is not
+an operator either — it is exclusive-or in Python and a power to most readers,
+so rather than quietly meaning one of them it is refused. Write a power as `**`.
 
 - **Species names** are delimited by square brackets, e.g. `[O3]`, `[Br-]`,
   `[BrO3-]`. Charge suffixes and digits inside the brackets are accepted.
