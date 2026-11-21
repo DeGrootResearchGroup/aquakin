@@ -14,7 +14,6 @@ import pytest
 
 import aquakin
 
-
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "dynamic_stoich_model.yaml"
 
 

@@ -12,10 +12,11 @@ real stiff-ODE solves with AD (~irreducible seconds each) and the cost is spread
 across hundreds of tests — neither a JAX compile-cache (verified: cold ≈ warm)
 nor concentrating it in a few files makes the whole suite fast.
 
-- The **`lint`** job (`ruff check aquakin` + `ruff format --check aquakin`, 3.12)
-  runs on **every PR and every push** — a purely static gate (no JAX import, no
-  compile), so it finishes in seconds and is the cheapest signal in the matrix. It
-  installs only the `lint` extra (`pip install -e ".[lint]"`, which pins
+- The **`lint`** job (3.12) runs
+  `ruff check aquakin aquakin_ui tests scripts examples` and
+  `ruff format --check aquakin aquakin_ui` on **every PR and every push** — a
+  purely static gate (no JAX import, no compile), so it finishes in seconds and
+  is the cheapest signal in the matrix. It installs only the `lint` extra (`pip install -e ".[lint]"`, which pins
   `ruff>=0.15,<0.16` so a new ruff release cannot redden the gate without a
   deliberate bump). The rule set and the per-file ignores live in `[tool.ruff]` in
   `pyproject.toml`: `select = E,F,W,I,B,RUF` at `line-length = 100` (the width the
@@ -28,7 +29,10 @@ nor concentrating it in a few files makes the whole suite fast.
   and module-import-position (`E402`) because the re-export packages carry
   deliberate, load-bearing import order (`plant/__init__.py` imports `a2o` /
   `bsm.evaluation` last to avoid an import cycle; `aquakin/__init__.py` enables
-  x64 before any submodule import that builds JAX state). It skips the bare
+  x64 before any submodule import that builds JAX state). `tests/`, `scripts/`
+  and `examples/` are linted but not yet formatted: formatting them is a one-time
+  bulk diff, to land as its own commit listed in a `.git-blame-ignore-revs` file.
+  It skips the bare
   `labeled` event and the
   schedule / dispatch refresh, exactly like the fast gate.
 - The **`docs`** job (job name **`docs (sphinx)`**, 3.12) runs on **every PR and

@@ -18,7 +18,6 @@ from aquakin.core.vector_kernel import (
     build_vectorized_rates,
 )
 
-
 # Models spanning the node set: inline-division Monods (asm1), pH-switch /
 # pH-inhibit / safe_div / max (adm1), Arrhenius / state-derived pH (wats),
 # the SUMO bio-P models, and a precipitation model (derived SI_/R_ fields).
@@ -184,7 +183,6 @@ def test_constant_exponent_keeps_derivative_finite():
     derivative check does."""
     net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     C = net.default_concentrations()
-    ca = net.default_conditions(1).fields
 
     # dr/dC through the kernel must be finite everywhere (the state-derived pH
     # makes the bad term contaminate every species column if it NaNs).
@@ -238,7 +236,6 @@ def test_unsupported_node_falls_back_to_scalar():
     """A model with an AST node type the kernel does not handle leaves
     ``_rate_kernel`` as ``None`` (scalar fallback), rather than raising at load.
     """
-    from aquakin.core import nodes
     from aquakin.core.nodes import ASTNode
 
     class _UnknownNode(ASTNode):

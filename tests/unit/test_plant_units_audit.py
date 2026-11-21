@@ -311,7 +311,7 @@ def test_adm1_to_asm1_converts_from_the_source_models_units(asm1, adm1):
 
 def test_translator_rejects_a_unit_it_cannot_convert(asm1, adm1):
     # Inorganic N as a mass needs a molar mass, not a unit conversion.
-    with pytest.raises(ValueError, match="'S_IN'.*cannot be converted"):
+    with pytest.raises(ValueError, match=r"'S_IN'.*cannot be converted"):
         ASM1toADM1(asm1, _with_units(adm1, S_IN="g_N/m3"))
     # A model left at the schema's default species units (mol/L) claims an
     # amount of substance where the ASM1 side works in g_COD/m3.

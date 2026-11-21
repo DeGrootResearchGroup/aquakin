@@ -7,10 +7,10 @@ matplotlib = pytest.importorskip("matplotlib")   # optional `plot` extra
 matplotlib.use("Agg")            # headless: no display needed
 import matplotlib.pyplot as plt  # noqa: E402
 
-import aquakin                   # noqa: E402
+import aquakin  # noqa: E402
 from aquakin.plant.cstr import Aeration, CSTRUnit  # noqa: E402
-from aquakin.plant.plant import Plant              # noqa: E402
-from aquakin.plant.streams import StreamSeries     # noqa: E402
+from aquakin.plant.plant import Plant  # noqa: E402
+from aquakin.plant.streams import StreamSeries  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

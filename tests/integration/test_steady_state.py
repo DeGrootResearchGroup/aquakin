@@ -14,7 +14,6 @@ import pytest
 import aquakin
 from aquakin.plant.steady import ptc_forward, solve_steady_state
 
-
 # --- solver core, no plant (fast) --------------------------------------------
 
 def test_ptc_converges_to_linear_root():
@@ -275,7 +274,7 @@ def test_branch_recorder_enabled_and_disabled():
 # --- full plant: BSM1 / BSM2 (slow) ------------------------------------------
 
 def _bsm1():
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
     from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
     from aquakin.plant.influent import InfluentSeries
     asm1 = aquakin.load_model("asm1")
@@ -530,9 +529,8 @@ def test_bsm2_steady_state_matches_forward():
     # BSM2 -- the 167-state plant with the long-SRT anaerobic digester, the stiff
     # case a plain Newton root-find stalls on. PTC reaches it and agrees with the
     # forward reference.
-    from aquakin.plant.bsm.bsm2 import (
-        build_bsm2, bsm2_constant_influent, bsm2_parameters)
     from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.bsm.bsm2 import bsm2_constant_influent, bsm2_parameters, build_bsm2
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
     # The default settler (lumped TSS + soluble holdup). With the Takács
@@ -669,9 +667,8 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
     # the two STABLE invariants -- both floors converge, to the SAME operating
     # point -- and that per-state scaling is not a material iteration regression,
     # rather than asserting a brittle strict iteration win.
-    from aquakin.plant.bsm.bsm2 import (
-        build_bsm2, bsm2_constant_influent, bsm2_parameters)
     from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.bsm.bsm2 import bsm2_constant_influent, bsm2_parameters, build_bsm2
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")
     # Pinned to the per-species settler without soluble holdup: this compares the
@@ -877,8 +874,7 @@ def test_dgsm_cond_filter_and_with_cond_factor():
     """The near-singular-Jacobian filter (the heavy-tail robustification) drops the
     samples it should and re-aggregation reuses the retained per-sample data. Fast
     and deterministic -- exercises the aggregation directly, no plant solve."""
-    from aquakin.plant.sensitivity import (_dgsm_aggregate, _cond_mask,
-                                           SteadyStateDGSMResult)
+    from aquakin.plant.sensitivity import SteadyStateDGSMResult, _cond_mask, _dgsm_aggregate
     rng = np.random.default_rng(0)
     N, m, k = 200, 1, 3
     grad = rng.normal(size=(N, m, k))

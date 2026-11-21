@@ -41,7 +41,7 @@ def test_max_steps_is_exposed_and_enforced(simple_model):
         simple_model, conditions,
         integrator=aquakin.IntegratorConfig(max_steps=2))
     assert r_tight.max_steps == 2
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match=r"step budget \(max_steps=2\)"):
         r_tight.solve(C0, params=params, t_span=(0.0, 20.0), t_eval=t_eval)
 
     r_ok = aquakin.BatchReactor(
@@ -200,6 +200,7 @@ def test_solve_chemistry_helper_matches_analytical_and_scales(simple_model):
     (the PFR's 1/velocity device): a span of 2*T at scale 0.5 equals a span of
     T at scale 1."""
     import diffrax
+
     from aquakin.integrate._common import solve_chemistry
 
     net = simple_model

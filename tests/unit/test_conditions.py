@@ -6,7 +6,6 @@ import pytest
 import aquakin
 from aquakin.core.conditions import OperatingConditions, SpatialConditions
 
-
 # ----- OperatingConditions (0-D alias) ------------------------------------
 
 def test_operating_conditions_is_single_location_spatial():

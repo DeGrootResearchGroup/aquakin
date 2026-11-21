@@ -356,7 +356,7 @@ def test_plant_time_unit_converts_event_times(decay):
 
 @pytest.mark.slow
 def test_plant_time_event_resets_state():
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start, load_bsm1_influent
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1, load_bsm1_influent
 
     net = aquakin.load_model("asm1")
     plant = build_bsm1(net)

@@ -348,5 +348,5 @@ def test_an_expression_channel_names_its_stream_when_it_cannot_be_read():
     with pytest.raises(ValueError, match="cannot multiply two measured quantities"):
         resolve("x = [SS]*[XS]")
     # Either way the stream is named, so the user knows which observable to fix.
-    with pytest.raises(ValueError, match="stream 'tank.out'"):
+    with pytest.raises(ValueError, match=r"stream 'tank\.out'"):
         resolve("x = [SS]*[XS]")

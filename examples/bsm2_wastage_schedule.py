@@ -14,13 +14,13 @@ heterotroph biomass on either side, showing the inventory response.
 import jax.numpy as jnp
 
 import aquakin
-from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
-    build_bsm2,
     bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
+    bsm2_warm_start,
     bsm2_wastage_schedule,
+    build_bsm2,
 )
 
 

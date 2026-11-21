@@ -342,7 +342,7 @@ def test_settings_that_are_not_well_formed_are_refused():
         validate_settings(cstr, {"conditions": {1: 293.15}})
     with pytest.raises(ValueError, match="'reagent' must be"):
         validate_settings(dosing, {"reagent": {"model": "asm1", "colour": "red"}})
-    with pytest.raises(ValueError, match="'reagent.composition.SS' must be a number"):
+    with pytest.raises(ValueError, match=r"'reagent\.composition\.SS' must be a number"):
         validate_settings(dosing, {"reagent": {"model": "asm1", "composition": {"SS": "a lot"}}})
     with pytest.raises(ValueError, match="can only be set from Python"):
         validate_settings(store, {"initial_concentrations": [1.0]})
@@ -373,10 +373,10 @@ def test_a_unit_that_cannot_be_written_as_settings_says_why():
 
     m = aquakin.load_model("asm1")
     tank = plant.CSTRUnit("t", dataclasses.replace(m), 100.0, ["in"], conditions=T)
-    with pytest.raises(ValueError, match="is not a shipped model as aquakin.load_model"):
+    with pytest.raises(ValueError, match=r"is not a shipped model as aquakin\.load_model"):
         unit_settings(tank)
     store = plant.StorageTank("s", m, 10.0, initial_concentrations=m.default_concentrations())
-    with pytest.raises(ValueError, match="unit 's': 'initial_concentrations' .* has no plain form"):
+    with pytest.raises(ValueError, match=r"unit 's': 'initial_concentrations' .* has no plain form"):
         unit_settings(store)
 
     class Custom(plant.CSTRUnit):
@@ -451,7 +451,7 @@ def test_cached_model_files_and_plain_setting_values(tmp_path):
     # Without full, an aeration lists only the fields away from their defaults.
     assert unit_settings(tank)[1]["aeration"] == {"kla": 240.0}
     number = unit_kind("cstr").settings[1]
-    with pytest.raises(ValueError, match="'volume' .* has no plain form"):
+    with pytest.raises(ValueError, match=r"'volume' .* has no plain form"):
         _setting_value(number, object())
 
 

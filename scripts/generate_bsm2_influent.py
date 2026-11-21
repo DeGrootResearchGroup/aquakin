@@ -21,7 +21,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 # BSM2 constant-influent composition (the published open-loop operating point).
 # Concentrations in g/m3; alkalinity in mol HCO3-/m3; Q in m3/d.
 _BSM2_AVG = {

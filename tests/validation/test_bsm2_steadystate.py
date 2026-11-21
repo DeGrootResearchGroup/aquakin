@@ -24,12 +24,11 @@ import aquakin
 from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     BSM2_CONSTANT_INFLUENT_T,
-    build_bsm2,
     bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
+    build_bsm2,
 )
-
 
 # Published BSM2 open-loop reactor steady states (asm1init_bsm2 XINIT1 / XINIT5).
 REF = {

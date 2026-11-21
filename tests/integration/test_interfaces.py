@@ -256,8 +256,12 @@ def test_plant_feeds_digester_pH_to_interface():
     (~7.3), not the interface's fixed pH_adm of 7.0."""
     from aquakin.plant.bsm import bsm2_warm_start
     from aquakin.plant.bsm.bsm2 import (
-        BSM2_CONSTANT_INFLUENT_T, build_bsm2, bsm2_asm1_model,
-        bsm2_constant_influent, bsm2_parameters)
+        BSM2_CONSTANT_INFLUENT_T,
+        bsm2_asm1_model,
+        bsm2_constant_influent,
+        bsm2_parameters,
+        build_bsm2,
+    )
 
     asm1 = bsm2_asm1_model()
     adm1 = aquakin.load_model("adm1")
@@ -295,7 +299,7 @@ def test_needs_src_ph_influent_edge_warns():
     fall back to the fixed ``pH_adm``. The connection-index build warns rather
     than failing silently. Not reachable in shipped plants (the digester is
     always a real source unit), so this exercises the defensive guard directly."""
-    from aquakin.plant.plant import Plant, Connection
+    from aquakin.plant.plant import Connection, Plant
 
     class _SrcPHTranslator:
         needs_src_pH = True

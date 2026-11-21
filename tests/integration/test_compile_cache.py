@@ -15,7 +15,6 @@ import aquakin
 from aquakin.integrate import _common
 from aquakin.plant import CSTRUnit, InfluentSeries, Plant
 
-
 # ----- load_model caching -----------------------------------------------
 
 def test_load_model_returns_cached_object():
@@ -73,7 +72,6 @@ def test_each_compile_affecting_setting_keys_the_cache(simple_model):
     dropped one from ``settings_cache_key`` would otherwise be a silent
     wrong-result cache hit; here it surfaces as a failure. (The toy A->B model
     keeps the compiles cheap; the cache mechanism is model-agnostic.)"""
-    import diffrax
 
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0 = jnp.asarray([1.0, 0.0])

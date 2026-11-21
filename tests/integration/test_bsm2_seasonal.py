@@ -18,9 +18,9 @@ from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm.bsm2 import (
     BSM2_CONSTANT_INFLUENT,
     BSM2_Q_REF,
-    build_bsm2,
     bsm2_asm1_model,
     bsm2_parameters,
+    build_bsm2,
 )
 from aquakin.plant.influent import InfluentSeries
 

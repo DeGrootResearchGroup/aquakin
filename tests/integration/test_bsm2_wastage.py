@@ -12,16 +12,15 @@ import pytest
 
 import aquakin
 from aquakin.plant.bsm import (
-    bsm2_warm_start,
-    build_bsm2,
     bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
+    bsm2_warm_start,
     bsm2_wastage_schedule,
+    build_bsm2,
 )
 from aquakin.plant.bsm.bsm2 import BSM2_RAS, BSM2_WASTAGE_HIGH, BSM2_WASTAGE_LOW
 from aquakin.plant.schedule import PiecewiseConstantSchedule
-
 
 # ----- PiecewiseConstantSchedule (pure) -----------------------------------
 
@@ -36,7 +35,7 @@ def test_schedule_steps_between_values():
 
 
 def test_schedule_length_validation():
-    with pytest.raises(ValueError, match="len.values."):
+    with pytest.raises(ValueError, match=r"len\(values\)"):
         PiecewiseConstantSchedule([1.0, 2.0], [10.0, 20.0])  # need 3 values
 
 

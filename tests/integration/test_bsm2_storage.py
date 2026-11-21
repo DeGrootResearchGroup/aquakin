@@ -12,12 +12,12 @@ import pytest
 
 import aquakin
 from aquakin.plant.bsm import (
-    bsm2_warm_start,
-    build_bsm2,
     RejectStorage,
     bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
+    bsm2_warm_start,
+    build_bsm2,
 )
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.streams import Stream
@@ -156,7 +156,7 @@ def test_storage_fills_and_bypasses_all_reject(storage_run):
     the whole reject stream, so it is a faithful pass-through at steady state."""
     plant, sol, params = storage_run
     V = float(sol.unit_state("reject_storage")[-1, -1])
-    assert V == pytest.approx(0.9 * 160.0, abs=1.0)  # full level
+    assert pytest.approx(0.9 * 160.0, abs=1.0) == V  # full level
     bypass = plant.stream(sol, "reject_storage.bypass", params)
     released = plant.stream(sol, "reject_storage.out", params)
     reject_in = plant.stream(sol, "reject_mix.out", params)
@@ -170,6 +170,7 @@ def test_grad_through_storage_plant_is_finite(asm1):
     gradient could hide -- so differentiate a short solve w.r.t. the initial state
     (which includes V) and check it stays finite."""
     import jax
+
     from aquakin.plant import Plant
     plant = Plant("t", time_unit="d")
     plant.add_unit(StorageTank(name="store", model=asm1, volume=160.0,

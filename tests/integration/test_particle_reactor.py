@@ -140,7 +140,6 @@ def test_integrate_ensemble_distinct_tracks(simple_model):
 def test_particle_direct_adjoint_enables_forward_mode(simple_model):
     """ParticleTrackReactor now accepts adjoint=; DirectAdjoint makes the track
     solve forward-mode differentiable (jacfwd)."""
-    import diffrax
 
     track = aquakin.Track(t=jnp.linspace(0.0, 10.0, 11),
                           fields={"T": jnp.full(11, 293.15)})
@@ -158,7 +157,6 @@ def test_particle_direct_adjoint_enables_forward_mode(simple_model):
 
 def test_integrate_ensemble_forwards_adjoint_and_dtmax(simple_model):
     """integrate_ensemble forwards adjoint/dtmax to each per-track reactor."""
-    import diffrax
     from aquakin.integrate.particle import integrate_ensemble
 
     tracks = {

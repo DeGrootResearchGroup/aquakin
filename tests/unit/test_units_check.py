@@ -22,7 +22,6 @@ from aquakin.utils.units import (
     parse_units,
 )
 
-
 # --- the Dimension algebra --------------------------------------------------
 
 def test_dimension_algebra():
@@ -554,7 +553,7 @@ def test_min_literal_operand_adopts_sibling():
 
 def test_min_cross_currency_flagged():
     ws = _check("k * min([X], [Y])", check_root=False)
-    assert any("'min' operands" == w.location for w in ws)
+    assert any(w.location == "'min' operands" for w in ws)
 
 
 def test_exp_of_dimensionless_passes():

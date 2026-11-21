@@ -30,9 +30,9 @@ from aquakin.plant.bsm import (
     load_bsm1_influent,
 )
 from aquakin.plant.bsm.bsm2 import (
-    build_bsm2,
     bsm2_constant_influent,
     bsm2_parameters,
+    build_bsm2,
 )
 from aquakin.plant.influent import InfluentSeries
 
@@ -83,9 +83,9 @@ def test_resolve_diff_config_maps_every_supported_mode():
 
 def test_resolve_diff_config_rejects_bad_and_unsupported():
     DC = aquakin.DifferentiationConfig
-    with pytest.raises(ValueError, match="diff.mode must be"):
+    with pytest.raises(ValueError, match=r"diff\.mode must be"):
         Plant._resolve_diff_config(DC(mode="sideways"))
-    with pytest.raises(ValueError, match="diff.method must be"):
+    with pytest.raises(ValueError, match=r"diff\.method must be"):
         Plant._resolve_diff_config(DC(method="not_a_method"))
     # forward + stable is the augmented variational solve -- solve() does not serve it.
     with pytest.raises(ValueError, match="augmented variational solve"):

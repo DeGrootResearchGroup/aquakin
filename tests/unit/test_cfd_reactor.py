@@ -125,7 +125,9 @@ def test_step_raises_on_pathological_inputs(reactor, simple_state):
     integration completes with NaN. Both routes surface as exceptions.
     """
     C, conds = simple_state
-    with pytest.raises(Exception):
+    with pytest.raises(
+        RuntimeError, match=r"maximum number of solver steps|non-finite concentrations"
+    ):
         reactor.step(C, conds, dt=1.0, params=np.asarray([np.nan]))
 
 

@@ -19,7 +19,6 @@ import pytest
 import aquakin
 from aquakin.integrate.forward_solve import StepControl, forward_solve
 
-
 # --------------------------------------------------------------------------
 # Synthetic (fast, no plant) -- the integrator math.
 # --------------------------------------------------------------------------
@@ -127,7 +126,7 @@ def test_stalled_solve_raises():
         return 2.0 * y * jnp.eye(1)
 
     te = jnp.linspace(0.0, 2.0, 5)
-    with pytest.raises(Exception, match="stalled|maximum number"):
+    with pytest.raises(Exception, match=r"stalled|maximum number"):
         forward_solve(rhs, jac, jnp.array([1.0]), None, 0.0, 2.0, te,
                       rtol=1e-6, atol=1e-9,
                       control=StepControl(max_steps=100_000))
@@ -139,7 +138,7 @@ def test_stalled_solve_raises():
 
 @pytest.fixture(scope="module")
 def bsm1():
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
     from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
     from aquakin.plant.influent import InfluentSeries
 
@@ -255,10 +254,10 @@ def test_forward_fast_matches_diffrax_bsm1(bsm1):
 @pytest.mark.slow
 def test_forward_fast_matches_diffrax_bsm2():
     from aquakin.plant.bsm import bsm2_warm_start
-    from aquakin.plant.bsm.bsm2 import (
-        InfluentBypass, build_bsm2, bsm2_asm1_model, bsm2_parameters)
+    from aquakin.plant.bsm.bsm2 import InfluentBypass, bsm2_asm1_model, bsm2_parameters, build_bsm2
     from aquakin.plant.influent import load_bsm2_influent
-    asm1 = bsm2_asm1_model(); adm1 = aquakin.load_model("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
     p = build_bsm2(asm1_model=asm1, adm1_model=adm1,
                    do_temperature_correction=True,

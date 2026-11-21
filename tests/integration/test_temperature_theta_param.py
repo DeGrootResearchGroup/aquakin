@@ -280,7 +280,7 @@ def test_calibrate_recovers_theta_and_k_ref_with_shared_theta(param):
 
 def test_missing_theta_parameter(tmp_path):
     text = _PARAM.replace("theta: theta_k, ref_T: 293.15}}\n  k2", "theta: theta_q, ref_T: 293.15}}\n  k2")
-    with pytest.raises(ValueError, match="theta_q.*not declared"):
+    with pytest.raises(ValueError, match=r"theta_q.*not declared"):
         _load(text, tmp_path, "missing.yaml")
 
 

@@ -498,7 +498,7 @@ def test_nan_and_misspelled_settings_are_refused_before_anything_is_written(tmp_
         with pytest.raises(SpecError, match=message):
             write_spec(bad, target)
         assert target.read_text() == "kept: true\n"
-    with pytest.raises(SpecError, match="units.tank1"):
+    with pytest.raises(SpecError, match=r"units\.tank1"):
         Plant.from_spec(
             dict(
                 spec,
@@ -610,7 +610,7 @@ def test_a_broken_chain_is_refused_and_nothing_is_written(tmp_path):
     spec = p.to_spec()
     (tmp_path / "elsewhere" / "base0.yaml").unlink()
     project = tmp_path / "project"
-    with pytest.raises(SpecError, match="base0.yaml', which does not exist"):
+    with pytest.raises(SpecError, match=r"base0\.yaml', which does not exist"):
         aquakin.plant.write_spec(spec, project / "flowsheet.yaml", base_dir=tmp_path)
     assert not project.exists()
 
@@ -689,10 +689,10 @@ def test_specs_that_name_things_wrongly_are_refused(tmp_path):
         Plant.from_spec(spec)
     model.write_text("model: [\n")
     spec = {"format": 2, "models": {"mine": {"source": str(model)}}, "units": {}}
-    with pytest.raises(SpecError, match="models.mine: "):
+    with pytest.raises(SpecError, match=r"models\.mine: "):
         Plant.from_spec(spec)
     good = _bsm1().to_spec()
-    with pytest.raises(SpecError, match="streams.bad name: WiringError"):
+    with pytest.raises(SpecError, match=r"streams\.bad name: WiringError"):
         Plant.from_spec(dict(good, streams={"bad name": "clarifier.overflow"}))
 
 
@@ -776,7 +776,7 @@ def test_write_spec_refuses_what_it_cannot_write(tmp_path):
     from aquakin.plant.spec import write_spec
 
     spec = _bsm1().to_spec()
-    with pytest.raises(SpecError, match="units.tank1: "):
+    with pytest.raises(SpecError, match=r"units\.tank1: "):
         write_spec(
             dict(spec, units={**spec["units"], "tank1": {"kind": "vat"}}), tmp_path / "a.yaml"
         )
@@ -819,10 +819,10 @@ def test_tables_and_unknown_kinds_in_fingerprints_and_changes(tmp_path):
     assert spec_changes(tmp_path / "flowsheet.yaml") == ["data/feed.csv has changed"]
     table.unlink()
     assert spec_changes(tmp_path / "flowsheet.yaml") == ["data/feed.csv is missing"]
-    with pytest.raises(SpecError, match="feed.csv does not exist"):
+    with pytest.raises(SpecError, match=r"feed\.csv does not exist"):
         spec_fingerprint(tmp_path / "flowsheet.yaml")
     spec = load_spec_file(tmp_path / "flowsheet.yaml")
-    with pytest.raises(SpecError, match="units.tank1: "):
+    with pytest.raises(SpecError, match=r"units\.tank1: "):
         spec_fingerprint(dict(spec, units={"tank1": {"kind": "vat"}}), base_dir=tmp_path)
 
 
@@ -847,9 +847,9 @@ def test_model_files_that_cannot_be_found_or_read(tmp_path):
     relative = {"format": 2, "models": {"mine": {"source": "models/mine.yaml"}}, "units": {}}
     with pytest.raises(SpecError, match="needs the spec to be read from a file"):
         Plant.from_spec(relative)
-    with pytest.raises(SpecError, match="model file .*mine.yaml does not exist"):
+    with pytest.raises(SpecError, match=r"model file .*mine\.yaml does not exist"):
         spec_fingerprint(relative, base_dir=tmp_path)
-    with pytest.raises(SpecError, match="models.mine: model file .*does not exist"):
+    with pytest.raises(SpecError, match=r"models\.mine: model file .*does not exist"):
         write_spec(relative, tmp_path / "out" / "flowsheet.yaml", base_dir=tmp_path)
     (tmp_path / "bad.yaml").write_text("model: [\n")
     bad = {"format": 2, "models": {"bad": {"source": str(tmp_path / "bad.yaml")}}, "units": {}}

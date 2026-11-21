@@ -12,7 +12,6 @@ from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
 from aquakin.plant.cstr import CSTRUnit
 from aquakin.plant.mixer import MixerUnit, SetpointSplitter
 
-
 _INF = {"SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
         "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0}
 

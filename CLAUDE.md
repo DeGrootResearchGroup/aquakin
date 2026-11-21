@@ -458,22 +458,24 @@ After **every code change**, before considering the task complete, review and
 act on the following:
 
 1. **Lint & format** — Run ruff locally before committing and pushing any code
-   change. The CI `lint (ruff)` job runs `ruff check aquakin aquakin_ui` **and**
+   change. The CI `lint (ruff)` job runs
+   `ruff check aquakin aquakin_ui tests scripts examples` **and**
    `ruff format --check aquakin aquakin_ui` on every PR and is a **required merge
    gate**, so an
    unformatted file (or a lint error) fails CI — a common way a refactor that
    only shortens lines trips the format gate. Run both, from the repo root:
-   - `ruff check aquakin aquakin_ui` — must report no errors.
+   - `ruff check aquakin aquakin_ui tests scripts examples` — must report no
+     errors. In a test, an unused import or variable often means an assertion
+     that was never written: look at it before deleting it.
    - `ruff format aquakin aquakin_ui` — auto-applies formatting in place (CI runs
      it with `--check`, which only verifies; running it without `--check` fixes
      the files). Re-run `ruff format --check aquakin aquakin_ui` to confirm it is
-     clean.
+     clean. `tests/`, `scripts/` and `examples/` are linted but not yet
+     formatted: do not run `ruff format` over them as part of an unrelated change.
 
    Ruff is pinned via the `lint` extra (`pip install -e ".[lint]"`); see the
    `[tool.ruff]` config in `pyproject.toml` for the rule set and per-file
    ignores. Not needed for docs/config-only changes that touch no `.py` files.
-   CI lints only the two packages; keep `tests/`, `scripts/` and `examples/`
-   free of unused imports and variables by hand.
 
 2. **Tests** — Every behaviour change comes with a test that would fail without
    it (`.claude/rules/tests.md` has the full table and the quality bar):

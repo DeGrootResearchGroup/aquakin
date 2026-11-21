@@ -68,9 +68,10 @@ jobs:
   # ---- Lint gate: ruff (fast, always-on) --------------------------------------
   # Static checks only -- no JAX import, no compile -- so it is cheap and runs on
   # every push/PR (skipped on the bare `labeled` event and the schedule/dispatch
-  # refresh, like the fast gate). Runs `ruff check` and `ruff format --check` over
-  # the package; the rule set, line width and per-file ignores live in
-  # `pyproject.toml`.
+  # refresh, like the fast gate). Runs `ruff check` over the two packages and
+  # `tests/`, `scripts/`, `examples/`, and `ruff format --check` over the two
+  # packages only (the other directories are not formatted yet); the rule set,
+  # line width and per-file ignores live in `pyproject.toml`.
   lint:
     name: lint (ruff)
     if: >-
@@ -92,7 +93,7 @@ jobs:
           pip install -e ".[lint]"
 
       - name: Run ruff check
-        run: ruff check aquakin aquakin_ui
+        run: ruff check aquakin aquakin_ui tests scripts examples
 
       - name: Run ruff format --check
         run: ruff format --check aquakin aquakin_ui
