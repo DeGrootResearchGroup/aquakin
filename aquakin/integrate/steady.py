@@ -398,11 +398,12 @@ def solve_steady_state(
        root -- the case for every shipped model at its operating point, where
        the transposed solve is exact. If the Jacobian is rank-deficient (a fully
        dormant/depleted species gives a zero row, so the root is not locally
-       unique along that null direction), the true IFT cotangent is undefined and
-       the backward returns the least-squares min-norm cotangent instead; a
-       gradient w.r.t. a parameter that moves only a dormant species is then not
-       reliable. The forward iteration is unaffected -- its pseudo-time term
-       keeps the per-step operator non-singular regardless.
+       unique along that null direction), the true IFT cotangent is undefined.
+       The backward still uses the plain dense solve (no least-squares
+       fallback; see :func:`_ift_state`), so its result there may be non-finite
+       or arbitrary, and a gradient w.r.t. a parameter that moves only a dormant
+       species is not reliable. The forward iteration is unaffected -- its
+       pseudo-time term keeps the per-step operator non-singular regardless.
 
     Parameters
     ----------
