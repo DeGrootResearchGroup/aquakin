@@ -9,11 +9,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from aquakin.integrate._transforms import (
-    dphysical_dunconstrained,
-    from_unconstrained,
-    to_unconstrained,
-)
 from aquakin.integrate.calibration.config import FreeICConfig
 
 if TYPE_CHECKING:
@@ -113,19 +108,6 @@ def _simplex_fraction_cov(z, cov_z) -> np.ndarray:
     f = np.asarray(jax.nn.softmax(jnp.concatenate([jnp.zeros(1), jnp.asarray(z)])))
     J = (np.diag(f) - np.outer(f, f))[:, 1:]  # d f / d z
     return J @ np.asarray(cov_z) @ J.T
-
-
-def _to_unconstrained(value: jnp.ndarray, transform: str) -> jnp.ndarray:
-    return to_unconstrained(value, transform)
-
-
-def _from_unconstrained(theta: jnp.ndarray, transform: str) -> jnp.ndarray:
-    return from_unconstrained(theta, transform)
-
-
-def _jacobian_physical_wrt_theta(theta: jnp.ndarray, transform: str) -> jnp.ndarray:
-    """``dp/dtheta`` at the given ``theta``, used for the delta-method std."""
-    return dphysical_dunconstrained(from_unconstrained(theta, transform), transform)
 
 
 def _joint_names(problem: _CalibrationProblem) -> list[str]:

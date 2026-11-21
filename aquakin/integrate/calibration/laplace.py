@@ -12,8 +12,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from aquakin.integrate._transforms import dphysical_dunconstrained, from_unconstrained
 from aquakin.integrate.calibration.coords import (
-    _jacobian_physical_wrt_theta,
     _joint_names,
     _simplex_fraction_cov,
 )
@@ -293,7 +293,12 @@ def _laplace_posterior(
 
     # Delta-method projection to physical space.
     jac = jnp.stack(
-        [_jacobian_physical_wrt_theta(rate_theta_opt[i], problem.transforms[i]) for i in range(d)]
+        [
+            dphysical_dunconstrained(
+                from_unconstrained(rate_theta_opt[i], problem.transforms[i]), problem.transforms[i]
+            )
+            for i in range(d)
+        ]
     )
     std_physical = jnp.abs(jac) * std_unconstrained[:d]
     params_named_std = {name: float(std_physical[i]) for i, name in enumerate(problem.free_params)}

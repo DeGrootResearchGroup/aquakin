@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import least_squares, minimize
 
-from aquakin.integrate.calibration.coords import _to_unconstrained
+from aquakin.integrate._transforms import to_unconstrained
 
 if TYPE_CHECKING:
     from aquakin.integrate.calibration.objective import _FitConfig, _ObjectiveBundle
@@ -164,7 +164,7 @@ def _resolve_starts(problem: _CalibrationProblem, starts) -> list:
         out.append(
             jnp.stack(
                 [
-                    _to_unconstrained(p[model.param_index[name]], t)
+                    to_unconstrained(p[model.param_index[name]], t)
                     for name, t in zip(problem.free_params, problem.transforms)
                 ]
             )

@@ -12,12 +12,10 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate._common import native_time_factor
-from aquakin.integrate._transforms import to_unconstrained
+from aquakin.integrate._transforms import from_unconstrained, to_unconstrained
 from aquakin.integrate.calibration.coords import (
-    _from_unconstrained,
     _resolve_ic_coords,
     _simplex_pools,
-    _to_unconstrained,
 )
 from aquakin.integrate.calibration.loss import (
     _build_loss,
@@ -205,14 +203,14 @@ class _CalibrationProblem:
         """Free rate parameters in physical space from their unconstrained
         ``theta`` block (applying each parameter's transform)."""
         return jnp.stack(
-            [_from_unconstrained(rate_thetas[i], self.transforms[i]) for i in range(self.n_rate)]
+            [from_unconstrained(rate_thetas[i], self.transforms[i]) for i in range(self.n_rate)]
         )
 
     def rate_theta0(self) -> jnp.ndarray:
         """The unconstrained start vector for the rate block (from ``p0_full``)."""
         return jnp.stack(
             [
-                _to_unconstrained(self.p0_full[self.model.param_index[name]], t)
+                to_unconstrained(self.p0_full[self.model.param_index[name]], t)
                 for name, t in zip(self.free_params, self.transforms)
             ]
         )

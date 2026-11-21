@@ -5,7 +5,11 @@ it re-exports what moved: tests, ``fisher.py``, ``profile.py`` and the plant
 layer import private names from it, and a test monkeypatches
 ``_ReactorForwardModel`` on it. The list below is every aquakin-defined name the
 module exported before the split (the stdlib / NumPy / JAX / SciPy helpers it
-happened to import, such as ``np`` or ``least_squares``, are not part of it).
+happened to import, such as ``np`` or ``least_squares``, are not part of it),
+less the three one-line transform shims ``_to_unconstrained``,
+``_from_unconstrained`` and ``_jacobian_physical_wrt_theta``, removed on
+purpose: call ``to_unconstrained`` / ``from_unconstrained`` /
+``dphysical_dunconstrained`` from ``aquakin.integrate._transforms`` instead.
 """
 
 import importlib
@@ -56,13 +60,11 @@ EXPORTED = [
     "_fit_result",
     "_forward_jac",
     "_free_ic_fields",
-    "_from_unconstrained",
     "_ic_coordinate_names",
     "_ic_theta_from_pools",
     "_initial_point",
     "_is_sigma_estimate",
     "_is_solve_failure",
-    "_jacobian_physical_wrt_theta",
     "_joint_names",
     "_laplace_covariance",
     "_laplace_posterior",
@@ -87,7 +89,6 @@ EXPORTED = [
     "_sigma_per_dataset",
     "_simplex_fraction_cov",
     "_simplex_pools",
-    "_to_unconstrained",
     "calibrate",
     "check_finite_gradient",
     "dphysical_dunconstrained",

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 import numpy as np
 
-from aquakin.integrate.calibration.coords import _from_unconstrained, _to_unconstrained
+from aquakin.integrate._transforms import from_unconstrained, to_unconstrained
 
 if TYPE_CHECKING:
     from aquakin.integrate._common import Reactor
@@ -215,7 +215,7 @@ class CalibrationResult:
         free_idx = np.asarray([model.param_index[n] for n in names])
         theta_map = np.array(
             [
-                float(_to_unconstrained(jnp.asarray(self.params_named[n]), t))
+                float(to_unconstrained(jnp.asarray(self.params_named[n]), t))
                 for n, t in zip(names, self.transforms)
             ]
         )
@@ -241,7 +241,7 @@ class CalibrationResult:
         )
         out = np.tile(np.asarray(self.params, dtype=float), (n_draw, 1))
         for i, t in enumerate(self.transforms):
-            out[:, free_idx[i]] = np.asarray(_from_unconstrained(jnp.asarray(thetas[:, i]), t))
+            out[:, free_idx[i]] = np.asarray(from_unconstrained(jnp.asarray(thetas[:, i]), t))
         return out
 
     def predictive_band(
