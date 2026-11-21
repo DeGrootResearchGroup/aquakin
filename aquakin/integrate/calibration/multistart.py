@@ -13,7 +13,7 @@ from scipy.optimize import least_squares, minimize
 from aquakin.integrate.calibration.coords import _to_unconstrained
 
 if TYPE_CHECKING:
-    from aquakin.integrate.calibrate import _FitConfig, _ObjectiveBundle
+    from aquakin.integrate.calibration.objective import _FitConfig, _ObjectiveBundle
     from aquakin.integrate.calibration.problem import _CalibrationProblem
 
 
