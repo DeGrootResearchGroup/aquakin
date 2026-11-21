@@ -458,6 +458,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `Plant.calibrate()` now refuses an unknown `OptimizerConfig(method=...)` with
+  the same `ValueError` as `aquakin.calibrate()`, naming the valid methods.
+  Before, the plant fit started and then failed inside SciPy with an unhelpful
+  `TypeError: 'NoneType' object is not callable`. The method is now checked when
+  the `OptimizerConfig` is built, so an invalid one is refused before any fit.
+
 - `Plant.run_to_steady_state()` no longer reports convergence in silence when its
   default `criterion="norm"` has stopped early. That test compares `||dy/dt||`
   with `ss_atol + ss_rtol*||y||`, so every state inflates the tolerance that
