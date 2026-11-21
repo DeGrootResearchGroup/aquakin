@@ -25,6 +25,9 @@ from aquakin.study import (
 from aquakin.study.study import _Study
 
 BSM1 = Path(__file__).parents[2] / "examples" / "projects" / "bsm1"
+#: Where a study with a results folder but no finished run stands, as
+#: ``study_results`` reports it beside what it read.
+NOT_RUN = {"state": "not run", "has_results": False, "reasons": [], "notes": []}
 
 
 def test_the_form_describes_every_setting_and_kind():
@@ -113,6 +116,43 @@ def test_bad_studies_are_refused_and_leave_nothing(project):
             },
         )
     assert not (project / "studies" / "bad").exists()
+
+
+def test_an_absolute_flowsheet_is_stored_relative_to_the_study(project):
+    """A front end names the spec file it has open; the study keeps the path from
+    its own folder, and none at all for the project's flowsheet.yaml."""
+    simulate = {"kind": "simulate", "streams": ["effluent"]}
+    (project / "plant.yaml").write_text((project / "flowsheet.yaml").read_text())
+    other = create_study(project, "other", {**simulate, "flowsheet": str(project / "plant.yaml")})
+    assert yaml.safe_load((other / "study.yaml").read_text())["study"]["flowsheet"] == (
+        "../../plant.yaml"
+    )
+    default = create_study(
+        project, "default", {**simulate, "flowsheet": str(project / "flowsheet.yaml")}
+    )
+    assert "flowsheet" not in yaml.safe_load((default / "study.yaml").read_text())["study"]
+    update_study(other, {**simulate, "flowsheet": str(project / "flowsheet.yaml")})
+    assert read_study(other) == simulate
+    # A relative path is the user's own and is kept as written.
+    update_study(other, {**simulate, "flowsheet": "../../plant.yaml"})
+    assert read_study(other)["flowsheet"] == "../../plant.yaml"
+
+
+def test_a_flowsheet_on_another_drive_is_kept_absolute(project, monkeypatch):
+    """Windows has no relative path between drives (``os.path.relpath`` raises
+    ``ValueError``); the study then keeps the absolute path it was given."""
+    import aquakin.study.form as form
+
+    def across_drives(path, start):
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(form.os.path, "relpath", across_drives)
+    elsewhere = str(project / "plant.yaml")
+    (project / "plant.yaml").write_text((project / "flowsheet.yaml").read_text())
+    folder = create_study(
+        project, "elsewhere", {"kind": "simulate", "streams": ["effluent"], "flowsheet": elsewhere}
+    )
+    assert read_study(folder)["flowsheet"] == elsewhere
 
 
 def test_an_initial_state_from_another_study_is_copied_in(project):
@@ -278,7 +318,7 @@ def test_the_results_of_a_run_in_time_read_by_stream(project):
         "t_obs: [1.0], sigma: 1.0}\n"
     )
     (fisher / "results").mkdir()
-    assert study_results(fisher) == {"kind": "fisher", "files": [], "summary": None}
+    assert study_results(fisher) == {"kind": "fisher", "files": [], "summary": None, **NOT_RUN}
 
 
 def test_the_results_of_each_analysis_read_as_plain_data(project):
@@ -290,7 +330,7 @@ def test_the_results_of_each_analysis_read_as_plain_data(project):
 
     fisher = create_study(project, "f", {"kind": "fisher", **common, "t_obs": [1.0], "sigma": 0.1})
     (fisher / "results").mkdir()
-    assert study_results(fisher) == {"kind": "fisher", "files": [], "summary": None}
+    assert study_results(fisher) == {"kind": "fisher", "files": [], "summary": None, **NOT_RUN}
     write_matrix(fisher / "results" / "fisher.csv", np.array([[4.0]]), ["asm1.muH"])
     (fisher / "results" / "summary.yaml").write_text("values: {asm1.muH: 6.0}\nstd: null\n")
     found = study_results(fisher)
@@ -306,6 +346,7 @@ def test_the_results_of_each_analysis_read_as_plain_data(project):
         "files": [],
         "summary": None,
         "data": {"t": [0.5, 1.0], "values": {"effluent": {"SNH": [1.0, 1.2]}}},
+        **NOT_RUN,
     }
     write_trajectory(fit / "results" / "fitted.csv", [0.5, 1.0], {"effluent.SNH": [1.05, math.inf]})
     (fit / "results" / "fit.yaml").write_text("fitted: {asm1.muH: 5.9}\nconverged: true\n")
@@ -323,7 +364,7 @@ def test_the_results_of_each_analysis_read_as_plain_data(project):
          "grid": [5.0, 6.0]},
     )  # fmt: skip
     (prof / "results").mkdir()
-    assert study_results(prof) == {"kind": "profile", "files": [], "summary": None}
+    assert study_results(prof) == {"kind": "profile", "files": [], "summary": None, **NOT_RUN}
     write_table(
         prof / "results" / "profile.csv", {"asm1.muH": [5.0, 6.0], "delta_loss": [2.0, 0.0]}
     )
@@ -338,7 +379,7 @@ def test_the_results_of_each_analysis_read_as_plain_data(project):
          "candidates": [{"name": "a", "observables": common["observables"], "sigma": 0.1}]},
     )  # fmt: skip
     (rank / "results").mkdir()
-    assert study_results(rank) == {"kind": "rank", "files": [], "criterion": "A"}
+    assert study_results(rank) == {"kind": "rank", "files": [], "criterion": "A", **NOT_RUN}
     write_table(rank / "results" / "ranking.csv", {"rank": [1], "candidate": ["a"], "A": [0.5]})
     found = study_results(rank)
     assert found["criterion"] == "A" and found["table"]["candidate"] == ["a"]

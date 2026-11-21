@@ -35,7 +35,7 @@ expected values). `tests/ui` runs in the required fast gate (the `ui` CI job).
 | `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. **Numbers are shown exactly** (`_float_text`, the shortest round-trip text): Apply reads every field back, so a rounded display would change values nobody edited. The aeration value is read only in the mode the form was drawn with, and a unit's conditions are kept when its model could not be described (no condition rows). Each row carries a `suffix`, the unit its help names (`unit_in`: "(m³)", "(g/m³, i.e. mg/L)", ", m³/d"; help writes flows and times per day and they are shown on the plant's clock, m³/h on an hourly plant), a condition's model unit (T in K), kLa's 1/clock, the DO set-point's oxygen unit. An unreadable field raises `FieldError` with its row `key` (shown under the field from `sel_errors`). `suggest_species` gives settling settings the model's X species when their ASM1 default (or empty one) does not fit; new units and model changes take it. Lists no setting or type of its own (the settling settings are named by their role) |
 | `icons.py` | `ICONS`, `COLOURS`, `CATEGORY_LABELS`, `SVG`, `icon_name` | the only per-kind presentation table; an unlisted kind gets the tank icon |
 | `study_form.py` | `fields_for`, `draft_for`, `study_from`, `missing` | **pure**: the study dialog's draft from the worker's `study_form` (numbers kept as text, an even time grid as start / stop / count) and back, empty fields and defaults left out; `missing` names a kind's required fields by label. Lists no setting of its own |
-| `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart`, `xy_chart`, `analysis_view` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`). `xy_chart` is the core: a line, data points (slot-2 orange, with a fit/data legend when both) and a labelled reference hairline (a profile's threshold). `analysis_view` turns a Fisher, rank, calibrate or profile reply into notes, tables and charts |
+| `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart`, `xy_chart`, `analysis_view`, `ANALYSIS_VIEWS`, `SIMULATE` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`). `xy_chart` is the core: a line, data points (slot-2 orange, with a fit/data legend when both) and a labelled reference hairline (a profile's threshold). `analysis_view` dispatches through `ANALYSIS_VIEWS` (one `_<kind>_view` per kind but `SIMULATE`, which the editor draws itself) and raises on a kind it lacks |
 | `settings.py` | `Settings`, `DEFAULTS`, `settings_path` | the user's preferences, a JSON file in the configuration folder (`AQUAKIN_UI_CONFIG` overrides; `tests/ui/conftest.py` points it at a temporary file for every test, so tests never touch the user's); unknown keys and wrong types are ignored on read; a failed write keeps the value for the session |
 | `jobs.py` | `StudyRun` | one study run = one `python -m aquakin study run --json` process: JSON progress events on stdout, `cancel` on stdin (killed after `CANCEL_GRACE` if no checkpoint comes); its own temporary log |
 | `app.py` | `Editor` | the page; turns finished canvas edits into document changes; the Studies tab |
@@ -43,6 +43,29 @@ expected values). `tests/ui` runs in the required fast gate (the `ui` CI job).
 
 Icons (`icons/*.svg`) are original line icons (see `icons/README.md`): 24-unit
 viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
+
+## The worker protocol (pinned by `tests/ui/test_protocol.py`)
+
+The two sides share no import, so what they must agree on is pinned by a test
+that imports both. Keep it that way rather than copying knowledge across:
+
+- **Every command name the editor sends** (`worker.request("...")`,
+  `_worker_study("...")`, always a literal) is one of `_handlers()` in
+  `aquakin/__main__.py`. A new command is added there first.
+- **A refusal is `{"error": message, "type": class name}`**
+  (`aquakin.plant.errors.error_reply`; also `check_unit` / `check_spec` results
+  and the run's `error` event). `WorkerError` carries the message as its text and
+  `.type`. Show the message as it stands; never parse a class name out of text.
+- **Study state and paths come from the worker**: `list_studies` gives each
+  study's `path`, `state`, `has_results` and `flowsheet` (the spec it builds
+  from); `study_results` and the run's `done` event give `has_results` and the
+  reasons. Decide "has results" from `has_results`, never from a state's name,
+  and never rebuild `studies/<name>/study.yaml` or `../../flowsheet.yaml` here:
+  a new study's `flowsheet:` is sent as the spec's absolute path and aquakin
+  stores it relative. `STATE_COLOURS` (app.py) is the one table of state names
+  on this side, pinned to aquakin's `STATES`.
+- **Every study kind has a view** (`results.SIMULATE` + `ANALYSIS_VIEWS` equal
+  aquakin's `KINDS`).
 
 ## Sync rules (each was a bug found in the browser)
 
@@ -114,11 +137,10 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   replacing its results asks first like any study. **Studies are per folder but
   a spec is per file**: the study is `simulation` for `flowsheet.yaml` and
   `simulation_<stem>` for any other spec (`simulation_name`), an existing one
-  whose `flowsheet:` points at another file is pointed back, and a frozen one is
-  refused (it would run its snapshot, not the drawing). The study dialog sets
-  `flowsheet:` for a new study of a spec not named `flowsheet.yaml`
-  (`flowsheet_entry`) and keeps an edited study's own (the form has no such
-  field, so `study_from` would drop it). **A measured channel may be a measure
+  whose listed `flowsheet` is another file is pointed back, and a frozen one is
+  refused (it would run its snapshot, not the drawing). The study dialog sends
+  a new study's `flowsheet:` as the open spec's path and keeps an edited
+  study's own (the form has no such field, so `study_from` would drop it). **A measured channel may be a measure
   expression** (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, see `.claude/rules/plant-analysis.md`):
   the channels widget is a `VCombobox`, not a `VSelect`, so free text becomes a
   chip and travels as a plain string the draft must not touch — aquakin reads it
@@ -128,7 +150,7 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
   expression itself anyway. A structured measure read from a file still rides in
   the row's `measures` map, keyed by name. A run started this way opens its
   results when it finishes (`_show_when_done`). **Results** (`show_results`) asks the worker for
-  `study_results`; the charts are redrawn in Python when the stream or channels
+  `study_results`, whose own `reasons` make the out-of-date note; the charts are redrawn in Python when the stream or channels
   change (`choose_results_stream` / `show_charts`).
 - **The flowsheet's file** (`_spec_file`) is the one last opened or saved here;
   the toolbar path is only where Open reads and Save writes next (an unsaved
@@ -160,13 +182,13 @@ viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
 - **A deleted unit and its wires are one removal**: Vue Flow reports them as
   two changes; the canvas queues them and emits one `remove` (one Undo).
 - **A cancelled run is reported cancelled** even when it is killed before a
-  checkpoint (`StudyRun.cancelled`). "Replace results?" is asked only for a
-  study with results (fresh, stale, damaged).
+  checkpoint (`StudyRun.cancelled`). "Replace results?" is asked, and
+  unfreezing asks, only for a study with results (`has_results`).
 - **Selecting a unit opens its form** (`on_select` sets the Unit tab). The
   palette marks kinds with a required setting the form cannot edit
   (`_needs_python`: an SBR's phases, a dosing unit's reagent). A new flowsheet
   runs on days (`options: {time_unit: d}`). Errors reach the page without
-  exception class names (`_plain_error`).
+  exception class names (the worker sends them apart, see the protocol above).
 - **A scheduled value is text, read by aquakin** (`scheduled_number`,
   `scheduled_species_values` — an influent's `Q`, `T` and each `composition`
   entry): `forms._scheduled` keeps a number a number (so a constant feed is

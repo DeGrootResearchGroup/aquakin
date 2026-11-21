@@ -80,6 +80,12 @@ Replies go to a private duplicate of the process's stdout and descriptor 1 is
 pointed at stderr while serving (plus a Python-level redirect per handler), so
 no other output can corrupt a reply; a failed request, or a reply that is not
 strict JSON (NaN), gets `{"ok": false, "error": ...}` without stopping the worker.
+**An error is `{"error": message, "type": class name}`**
+(`plant.errors.error_reply`): a refused request, `check_unit` / `check_spec`
+results and the study run's error event all use it. Never format
+`f"{type(exc).__name__}: {exc}"` into a message a front end shows. The commands
+`aquakin_ui` sends, and the study states and kinds it names, are pinned by
+`tests/ui/test_protocol.py` (see `.claude/rules/ui.md`).
 
 **Flowsheet spec (`plant/spec.py`, `Plant.to_spec` / `Plant.from_spec`).** A
 plant as a file (format 2), built on the catalogue. Units are keyed by their

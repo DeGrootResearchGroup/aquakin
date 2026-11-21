@@ -289,6 +289,166 @@ def _table(title: str, columns: list[str], rows: list[list]) -> dict:
     return {"title": title, "columns": columns, "rows": rows}
 
 
+def _fisher_view(results: dict, summary: dict, lines: list, tables: list, charts: list) -> None:
+    """A Fisher study: the parameters' values and standard deviations, the design
+    criteria and the information matrix."""
+    values = summary.get("values") or {}
+    std = summary.get("std")
+    tables.append(
+        _table(
+            "Parameters",
+            ["parameter", "value", "standard deviation"],
+            [[n, fmt(v), fmt((std or {}).get(n))] for n, v in values.items()],
+        )
+    )
+    if std is None:
+        lines.append(
+            "The information matrix is singular: these measurements cannot tell the "
+            "free parameters apart."
+        )
+    criteria = summary.get("criteria") or {}
+    tables.append(
+        _table(
+            "Design criteria",
+            ["criterion", "value"],
+            [[c, fmt(v)] for c, v in criteria.items()],
+        )
+    )
+    matrix = results.get("matrix")
+    if matrix:
+        tables.append(
+            _table(
+                "Information matrix (log-parameters where transformed)",
+                ["", *matrix["names"]],
+                [[n, *(fmt(v) for v in row)] for n, row in zip(matrix["names"], matrix["rows"])],
+            )
+        )
+
+
+def _rank_view(results: dict, summary: dict, lines: list, tables: list, charts: list) -> None:
+    """A rank study: the sensor sets, best first."""
+    table = results.get("table") or {}
+    criterion = results.get("criterion", "D")
+    n = len(table.get("candidate") or [])
+    rows = [
+        [
+            str(i + 1),
+            table["candidate"][i],
+            fmt((table.get(criterion) or [None] * n)[i]),
+            fmt((table.get("improvement") or [None] * n)[i]),
+        ]
+        for i in range(n)
+    ]
+    tables.append(
+        _table("Sensor sets, best first", ["rank", "sensor set", criterion, "improvement"], rows)
+    )
+    lines.append(
+        "Improvement is over the sensors already in place (the base); it is empty "
+        "when there is no base."
+    )
+
+
+def _calibrate_view(results: dict, summary: dict, lines: list, tables: list, charts: list) -> None:
+    """A calibration: the fitted parameters, how the fit ended, any estimated
+    measurement error, and a chart of fit and data per channel."""
+    fitted = summary.get("fitted") or {}
+    std = summary.get("std") or {}
+    if fitted:
+        tables.append(
+            _table(
+                "Fitted parameters",
+                ["parameter", "value", "standard deviation"],
+                [[n, fmt(v), fmt(std.get(n))] for n, v in fitted.items()],
+            )
+        )
+    if summary:
+        state = "converged" if summary.get("converged") else "did not converge"
+        lines.append(
+            f"The fit {state} after {summary.get('iterations')} iterations "
+            f"({summary.get('message')})."
+        )
+    estimate = summary.get("sigma_estimate")
+    if estimate:
+        tables.append(
+            _table(
+                "Estimated measurement error",
+                ["channel", "standard deviation"],
+                [[n, fmt(v)] for n, v in estimate.items()],
+            )
+        )
+    fit = results.get("fitted") or {}
+    data = results.get("data") or {}
+    for stream, channels in (fit.get("values") or {}).items():
+        for channel, values in channels.items():
+            observed = (data.get("values") or {}).get(stream, {}).get(channel)
+            charts.append(
+                {
+                    "channel": f"{stream}.{channel}",
+                    "svg": xy_chart(
+                        title=f"{stream} {channel}",
+                        label=f"{channel} of {stream}: data and fit",
+                        x_name="t",
+                        line=list(zip(fit["t"], values)),
+                        dots=list(zip(data.get("t") or [], observed or [])),
+                        x_axis="time",
+                    ),
+                }
+            )
+
+
+def _profile_view(results: dict, summary: dict, lines: list, tables: list, charts: list) -> None:
+    """A profile: the best value and interval, a chart of the profile and its table."""
+    table = results.get("table") or {}
+    parameter = summary.get("parameter")
+    low, high = (summary.get("ci") or [None, None])[:2]
+    bounds = (
+        "below the grid" if low is None else fmt(low),
+        "above the grid" if high is None else fmt(high),
+    )
+    lines.append(
+        f"Best of the grid: {parameter} = {fmt(summary.get('mle'))}. 95 % interval: "
+        f"{bounds[0]} to {bounds[1]} (where the curve stays under the threshold)."
+    )
+    if parameter in table:
+        charts.append(
+            {
+                "channel": parameter,
+                "svg": xy_chart(
+                    title=f"Profile of {parameter}",
+                    label=f"likelihood profile of {parameter}",
+                    x_name=parameter,
+                    line=list(zip(table[parameter], table.get("delta_loss") or [])),
+                    reference=(summary.get("delta", 1.92), "threshold"),
+                    x_axis=parameter,
+                ),
+            }
+        )
+        tables.append(
+            _table(
+                "Profile",
+                [parameter, "loss", "rise from the best"],
+                [
+                    [fmt(x), fmt(v), fmt(d)]
+                    for x, v, d in zip(table[parameter], table.get("loss"), table.get("delta_loss"))
+                ],
+            )
+        )
+
+
+#: The kind of study shown by the editor's own tables and charts (a steady state
+#: or a run in time), not by :func:`analysis_view`.
+SIMULATE = "simulate"
+
+#: Each other kind's view; ``tests/ui/test_protocol.py`` pins that these and
+#: :data:`SIMULATE` are exactly aquakin's study kinds.
+ANALYSIS_VIEWS = {
+    "fisher": _fisher_view,
+    "rank": _rank_view,
+    "calibrate": _calibrate_view,
+    "profile": _profile_view,
+}
+
+
 def analysis_view(results: dict) -> dict:
     """What a Fisher, rank, calibrate or profile study found, ready to show.
 
@@ -302,149 +462,18 @@ def analysis_view(results: dict) -> dict:
     dict
         ``{"lines": [text], "tables": [{"title", "columns", "rows"}],
         "charts": [{"channel", "svg"}]}``; every number as text.
+
+    Raises
+    ------
+    ValueError
+        If the kind has no view here (rather than drawing it as another kind).
     """
     kind = results["kind"]
-    summary = results.get("summary") or {}
+    view = ANALYSIS_VIEWS.get(kind)
+    if view is None:
+        raise ValueError(f"no view for a {kind!r} study")
     lines: list[str] = []
     tables: list[dict] = []
     charts: list[dict] = []
-    if kind == "fisher":
-        values = summary.get("values") or {}
-        std = summary.get("std")
-        tables.append(
-            _table(
-                "Parameters",
-                ["parameter", "value", "standard deviation"],
-                [[n, fmt(v), fmt((std or {}).get(n))] for n, v in values.items()],
-            )
-        )
-        if std is None:
-            lines.append(
-                "The information matrix is singular: these measurements cannot tell the "
-                "free parameters apart."
-            )
-        criteria = summary.get("criteria") or {}
-        tables.append(
-            _table(
-                "Design criteria",
-                ["criterion", "value"],
-                [[c, fmt(v)] for c, v in criteria.items()],
-            )
-        )
-        matrix = results.get("matrix")
-        if matrix:
-            tables.append(
-                _table(
-                    "Information matrix (log-parameters where transformed)",
-                    ["", *matrix["names"]],
-                    [
-                        [n, *(fmt(v) for v in row)]
-                        for n, row in zip(matrix["names"], matrix["rows"])
-                    ],
-                )
-            )
-    elif kind == "rank":
-        table = results.get("table") or {}
-        criterion = results.get("criterion", "D")
-        n = len(table.get("candidate") or [])
-        rows = [
-            [
-                str(i + 1),
-                table["candidate"][i],
-                fmt((table.get(criterion) or [None] * n)[i]),
-                fmt((table.get("improvement") or [None] * n)[i]),
-            ]
-            for i in range(n)
-        ]
-        tables.append(
-            _table(
-                "Sensor sets, best first", ["rank", "sensor set", criterion, "improvement"], rows
-            )
-        )
-        lines.append(
-            "Improvement is over the sensors already in place (the base); it is empty "
-            "when there is no base."
-        )
-    elif kind == "calibrate":
-        fitted = summary.get("fitted") or {}
-        std = summary.get("std") or {}
-        if fitted:
-            tables.append(
-                _table(
-                    "Fitted parameters",
-                    ["parameter", "value", "standard deviation"],
-                    [[n, fmt(v), fmt(std.get(n))] for n, v in fitted.items()],
-                )
-            )
-        if summary:
-            state = "converged" if summary.get("converged") else "did not converge"
-            lines.append(
-                f"The fit {state} after {summary.get('iterations')} iterations "
-                f"({summary.get('message')})."
-            )
-        estimate = summary.get("sigma_estimate")
-        if estimate:
-            tables.append(
-                _table(
-                    "Estimated measurement error",
-                    ["channel", "standard deviation"],
-                    [[n, fmt(v)] for n, v in estimate.items()],
-                )
-            )
-        fit = results.get("fitted") or {}
-        data = results.get("data") or {}
-        for stream, channels in (fit.get("values") or {}).items():
-            for channel, values in channels.items():
-                observed = (data.get("values") or {}).get(stream, {}).get(channel)
-                charts.append(
-                    {
-                        "channel": f"{stream}.{channel}",
-                        "svg": xy_chart(
-                            title=f"{stream} {channel}",
-                            label=f"{channel} of {stream}: data and fit",
-                            x_name="t",
-                            line=list(zip(fit["t"], values)),
-                            dots=list(zip(data.get("t") or [], observed or [])),
-                            x_axis="time",
-                        ),
-                    }
-                )
-    elif kind == "profile":
-        table = results.get("table") or {}
-        parameter = summary.get("parameter")
-        low, high = (summary.get("ci") or [None, None])[:2]
-        bounds = (
-            "below the grid" if low is None else fmt(low),
-            "above the grid" if high is None else fmt(high),
-        )
-        lines.append(
-            f"Best of the grid: {parameter} = {fmt(summary.get('mle'))}. 95 % interval: "
-            f"{bounds[0]} to {bounds[1]} (where the curve stays under the threshold)."
-        )
-        if parameter in table:
-            charts.append(
-                {
-                    "channel": parameter,
-                    "svg": xy_chart(
-                        title=f"Profile of {parameter}",
-                        label=f"likelihood profile of {parameter}",
-                        x_name=parameter,
-                        line=list(zip(table[parameter], table.get("delta_loss") or [])),
-                        reference=(summary.get("delta", 1.92), "threshold"),
-                        x_axis=parameter,
-                    ),
-                }
-            )
-            tables.append(
-                _table(
-                    "Profile",
-                    [parameter, "loss", "rise from the best"],
-                    [
-                        [fmt(x), fmt(v), fmt(d)]
-                        for x, v, d in zip(
-                            table[parameter], table.get("loss"), table.get("delta_loss")
-                        )
-                    ],
-                )
-            )
+    view(results, results.get("summary") or {}, lines, tables, charts)
     return {"lines": lines, "tables": tables, "charts": charts}

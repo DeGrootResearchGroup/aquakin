@@ -400,6 +400,22 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Changed
 
+- Errors from the `aquakin serve` worker, from `aquakin.plant.catalog.check_unit`
+  and from `aquakin.plant.spec.check_spec` now carry the message and the
+  exception's class apart, `{"error": "volume must be positive", "type":
+  "ValueError"}`, instead of `"ValueError: volume must be positive"`; the
+  `aquakin study run --json` error event does the same. The flowsheet editor
+  shows the message as it stands.
+- The worker's `list_studies` and `study_results` replies, and the `done` event
+  of `aquakin study run --json`, say whether the study has results
+  (`has_results`); `list_studies` also gives the spec each study builds its plant
+  from (`flowsheet`), and `study_results` where the study stands (`state`,
+  `reasons`, `notes`). The editor's results now say why they are out of date
+  (which input changed) rather than only that the flowsheet changed.
+- `create_study` and `update_study` accept an absolute `flowsheet:` path and
+  store it relative to the study folder (leaving it out when it is the
+  project's `flowsheet.yaml`). Study files on disk keep their names and format.
+
 - `IFASUnit` / `MBBRUnit` now default to `n_layers=16`, up from 4. The biofilm
   discretization is first order and its error is governed by the penetration
   ratio `L_f/delta` rather than thickness alone: at `L_f/delta = 4` four layers

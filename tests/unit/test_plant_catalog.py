@@ -168,6 +168,8 @@ def test_settings_come_from_the_constructor_and_its_docstring():
 def test_exactly_one_of_is_reported():
     out = check_unit("clarifier", "c", {"model": "asm1", "area": 1500.0, "height": 4.0})
     assert not out["ok"] and "exactly one of overflow_Q, underflow_Q" in out["error"]
+    # The class travels apart from the message, which a front end shows as it stands.
+    assert out["type"] == "ValueError" and not out["error"].startswith("ValueError")
 
 
 def test_aeration_values_are_type_checked():
@@ -257,6 +259,7 @@ def test_serve_checks_a_whole_spec():
     good, bad = (json.loads(line)["result"] for line in out.getvalue().splitlines())
     assert good == {"ok": True, "unfed": [], "dangling": ["tank.out"], "recycles": []}
     assert not bad["ok"] and bad["error"].startswith("units.tank:")
+    assert bad["type"] == "SpecError"
 
 
 def test_a_reply_that_is_not_json_does_not_end_the_worker(monkeypatch):

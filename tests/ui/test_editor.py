@@ -136,7 +136,13 @@ def test_studies_are_listed_run_frozen_and_copied(tmp_path):
         ed._apply_run_event = lambda name, event: (events.append(event), original(name, event))
         ed.run_study("short")
         assert ed._runs["short"].wait(300)["event"] == "done"
-        assert events[-1] == {"event": "done", "state": "fresh", "reasons": [], "notes": []}
+        assert events[-1] == {
+            "event": "done",
+            "state": "fresh",
+            "has_results": True,
+            "reasons": [],
+            "notes": [],
+        }
         assert ed._study("short")["state"] == "fresh" and not ed._runs
 
         # Running again would replace the results: the editor asks, and "copy"
@@ -249,7 +255,7 @@ class _Failing:
 
     def request(self, command, **fields):
         if command in self.fail:
-            raise WorkerError(f"StudyError: {command} failed")
+            raise WorkerError(f"{command} failed", "StudyError")
         if command in self.crash:
             raise RuntimeError(f"{command} crashed")
         return self.worker.request(command, **fields)
@@ -287,12 +293,15 @@ def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path):
         ed.show_results("short")
         assert "could not read the results of short" in ed.state.message
         assert "has no results; run it first" in ed.state.message
-        ed.state.studies = [
-            {**st, "state": "stale"} if st["name"] == "simulation_plant" else st
-            for st in ed.state.studies
-        ]
+        # Results gone stale say why, as aquakin's check of the study does.
+        settings = project / "studies" / "simulation_plant" / "study.yaml"
+        edited = yaml.safe_load(settings.read_text())
+        edited["study"]["description"] = "edited after the run"
+        settings.write_text(yaml.safe_dump(edited))
         ed.show_results("simulation_plant")
-        assert ed.state.results_note.startswith("The flowsheet has changed since this ran")
+        assert ed.state.results_note == (
+            "Run the study again for up-to-date results: the study's settings have changed."
+        )
 
         ed.set_ask_replace(False)
         assert not ed.state.ask_replace and "could not save the preference" in ed.state.message
@@ -574,9 +583,10 @@ def test_unsaved_edits_are_saved_or_kept_before_open_and_run(tmp_path):
         ed.run_study("short")
         ed.answer_study("cancel")
         assert "short" not in ed._show_when_done
-        # Results just run are not called stale by an older listing.
+        # Results just run are not called stale by an older listing: where the
+        # study stands comes with its results.
         ed.state.studies = [{**st, "state": "stale"} for st in ed.state.studies]
-        ed.show_results("short", state="fresh")
+        ed.show_results("short")
         assert ed.state.results_note == ""
         ed.state.spec_path = "  "
         ed.request_open()
@@ -643,8 +653,6 @@ def test_toolbar_actions_apply_the_forms_edits_and_aeration_suits_the_model(tmp_
 
 
 def test_the_form_marks_the_bad_field_and_new_units_suit_the_model(tmp_path):
-    from aquakin_ui.app import _plain_error
-
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-usability-test", client_type="vue3")
     ed = Editor(server, path=project / "flowsheet.yaml")
@@ -665,7 +673,6 @@ def test_the_form_marks_the_bad_field_and_new_units_suit_the_model(tmp_path):
         kinds = {k["kind"]: k for group in ed.state.palette for k in group["kinds"]}
         assert kinds["sbr"]["python"] and "only be set from Python" in kinds["sbr"]["summary"]
         assert not kinds["cstr"]["python"]
-        assert _plain_error("WorkerError: FileNotFoundError: no such file") == "no such file"
     finally:
         ed.worker.stop()
 
@@ -770,4 +777,56 @@ def test_a_channel_of_your_own_is_written_from_the_study_dialog(tmp_path):
             "BOD5 = 0.65*[SS] + 0.65*[XS]",
         ]
     finally:
+        ed.worker.stop()
+
+
+def test_errors_reach_the_page_without_class_names_and_simulate_reports_a_broken_study(
+    tmp_path,
+):
+    """The worker sends an error's message and its class apart, so what the page
+    shows is the message alone; a Simulate study whose study.yaml cannot be read
+    is reported with the reason aquakin gives, and a frozen study without
+    results is unfrozen without asking (there is nothing to delete)."""
+    project = _study_project(tmp_path)
+    worker = _Failing()
+    worker.fail = {"check_spec", "check_unit"}
+    server = get_server(name="aquakin-ui-plain-errors-test", client_type="vue3")
+    ed = Editor(server, worker=worker, path=project / "flowsheet.yaml")
+    try:
+        assert ed._check_unit("tank") == "check_unit failed"
+        assert ed._check_plant() == {"ok": False, "error": "check_spec failed"}
+        ed.publish(checks=False)
+        assert ed.state.errors == ["tank: check_unit failed"]  # a unit's error first
+        worker.fail = set()
+        ed._unit_checks.clear()
+        assert ed._check_unit("tank") is None
+        ed.publish(checks=False)
+        assert ed.state.errors == ["plant: check_spec failed"]
+
+        worker.fail = {"write_spec"}
+        ed.save(path=project / "flowsheet.yaml")
+        assert ed.state.message == f"could not save {project / 'flowsheet.yaml'}: write_spec failed"
+        worker.fail = set()
+
+        missing = tmp_path / "nowhere.yaml"
+        ed.state.spec_path = str(missing)
+        ed.request_open()
+        assert ed.state.message.startswith(f"could not open {missing}: ")
+        assert "No such file" in ed.state.message and "Error" not in ed.state.message
+
+        ed.refresh_studies()
+        ed.freeze_study("short")
+        assert ed._study("short") == {**ed._study("short"), "frozen": True, "has_results": False}
+        ed.unfreeze_study("short")
+        assert not ed.state.study_confirm_open and not ed._study("short")["frozen"]
+
+        broken = project / "studies" / "simulation"
+        broken.mkdir()
+        (broken / "study.yaml").write_text("study: {kind: survey}\n")
+        ed.simulate()
+        assert ed.state.message.startswith("could not set up the simulation: ")
+        assert "kind: Input should be 'simulate'" in ed.state.message
+        assert "ValidationError" not in ed.state.message and "simulation" not in ed._runs
+    finally:
+        ed.stop_runs()
         ed.worker.stop()
