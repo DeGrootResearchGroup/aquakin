@@ -58,7 +58,7 @@ def test_validation(asm1):
         _mbr(asm1, rejection=1.5)
     with pytest.raises(ValueError, match="waste_flow must be"):
         _mbr(asm1, waste_flow=-1.0)
-    with pytest.raises(ValueError, match="missing condition"):
+    with pytest.raises(ValueError, match="missing required condition values"):
         MBRUnit("m", asm1, volume=1.0, particulate_species=_PARTS)
     with pytest.raises(ValueError, match="particulate species"):
         _mbr(asm1, particulate_species=["NOPE"])
