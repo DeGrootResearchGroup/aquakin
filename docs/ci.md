@@ -103,6 +103,13 @@ nor concentrating it in a few files makes the whole suite fast.
   `after_n_builds` in `codecov.yml` did not help, because the carried-forward
   slow/validation/heavy sessions count toward it.
 
+  The Codecov **project** status is informational; the **patch** status
+  (`codecov/patch`) has an 85% target on the lines the PR adds or changes. On a
+  normal PR only the fast tier uploads, so a change covered only by `slow`,
+  `validation` or `heavy` tests reads as uncovered there: cover it in the fast
+  tier, or apply `full-ci`. It is not one of the required checks (see *Branch
+  protection* below): a red patch status is a signal for review, not a block.
+
   The fast-tier durations are recorded by **`refresh-fast-durations`**, which
   runs with the weekly slow/validation refresh (`refresh-durations`, Mondays,
   or a manual `workflow_dispatch`). It uses the same

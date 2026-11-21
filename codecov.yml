@@ -9,8 +9,12 @@
 # forward reuses each flag's last known coverage when a build does not upload it,
 # so PRs show the full combined picture.
 #
-# Status checks are informational (never fail CI) -- this adds a badge and a
-# report, not a coverage gate.
+# The project status is informational (it never fails CI): it is a badge and a
+# report, not a gate. The patch status is a real target: the lines a PR adds or
+# changes must be at least 85% covered by the tests that ran on it. The number
+# is set below what recent PRs reach (29 of the 30 merged before it was set
+# reported patch coverage; the lowest was 94.5%, the median 100%), so it fails
+# a PR that adds largely untested code without flagging the usual one.
 #
 # The fast tier uploads once per run, from the `fast-coverage` job after every
 # fast shard has finished (.github/workflows/ci.yml), so the PR comment and
@@ -25,7 +29,7 @@ coverage:
         informational: true
     patch:
       default:
-        informational: true
+        target: 85%
 
 flag_management:
   default_rules:
