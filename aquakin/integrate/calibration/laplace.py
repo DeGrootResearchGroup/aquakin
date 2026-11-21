@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from aquakin.integrate._linalg import _NULL_LOADING_TOL, _NULL_RTOL
 from aquakin.integrate._transforms import dphysical_dunconstrained, from_unconstrained
 from aquakin.integrate.calibration.coords import (
     _joint_names,
@@ -20,7 +21,6 @@ from aquakin.integrate.calibration.coords import (
 from aquakin.integrate.calibration.loss import _data_term
 from aquakin.integrate.calibration.objective import _forward_jac, _residual_parts
 from aquakin.integrate.calibration.problem import _predict
-from aquakin.integrate.identifiability import _NULL_LOADING_TOL, _NULL_RTOL
 
 if TYPE_CHECKING:
     from aquakin.integrate.calibration.objective import _FitConfig

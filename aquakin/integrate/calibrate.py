@@ -43,6 +43,7 @@ from aquakin.integrate._common import (
     native_time_factor,
     with_adjoint,
 )
+from aquakin.integrate._linalg import _NULL_LOADING_TOL, _NULL_RTOL
 from aquakin.integrate._transforms import (
     dphysical_dunconstrained,
     from_unconstrained,
@@ -139,7 +140,6 @@ from aquakin.integrate.calibration.result import (
     CalibrationResult,
     PredictiveBand,
 )
-from aquakin.integrate.identifiability import _NULL_LOADING_TOL, _NULL_RTOL
 
 # Every name this module has exported. The implementation lives in the
 # ``aquakin.integrate.calibration`` subpackage; the names are re-exported here so
