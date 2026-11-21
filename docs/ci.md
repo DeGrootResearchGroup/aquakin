@@ -104,10 +104,15 @@ nor concentrating it in a few files makes the whole suite fast.
   slow/validation/heavy sessions count toward it.
 
   The Codecov **project** status is informational. The **patch** status
-  (`codecov/patch`) needs **98%** of the lines a PR adds or changes to be
-  covered, with `threshold: 0%` so nothing passes below that. Partially covered
-  branches count against it, so an untaken `if x is not None:` fallback in new
-  code is a miss. Two consequences contributors will hit:
+  (`codecov/patch`) has a **100%** target: every line a PR adds or changes is
+  expected to be covered (`threshold: 0%`, so anything short reads red).
+  Partially covered branches count against it, so an untaken
+  `if x is not None:` fallback in new code is a miss. A red patch status asks
+  for one of two things: add the test, or state in the PR which lines are
+  uncovered and why (a defensive branch no input can reach, or code only
+  `slow` tests exercise on a PR without `full-ci`). It is never a reason to add
+  `# pragma: no cover`, or a test that only executes lines without checking
+  what they do. Two consequences contributors will hit:
   - **The fast-tier-only upload matters.** On a normal PR only the fast tier
     uploads; the slow, validation and heavy flags are carried forward from
     `main` and say nothing about lines the PR wrote. New code that only a
@@ -117,10 +122,10 @@ nor concentrating it in a few files makes the whole suite fast.
   - **Moved code counts as changed.** Codecov has no notion of a move, so a
     behaviour-preserving refactor that relocates code carries that code's
     existing fast-tier gaps into its patch number. Run it with `full-ci`; if it
-    is still short, the gap predates the PR and the reviewer judges it.
+    is still short, the gap predates the PR: say so in the PR.
 
-  The patch status is not one of the required checks (see *Branch protection*
-  below): red is a signal for review, not a block.
+  The patch status is a target, not one of the required checks (see *Branch
+  protection* below): red is a prompt for the author and reviewer, not a block.
 
   The fast-tier durations are recorded by **`refresh-fast-durations`**, which
   runs with the weekly slow/validation refresh (`refresh-durations`, Mondays,

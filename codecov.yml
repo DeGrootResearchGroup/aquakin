@@ -10,13 +10,14 @@
 # so PRs show the full combined picture.
 #
 # The project status is informational (it never fails CI): it is a badge and a
-# report, not a gate. The patch status is a real target: at least 98% of the
-# lines a PR adds or changes must be covered by the tests that ran on it, with
-# `threshold: 0%` so it cannot pass below the target. On a normal PR only the
-# `fast` flag uploads, so code covered only by slow / validation / heavy tests
-# counts as uncovered unless the PR carries the `full-ci` label. Codecov also
-# counts moved lines as changed, so a pure move of code with existing gaps can
-# fall short; see docs/ci.md.
+# report, not a gate. The patch status is a target of 100%: every line a PR
+# adds or changes is expected to be covered by the tests that ran on it, with
+# `threshold: 0%` so nothing short of that reads as green. It is a signal, not a
+# required check: a red patch status asks the PR to add the test or to say which
+# lines are uncovered and why. On a normal PR only the `fast` flag uploads, so
+# code covered only by slow / validation / heavy tests counts as uncovered
+# unless the PR carries the `full-ci` label, and Codecov counts moved lines as
+# changed; see docs/ci.md.
 #
 # The fast tier uploads once per run, from the `fast-coverage` job after every
 # fast shard has finished (.github/workflows/ci.yml), so the PR comment and
@@ -31,7 +32,7 @@ coverage:
         informational: true
     patch:
       default:
-        target: 98%
+        target: 100%
         threshold: 0%
 
 flag_management:

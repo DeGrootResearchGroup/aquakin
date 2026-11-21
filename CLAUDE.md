@@ -485,11 +485,13 @@ act on the following:
    - Bug fix → regression test, **seen to fail on the unfixed code**
    - Run the tests you touched, and the fast gate for a cross-cutting change;
      report what ran and what did not.
-   - Codecov's patch status needs 98% of the changed lines covered, and on a
-     normal PR only the fast tier uploads. New code that only a `slow`,
-     `validation` or `heavy` test reaches reads as uncovered: test it from the
-     fast tier, or apply `full-ci` (details in `docs/ci.md`). Do not add
-     `# pragma: no cover` to reach the number.
+   - New and changed lines are expected to be covered: Codecov's patch status
+     targets 100% (a signal, not a required check). When it is red, add the
+     test, or state in the PR which lines are uncovered and why (a defensive
+     branch no input can reach; code only `slow` tests exercise, on a PR
+     without `full-ci`, since only the fast tier uploads on a normal PR). Never
+     add `# pragma: no cover`, or a test that only executes lines, to make it
+     green. Details in `docs/ci.md`.
 
 3. **Duplication and leftovers** — Re-read the diff as a reviewer:
    - Did you copy a block that should be one shared function?
