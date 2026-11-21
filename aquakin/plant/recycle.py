@@ -58,32 +58,6 @@ class RecycleResolver:
         self._recycle_T_map_constant: bool | None = None
         self._flow_map_constant: bool | None = None
 
-    def _seed_recycle_streams(
-        self,
-        resolved_flows: dict[tuple[str | None, str], jnp.ndarray],
-    ) -> dict[tuple[str, str], Stream]:
-        """Pre-seed recycle back-edges with their resolved flow + initial conc.
-
-        A recycle edge (downstream -> upstream) must be readable before its
-        source unit has been visited in the sweep. We seed it with the
-        exactly-resolved flow (from :meth:`_resolve_flows`) and a seed
-        concentration -- the edge's explicit ``initial_value`` when given, else
-        the zero-flow auto-seed from :meth:`_finalize_topology`; the
-        concentration is then corrected within a few sweep passes, as recycle
-        concentrations are read directly from the source unit's state.
-        """
-        seeded: dict[tuple[str, str], Stream] = {}
-        for conn in self.plant._recycle_conns:
-            key = (conn.from_unit, conn.from_port)
-            iv = (
-                conn.initial_value
-                if conn.initial_value is not None
-                else self.plant._recycle_seeds[key]
-            )
-            q = resolved_flows[key]
-            seeded[key] = Stream(Q=q, C=iv.C, model=iv.model, scalars=dict(iv.scalars))
-        return seeded
-
     def _resolve_recycle_concentrations(
         self,
         t: jnp.ndarray,

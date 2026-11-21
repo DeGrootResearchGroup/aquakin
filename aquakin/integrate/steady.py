@@ -89,7 +89,7 @@ class PTCResult:
     converged: jnp.ndarray
 
 
-def _scaled_resnorm(F: jnp.ndarray, y: jnp.ndarray, floor: float) -> jnp.ndarray:
+def scaled_resnorm(F: jnp.ndarray, y: jnp.ndarray, floor: float) -> jnp.ndarray:
     """Infinity norm of the *relative* rate ``F / max(|y|, floor)``.
 
     Scaling by the state magnitude weighs every component comparably -- without
@@ -99,10 +99,10 @@ def _scaled_resnorm(F: jnp.ndarray, y: jnp.ndarray, floor: float) -> jnp.ndarray
     return jnp.max(jnp.abs(F) / jnp.maximum(jnp.abs(y), floor))
 
 
-def _scaled_residual_event(tol: float, scale_floor):
+def scaled_residual_event(tol: float, scale_floor):
     """A ``diffrax.Event`` condition: stop once the scaled residual is at most ``tol``.
 
-    The residual is :func:`_scaled_resnorm` of the vector field at the current
+    The residual is :func:`scaled_resnorm` of the vector field at the current
     state, the quantity :func:`ptc_forward` converges on, so a forward solve
     stopped by this event meets the same test as the algebraic solve.
     """
@@ -110,7 +110,7 @@ def _scaled_residual_event(tol: float, scale_floor):
     def cond_fn(t, y, args, *, terms, solver, **kwargs):
         del kwargs
         F = solver.func(terms, t, y, args)
-        return _scaled_resnorm(F, y, scale_floor) <= tol
+        return scaled_resnorm(F, y, scale_floor) <= tol
 
     return cond_fn
 
@@ -230,7 +230,7 @@ def ptc_forward(
 
     def _ser_resnorm(Fv, yv):
         if ser_norm == "max":
-            return _scaled_resnorm(Fv, yv, scale_floor)
+            return scaled_resnorm(Fv, yv, scale_floor)
         return jnp.mean(jnp.abs(Fv) / jnp.maximum(jnp.abs(yv), scale_floor))
 
     # Globalization of the PTC step. A bare backward-Euler step at a large
@@ -288,7 +288,7 @@ def ptc_forward(
             if nonneg:
                 yt = jnp.maximum(yt, 0.0)  # clip any residual roundoff negatives
             Ft = F(yt)
-            return yt, _scaled_resnorm(Ft, yt, scale_floor), _ser_resnorm(Ft, yt)
+            return yt, scaled_resnorm(Ft, yt, scale_floor), _ser_resnorm(Ft, yt)
 
         # (2) Backtrack while the step overshoots beyond divergence_factor x the
         # best residual so far (non-monotone bound). A converging step accepts the
@@ -366,7 +366,7 @@ def ptc_forward(
         return (r > tol) & (k < max_iter)
 
     F0 = F(y0)
-    r0 = _scaled_resnorm(F0, y0, scale_floor)
+    r0 = scaled_resnorm(F0, y0, scale_floor)
     rs0 = _ser_resnorm(F0, y0)
     dt0 = jnp.asarray(dt0)
     init = (y0, dt0, r0, rs0, r0, y0, rs0, dt0, rs0, jnp.asarray(0), jnp.asarray(0))
@@ -398,11 +398,12 @@ def solve_steady_state(
        root -- the case for every shipped model at its operating point, where
        the transposed solve is exact. If the Jacobian is rank-deficient (a fully
        dormant/depleted species gives a zero row, so the root is not locally
-       unique along that null direction), the true IFT cotangent is undefined and
-       the backward returns the least-squares min-norm cotangent instead; a
-       gradient w.r.t. a parameter that moves only a dormant species is then not
-       reliable. The forward iteration is unaffected -- its pseudo-time term
-       keeps the per-step operator non-singular regardless.
+       unique along that null direction), the true IFT cotangent is undefined.
+       The backward still uses the plain dense solve (no least-squares
+       fallback; see :func:`_ift_state`), so its result there may be non-finite
+       or arbitrary, and a gradient w.r.t. a parameter that moves only a dormant
+       species is not reliable. The forward iteration is unaffected -- its
+       pseudo-time term keeps the per-step operator non-singular regardless.
 
     Parameters
     ----------
@@ -669,7 +670,7 @@ def make_arclength_kernels(rhs, scale, ptc_kwargs=None):
         A = jnp.zeros((n + 1, n + 1))
         A = A.at[:n, :n].set(Fz).at[:n, n].set(Fs).at[n, :n].set(tz).at[n, n].set(ts)
         du = jnp.linalg.solve(A, -jnp.concatenate([F, jnp.asarray([N])]))
-        return z + du[:n], s + du[n], _scaled_resnorm(F, y, floor), A
+        return z + du[:n], s + du[n], scaled_resnorm(F, y, floor), A
 
     @jax.jit
     def tangent(A, tz, ts):

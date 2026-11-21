@@ -35,7 +35,7 @@ Claude-facing files** at the end.
 | Rule | Loads for | Covers |
 |---|---|---|
 | `.claude/rules/tests.md` | `tests/**` | what makes a test able to fail, gradient tests, shared fixtures, the tiers and what CI actually runs |
-| `.claude/rules/core.md` | `aquakin/core/**` | AST rate evaluation, parser, **the one expression tokenizer (`core/lexer.py`) every expression language shares**, vectorized kernel, `SpatialConditions`, parameter namespacing |
+| `.claude/rules/core.md` | `aquakin/core/**`, `aquakin/utils/**` | AST rate evaluation, parser, **the one expression tokenizer (`core/lexer.py`) every expression language shares**, vectorized kernel, `SpatialConditions`, parameter namespacing |
 | `.claude/rules/core-speciation.md` | `core/ph_solver.py`, `core/speciation.py` | charge-balance pH solver, derived conditions, the `speciation:` block |
 | `.claude/rules/core-precipitation.md` | `core/precipitation*.py` | mineral precipitation: rate law, the `precipitation:` block, the algebraic equilibrium mode |
 | `.claude/rules/integration.md` | `aquakin/integrate/**` | solver choice, operator splitting, located events, compiled-solve caching |

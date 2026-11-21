@@ -345,6 +345,8 @@ def composition_base(model: CompiledModel) -> str | None:
 
     import yaml
 
+    # One of the two sanctioned upward imports (see the layering test): only the
+    # loader can give a shipped model's species list to compare against.
     from aquakin.schema.loader import load_model
 
     if model.name in _BUILDERS:

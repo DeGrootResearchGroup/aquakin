@@ -1,6 +1,7 @@
 ---
 paths:
   - "aquakin/core/**"
+  - "aquakin/utils/**"
 ---
 
 # Rules — `aquakin/core/`
@@ -20,13 +21,21 @@ schema in `schema/model_spec.py`, touches the topic):
 
 ## Layering
 
-`core` must not import `schema`, `integrate`, `plant` or `study`, not even
-inside a function body: `tests/unit/test_layering.py` scans every import and
-fails on one. A piece both `core` and a higher layer need lives in `core` and
-is re-exported upward (`default_atol` is in `core/tolerance.py`). The one
-sanctioned exception is `CompiledModel.influent`, which imports
-`plant.influent` because `net.influent(...)` is how plants build their feed;
-the test allows exactly that import and no other.
+`core` and `utils` are one level (they import each other) and must not import
+`schema`, `integrate`, `plant` or `study`, not even inside a function body:
+`tests/unit/test_layering.py` scans every import and fails on one. A piece both
+`core` and a higher layer need lives in `core` and is re-exported upward
+(`default_atol` is in `core/tolerance.py`). The test allows exactly two
+exceptions, each because a public `CompiledModel` method needs the layer above:
+- `CompiledModel.influent` imports `plant.influent`, because `net.influent(...)`
+  is how plants build their feed.
+- `utils/composition.py` imports `schema.loader.load_model`, because
+  `CompiledModel.composition()` falls back to a shipped model's table and
+  choosing it compares the model's species with the shipped model's. The
+  `extends:` chain is read at call time, so the base cannot be recorded when
+  the model is loaded.
+
+Add no third: move the shared piece down instead.
 
 ## AST Rate Expression Evaluation
 
