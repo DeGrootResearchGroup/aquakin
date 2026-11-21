@@ -133,7 +133,7 @@ testpaths = ["tests"]
 # per-shard reports use repo-relative paths so Codecov merges them correctly
 # across the different job checkouts. `branch = true` adds branch coverage.
 [tool.coverage.run]
-source = ["aquakin"]
+source = ["aquakin", "aquakin_ui"]
 branch = true
 relative_files = true
 # `aquakin/models/_make_*.py` are one-off, run-by-hand generator scripts that
