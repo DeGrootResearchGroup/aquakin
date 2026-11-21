@@ -668,6 +668,24 @@ def test_plant_calibrate_start_list_validation(decay_plant):
             plant.calibrate(obs, t_obs, [PARAM], optimizer=opt, **kw)
 
 
+def test_plant_calibrate_rejects_unknown_optimizer_method(decay_plant):
+    """An unknown ``optimizer.method`` is refused with the ``ValueError`` that
+    ``aquakin.calibrate`` raises, naming the valid methods, before any fit runs."""
+    net, plant = decay_plant
+    with pytest.raises(
+        ValueError,
+        match=r"optimizer\.method must be one of \('lbfgsb', 'gauss_newton'\); got 'newton'",
+    ):
+        plant.calibrate(
+            jnp.zeros(5),
+            jnp.linspace(1.0, 20.0, 5),
+            [PARAM],
+            target="tank",
+            observed_channels=["B"],
+            optimizer=OptimizerConfig(method="newton"),
+        )
+
+
 def test_plant_calibrate_start_list_reaches_the_optimiser(decay_plant, monkeypatch):
     """A valid start list is resolved (dict and full-vector starts, by plant
     parameter name) and handed to the multistart runner, the first entry being
