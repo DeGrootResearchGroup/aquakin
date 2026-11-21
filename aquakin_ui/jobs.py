@@ -120,7 +120,10 @@ class StudyRun:
             self._proc.stdin.write("cancel\n")
             self._proc.stdin.flush()
         except (BrokenPipeError, OSError, ValueError):
-            pass
+            # The run has ended. Close its input now: a "cancel" left in the
+            # pipe's buffer would raise BrokenPipeError again when collected.
+            with contextlib.suppress(OSError, ValueError):
+                self._proc.stdin.close()
 
         def kill_later():
             if not self.finished.wait(CANCEL_GRACE):
