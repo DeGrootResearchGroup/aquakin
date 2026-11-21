@@ -208,8 +208,30 @@ Each language keeps its own error class (a message should name the language the
 reader is writing in), which is why `tokenize` takes the class to raise rather
 than owning one.
 
-Precedence is shared too, and `core/parser.py` and `plant/time_expr.py` must
-stay in step: `unary := ('+'|'-') unary | power`, `power := primary ('**' unary)?`.
+### One precedence, three languages (`core/precedence.py`)
+
+The same applies a level up. `PrecedenceParser` holds the grammar all three
+share — `expression := term (('+'|'-') term)*`, `term := unary (('*'|'/')
+unary)*`, `unary := ('+'|'-') unary | power`, `power := primary ('**' unary)?`
+— and a language subclasses it, supplies `primary()` for its own leaves, and
+implements one hook per operation (`add`, `subtract`, `multiply`, `divide`,
+`negate`, `power`), each given the operator token so it can name a position.
+
+**A language that does not allow an operation raises in its hook**, rather than
+having a grammar of its own: that is how a measure expression stays affine
+(`multiply` refuses two measured operands, `power` refuses outright). The base's
+`power` already refuses, so a new language is safe before it has thought about
+powers.
+
+A sign binds **looser** than a power (`-2**2` is `-(2**2)`), `**` is
+right-associative and its exponent may carry a sign. All three had this
+backwards until #699 and it had to be fixed in each by hand — which is the whole
+reason it is written down once.
+
+**Changing either shared file is a `full-ci` change.** Guard it the way those
+two were: re-parse every expression in every shipped model, fixture and example
+and compare the ASTs (845 of them; the throwaway script is in the #699 / lexer
+PR description). A refactor that changes no AST changes no model.
 
 ### Parser
 

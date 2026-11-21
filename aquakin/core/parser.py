@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import fields
 
-from aquakin.core.lexer import Token, tokenize
+from aquakin.core.lexer import Token
 from aquakin.core.nodes import (
     AddNode,
     ASTNode,
@@ -39,6 +39,7 @@ from aquakin.core.nodes import (
     SpeciesNode,
     SubtractNode,
 )
+from aquakin.core.precedence import PrecedenceParser
 
 
 def _build_function_registry() -> dict:
@@ -76,17 +77,21 @@ class ParseError(ValueError):
 # --- Parser ------------------------------------------------------------
 
 
-class _Parser:
-    def __init__(self, text: str) -> None:
-        self.text = text
-        self.tokens = tokenize(text, error=ParseError)
-        self.i = 0
+class _Parser(PrecedenceParser):
+    """The shared precedence, building the rate-expression AST.
 
-    def _peek(self) -> Token:
-        return self.tokens[self.i]
+    Only the leaves are this language's own: ``[species]``, ``{condition}``, a
+    bare identifier as a rate constant, and the domain functions discovered from
+    the AST node classes.
+    """
+
+    error = ParseError
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
 
     def _eat(self, kind: str | Iterable[str]) -> Token:
-        tok = self._peek()
+        tok = self.peek()
         kinds = (kind,) if isinstance(kind, str) else tuple(kind)
         if tok.kind not in kinds:
             raise ParseError(
@@ -96,62 +101,41 @@ class _Parser:
         self.i += 1
         return tok
 
-    def parse(self) -> ASTNode:
-        node = self._expr()
-        if self._peek().kind != "EOF":
-            tok = self._peek()
-            raise ParseError(
-                f"Unexpected token {tok.value!r} at position {tok.pos} in expression {self.text!r}"
-            )
-        return node
+    def trailing_message(self, token: Token) -> str:
+        return (
+            f"Unexpected token {token.value!r} at position {token.pos} in expression {self.text!r}"
+        )
 
-    def _expr(self) -> ASTNode:
-        node = self._term()
-        while self._peek().kind in ("PLUS", "MINUS"):
-            op = self._eat(("PLUS", "MINUS"))
-            right = self._term()
-            node = AddNode(node, right) if op.kind == "PLUS" else SubtractNode(node, right)
-        return node
+    # --- the arithmetic, as AST nodes -------------------------------------
 
-    def _term(self) -> ASTNode:
-        node = self._unary()
-        while self._peek().kind in ("STAR", "SLASH"):
-            op = self._eat(("STAR", "SLASH"))
-            right = self._unary()
-            node = MultiplyNode(node, right) if op.kind == "STAR" else DivideNode(node, right)
-        return node
+    def add(self, left, right, token):
+        return AddNode(left, right)
 
-    def _unary(self) -> ASTNode:
-        """A sign, or a power.
+    def subtract(self, left, right, token):
+        return SubtractNode(left, right)
 
-        A sign binds **looser** than ``**``, as in Python and ordinary
-        mathematical notation: ``-2**2`` is ``-(2**2)``, not ``(-2)**2``.
-        """
-        if self._peek().kind == "PLUS":
-            self._eat("PLUS")
-            return self._unary()
-        if self._peek().kind == "MINUS":
-            self._eat("MINUS")
-            return NegateNode(self._unary())
-        return self._power()
+    def multiply(self, left, right, token):
+        return MultiplyNode(left, right)
 
-    def _power(self) -> ASTNode:
-        node = self._primary()
-        if self._peek().kind == "POW":
-            self._eat("POW")
-            # Right-associative, and the exponent may carry its own sign, so
-            # ``2**-1`` and ``2**3**2`` both read as they do in Python.
-            node = PowerNode(node, self._unary())
-        return node
+    def divide(self, left, right, token):
+        return DivideNode(left, right)
 
-    def _primary(self) -> ASTNode:
-        tok = self._peek()
+    def negate(self, operand, token):
+        return NegateNode(operand)
+
+    def power(self, base, exponent, token):
+        return PowerNode(base, exponent)
+
+    # --- its leaves -------------------------------------------------------
+
+    def primary(self) -> ASTNode:
+        tok = self.peek()
         if tok.kind == "NUMBER":
             self._eat("NUMBER")
             return ConstantNode(float(tok.value))
         if tok.kind == "LPAREN":
             self._eat("LPAREN")
-            node = self._expr()
+            node = self.expression()
             self._eat("RPAREN")
             return node
         if tok.kind == "LBRACE":
@@ -161,7 +145,7 @@ class _Parser:
             return ConditionNode(name_tok.value)
         if tok.kind == "LBRACK":
             self._eat("LBRACK")
-            name_tok = self._peek()
+            name_tok = self.peek()
             if name_tok.kind != "IDENT":
                 # A species name must START with an identifier token; its charge
                 # suffixes ('Br-', 'BrO3-', 'Ca2+') are read by _read_species_name
@@ -176,7 +160,7 @@ class _Parser:
         if tok.kind == "IDENT":
             self._eat("IDENT")
             name = tok.value
-            if self._peek().kind == "LPAREN":
+            if self.peek().kind == "LPAREN":
                 self._eat("LPAREN")
                 args = self._arglist()
                 self._eat("RPAREN")
@@ -201,8 +185,8 @@ class _Parser:
         parts.append(ident.value)
         prev_end = ident.pos + len(ident.value)
         # Then any number of adjacent '+', '-', integer, or ident tokens.
-        while self._peek().kind in ("PLUS", "MINUS", "NUMBER", "IDENT"):
-            tok = self._peek()
+        while self.peek().kind in ("PLUS", "MINUS", "NUMBER", "IDENT"):
+            tok = self.peek()
             if tok.pos != prev_end:
                 # Whitespace separated the previous token from this one — stop.
                 break
@@ -227,10 +211,10 @@ class _Parser:
         return "".join(parts)
 
     def _arglist(self) -> list[ASTNode]:
-        args = [self._expr()]
-        while self._peek().kind == "COMMA":
+        args = [self.expression()]
+        while self.peek().kind == "COMMA":
             self._eat("COMMA")
-            args.append(self._expr())
+            args.append(self.expression())
         return args
 
     def _make_function_call(self, name: str, args: list[ASTNode]) -> ASTNode:

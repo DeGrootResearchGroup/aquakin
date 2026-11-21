@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from aquakin.core.hints import did_you_mean
-from aquakin.core.lexer import Token, spell, tokenize
+from aquakin.core.precedence import PrecedenceParser
 
 __all__ = [
     "KEYWORDS",
@@ -200,111 +200,82 @@ class _Terms:
         return out
 
 
-class _ExpressionParser:
-    """Recursive descent over a measure expression, evaluating to :class:`_Terms`.
+class _ExpressionParser(PrecedenceParser):
+    """The affine arithmetic of a weighted sum, evaluating to :class:`_Terms`.
 
-    The grammar is the arithmetic of a weighted sum::
-
-        expr    := term (('+' | '-') term)*
-        term    := factor (('*' | '/') factor)*
-        factor  := ('+' | '-') factor | primary
-        primary := number | '[' species ']' | measurement | '(' expr ')'
-
-    A product needs one side to be a plain number and a divisor must be one, so
-    whatever the expression says is linear in the stream -- which is what lets a
-    channel be a column of the measurement matrix, and what the sensor ranking
-    and Fisher information rely on.
+    The precedence is the shared one; the leaves and the restrictions are this
+    language's own. A product needs one side to be a plain number and a divisor
+    must be one, and a power is refused outright, so whatever the expression
+    says is **linear** in the stream -- which is what lets a channel be a column
+    of the measurement matrix, and what the sensor ranking and Fisher
+    information rely on.
     """
 
-    def __init__(self, text: str, offset: int = 0) -> None:
-        self.text = text
-        self.tokens = tokenize(text, error=MeasureSyntaxError, offset=offset)
-        self.i = 0
-
-    def _peek(self) -> Token:
-        return self.tokens[self.i]
-
-    def _take(self, kind: str) -> Token:
-        token = self._peek()
-        if token.kind != kind:
-            raise MeasureSyntaxError(self._unexpected(token, f"expected {spell(kind)}"))
-        self.i += 1
-        return token
-
-    def _unexpected(self, token: Token, expected: str) -> str:
-        what = spell("EOF") if token.kind == "EOF" else f"{token.value!r}"
-        return f"{expected}, got {what} at position {token.pos}"
+    error = MeasureSyntaxError
 
     def parse(self) -> _Terms:
-        if self._peek().kind == "EOF":
+        if self.peek().kind == "EOF":
             raise MeasureSyntaxError("the expression is empty")
-        terms = self._expression()
-        token = self._peek()
-        if token.kind != "EOF":
-            raise MeasureSyntaxError(self._unexpected(token, "expected '+' or '-'"))
-        return terms
+        return super().parse()
 
-    def _expression(self) -> _Terms:
-        terms = self._term()
-        while self._peek().kind in ("PLUS", "MINUS"):
-            sign = 1.0 if self._peek().kind == "PLUS" else -1.0
-            self.i += 1
-            terms = terms.added(self._term(), sign)
-        return terms
+    def trailing_message(self, token) -> str:
+        return f"expected '+' or '-', got {self.describe(token)} at position {token.pos}"
 
-    def _term(self) -> _Terms:
-        terms = self._factor()
-        while self._peek().kind in ("STAR", "SLASH"):
-            operator = self._peek()
-            self.i += 1
-            right = self._factor()
-            if operator.kind == "STAR":
-                if not terms.measured:
-                    terms = right.scaled(terms.constant)
-                elif not right.measured:
-                    terms = terms.scaled(right.constant)
-                else:
-                    raise MeasureSyntaxError(
-                        f"a measure is a weighted sum, so it cannot multiply two measured "
-                        f"quantities (at position {operator.pos}); one side of a '*' must "
-                        f"be a number"
-                    )
-            else:
-                if right.measured:
-                    raise MeasureSyntaxError(
-                        f"a measure is a weighted sum, so it can only divide by a number "
-                        f"(at position {operator.pos})"
-                    )
-                if right.constant == 0.0:
-                    raise MeasureSyntaxError(f"division by zero at position {operator.pos}")
-                terms = terms.scaled(1.0 / right.constant)
-        return terms
+    # --- the affine arithmetic -------------------------------------------
 
-    def _factor(self) -> _Terms:
-        token = self._peek()
-        if token.kind in ("PLUS", "MINUS"):
-            self.i += 1
-            factor = self._factor()
-            return factor if token.kind == "PLUS" else factor.scaled(-1.0)
-        return self._primary()
+    def add(self, left, right, token):
+        return left.added(right, 1.0)
 
-    def _primary(self) -> _Terms:
-        token = self._peek()
+    def subtract(self, left, right, token):
+        return left.added(right, -1.0)
+
+    def multiply(self, left, right, token):
+        if not left.measured:
+            return right.scaled(left.constant)
+        if not right.measured:
+            return left.scaled(right.constant)
+        raise MeasureSyntaxError(
+            f"a measure is a weighted sum, so it cannot multiply two measured "
+            f"quantities (at position {token.pos}); one side of a '*' must be a number"
+        )
+
+    def divide(self, left, right, token):
+        if right.measured:
+            raise MeasureSyntaxError(
+                f"a measure is a weighted sum, so it can only divide by a number "
+                f"(at position {token.pos})"
+            )
+        if right.constant == 0.0:
+            raise MeasureSyntaxError(f"division by zero at position {token.pos}")
+        return left.scaled(1.0 / right.constant)
+
+    def negate(self, operand, token):
+        return operand.scaled(-1.0)
+
+    def power(self, base, exponent, token):
+        raise MeasureSyntaxError(
+            f"a measure is a weighted sum, so it has no powers (at position {token.pos})"
+        )
+
+    # --- its leaves -------------------------------------------------------
+
+    def primary(self) -> _Terms:
+        token = self.peek()
         if token.kind == "NUMBER":
-            self.i += 1
+            self.advance()
             return _Terms(constant=float(token.value))
         if token.kind == "LBRACK":
-            self.i += 1
-            name = self._take("IDENT").value
-            self._take("RBRACK")
+            self.advance()
+            name = self.expect("IDENT").value
+            self.expect("RBRACK")
             return _Terms(species={name: 1.0})
         if token.kind == "LPAREN":
-            self.i += 1
-            terms = self._expression()
-            self._take("RPAREN")
+            self.advance()
+            terms = self.expression()
+            self.expect("RPAREN")
             return terms
         if token.kind == "IDENT":
-            self.i += 1
+            self.advance()
             if token.value not in KEYWORDS:
                 hint = did_you_mean(token.value, list(KEYWORDS))
                 raise MeasureSyntaxError(
@@ -312,7 +283,13 @@ class _ExpressionParser:
                     f"write a species in brackets, as '[{token.value}]'.{hint}"
                 )
             return _Terms(keywords={token.value: 1.0})
-        raise MeasureSyntaxError(self._unexpected(token, "expected a number, '[species]' or '('"))
+        raise MeasureSyntaxError(self.expected_message_for_primary(token))
+
+    def expected_message_for_primary(self, token) -> str:
+        return (
+            f"expected a number, '[species]' or '(', got {self.describe(token)} "
+            f"at position {token.pos}"
+        )
 
 
 def parse_measure(text: str) -> Measure:
@@ -371,7 +348,7 @@ def parse_measure(text: str) -> Measure:
         )
     # The name and '=' are already taken off, so the parser is told where the
     # body starts: a position in a message points into the text the user wrote.
-    terms = _ExpressionParser(body, len(text) - len(body)).parse()
+    terms = _ExpressionParser(body, offset=len(text) - len(body)).parse()
     terms.species = {s: w for s, w in terms.species.items() if w}
     terms.keywords = {k: w for k, w in terms.keywords.items() if w}
     if terms.constant:
