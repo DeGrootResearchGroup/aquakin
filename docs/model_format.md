@@ -122,15 +122,20 @@ grammar:
 
 ```
 expr    := term (('+' | '-') term)*
-term    := factor (('*' | '/') factor)*
-factor  := unary ('**' factor)?
-unary   := ('+' | '-') unary | primary
+term    := unary (('*' | '/') unary)*
+unary   := ('+' | '-') unary | power
+power   := primary ('**' unary)?
 primary := number
          | '[' species_name ']'
          | '{' condition_name '}'
          | identifier ('(' arglist ')')?
          | '(' expr ')'
 ```
+
+Precedence follows Python and ordinary mathematical notation, so `**` is
+right-associative, a sign binds looser than it (`-k**2` is `-(k**2)`), and an
+exponent may carry its own sign (`k**-1`). Bracket the base when you mean to
+raise a negative value: `(0 - k)**2`.
 
 - **Species names** are delimited by square brackets, e.g. `[O3]`, `[Br-]`,
   `[BrO3-]`. Charge suffixes and digits inside the brackets are accepted.

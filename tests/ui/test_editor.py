@@ -670,6 +670,63 @@ def test_the_form_marks_the_bad_field_and_new_units_suit_the_model(tmp_path):
         ed.worker.stop()
 
 
+def test_an_influent_pattern_is_typed_into_the_form_and_saved_as_text(tmp_path):
+    """A feed that follows a schedule is written in the unit form as an
+    expression of time; it reaches the spec as the text that was typed, with no
+    table file written beside it."""
+    import yaml
+
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-influent-expression-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        ed.on_select({"nodes": ["feed"], "edges": []}, None)
+        rows = {r["key"]: r for r in ed.state.sel_rows}
+        # The flow is an ordinary editable field, not one the form refuses.
+        assert rows["Q"]["widget"] != "readonly"
+        assert rows["Q"]["value"] == "2000"
+
+        edited = _rows_with(ed, "Q", "2000 + 500*sin(2*pi*t)")
+        next(r for r in edited if r["key"] == "composition")["value"] = (
+            "SS: 60, SNH: 30 + 10*sin(2*pi*t)"
+        )
+        assert ed.apply_properties(edited)
+
+        ed.save()
+        doc = yaml.safe_load((project / "flowsheet.yaml").read_text())
+        feed = doc["units"]["feed"]
+        assert feed["Q"] == "2000 + 500*sin(2*pi*t)"
+        assert feed["composition"]["SNH"] == "30 + 10*sin(2*pi*t)"
+        assert feed["composition"]["SS"] == 60.0  # a constant stays a number
+        assert not (project / "data").exists()
+
+        # And aquakin builds the pattern back from what the editor wrote.
+        from aquakin.plant import InfluentExpression, Plant
+
+        rebuilt = Plant.from_spec(project / "flowsheet.yaml")
+        feed_back = rebuilt.influents["feed"]
+        assert isinstance(feed_back, InfluentExpression)
+        assert float(feed_back.at(0.25).Q) == 2500.0
+    finally:
+        ed.worker.stop()
+
+
+def test_an_unreadable_influent_pattern_is_refused_by_the_form(tmp_path):
+    """aquakin_ui cannot read an expression itself, so the refusal comes from
+    aquakin -- but it still has to reach the field rather than the first solve."""
+    project = _study_project(tmp_path)
+    server = get_server(name="aquakin-ui-influent-expression-bad-test", client_type="vue3")
+    ed = Editor(server, path=project / "flowsheet.yaml")
+    try:
+        ed.on_select({"nodes": ["feed"], "edges": []}, None)
+        ed.apply_properties(_rows_with(ed, "Q", "2000 + wobble(t)"))
+        problem = ed._check_unit("feed")
+        assert problem is not None
+        assert "wobble" in problem and "'Q'" in problem
+    finally:
+        ed.worker.stop()
+
+
 def test_a_channel_of_your_own_is_written_from_the_study_dialog(tmp_path):
     """The channels combobox takes free text, so a measure expression reaches
     aquakin as a plain channel; an unreadable one is refused with its reason

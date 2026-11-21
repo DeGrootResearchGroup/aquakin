@@ -292,3 +292,32 @@ def test_full_expression_compiles_and_evaluates():
     params = jnp.asarray([5.0])
     result = float(fn(C, params, {}, 0))
     assert result == pytest.approx(5.0 * 3.0 + 2.0)
+
+
+def test_precedence_follows_python():
+    """A sign binds looser than a power, as in Python and ordinary notation.
+
+    It bound tighter until #699 -- ``-2**2`` read as ``(-2)**2`` -- which nobody
+    predicts. No shipped expression relied on it. ``aquakin.plant.time_expr``
+    shares this precedence and is pinned the same way.
+    """
+    minus_squared = parse_rate_expression("-2**2")
+    assert isinstance(minus_squared, NegateNode)
+    assert isinstance(minus_squared.operand, PowerNode)
+
+    # Bracket the base to raise a negative value.
+    bracketed = parse_rate_expression("(0 - 2)**2")
+    assert isinstance(bracketed, PowerNode)
+
+    # The exponent may carry its own sign, and ** stays right-associative.
+    reciprocal = parse_rate_expression("k**-1")
+    assert isinstance(reciprocal, PowerNode)
+    assert isinstance(reciprocal.right, NegateNode)
+    tower = parse_rate_expression("2**3**2")
+    assert isinstance(tower, PowerNode) and isinstance(tower.right, PowerNode)
+
+    # A sign on one factor of a product binds that factor only.
+    product = parse_rate_expression("-2*3**2")
+    assert isinstance(product, MultiplyNode)
+    assert isinstance(product.left, NegateNode)
+    assert isinstance(product.right, PowerNode)

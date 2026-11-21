@@ -758,3 +758,201 @@ def load_bsm2_influent(profile: str, model: CompiledModel) -> InfluentSeries:
     return dataclasses.replace(
         series, T=series.T + 273.15, units=_declared_for(model, _BSM2_INFLUENT_UNITS)
     )
+
+
+@dataclass
+class InfluentExpression:
+    """An influent whose flow, temperature and composition are expressions of time.
+
+    The counterpart of :class:`InfluentSeries` for a feed that follows a
+    *pattern* rather than a measured record: a diurnal flow, a weekly load, a
+    step test. Each value is read by :mod:`aquakin.plant.time_expr`, so it is a
+    plain string in a flowsheet spec -- it fingerprints, diffs and round-trips,
+    and needs no table file beside it::
+
+        InfluentExpression(
+            model,
+            Q="18446 + 4000*sin(2*pi*t)",
+            composition={"SNH": "31.6 + 8*sin(2*pi*t - 0.5)", "SS": 69.5},
+        )
+
+    A value may equally be a plain number, which costs nothing extra, so a
+    partly-patterned feed needs no ceremony for the parts that are constant.
+
+    ``t`` is the plant's clock. The expressions are written on
+    ``time_unit`` (the model's when not given) and :meth:`in_time_unit` puts
+    them on the plant's, so an expression written in days still means days on a
+    plant running on hours.
+
+    Attributes
+    ----------
+    model : CompiledModel
+        Kinetic model whose species the composition names.
+    Q : str or float
+        Volumetric flow, as an expression of ``t`` or a constant.
+    composition : dict[str, str or float], optional
+        Species name -> expression or constant. A species not named is absent
+        from the feed (zero), as with ``InfluentSeries.constant(base="zero")``.
+    T : str or float, optional
+        Feed temperature; ``None`` (default) leaves the influent
+        temperature-agnostic, as in :class:`InfluentSeries`.
+    units : dict[str, str], optional
+        The units the values are given in, keyed by ``"t"``, ``"Q"``, ``"T"``
+        or a species name -- read exactly as :class:`InfluentSeries` reads them,
+        except that the conversion is applied as the expression is evaluated
+        rather than to stored data (a string cannot be scaled in place).
+    time_unit : str, optional
+        The clock the expressions are written on; the model's when ``None``.
+        ``units["t"]`` sets it too, and wins when both are given.
+
+    See Also
+    --------
+    InfluentSeries : the same feed as a measured record of samples.
+    aquakin.plant.time_expr : the expression language, and what it can call.
+    """
+
+    model: CompiledModel
+    Q: str | float = 0.0
+    composition: dict[str, str | float] | None = None
+    T: str | float | None = None
+    units: dict[str, str] | None = None
+    time_unit: str | None = None
+    #: The clock ``at()`` is called on; set by :meth:`in_time_unit`, else the
+    #: expressions' own, so a standalone influent needs no plant to be read.
+    clock: str | None = None
+
+    def __post_init__(self) -> None:
+        self.composition = dict(self.composition or {})
+        unknown = sorted(s for s in self.composition if s not in self.model.species_index)
+        if unknown:
+            from aquakin.core.hints import did_you_mean
+
+            hint = did_you_mean(unknown[0], list(self.model.species))
+            raise ValueError(
+                f"composition names {unknown}, which are not species of model "
+                f"'{self.model.name}'.{hint}"
+            )
+        self._check_units()
+        # Read every expression now, so a typo is a load-time error naming the
+        # field rather than a failure inside the first solve.
+        self._compile()
+
+    def _check_units(self) -> None:
+        if not self.units:
+            return
+        allowed = {"t", "Q", "T", *self.model.species}
+        unknown = sorted(k for k in self.units if k not in allowed)
+        if unknown:
+            raise ValueError(
+                f"units declares {unknown}, which are not 't', 'Q', 'T' or a "
+                f"species of model '{self.model.name}'."
+            )
+        bad = sorted(k for k, v in self.units.items() if not isinstance(v, str))
+        if bad:
+            raise ValueError(f"units values must be strings; got non-strings for {bad}.")
+        unreadable = sorted(
+            k
+            for k, v in self.units.items()
+            if parse_units(v) is None and not (k == "T" and v.strip().lower() in CELSIUS_SPELLINGS)
+        )
+        if unreadable:
+            raise ValueError(
+                f"units declares {unreadable} in units that cannot be read: "
+                + ", ".join(f"{k}={self.units[k]!r}" for k in unreadable)
+                + ". Use e.g. 'd', 'm3/d', 'K', 'g_N/m3' or 'mg/L'."
+            )
+
+    @property
+    def _expression_clock(self) -> str | None:
+        """The clock the expressions are written on."""
+        return (self.units or {}).get("t") or self.time_unit or self.model.time_unit
+
+    def _scale(self, key: str, target: str) -> float:
+        """Factor from the declared unit of ``key`` to ``target`` (1 when nothing
+        is declared, or the target is unknown)."""
+        unit = (self.units or {}).get(key)
+        if unit is None or not target:
+            return 1.0
+        try:
+            factor = conversion_factor(unit, target)
+        except ValueError as exc:
+            raise ValueError(
+                f"units declares '{key}' in '{unit}', which cannot be converted to "
+                f"'{target}' as model '{self.model.name}' requires: {exc}"
+            ) from None
+        return 1.0 if factor is None else factor
+
+    def _compile(self) -> None:
+        """Build the callables ``at`` evaluates, with the unit factors folded in.
+
+        A declared unit cannot be applied to the stored value the way
+        :class:`InfluentSeries` scales its arrays -- the value is a string -- so
+        it is applied to the result instead, which is the same number.
+        """
+        from aquakin.plant.time_expr import compile_time_expression
+
+        expr_clock = self._expression_clock
+        caller_clock = self.clock or expr_clock
+        time_scale = 1.0
+        if expr_clock is not None and caller_clock is not None and caller_clock != expr_clock:
+            factor = conversion_factor(caller_clock, expr_clock)
+            if factor is not None:
+                time_scale = factor
+
+        def read(value, what, out_scale=1.0, offset=0.0):
+            fn = compile_time_expression(value, time_scale=time_scale, what=what)
+            if out_scale == 1.0 and offset == 0.0:
+                return fn
+            return lambda t, f=fn, s=out_scale, o=offset: f(t) * s + o
+
+        flow_target = "" if caller_clock is None else f"m3/{caller_clock}"
+        # Q is declared per the expressions' own clock; it leaves per the
+        # caller's, so the two conversions compose.
+        q_scale = self._scale("Q", f"m3/{expr_clock}" if expr_clock else "")
+        if expr_clock is not None and caller_clock is not None and flow_target:
+            per_clock = conversion_factor(f"m3/{expr_clock}", flow_target)
+            if per_clock is not None:
+                q_scale *= per_clock
+        self._Q_fn = read(self.Q, "the flow", q_scale)
+
+        self._T_fn = None
+        if self.T is not None:
+            celsius = (self.units or {}).get("T", "").strip().lower() in CELSIUS_SPELLINGS
+            t_scale = 1.0 if celsius else self._scale("T", "K")
+            self._T_fn = read(self.T, "the temperature", t_scale, 273.15 if celsius else 0.0)
+
+        self._C_fns = []
+        for species, value in self.composition.items():
+            scale = self._scale(species, self.model.species_units.get(species, ""))
+            self._C_fns.append(
+                (self.model.species_index[species], read(value, f"species '{species}'", scale))
+            )
+
+    def in_time_unit(self, time_unit: str | None) -> InfluentExpression:
+        """This influent read on the clock ``time_unit``.
+
+        The expressions are unchanged -- they still mean what they said on their
+        own clock; only the ``t`` they are given, and the flow they return, are
+        converted. Returns ``self`` when there is nothing to change.
+        """
+        if time_unit is None or time_unit == (self.clock or self._expression_clock):
+            return self
+        return dataclasses.replace(self, clock=time_unit)
+
+    def at(self, t: jnp.ndarray) -> Stream:
+        """Return the influent :class:`Stream` at time ``t``.
+
+        Every value is evaluated at ``t``; a species the composition does not
+        name is zero.
+        """
+        t = jnp.asarray(t, dtype=float)
+        C = jnp.zeros(self.model.n_species)
+        for index, fn in self._C_fns:
+            C = C.at[index].set(jnp.asarray(fn(t), dtype=float))
+        T = None if self._T_fn is None else jnp.asarray(self._T_fn(t), dtype=float)
+        return Stream(
+            Q=jnp.asarray(self._Q_fn(t), dtype=float),
+            C=C,
+            model=self.model,
+            scalars=make_scalars(T=T),
+        )

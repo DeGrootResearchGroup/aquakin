@@ -142,6 +142,48 @@ print(f"EQI = {ev.eqi:.0f} kg/d   OCI = {ev.oci:.0f}")
 reports the physical flows (aeration energy, pumping, sludge and methane
 production) that feed the reporting layer below.
 
+### A feed that follows a pattern
+
+A load that follows a *shape* rather than a measured record needs no table file.
+`InfluentExpression` takes the flow, the temperature and any species as
+expressions of the plant's clock:
+
+```python
+from aquakin.plant import InfluentExpression
+
+plant.add_influent("feed", InfluentExpression(
+    model,
+    Q="18446 + 4000*sin(2*pi*t)",                 # a diurnal flow
+    composition={"SNH": "31.6 + 8*sin(2*pi*t - 0.5)", "SS": 69.5},
+), to=plant.influent_endpoint)
+```
+
+Each value may equally be a plain number, so only the parts that vary need an
+expression; a species that is not named is absent from the feed. The expressions
+are ordinary arithmetic with `sin`, `cos`, `exp`, `sqrt`, `min`, `max`, `clip`,
+`step` and `pi` (the full list is `aquakin.plant.time_expr.FUNCTIONS`), and they
+are evaluated inside the solve, so a run driven by one still differentiates.
+
+There is no `if`: a value that switches uses `step` or `clip`, which stay
+differentiable. A wastage pump that steps up for half the year is
+`"300 + 150*step(t - 182)"`.
+
+`t` is the plant's clock, and the expressions keep the clock they were written
+on, so one written for a plant running on days still means days if the plant is
+later put on hours. Because the whole feed is text, it goes into a flowsheet
+spec as it stands — no CSV beside it:
+
+```yaml
+feed:
+  kind: influent
+  model: asm1
+  Q: 18446 + 4000*sin(2*pi*t)
+  composition: {SNH: 31.6 + 8*sin(2*pi*t - 0.5), SS: 69.5}
+```
+
+Use `InfluentSeries` instead when the feed *is* a record — measured data, or the
+benchmark load files that `load_bsm1_influent` reads.
+
 ```{note}
 The benchmark literature gives two versions of the BSM1 indices. `evaluate_bsm1`
 follows the **updated** evaluation (Alex et al. 2008): EQI weights 2 (TSS),

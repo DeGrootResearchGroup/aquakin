@@ -190,7 +190,12 @@ unsupported-node fallback) in `tests/unit/test_vector_kernel.py`.
 ### Parser
 
 Recursive descent parser. No external parser dependencies. Operator precedence
-(lowest to highest): `+/-`, `*/`, `**`, unary, primary. Species names are
+(lowest to highest): `+/-`, `*/`, unary, `**`, primary — **Python's**, so a sign
+binds *looser* than a power (`-2**2` is `-(2**2)`) and an exponent may carry its
+own sign (`2**-1`). It bound a sign tighter until #699; that reading surprised
+everyone who met it, and no shipped expression relied on it (all 845 parse
+identically). `aquakin/plant/time_expr.py` shares the precedence and must stay
+in step. Species names are
 delimited by square brackets: `[O3]`. Rate constant names are namespaced
 automatically: `k1` in reaction `O3_Br_direct` becomes `O3_Br_direct.k1`.
 
