@@ -103,12 +103,24 @@ nor concentrating it in a few files makes the whole suite fast.
   `after_n_builds` in `codecov.yml` did not help, because the carried-forward
   slow/validation/heavy sessions count toward it.
 
-  The Codecov **project** status is informational; the **patch** status
-  (`codecov/patch`) has an 85% target on the lines the PR adds or changes. On a
-  normal PR only the fast tier uploads, so a change covered only by `slow`,
-  `validation` or `heavy` tests reads as uncovered there: cover it in the fast
-  tier, or apply `full-ci`. It is not one of the required checks (see *Branch
-  protection* below): a red patch status is a signal for review, not a block.
+  The Codecov **project** status is informational. The **patch** status
+  (`codecov/patch`) needs **98%** of the lines a PR adds or changes to be
+  covered, with `threshold: 0%` so nothing passes below that. Partially covered
+  branches count against it, so an untaken `if x is not None:` fallback in new
+  code is a miss. Two consequences contributors will hit:
+  - **The fast-tier-only upload matters.** On a normal PR only the fast tier
+    uploads; the slow, validation and heavy flags are carried forward from
+    `main` and say nothing about lines the PR wrote. New code that only a
+    `slow` / `validation` / `heavy` test reaches therefore reads as uncovered,
+    and the patch status goes red. Either cover it from a fast test, or apply
+    the **`full-ci`** label so those tiers run and upload on the PR.
+  - **Moved code counts as changed.** Codecov has no notion of a move, so a
+    behaviour-preserving refactor that relocates code carries that code's
+    existing fast-tier gaps into its patch number. Run it with `full-ci`; if it
+    is still short, the gap predates the PR and the reviewer judges it.
+
+  The patch status is not one of the required checks (see *Branch protection*
+  below): red is a signal for review, not a block.
 
   The fast-tier durations are recorded by **`refresh-fast-durations`**, which
   runs with the weekly slow/validation refresh (`refresh-durations`, Mondays,
