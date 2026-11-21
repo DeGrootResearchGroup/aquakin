@@ -32,9 +32,9 @@ import jax.numpy as jnp
 from aquakin.integrate.events import Event
 from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
+from aquakin.plant.kinetic import AdjustableTemperatureUnit
 from aquakin.plant.settling import SettlingModel
 from aquakin.plant.streams import Stream
-from aquakin.plant.units import ModelTimeScaling
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -82,7 +82,7 @@ class SBRPhase:
 
 
 @dataclass
-class SBRUnit(ModelTimeScaling, CouplingAware):
+class SBRUnit(AdjustableTemperatureUnit, CouplingAware):
     """A sequencing batch reactor: variable-volume, time-phased single tank.
 
     Parameters
@@ -106,7 +106,12 @@ class SBRUnit(ModelTimeScaling, CouplingAware):
         Starting fill level ``V0 / full_volume`` (the heel left after the
         previous decant). Default 0.25.
     conditions : dict
-        Per-model condition values (e.g. ``{"T": 293.15}``), as for a CSTR.
+        Per-model condition values (e.g. ``{"T": 293.15}``), as for a CSTR. The
+        kinetics always run at this static ``T`` (change it with
+        :meth:`set_temperature` or ``Plant.set_temperature``): unlike a CSTR the
+        SBR does not follow its inlet temperature, since it draws feed only
+        during fill phases, and a heat-balance temperature model does not
+        track it, since its liquid volume varies over the cycle.
     do_sat : float
         Oxygen saturation (g/m³) in the aeration term ``kLa*(do_sat - C_O2)``.
     oxygen_species : str
@@ -144,12 +149,7 @@ class SBRUnit(ModelTimeScaling, CouplingAware):
             raise ValueError(f"SBRUnit '{self.name}' phase durations must be > 0.")
         if not (0.0 < self.initial_fraction <= 1.0):
             raise ValueError(f"SBRUnit '{self.name}' initial_fraction must be in (0, 1].")
-        missing = [c for c in self.model.conditions_required if c not in self.conditions]
-        if missing:
-            raise ValueError(
-                f"SBRUnit '{self.name}' is missing condition values for: "
-                f"{missing}. Provided: {list(self.conditions)}."
-            )
+        self._init_conditions(self.conditions)
         for s in self.particulate_species:
             if s not in self.model.species_index:
                 raise ValueError(
@@ -192,9 +192,6 @@ class SBRUnit(ModelTimeScaling, CouplingAware):
             self._o2_mask = jnp.zeros((n,)).at[o2].set(1.0)
         else:
             self._o2_mask = jnp.zeros((n,))
-
-        # Condition arrays for the rate evaluation (as on a CSTR).
-        self._condition_arrays = {k: jnp.asarray([float(v)]) for k, v in self.conditions.items()}
 
         # Bind the settling model's particulate mask.
         self.settling.bind(self.model, list(self.particulate_species))
@@ -343,9 +340,8 @@ class SBRUnit(ModelTimeScaling, CouplingAware):
         # solids -- mass is conserved whatever the settling model reports.
         convection = q_in / V_safe * (C_in - C) - q_out / V_safe * (c_decant - C)
 
-        stoich = self.model.compute_stoich(params)
-        rates = self.model.rates(C, params, self._condition_arrays, 0)
-        chemistry = self._scale_rates(stoich.T @ rates)
+        # Kinetics at the static operating temperature (see the class docstring).
+        chemistry = self._reaction(C, params, self._condition_arrays)
 
         aeration = kla * self._o2_mask * (self.do_sat - C)
 

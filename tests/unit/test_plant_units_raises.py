@@ -224,7 +224,7 @@ def test_digester_missing_condition():
         def default_conditions(self):
             return _Fields()
 
-    with pytest.raises(ValueError, match="missing condition values"):
+    with pytest.raises(ValueError, match="missing required condition values"):
         ADM1DigesterUnit(
             name="dig",
             model=_StubModel(),

@@ -76,7 +76,7 @@ def test_spec_validation(asm1):
         SBRUnit("s", asm1, _phases(), 1000.0, 1.0, 1.0,
                 InterfaceSettling(1.0, 1.0), particulate_species=_PARTS,
                 initial_fraction=1.5, conditions={"T": 293.15})
-    with pytest.raises(ValueError, match="missing condition"):
+    with pytest.raises(ValueError, match="missing required condition values"):
         SBRUnit("s", asm1, _phases(), 1000.0, 1.0, 1.0,
                 InterfaceSettling(1.0, 1.0))
     with pytest.raises(ValueError, match="particulate species"):

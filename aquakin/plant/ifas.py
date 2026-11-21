@@ -51,8 +51,8 @@ from aquakin.plant.cstr import (
     AerationUnit,
     aeration_transfer,
 )
+from aquakin.plant.kinetic import AdjustableTemperatureUnit
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
-from aquakin.plant.units import ModelTimeScaling
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -78,7 +78,7 @@ def _default_biofilm_fixed_mask(model, soluble_mask) -> jnp.ndarray:
 
 
 @dataclass
-class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
+class IFASUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
     """An IFAS / MBBR tank: a CSTR bulk coupled to a depth-resolved biofilm.
 
     Parameters
@@ -229,12 +229,7 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
 
     def __post_init__(self) -> None:
         check_positive(self.name, "volume", self.volume)
-        missing = set(self.model.conditions_required) - set(self.conditions)
-        if missing:
-            raise ValueError(
-                f"IFASUnit '{self.name}' is missing required condition values "
-                f"for: {sorted(missing)}. Provided: {sorted(self.conditions)}"
-            )
+        self._init_conditions(self.conditions)
         if not (0.0 < self.fill_fraction <= 1.0):
             raise ValueError(
                 f"IFASUnit '{self.name}' fill_fraction must be in (0, 1]; got {self.fill_fraction}."
@@ -341,10 +336,6 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         # Bulk aeration vectors (the AerationUnit mixin, shared with CSTRUnit).
         self._setup_aeration()
 
-        self._condition_arrays = {
-            cname: jnp.asarray([float(self.conditions[cname])])
-            for cname in self.model.conditions_required
-        }
         self._n = n
         self._n_comp = self.n_layers + 1
 
@@ -491,14 +482,12 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         return out
 
     def set_temperature(self, temperature_K: float) -> None:
-        """Set the static operating temperature (Kelvin) for the bulk + biofilm."""
-        if "T" not in self.model.conditions_required:
-            return
-        self.conditions = {**self.conditions, "T": float(temperature_K)}
-        self._condition_arrays = {
-            **self._condition_arrays,
-            "T": jnp.asarray([float(temperature_K)]),
-        }
+        """Set the static operating temperature (Kelvin) for the bulk + biofilm.
+
+        A no-op for a model without a ``T`` condition: the conditions are then
+        unchanged, and the biofilm's are rebuilt from them as at construction.
+        """
+        super().set_temperature(temperature_K)
         self._biofilm.conditions = SpatialConditions.uniform(
             **{k: float(v) for k, v in self.conditions.items()}
         )
@@ -606,12 +595,11 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         y, thickness = self._split(state)  # row 0 bulk, 1.. layers; plus L_f
         dz = layer_thickness(thickness, self.n_layers)
 
-        # Inlet temperature drives the (bulk + biofilm) kinetics through the 'T'
-        # condition, exactly as for a CSTR.
-        T_in = self._mixed_inlet_T(inputs)
-        conditions = self._condition_arrays
-        if T_in is not None and "T" in self._condition_arrays:
-            conditions = {**self._condition_arrays, "T": jnp.reshape(T_in, (1,))}
+        # The operating temperature (under a heat-balance model the tank's own
+        # temperature state) drives the bulk + biofilm kinetics, as for a CSTR.
+        # The reaction itself runs per compartment inside the biofilm RHS, which
+        # calls the same canonical model.dCdt.
+        conditions, T_op = self._operating_conditions(inputs, signals)
 
         # Biofilm diffusion + per-compartment reaction (no internal feed): this is
         # the BiofilmReactor RHS, finite-volume face fluxes between bulk<->surface
@@ -633,8 +621,7 @@ class IFASUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         Q_total, C_in = mixed_feed(inputs, self.input_port_names)
         bulk = y[0]
         convection = (Q_total / self.volume) * (C_in - bulk)
-        T_eff = T_in if T_in is not None else self.conditions.get("T")
-        aeration = aeration_transfer(self._av, bulk, T_eff, signals, self.model)
+        aeration = aeration_transfer(self._av, bulk, T_op, signals, self.model)
         dydt = dydt.at[0].add(convection + aeration)
 
         if not self.dynamic_thickness:

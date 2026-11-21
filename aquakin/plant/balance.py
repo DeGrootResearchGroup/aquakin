@@ -413,23 +413,14 @@ def _reaction_volume(plant, unit_name, params):
 
 
 def _reaction_term(plant, unit_name, C, params):
-    """The reaction (chemistry) term ``dC/dt`` of a reactive unit, reproducing
-    exactly what its ``rhs`` evaluates: an aerated CSTR's ``stoichᵀ·rates``, or an
-    ADM1 digester's ``model.dCdt`` (which also runs the gas-liquid transfer and
-    overpressure gas outflow, so the biogas export is included)."""
+    """The reaction (chemistry) term ``dC/dt`` of a reactive unit, from the same
+    :meth:`~aquakin.plant.kinetic.KineticUnit._reaction` its ``rhs`` calls (the
+    canonical ``model.dCdt``, positivity limiter included, per the plant's time
+    unit), at the unit's static conditions. For an ADM1 digester that term also
+    runs the gas-liquid transfer and overpressure gas outflow, so the biogas
+    export is included."""
     unit = plant.units[unit_name]
-    net = unit.model
-    p_unit = plant._params_for_unit(unit_name, params)
-    if hasattr(unit, "_liquid_mask"):  # ADM1 digester
-        if getattr(unit, "_v_liq_idx", None) is not None:
-            p_unit = p_unit.at[unit._v_liq_idx].set(float(unit.volume))
-        term = net.dCdt(C, p_unit, unit._condition_arrays, 0)
-    else:
-        stoich = net.compute_stoich(p_unit)  # aerated/anoxic CSTR
-        term = stoich.T @ net.rates(C, p_unit, unit._condition_arrays, 0)
-    # Per the plant's time unit, as the unit's rhs sees it.
-    factor = getattr(unit, "_rate_factor", 1.0)
-    return term if factor == 1.0 else term * factor
+    return unit._reaction(C, plant._params_for_unit(unit_name, params), unit._condition_arrays)
 
 
 def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps):

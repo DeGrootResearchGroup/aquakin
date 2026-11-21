@@ -24,9 +24,8 @@ import jax.numpy as jnp
 from aquakin.core.temperature import T_REF_20C
 from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
+from aquakin.plant.kinetic import AdjustableTemperatureUnit
 from aquakin.plant.streams import Stream, mixed_scalars
-from aquakin.plant.temperature import OPERATING_T_SIGNAL
-from aquakin.plant.units import ModelTimeScaling
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -437,8 +436,7 @@ class AerationUnit:
     exposes the readers the aeration-energy / O2-balance code and the control bus
     use, so a CSTR, an IFAS/MBBR tank and an MBR share one definition instead of
     each re-deriving them. A consumer sets ``self.aeration`` / ``self.model`` /
-    ``self.name`` and calls :meth:`_setup_aeration` from its ``__post_init__``;
-    the flow-weighted inlet temperature reads the unit's ``input_ports``.
+    ``self.name`` and calls :meth:`_setup_aeration` from its ``__post_init__``.
     """
 
     def _setup_aeration(self) -> None:
@@ -473,19 +471,9 @@ class AerationUnit:
     def _controlled_kla(self) -> dict:
         return self._av.controlled
 
-    def _mixed_inlet_T(self, inputs: dict[str, Stream]):
-        """Flow-weighted inlet temperature, or ``None`` if no inlet carries one.
-
-        Uses the canonical :func:`~aquakin.plant.streams.mixed_scalars`, which
-        ignores a temperature-agnostic (``"T"`` absent) inlet rather than
-        collapsing the whole mix to ``None``. The well-mixed reactor is taken to
-        be at this temperature (no thermal lag -- the hydraulic retention is
-        hours, far shorter than the seasonal temperature variation)."""
-        return mixed_scalars(inputs, self.input_ports, keys=("T",)).get("T")
-
 
 @dataclass
-class CSTRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
+class CSTRUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
     """A single continuous-flow stirred tank with kinetics + aeration.
 
     Parameters
@@ -522,25 +510,12 @@ class CSTRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
 
     def __post_init__(self) -> None:
         check_positive(self.name, "volume", self.volume)
-        missing = set(self.model.conditions_required) - set(self.conditions)
-        if missing:
-            raise ValueError(
-                f"CSTRUnit '{self.name}' is missing required condition values "
-                f"for: {sorted(missing)}. Provided: {sorted(self.conditions)}"
-            )
+        self._init_conditions(self.conditions)
         # Translate the Aeration spec into the per-species RHS vectors (the
         # fixed-kLa / saturation vectors, the closed-loop signal map, and the
         # temperature-correction config) -- the AerationUnit mixin, shared with
         # the IFAS and MBR units.
         self._setup_aeration()
-
-        # Condition arrays for the kinetics call: each declared condition
-        # broadcast to a length-1 array so the rate functions index with
-        # loc_idx=0 — same convention as BatchReactor.
-        self._condition_arrays = {
-            name: jnp.asarray([float(self.conditions[name])])
-            for name in self.model.conditions_required
-        }
 
     @property
     def state_size(self) -> int:
@@ -549,23 +524,6 @@ class CSTRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
     def state_names(self) -> tuple[str, ...]:
         """Names of the state entries, in order: the species concentrations."""
         return tuple(self.model.species)
-
-    def set_temperature(self, temperature_K: float) -> None:
-        """Set this reactor's static operating temperature (Kelvin).
-
-        Updates the ``T`` condition (and its precomputed rate-evaluation array)
-        in place, so a re-solve runs the kinetics -- including any Arrhenius
-        ``temperature_corrections`` -- at the new temperature. A no-op for a
-        model that declares no ``T`` condition. The plant clears its compiled-
-        solve cache after calling this; on a bare unit, rebuild any cached solve.
-        """
-        if "T" not in self.model.conditions_required:
-            return
-        self.conditions = {**self.conditions, "T": float(temperature_K)}
-        self._condition_arrays = {
-            **self._condition_arrays,
-            "T": jnp.asarray([float(temperature_K)]),
-        }
 
     @property
     def input_ports(self) -> list[str]:
@@ -647,35 +605,15 @@ class CSTRUnit(ModelTimeScaling, AerationUnit, CouplingAware):
         # Convection.
         convection = (Q_total / self.volume) * (C_in - state)
 
-        # Chemistry. The reactor's operating temperature is, in order: the
-        # plant-supplied operating temperature (the lagged tank state under a
-        # heat-balance temperature model, threaded in via the control-signal bus);
-        # else the flow-weighted inlet temperature (the instantaneous/algebraic
-        # default); else the static condition value. When set and the model uses
-        # a 'T' condition, temperature-dependent kinetics run at it -- so they
-        # track the season.
-        conditions = self._condition_arrays
-        T_in = None
-        if signals is not None:
-            T_in = signals.get(OPERATING_T_SIGNAL)
-        if T_in is None:
-            T_in = self._mixed_inlet_T(inputs)
-        if T_in is not None and "T" in self._condition_arrays:
-            conditions = {**self._condition_arrays, "T": jnp.reshape(T_in, (1,))}
-        # The reaction term is the model's canonical dCdt -- it applies
-        # clip_negative_states to the rate inputs and the positivity limiter to
-        # the net term, so a fully consumed soluble cannot integrate negative and
-        # recirculate. Convection/aeration are added on top, unlimited (the
-        # reaction term is the only one the limiter guards).
-        stoich = self.model.compute_stoich(params)
-        chemistry = self._scale_rates(self.model.dCdt(state, params, conditions, 0, stoich=stoich))
-
-        # Aeration (mass transfer). The operating temperature for the optional
-        # driving-force correction is the (flow-weighted) inlet T the kinetics use,
-        # else the static T condition; aeration_transfer applies the correction
-        # only when the spec enables it, then overrides any closed-loop kLa with
-        # its control signal.
-        T_eff = T_in if T_in is not None else self.conditions.get("T")
-        aeration = aeration_transfer(self._av, state, T_eff, signals, self.model)
+        # Chemistry at the operating temperature (the plant-supplied lagged tank
+        # temperature, else the flow-weighted inlet, else the static condition),
+        # through the canonical dCdt. Convection and aeration are added on top,
+        # unlimited (the reaction term is the only one the limiter guards).
+        conditions, T_op = self._operating_conditions(inputs, signals)
+        chemistry = self._reaction(state, params, conditions)
+        # Aeration (mass transfer), with the optional driving-force correction at
+        # the same temperature; aeration_transfer then overrides any closed-loop
+        # kLa with its control signal.
+        aeration = aeration_transfer(self._av, state, T_op, signals, self.model)
 
         return convection + chemistry + aeration
