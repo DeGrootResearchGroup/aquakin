@@ -80,8 +80,10 @@ Key types:
   observed_channels=, y0=, ...)` ([`plant/calibrate.py`](aquakin/plant/calibrate.py),
   bound as a method) MAP-fits by-name plant parameters (`"<model>.<param>"`)
   against an output stream. It **reuses the reactor-calibration machinery**
-  (`integrate/calibrate.py`: `_CalibrationProblem`, `_build_objective`,
-  `_run_multistart`, `_laplace_posterior`) through the forward-model seam — the
+  (`integrate/calibrate.py`: `_CalibrationProblem`, `_FitConfig.from_configs`, and
+  `_run_fit` — the same driver `aquakin.calibrate` runs, so it resolves only its
+  problem and forward model and must not grow its own fit loop) through the
+  forward-model seam — the
   plant supplies a `_PlantForwardModel` (`plant.solve` + stream reconstruction; the
   cap-free stable adjoint by default, so the reverse gradient is finite) and a
   `_PlantParamNamespace` (adapts `plant.parameter_index` / per-model transforms &
