@@ -252,6 +252,8 @@ aquakin/
 │   ├── forms.py                        # unit form from the catalogue (pure)
 │   ├── catalog.py / icons.py           # catalogue reply, port rules; icons + colours
 │   ├── worker.py                       # client of the `aquakin serve` worker
+│   ├── jobs.py                         # a study run in its own process (StudyRun)
+│   ├── process.py                      # start_piped: one way to start those two processes
 │   ├── widget/                         # Vue Flow trame widget + built bundle (serve/)
 │   └── icons/                          # line icons per unit kind
 │

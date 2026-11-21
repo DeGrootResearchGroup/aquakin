@@ -12,13 +12,12 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
-import subprocess
 import sys
-import tempfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
+
+from aquakin_ui.process import start_piped
 
 __all__ = ["StudyRun"]
 
@@ -59,24 +58,8 @@ class StudyRun:
         self.finished = threading.Event()
         self.final: dict | None = None
         self.cancelled = False  # a cancel was asked for
-        fd, name = tempfile.mkstemp(prefix="aquakin-study-", suffix=".log")
-        self.log_path = Path(name)
-        log = os.fdopen(fd, "w")
-        flags = {}
-        if sys.platform == "win32":
-            flags["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            flags["start_new_session"] = True
-        self._proc = subprocess.Popen(
-            self.command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=log,
-            text=True,
-            bufsize=1,
-            **flags,
-        )
-        log.close()
+        self._proc = start_piped(self.command, "aquakin-study-")
+        self.log_path = self._proc.log_path
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self) -> None:
@@ -88,7 +71,7 @@ class StudyRun:
             if event.get("event") != "progress":
                 self.final = event
             self.on_event(event)
-        self._proc.wait()
+        self._proc.proc.wait()
         if self.final is None:
             # Asked to stop and killed before a checkpoint: that is a cancel (the
             # study keeps whatever results it had), not a failure.
@@ -124,7 +107,7 @@ class StudyRun:
 
         def kill_later():
             if not self.finished.wait(CANCEL_GRACE):
-                self._proc.kill()
+                self._proc.proc.kill()
 
         threading.Thread(target=kill_later, daemon=True).start()
 
