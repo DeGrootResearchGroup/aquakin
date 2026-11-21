@@ -8,6 +8,7 @@ paths:
   - "aquakin/integrate/sensitivity.py"
   - "aquakin/integrate/colored_jacobian.py"
   - "aquakin/plant/sensitivity.py"
+  - "aquakin/plant/dynamic_solve.py"
   - "aquakin/plant/colored.py"
 ---
 

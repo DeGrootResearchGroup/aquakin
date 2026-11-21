@@ -1,6 +1,8 @@
 ---
 paths:
   - "aquakin/plant/plant.py"
+  - "aquakin/plant/dynamic_solve.py"
+  - "aquakin/plant/steady_solve.py"
   - "aquakin/plant/recycle.py"
   - "aquakin/plant/colored.py"
   - "aquakin/plant/solve_cache.py"
