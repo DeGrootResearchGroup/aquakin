@@ -21,6 +21,31 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
+- `aquakin.register_rate_function`: add a rate function aquakin does not ship,
+  without editing the package — the rate-law counterpart of the `Unit` protocol
+  that already lets you add a plant unit operation. A rate law needing a
+  function outside the built-in set previously meant forking aquakin or folding
+  the term into a precomputed condition field, which put its coefficients
+  outside the parameter vector and so outside calibration, sensitivity and
+  identifiability. A registered function is not second class: it parses,
+  evaluates, reaches the same batched rate kernel — bit-identically to its own
+  scalar path — and differentiates exactly as a built-in does, with its
+  constants as ordinary model parameters. Register before the model that uses
+  it is loaded; a model file naming an unregistered function now fails with an
+  error listing what is available and naming the remedy. A name or kernel key
+  that collides with a built-in is refused, since shadowing `monod` would
+  change what existing model files mean, and only registration can add a
+  function — defining a node class is never enough on its own. A function may
+  optionally declare how its result's dimension follows from its arguments', so
+  `check_units` can check expressions using it. `registered_rate_functions`
+  lists what is registered.
+
+### Fixed
+
+- `to_latex` no longer raises on a node type it has no explicit branch for; it
+  renders any rate function as `\mathrm{name}(args)`. Previously a model using
+  such a node could be solved but not written up.
+
 - An influent that follows a pattern rather than a table:
   `aquakin.plant.InfluentExpression` takes the flow, temperature and any species
   as expressions of the plant's clock — `Q="18446 + 4000*sin(2*pi*t)"` — so a
@@ -476,6 +501,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   release.
 
 ### Fixed
+
+- `Plant.calibrate()` now refuses an unknown `OptimizerConfig(method=...)` with
+  the same `ValueError` as `aquakin.calibrate()`, naming the valid methods.
+  Before, the plant fit started and then failed inside SciPy with an unhelpful
+  `TypeError: 'NoneType' object is not callable`. The method is now checked when
+  the `OptimizerConfig` is built, so an invalid one is refused before any fit.
 
 - `Plant.run_to_steady_state()` no longer reports convergence in silence when its
   default `criterion="norm"` has stopped early. That test compares `||dy/dt||`

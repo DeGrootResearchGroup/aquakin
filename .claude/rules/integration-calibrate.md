@@ -41,8 +41,19 @@ per-pool log bounds to the IC dims, or leaves them open for a split, so
 `_at_bound_sides` flags a pool on its own bound and never a log-ratio; the
 coordinate setup is `_resolve_ic_coords`, shared with the plant resolver, so
 `Plant.calibrate` supports both; `profile_likelihood` drops the profiled species from a
-bounds dict and refuses to profile a pool of a split). `calibrate`
-unpacks them into the internal `_FitConfig` / `_resolve_problem` scalars. The
+bounds dict and refuses to profile a pool of a split). **`calibrate` and
+`Plant.calibrate` share one driver; do not copy any of it into either entry
+point.** Validation that a config can do on its own belongs in its
+`__post_init__` (`OptimizerConfig` rejects an unknown `method` there, so no
+entry point can skip it); the multistart checks are `_check_start_args`;
+`_FitConfig.from_configs(optimizer, laplace, gradient=, ad_mode=, check_finite=,
+compiled_cache=, ...)` is the only place the configs become a `_FitConfig`; and
+`_run_fit(problem, fm, cfg, optimizer, ic_start, progress)` is the whole run
+once the problem and forward model exist (build the objective, place the start,
+check the start gradient, multistart, `_fit_result`). An entry point resolves
+its own problem and forward model and nothing else. `Plant.calibrate` passes
+`build_objective=` / `run_multistart=` as the names `plant/calibrate.py`
+imported, because its tests stub those module names. The other
 argument checks and result assembly that do not depend on the forward model are
 shared helpers that `Plant.calibrate` calls too: `_check_sigma_arg` /
 `_sigma_per_dataset` / `_coerce_sigma` / `_observed_counts` /

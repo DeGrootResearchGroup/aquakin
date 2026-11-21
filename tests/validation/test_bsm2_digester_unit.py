@@ -15,6 +15,9 @@ import aquakin
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.streams import Stream
 
+# Every test here runs in the validation job, which selects by this marker.
+pytestmark = pytest.mark.validation
+
 
 Q_FEED = 178.4674
 V_LIQ = 3400.0
@@ -66,7 +69,6 @@ def _solve_unit():
     return net, np.asarray(sol.ys[-1])
 
 
-@pytest.mark.validation
 def test_digester_unit_reproduces_bsm2_steady_state():
     net, C = _solve_unit()
     si = net.species_index
@@ -86,7 +88,6 @@ def test_digester_unit_reproduces_bsm2_steady_state():
     assert float(C[si["S_gas_ch4"]]) == pytest.approx(REFERENCE_SS["S_gas_ch4"], rel=0.015)
 
 
-@pytest.mark.validation
 def test_digester_effluent_flow_equals_feed():
     """The liquid effluent leaves at the feed flow (constant liquid volume)."""
     net = aquakin.load_model("adm1")

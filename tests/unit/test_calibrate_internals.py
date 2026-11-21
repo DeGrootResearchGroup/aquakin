@@ -499,6 +499,89 @@ def test_forward_jac_rule(ad_mode, gradient, cap, expected):
     assert _forward_jac(_cfg(ad_mode, gradient), _StubForwardModel(cap)) is expected
 
 
+# ---------- OptimizerConfig / _FitConfig.from_configs ----------
+
+
+def test_optimizer_config_rejects_unknown_method():
+    """The method is checked when the config is built, and again when a copy is
+    derived with ``dataclasses.replace`` (as a profile sweep does per point)."""
+    msg = r"optimizer\.method must be one of \('lbfgsb', 'gauss_newton'\); got 'newton'"
+    with pytest.raises(ValueError, match=msg):
+        aquakin.OptimizerConfig(method="newton")
+    with pytest.raises(ValueError, match=msg):
+        dataclasses.replace(aquakin.OptimizerConfig(), method="newton")
+
+
+def test_fit_config_from_configs_maps_every_field():
+    """Every optimiser and Laplace setting lands in its ``_FitConfig`` field,
+    compared with a hand-built config field by field."""
+    opt = aquakin.OptimizerConfig(
+        method="gauss_newton",
+        n_starts=3,
+        jitter=0.25,
+        jitter_schedule=(0.1, 0.2),
+        seed=7,
+        max_iter=42,
+        tol=1e-9,
+    )
+    lap = aquakin.LaplaceConfig(
+        method="gauss_newton", ridge=1e-4, fd_step=1e-2, dtmax=0.5, include_ic=True
+    )
+    cache = {}
+    got = _FitConfig.from_configs(
+        opt,
+        lap,
+        gradient="stable_adjoint",
+        ad_mode="reverse",
+        check_finite=False,
+        compiled_cache=cache,
+        stable_adjoint_max_steps=123,
+        stable_adjoint_low_memory=True,
+    )
+    expected = _FitConfig(
+        gradient="stable_adjoint",
+        ad_mode="reverse",
+        check_finite=False,
+        stable_adjoint_max_steps=123,
+        stable_adjoint_low_memory=True,
+        optimizer="gauss_newton",
+        max_iter=42,
+        tol=1e-9,
+        n_starts=3,
+        jitter=0.25,
+        jitter_schedule=(0.1, 0.2),
+        seed=7,
+        laplace=True,
+        laplace_method="gauss_newton",
+        laplace_ridge=1e-4,
+        laplace_fd_step=1e-2,
+        laplace_dtmax=0.5,
+        compiled_cache=cache,
+        laplace_include_ic=True,
+    )
+    assert dataclasses.asdict(got) == dataclasses.asdict(expected)
+    assert got.compiled_cache is cache
+
+
+def test_fit_config_from_configs_laplace_flag_and_defaults():
+    """``laplace=False`` turns the posterior off with the default Laplace
+    settings; the reactor stable-adjoint fields default to unset (a plant fit);
+    a ``laplace`` that is neither a bool nor a LaplaceConfig is refused."""
+    kw = dict(gradient="jax_adjoint", ad_mode="auto", check_finite=True, compiled_cache=None)
+    got = _FitConfig.from_configs(aquakin.OptimizerConfig(), False, **kw)
+    defaults = aquakin.LaplaceConfig()
+    assert got.laplace is False
+    assert (got.laplace_method, got.laplace_ridge, got.laplace_fd_step) == (
+        defaults.method,
+        defaults.ridge,
+        defaults.fd_step,
+    )
+    assert (got.stable_adjoint_max_steps, got.stable_adjoint_low_memory) == (0, False)
+    assert got.optimizer == "lbfgsb"
+    with pytest.raises(TypeError, match="laplace must be a bool or LaplaceConfig; got str"):
+        _FitConfig.from_configs(aquakin.OptimizerConfig(), "yes", **kw)
+
+
 # ---------- _build_loss / _build_residual: argument validation ----------
 
 

@@ -706,6 +706,18 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
         # carries the dimension of its prefactor ``A``.
         return _infer(node.A, ctx)
 
+    # A user-registered rate function (``aquakin.register_rate_function``) may
+    # declare how its result's dimension follows from its arguments', so it can
+    # be checked like a built-in. The hook takes the arguments' inferred
+    # dimensions in field order (each ``Dimension`` or ``None`` where unknown)
+    # and returns the result's, or ``None``.
+    rule = getattr(node, "DIMENSION", None)
+    if callable(rule):
+        return rule(tuple(_infer(c, ctx) for c in node.children()))
+
+    # Anything else is an unknown dimension: the check is skipped for this
+    # subexpression rather than guessed at. This is the safe default for a
+    # registered function that declares no rule.
     return None
 
 
