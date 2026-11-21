@@ -122,7 +122,29 @@ Key types:
   resolved by `plant/calibrate.py`'s `_resolve_observable_columns` (shared with
   `_resolve_plant_problem`), free names by `_check_free_params`. **Measured
   channels** (`plant/measures.py`): a channel is a species, a keyword (`Q`, `T`,
-  `COD`, `TKN`, `NOx`, `TN`, `TP`, `TSS`) or a `Measure`. `measure_map(model,
+  `COD`, `TKN`, `NOx`, `TN`, `TP`, `TSS`), a `Measure` (species weights,
+  `keywords=` weights on those measurements, `flow`, `temperature`) or a
+  **measure expression** — the same weighted sum as text, `"BOD5 = 0.65*[SS] +
+  0.65*[XS]"`, so a custom channel fits in a study file and in the editor's
+  study dialog (typed into the channels combobox, which takes free text).
+  `parse_measure` reads one (`MeasureSyntaxError`, a `ValueError`, with the
+  position in the text the user wrote, not in the body after the name);
+  `measure_map` calls `as_measure` on every channel **once**, up front, so every
+  consumer below — and the `dW` probe, which re-weighs the same channels — works
+  on resolved `Measure`s. `channel_name` is the results column (the name, never
+  the defining text); use it anywhere channels are named, not `isinstance(c,
+  Measure)`. The grammar is deliberately **affine**: `*` needs a number on one
+  side, `/` a number on the right, and a constant term is refused — the
+  ranking's `y @ M` and `_union_columns` are only valid because a channel is
+  linear in the stream, so **do not relax this**. A `Measure`'s keywords resolve
+  through `_keyword` (not `_channel`, so a keyword is never shadowed by a
+  same-named species) and therefore ride the existing `theta0`/`dW`
+  central-difference probe — a channel built on `TN` follows `i_XB` exactly as
+  `TN` does (`_follows_composition` is what arms the probe; extend it alongside
+  any new parameter-dependent keyword). Syntax is validated in the study schema
+  (`_Observable._readable_measures`) when the study is **written**; species are
+  resolved against the stream's model at **run** time, as an unknown plain
+  channel already is (a `KeyError` naming the stream). `measure_map(model,
   channels)` gives a `MeasureMap` (`W`, `q`, `t`, and the composition parameters
   the weights depend on with `theta0`/`dW`: a central-difference probe, exact for
   the affine content fractions, linearized otherwise, e.g. ASM2d's

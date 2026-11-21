@@ -120,7 +120,9 @@ _FIELDS = {
         "observables",
         "Measured channels",
         "What is measured, and on which stream: species, or a measurement such as COD, "
-        "TKN, NOx, TN, TP, TSS, flow (Q) or temperature (T).",
+        "TKN, NOx, TN, TP, TSS, flow (Q) or temperature (T). A channel of your own is "
+        "written as a weighted sum, 'BOD5 = 0.65*[SS] + 0.65*[XS]', with species in "
+        "brackets and the measurements above named as they are.",
         [],
     ),
     "free": (
@@ -223,7 +225,9 @@ _FIELDS = {
     "candidates": (
         "candidates",
         "Candidates",
-        "The sensor sets to rank, each named, with its channels and measurement error.",
+        "The sensor sets to rank, each named, with its channels and measurement error. "
+        "A channel of your own is written as a weighted sum, "
+        "'BOD5 = 0.65*[SS] + 0.65*[XS]'.",
         [],
     ),
     "base": (

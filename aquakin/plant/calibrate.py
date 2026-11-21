@@ -75,7 +75,7 @@ from aquakin.integrate.calibrate import (
     _sigma_per_dataset,
 )
 from aquakin.integrate.fisher import _resolve_transforms
-from aquakin.plant.measures import measure_map
+from aquakin.plant.measures import channel_name, measure_map
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
@@ -345,9 +345,11 @@ def _resolve_observable_columns(plant: Plant, observables) -> tuple[tuple, int]:
         endpoint, stream_model = _resolve_endpoint_species(plant, observable.stream)
         try:
             mm = measure_map(stream_model, observable.channels)
-        except KeyError as exc:
+        except (KeyError, ValueError) as exc:
+            # A ValueError here is an unreadable measure expression; both are
+            # re-raised as themselves so a caller's existing handling still fits.
             message = exc.args[0] if exc.args else str(exc)
-            raise KeyError(f"{message} (stream '{observable.stream}')") from None
+            raise type(exc)(f"{message} (stream '{observable.stream}')") from None
         idx = np.asarray(
             [plant.parameter_index(f"{stream_model.name}.{name}") for name in mm.params], int
         )
@@ -842,7 +844,11 @@ def calibrate_plant(
         columns = []
         for spec in observable_specs:
             _, stream_model = _resolve_endpoint_species(plant, spec.stream)
-            names = spec.channels if spec.channels is not None else stream_model.species
+            names = (
+                [channel_name(c) for c in spec.channels]
+                if spec.channels is not None
+                else list(stream_model.species)
+            )
             columns += [(ch, stream_model.species_units.get(ch, "")) for ch in names]
         observations, sigma = _convert_observations(
             observations, sigma, _observation_unit_factors(columns, observation_units)
