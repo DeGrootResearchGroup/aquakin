@@ -1,6 +1,9 @@
 ---
 paths:
   - "aquakin/integrate/calibrate.py"
+  - "aquakin/integrate/calibration/**"
+  - "aquakin/integrate/seam.py"
+  - "aquakin/integrate/_linalg.py"
   - "aquakin/integrate/fit.py"
   - "aquakin/integrate/fisher.py"
   - "aquakin/integrate/profile.py"
@@ -12,9 +15,32 @@ paths:
   - "aquakin/plant/identifiability.py"
 ---
 
-# Rules — calibration internals (`aquakin/integrate/calibrate.py` and its consumers)
+# Rules — calibration internals (`aquakin/integrate/calibrate.py`, `calibration/`, and their consumers)
 
 Split out of `.claude/rules/integration.md`.
+
+### Module layout
+
+- `integrate/calibrate.py` holds only `calibrate()` and re-exports, through
+  `__all__`, every name it has exported; `tests/unit/test_calibrate_exports.py`
+  pins the list. **New calibration code goes in the `integrate/calibration/`
+  module for its concern** (`config`, `observation`, `loss`, `coords`, `result`,
+  `problem`, `objective`, `multistart`, `laplace`, `driver`), never back into
+  `calibrate.py`, and the facade's export list does not grow.
+- `calibration/*` modules must not import `calibrate.py` (it imports them), and
+  `calibration/__init__.py` stays a docstring with no imports, so `fisher.py`
+  can import the pieces without a cycle. Cross-module references that are only
+  type annotations go under `TYPE_CHECKING`.
+- `calibrate()` reads `_ReactorForwardModel` from `calibrate.py`'s namespace,
+  where `test_calibrate.py` monkeypatches it; `_IRLS_MAX_ITER` lives with
+  `_run_multistart`, where a unit test patches it. Keep both where the patch
+  lands when moving code.
+- **`aquakin.plant` takes every private name of the calibration family from
+  `integrate/seam.py`**, which lists them (unchanged names, so the plant tests'
+  stubs on `aquakin.plant.calibrate` still apply).
+  `tests/unit/test_integrate_seam.py` fails on a bypassing import and on a seam
+  name with no plant caller: add a name to the seam in the same change as its
+  first plant use, remove it with its last.
 
 ### `calibrate()` internal structure
 
@@ -65,10 +91,13 @@ start clipping, the explicit start list) and `_fit_result` (fitted pools,
 `at_bound_mask`, the `CalibrationResult`). Change them, not a copy, so the two
 entry points cannot drift. The
 same three configs serve `profile_likelihood`. Below that, the body is decomposed
-([`integrate/calibrate.py`](aquakin/integrate/calibrate.py)). The argument
+([`integrate/calibration/`](aquakin/integrate/calibration/)). The argument
 handling is resolved **once** into a `_CalibrationProblem` dataclass (datasets,
 `free_indices`, resolved transforms, priors, free-IC blocks, `p0_full`) by
-`_resolve_problem`; the fit run is then three free functions taking that
+`_resolve_problem`, a short assembly of `_resolve_rate_params`,
+`_resolve_datasets`, `_resolve_priors`, `_resolve_free_ic` and
+`_resolve_rate_bounds`; the plant resolver shares `_check_start_in_domain`,
+`_is_multi_dataset` and `_resolve_priors` with it rather than copying them; the fit run is then three free functions taking that
 `problem`: `_build_objective` (the jit-cached objective / residual / Jacobian,
 data threaded as *arguments* so a `profile_likelihood` sweep reuses one compiled
 program via the shared `_compiled_cache`; everything the closures bake in -- the
@@ -97,8 +126,8 @@ NumPy on the matrix (no solves); it reads `joint_hessian` / `joint_names` from a
 `CalibrationResult` when present, else the rate `hessian_unconstrained`, and its
 `eig_keep` only *flags* weak directions. `calibrate`'s Laplace covariance
 (`_laplace_covariance`) is the full inverse of the Hessian and shares
-identifiability's null convention (`_NULL_RTOL`, `_NULL_LOADING_TOL`, imported
-from `identifiability.py`): an exactly null direction is left out of
+identifiability's null convention (`_NULL_RTOL`, `_NULL_LOADING_TOL`, which both
+import from `integrate/_linalg.py`): an exactly null direction is left out of
 `posterior_cov` and its involved parameters get an infinite std plus a
 `RuntimeWarning`. (`LaplaceConfig.eig_keep` once dropped every direction below
 1e-2 of the largest with zero variance, understating weakly identified stds by
@@ -141,7 +170,7 @@ scalar `sigma` becomes per-column when the factors differ; `"estimate"` /
 posterior, is therefore in model units; it is refused with `observation_fn`.
 The plant builds its columns from each observable's stream model.
 `observation_fn` (calibrate / profile / `Experiment`) goes through the shared
-`observe(ys, p, species_idx, fn, t=)` helper in `calibrate.py`, used by both
+`observe(ys, p, species_idx, fn, t=)` helper in `calibration/observation.py`, used by both
 `_predict` and `_FisherSetup.jacobian`; a three-argument `fn(t, C, p)`
 (`observation_takes_time`, by signature) gets the sample times in `t_obs`'s
 unit (native times divided by `_CalibrationProblem.obs_time_factor` /

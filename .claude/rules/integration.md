@@ -15,7 +15,7 @@ it on demand when a change elsewhere touches the topic):
 
 | Rule | Loads for | Covers |
 |---|---|---|
-| `integration-calibrate.md` | `calibrate.py`, `fit.py`, `fisher.py`, `profile.py`, `identifiability.py`, the experiment-design modules, and the plant calibration / identifiability modules that reuse them | `calibrate()`'s internal structure and the helpers `Plant.calibrate` shares |
+| `integration-calibrate.md` | `calibrate.py`, the `calibration/` subpackage, `seam.py`, `_linalg.py`, `fit.py`, `fisher.py`, `profile.py`, `identifiability.py`, the experiment-design modules, and the plant calibration / identifiability modules that reuse them | `calibrate()`'s internal structure and the helpers `Plant.calibrate` shares |
 | `integration-differentiation.md` | `_common.py`, `discrete_adjoint.py`, `forward_sensitivity.py`, `forward_solve.py`, `_simultaneous_corrector.py`, `sensitivity.py`, `colored_jacobian.py`, and `plant/sensitivity.py` / `plant/colored.py` | differentiating stiff models: `dtmax`, the adjoints, the discrete adjoint, forward sensitivities |
 
 ## Layering
