@@ -71,9 +71,22 @@ injecting it as a condition field)
 - `MinNode(a, b)` — `min(a, b)`, the ceiling counterpart of `MaxNode`; a
   two-sided clip is `min(hi, max(lo, x))`.
 
-`_safe_log` / `_safe_sqrt` sit beside `_safe_ratio` in `core/nodes.py` and use
-the same double-where shape; the difference is what each returns off the
-domain, which is a modelling decision per function, not a mechanical one.
+`_safe_log` / `_safe_sqrt` live in **`core/kernels.py`**, not in `nodes.py`:
+`sqrt` and `log` are offered by more than one of aquakin's expression
+languages, and a function whose derivative is non-finite somewhere needs the
+same guard wherever it is evaluated — otherwise the same spelling means two
+different things depending on which language it was written in. Put a guarded
+numeric there when a second language will evaluate it; `_safe_ratio` stays in
+`nodes.py` because the Monod family and `safe_div` exist only in the rate
+language.
+
+All three use the same double-where shape. What each returns *off* the domain
+differs deliberately and is a modelling decision per function, not a mechanical
+one: `_safe_ratio` and `_safe_sqrt` return the physical limit 0, while
+`_safe_log` keeps `-inf`, since a logarithm has no finite limit at zero to
+adopt and inventing one would silently change the model. So `log`'s guard
+protects the gradient only, and its caller still has to keep the argument
+positive.
 
 The four Monod nodes and `SafeDivideNode` all evaluate their `num/denom` through
 `_safe_ratio` (`core/nodes.py`), a **double-where** guard returning 0 (with a

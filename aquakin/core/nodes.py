@@ -12,6 +12,7 @@ import jax.numpy as jnp
 
 from aquakin.core.context import CompileContext
 from aquakin.core.hints import did_you_mean
+from aquakin.core.kernels import _safe_log, _safe_sqrt
 
 RateCallable = Callable[
     [jnp.ndarray, jnp.ndarray, dict[str, jnp.ndarray], int | jnp.ndarray], jnp.ndarray
@@ -52,43 +53,6 @@ def _safe_ratio(num, denom):
     nonzero = denom != 0.0
     safe = jnp.where(nonzero, denom, 1.0)
     return jnp.where(nonzero, num / safe, 0.0)
-
-
-def _safe_log(x):
-    """``log(x)`` whose *gradient* stays finite at and below zero.
-
-    ``d/dx log(x) = 1/x`` is infinite at ``x == 0`` and the value is NaN below
-    it, so a reverse-mode pass through a depleted state poisons the whole
-    parameter gradient. The double-where evaluates the logarithm at a finite
-    stand-in off the domain, so the live branch is exact and the masked branch
-    contributes a zero -- not a NaN -- tangent.
-
-    Unlike :func:`_safe_ratio` the *value* off the domain is ``-inf``, not 0:
-    a logarithm has no finite limit at zero to adopt, and inventing one would
-    silently change the model. The guard therefore protects the gradient only,
-    and a model using ``log`` is responsible for keeping its argument positive
-    -- ``clip_negative_states: true`` clamps the rate inputs, or write the term
-    so the argument cannot reach zero (``log(1 + [X]/K)``).
-    """
-    positive = x > 0.0
-    safe = jnp.where(positive, x, 1.0)
-    return jnp.where(positive, jnp.log(safe), -jnp.inf)
-
-
-def _safe_sqrt(x):
-    """``sqrt(x)`` whose gradient stays finite at zero.
-
-    ``d/dx sqrt(x) = 1/(2 sqrt(x))`` is infinite at ``x == 0`` -- exactly where
-    a half-order kinetic term sits when its species depletes, which is the
-    common case rather than a corner one. The double-where keeps the value
-    exact (``sqrt(0) == 0``) while the derivative at and below zero is 0 rather
-    than ``inf``. This is the same reasoning as the constant-exponent ``powc``
-    kernel, which keeps ``[X] ** 0.5`` differentiable at ``X == 0``; a transiently
-    negative state returns 0 rather than NaN.
-    """
-    positive = x > 0.0
-    safe = jnp.where(positive, x, 1.0)
-    return jnp.where(positive, jnp.sqrt(safe), 0.0)
 
 
 class ASTNode(ABC):
