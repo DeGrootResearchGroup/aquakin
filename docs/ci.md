@@ -47,7 +47,8 @@ nor concentrating it in a few files makes the whole suite fast.
 - The fast tier (`$FAST_MARKERS` = `not validation and not slow`, Python
   3.11/3.12) runs on **every PR and every push** and is the merge gate. It is
   two `pytest-split`-sharded jobs, each shard a fresh process pool of **two**
-  xdist workers (`-n 2`), **sharded for memory, not speed**:
+  xdist workers (`-n 2`), **sharded for memory, not speed**, plus the unsharded
+  `ui` job:
   - **`unit`**: `tests/unit`, `--splits 2`, balanced by the unit durations
     recorded in `.test_durations` (a test added since the last refresh gets
     their average). Unit tests compile little, so wall time is what to balance.
@@ -56,6 +57,17 @@ nor concentrating it in a few files makes the whole suite fast.
     exist, so the count split holds whatever `.test_durations` records. A
     worker's memory follows the number of solves it compiles, not their wall
     time, and a duration split could pile many quick solves into one shard.
+  - **`ui`**: `tests/ui` (the `aquakin-ui` editor, including the independence
+    test that it imports neither `aquakin` nor `jax`), one job per Python
+    version, not sharded. The set is small (about 90 tests, a minute and a half
+    on two workers) and its solves run in the `python -m aquakin serve` worker
+    processes it starts, not in the test process, so memory does not call for
+    shards. It needs no recorded durations. It is the only job that measures
+    `aquakin_ui` coverage (`--cov=aquakin --cov=aquakin_ui`); the other jobs
+    measure `aquakin` only, since none of their tests imports the editor, and
+    listing it there would add an unexercised package to the slow, validation
+    and heavy flags. `[tool.coverage.run] source` names both packages, so a
+    local `pytest --cov` measures both.
 
   Why: every JAX test process keeps the XLA compilation cache and live buffers
   of each solve it compiles until it exits, so a worker that has run a few
@@ -79,8 +91,9 @@ nor concentrating it in a few files makes the whole suite fast.
   end, so a slow, swapping or killed shard can be told apart.
 
   Coverage goes to Codecov **once per run**: each fast shard keeps its
-  `coverage.xml` as an artifact, and the **`fast-coverage`** job (after both
-  matrices, under the `fast` flag) uploads them all in one call. With one upload
+  `coverage.xml` as an artifact, and the **`fast-coverage`** job (after the
+  unit, integration and ui matrices, under the `fast` flag) uploads them all in
+  one call. With one upload
   per shard, Codecov posted its PR comment and patch status after the first few
   shards and showed the lines a still-running shard covers as missing.
   `after_n_builds` in `codecov.yml` did not help, because the carried-forward
@@ -98,8 +111,8 @@ nor concentrating it in a few files makes the whole suite fast.
   hand.
 
   The per-shard jobs are **not** the required check. The **`fast-gate`**
-  aggregator (job name **`fast gate`**) is: it `needs:` both matrices and is
-  green iff every shard succeeded (or was skipped, since a bare `labeled` event
+  aggregator (job name **`fast gate`**) is: it `needs:` the unit, integration
+  and ui matrices and is green iff every job in them succeeded (or was skipped, since a bare `labeled` event
   skips the gate, which must not block). It is a *stable* required-check name
   that survives shard-count changes, so **branch protection requires
   `fast gate`**, not the per-shard `unit tests (...)` / `integration tests (...)`
@@ -110,7 +123,10 @@ nor concentrating it in a few files makes the whole suite fast.
   stiff/plant solves (the `slow` marker on `test_bsm2_dynamic`, `test_bsm1`,
   `test_biofilm`, `test_forward_sensitivity`, the two `test_wats_sewer_*` files)
   and the published-data checks. A regression a PR's fast gate cannot catch
-  therefore surfaces within minutes of merging — revert from there. **Both are
+  therefore surfaces within minutes of merging — revert from there. **The
+  validation job selects by marker, and no job collects `tests/validation/` by
+  directory**, so a test there without `@pytest.mark.validation` runs nowhere:
+  mark the whole module (`pytestmark = pytest.mark.validation`). **Both are
   `pytest-split`-sharded** (`--splits N --group i`, `-n 1` within each shard):
   even serially, a single long-lived process accumulating the whole set's XLA
   compilation cache + live JAX buffers exhausts the 16 GB hosted runner and is

@@ -18,9 +18,12 @@ Vuetify, the same stack as aquaflux's `aquaflux-ui`. `ui` extra; entry point
 **`aquakin_ui` imports neither `aquakin` nor `jax`; `aquakin` never imports
 `aquakin_ui`.** Everything about units, models and plants comes from one
 long-lived `python -m aquakin serve` worker (`aquakin/__main__.py`, client
-`aquakin_ui/worker.py`). Pinned by `tests/ui/test_independence.py`
-(fresh-interpreter import of every module + AST scan of `aquakin/`). Tests may
-import aquakin (to build expected values).
+`aquakin_ui/worker.py`). Pinned by `tests/ui/test_independence.py`, which
+finds every `aquakin_ui/**/*.py` itself: an AST scan of each for an `aquakin` /
+`jax` import anywhere in the file (a function-level import counts, though a
+fresh import would never run it), a fresh-interpreter import of every module,
+and the reverse AST scan of `aquakin/`. Tests may import aquakin (to build
+expected values). `tests/ui` runs in the required fast gate (the `ui` CI job).
 
 ## Structure
 
