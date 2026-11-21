@@ -64,7 +64,7 @@ def main() -> None:
 
     fired = [n for _, n in sol.events_log]
     if "bromate limit" in fired:
-        t_stop = [t for t, n in sol.events_log if n == "bromate limit"][0]
+        t_stop = next(t for t, n in sol.events_log if n == "bromate limit")
         print(f"\nSolve terminated at t = {t_stop:.1f} s: bromate reached the "
               f"{BROMATE_LIMIT*128.0*1e6:.0f} ug/L limit.")
     else:

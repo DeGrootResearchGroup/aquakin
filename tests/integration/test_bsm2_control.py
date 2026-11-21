@@ -22,7 +22,6 @@ from aquakin.plant.bsm.bsm2 import (
 from aquakin.plant.control import PIController
 from aquakin.plant.streams import Stream
 
-
 # ----- PIController unit (no plant solve) ---------------------------------
 
 @pytest.fixture(scope="module")

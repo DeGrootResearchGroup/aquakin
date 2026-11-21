@@ -203,7 +203,7 @@ def test_function_registry_is_derived_from_the_nodes():
 
 
 def test_pH_inhibit_wrong_arity():
-    with pytest.raises(ParseError, match="pH_inhibit.. takes 2"):
+    with pytest.raises(ParseError, match=r"pH_inhibit\(\) takes 2"):
         parse_rate_expression("pH_inhibit(a)")
 
 

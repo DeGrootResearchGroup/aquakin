@@ -17,7 +17,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 # BSM1 average dry-weather influent (Copp 2002 Table 5.1).
 # Concentrations in g/m³; alkalinity in mol HCO3⁻/m³; Q in m³/d.
 _BSM1_DRY_AVG = {

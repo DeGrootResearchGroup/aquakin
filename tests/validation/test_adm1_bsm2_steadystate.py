@@ -37,7 +37,6 @@ import pytest
 
 import aquakin
 
-
 # --- Published BSM2 digester operating point -----------------------------
 Q_FEED = 178.4674  # m3/d -- benchmark digester feed flow
 V_LIQ = 3400.0     # m3

@@ -8,7 +8,6 @@ import pytest
 
 import aquakin
 
-
 _TNET = """
 model:
   name: ttest
@@ -78,17 +77,14 @@ def test_stoichiometry_untouched_by_temperature(tmp_path):
 
 def test_negative_theta_rejected(tmp_path):
     bad = _TNET.replace("theta: 1.1", "theta: -1.0")
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match=r"temperature\.theta must be > 0"):
         _load(bad, tmp_path, name="bad.yaml")
 
 
 def test_model_without_temperature_unaffected():
     """A model with no temperature specs has no corrections (back-compat)."""
-    net = aquakin.load_model_from_file  # sanity: shipped simple model
-    from importlib.resources import files
-    # The fixtures model has no temperature spec.
-    import aquakin as ak
-    n = ak.load_model("uv_h2o2")
+    # A shipped model with no temperature spec.
+    n = aquakin.load_model("uv_h2o2")
     assert n.temperature_corrections == []
 
 

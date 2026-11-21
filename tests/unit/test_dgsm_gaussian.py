@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from aquakin.integrate._qmc import _sobol_normal_sample
-from aquakin.plant.sensitivity import _dgsm_aggregate, _to_z, _from_z, _dtheta_dz
+from aquakin.plant.sensitivity import _dgsm_aggregate, _dtheta_dz, _from_z, _to_z
 
 
 def test_sobol_normal_sample_recovers_mean_std():

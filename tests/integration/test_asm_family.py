@@ -12,7 +12,6 @@ import pytest
 
 import aquakin
 
-
 # The SUMO-ported ASM/ADM models under test. Names only -- the shape contract
 # (species/reaction/parameter counts) lives in _EXPECTED_SHAPES below and is
 # asserted by a single dedicated test, so a benign model edit (e.g. adding a

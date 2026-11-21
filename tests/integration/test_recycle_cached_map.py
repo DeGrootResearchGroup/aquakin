@@ -140,7 +140,6 @@ def test_no_recycle_plant_trivially_constant(asm1):
 def test_grad_flows_through_cached_path(asm1):
     plant = _recycle_plant(asm1, carry_T=False)
     y0 = _prime(plant)
-    snh = asm1.species_index["SNH"]
     base = plant.default_parameters()
 
     def loss(scale):

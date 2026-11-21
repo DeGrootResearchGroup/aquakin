@@ -86,7 +86,7 @@ def _load_sumo(path):
         cells = {sp: str(ws.cell(r, col).value)
                  for col, sp in cols.items()
                  if ws.cell(r, col).value not in (None, "")}
-        rate = ws.cell(r, [c.column for c in ws[3] if c.value == "Rate"][0]).value
+        rate = ws.cell(r, next(c.column for c in ws[3] if c.value == "Rate")).value
         if cells:
             procs.setdefault(_norm(nm), (nm, j, cells, str(rate)))
     return params, species, procs
@@ -100,7 +100,7 @@ def _eval_cell(expr, params, vrefs):
     if re.search(r"[A-Za-z]{2,}", e):
         return None
     try:
-        return eval(e, {"__builtins__": {}}, {})  # noqa: S307 - arithmetic only
+        return eval(e, {"__builtins__": {}}, {})
     except Exception:
         return None
 

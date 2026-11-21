@@ -174,7 +174,7 @@ def test_expression_cycle_rejected(tmp_path):
             rate: "a"
             stoichiometry: {A: -1}
     """)
-    with pytest.raises(ValueError, match="[Cc]ycle"):
+    with pytest.raises(ValueError, match=r"[Cc]ycle"):
         aquakin.load_model_from_file(p)
 
 

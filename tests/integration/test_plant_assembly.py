@@ -15,7 +15,6 @@ import pytest
 import aquakin
 from aquakin.plant import (
     CSTRUnit,
-    IdentityTranslator,
     MixerUnit,
     Plant,
     RatioSplitter,
@@ -999,7 +998,7 @@ def test_bsm1_rhs_traces_do_not_cache_slices_of_closed_over_parameters():
 def _bsm2_no_solve():
     """The two-model BSM2 plant (ASM1 + ADM1), assembled but not solved --
     cheap, for the by-name parameter API."""
-    from aquakin.plant.bsm import build_bsm2, bsm2_asm1_model
+    from aquakin.plant.bsm import bsm2_asm1_model, build_bsm2
 
     asm1 = bsm2_asm1_model()
     adm1 = aquakin.load_model("adm1")
@@ -1049,7 +1048,7 @@ def test_plant_parameter_values_sets_only_named_entries():
 
 def test_plant_parameter_values_unknown_name_raises_with_hint():
     plant, _asm1, _adm1 = _bsm2_no_solve()
-    with pytest.raises(KeyError, match="Did you mean: asm1.muH"):
+    with pytest.raises(KeyError, match=r"Did you mean: asm1\.muH"):
         plant.parameter_values({"asm1.muh": 6.0})  # wrong case
     with pytest.raises(KeyError, match="Unknown plant parameter"):
         plant.parameter_index("adm1.nope")
@@ -1128,7 +1127,7 @@ def test_recycle_presolve_is_exact_and_gain_independent(capture):
     t = jnp.asarray(0.0)
     flows = plant._recycle._resolve_flows(t, params, states)
     presolved = plant._recycle._resolve_recycle_concentrations(t, states, params, flows)
-    key = list(plant._recycle_keys)[0]
+    key = next(iter(plant._recycle_keys))
     # Exactness as a fixed point: one forward pass from the pre-solved seed
     # reproduces the recycle concentration (gain-independent -- a deep
     # Gauss-Seidel reference would itself be unconverged at capture=0.998).
@@ -1270,8 +1269,8 @@ def test_introspection_unknown_name_hints():
 
 
 def test_solution_C_named_errors_and_available_streams():
-    from aquakin.plant.plant import PlantSolution
     from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.plant import PlantSolution
 
     plant, _asm1, _adm1 = _bsm2_no_solve()
     plant._build_state_layout()
@@ -1297,8 +1296,8 @@ def test_solution_C_named_errors_and_available_streams():
 def test_plant_final_named_and_C_named_many():
     """final_named / C_named_many on a PlantSolution mirror C_named(unit, sp):
     last-point floats by name, several trajectories at once, same hinted errors."""
-    from aquakin.plant.plant import PlantSolution
     from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.plant import PlantSolution
 
     plant, _asm1, _adm1 = _bsm2_no_solve()
     plant._build_state_layout()
@@ -1377,7 +1376,7 @@ def test_stream_unknown_semantic_name_hints():
 
 
 def test_digester_gas_and_no_digester_error(simple_net):
-    from aquakin.plant.bsm import build_bsm2, bsm2_warm_start, DigesterGas
+    from aquakin.plant.bsm import DigesterGas, bsm2_warm_start, build_bsm2
     from aquakin.plant.plant import PlantSolution
 
     plant = build_bsm2()
@@ -1407,7 +1406,7 @@ def test_digester_gas_normalized_to_published_steady_state():
     pressure by ``P_gas/P_atm``: ~2708 m3/d, giving ~1065 kg CH4/d. Omitting the
     normalization understates both by ``P_gas/P_atm`` (~5%), which the gas-phase
     concentrations -- matched without it -- cannot reveal."""
-    from aquakin.plant.bsm import build_bsm2, bsm2_warm_start
+    from aquakin.plant.bsm import bsm2_warm_start, build_bsm2
     from aquakin.plant.plant import PlantSolution
 
     # Published steady-state digester gas-phase composition (kg COD/m3 for the

@@ -6,11 +6,10 @@ import pytest
 
 import aquakin
 from aquakin.plant.balance import ComponentBalance, MassBalance
-from aquakin.plant.plant import Plant
 from aquakin.plant.cstr import Aeration, CSTRUnit
+from aquakin.plant.plant import Plant
 from aquakin.utils.balance import check_conservation
 from aquakin.utils.composition import canonical_content, composition_table
-
 
 # --- shipped composition tables ---------------------------------------------
 
@@ -186,7 +185,7 @@ def test_mass_balance_default_ports_are_influents_and_dangling_outputs():
 def test_mass_balance_closes_on_bsm1_steady_state():
     """The full BSM1 plant closes COD and N to ~machine precision at steady
     state (single-model water line: no digester gas phase)."""
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
 
     net = aquakin.load_model("asm1")
     plant = build_bsm1(model=net)
@@ -212,7 +211,7 @@ def test_mass_balance_closes_on_bsm1_takacs_lumped_settler():
     regression guard for the lumped-settler branch of the settler's
     ``component_inventory`` (which would otherwise fail to reshape the TSS head
     block)."""
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
 
     net = aquakin.load_model("asm1")
     plant = build_bsm1(model=net, use_takacs=True)
@@ -237,8 +236,12 @@ def test_mass_balance_closes_on_bsm2_steady_state():
     reject recycle) closes COD and N to <0.5% at steady state -- the digester
     biogas falls out of the reaction integral and the cross-model inventories
     sum on the canonical g basis."""
-    from aquakin.plant.bsm import (build_bsm2, bsm2_warm_start,
-                                   bsm2_constant_influent, bsm2_parameters)
+    from aquakin.plant.bsm import (
+        bsm2_constant_influent,
+        bsm2_parameters,
+        bsm2_warm_start,
+        build_bsm2,
+    )
 
     asm1 = aquakin.load_model("asm1")
     adm1 = aquakin.load_model("adm1")

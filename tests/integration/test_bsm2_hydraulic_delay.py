@@ -9,12 +9,12 @@ import pytest
 
 import aquakin
 from aquakin.plant.bsm import (
-    bsm2_warm_start,
-    build_bsm2,
     HydraulicDelay,
     bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
+    bsm2_warm_start,
+    build_bsm2,
 )
 from aquakin.plant.delay import HydraulicDelayUnit
 from aquakin.plant.streams import Stream
@@ -138,6 +138,7 @@ def test_grad_through_delay_plant_is_finite(asm1):
     where a reverse-mode NaN could hide -- so differentiate a short solve w.r.t.
     the initial state (load + flow) and check it stays finite."""
     import jax
+
     from aquakin.plant import Plant
     plant = Plant("t", time_unit="d")
     plant.add_unit(HydraulicDelayUnit(

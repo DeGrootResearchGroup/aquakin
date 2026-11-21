@@ -146,7 +146,6 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
     # nitrate-sulfur reactions and the sensitivity of those modes goes
     # non-finite (in both AD directions). With dtmax set, the gradient is
     # finite and matches a finite-difference of the same (capped) solve.
-    import diffrax
 
     C0 = net.concentrations({"S_NO": 20.0})
     p = net.default_parameters()

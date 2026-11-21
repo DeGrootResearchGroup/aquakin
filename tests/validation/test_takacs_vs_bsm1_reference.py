@@ -22,13 +22,13 @@ clarification-thickening process. Water Research 25(10), 1263-1271.
 Alex, J. et al. (2008). Benchmark Simulation Model no. 1 (BSM1). IWA TG report.
 """
 
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
-from aquakin.plant.takacs import TakacsClarifier
 from aquakin.plant.streams import Stream
+from aquakin.plant.takacs import TakacsClarifier
 
 # BSM1 reference settler parameters / geometry.
 _V0, _VMAX, _RH, _RP, _FNS, _XT = 474.0, 250.0, 5.76e-4, 2.86e-3, 2.28e-3, 3000.0

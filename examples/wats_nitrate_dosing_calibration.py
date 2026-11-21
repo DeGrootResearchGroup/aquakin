@@ -28,7 +28,6 @@ import numpy as np
 
 import aquakin
 
-
 # Anoxic nitrate-dosing batch initial state (mg/L as the model's COD/N/S units).
 BATCH_IC = {
     "X_BH": 30.0,    # heterotrophic biomass
@@ -70,7 +69,7 @@ def main() -> None:
         reactor, C0,
         observations=noisy, t_obs=t_obs,      # calibrate coerces NumPy inputs
         free_params=FREE, observed_species=OBSERVED,
-        transforms={name: "positive_log" for name in FREE},
+        transforms=dict.fromkeys(FREE, "positive_log"),
         loss="nll", sigma=sigma,
         optimizer=aquakin.OptimizerConfig(method="gauss_newton"),
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),

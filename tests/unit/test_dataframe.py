@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import aquakin
 from aquakin.integrate.batch import BatchSolution
 from aquakin.integrate.biofilm import BiofilmSolution
 from aquakin.integrate.pfr import PFRSolution

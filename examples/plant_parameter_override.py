@@ -13,7 +13,7 @@ with respect to a parameter -- shows the companion ``parameter_index``.
 """
 
 import aquakin
-from aquakin.plant.bsm import build_bsm2, bsm2_asm1_model
+from aquakin.plant.bsm import bsm2_asm1_model, build_bsm2
 
 
 def main() -> None:

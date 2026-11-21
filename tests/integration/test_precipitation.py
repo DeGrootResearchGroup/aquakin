@@ -206,7 +206,7 @@ def test_schema_rejects_undeclared_species():
         - {name: m, pKsp: 8.0, order: 2, ions: [
             {species: S_ghost, molar_mass: 1000, count: 1, charge: 2}]}
     """)
-    with pytest.raises(Exception, match="ghost|undeclared"):
+    with pytest.raises(Exception, match=r"ghost|undeclared"):
         _load_bad(block)
 
 
@@ -456,7 +456,7 @@ def test_schema_solid_requires_rate_constant():
 
 
 def test_schema_autoderived_solid_must_be_declared():
-    with pytest.raises(Exception, match="X_ghost|declared"):
+    with pytest.raises(Exception, match=r"X_ghost|declared"):
         _load_bad(textwrap.dedent("""
         precipitation:
           minerals:
@@ -583,7 +583,7 @@ def test_shared_ionic_strength_solves_and_differentiates():
 def test_power_order_below_one_rejected_at_load():
     # The power driver's gradient is infinite at SI=0 for order<1, so it is
     # rejected at validation; the bounded form has no such restriction.
-    from aquakin.schema.model_spec import MineralSpec, MineralIonSpec
+    from aquakin.schema.model_spec import MineralIonSpec, MineralSpec
     ion = MineralIonSpec(species="S_Ca", molar_mass=1000, count=1, charge=2)
     kw = dict(name="x", pKsp=8.0, ions=[ion], solid="X",
               rate_constant={"value": 1.0})
@@ -597,6 +597,7 @@ def test_precipitation_reaction_synthesis_is_idempotent():
     # Re-validating a precipitation ModelSpec (e.g. model_dump -> model_validate)
     # must NOT re-append the auto-synthesized precipitation reactions.
     import importlib.resources
+
     from aquakin.schema.loader import _yaml_to_spec
     from aquakin.schema.model_spec import ModelSpec
     txt = (importlib.resources.files("aquakin.models")

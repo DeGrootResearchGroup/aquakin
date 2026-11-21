@@ -86,7 +86,7 @@ def test_operating_specs_parse_identically():
 def test_dynamic_operating_is_forward_only():
     """Operating sensitivity rides the augmented variational solve, so reverse mode
     rejects it with a clear message (cheap -- raises before any solve)."""
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
     asm1 = aquakin.load_model("asm1")
     p = build_bsm1()
     p.add_influent("feed", asm1.influent({"SNH": 25.0, "SS": 60.0}, Q=18446.0))
@@ -106,7 +106,7 @@ def test_steady_and_dynamic_operating_sensitivity_agree():
     sensitivity: on a constant influent the dynamic effluent-ammonia sensitivity to
     the influent-load scale, run toward steady state, matches the steady-state
     operating column."""
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
     asm1 = aquakin.load_model("asm1")
     infl = asm1.influent({"SS": 60., "SNH": 25., "XS": 200., "XB_H": 50.,
                           "SI": 30., "XI": 25., "SND": 6., "XND": 10.,

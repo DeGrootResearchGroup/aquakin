@@ -13,9 +13,9 @@ from aquakin.plant.bsm import (
     BSM1_WARM_REACTOR_COMPOSITION,
     BSM2_WARM_REACTOR_COMPOSITION,
     bsm1_warm_start,
-    bsm2_warm_start,
     bsm2_asm1_model,
     bsm2_constant_influent,
+    bsm2_warm_start,
     build_bsm1,
     build_bsm2,
 )
@@ -46,7 +46,7 @@ def test_bsm2_warm_start_matches_manual_seed():
 
     y0 = bsm2_warm_start(plant)
     warm = asm1.concentrations(BSM2_WARM_REACTOR_COMPOSITION)
-    y0_manual = plant.initial_state(overrides={t: warm for t in _TANKS})
+    y0_manual = plant.initial_state(overrides=dict.fromkeys(_TANKS, warm))
     assert jnp.allclose(y0, y0_manual)
 
 

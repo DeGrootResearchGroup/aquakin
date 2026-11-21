@@ -9,19 +9,18 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
+from aquakin.plant.bsm import evaluate_bsm2
 from aquakin.plant.bsm.bsm2 import (
     BSM2_BYPASS_Q,
-    build_bsm2,
     InfluentBypass,
     bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
+    build_bsm2,
 )
-from aquakin.plant.bsm import evaluate_bsm2
 from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.mixer import RatioSplitter, SetpointSplitter, ThresholdSplitter
 from aquakin.plant.streams import Stream
-
 
 # ----- ThresholdSplitter (no plant solve) ---------------------------------
 

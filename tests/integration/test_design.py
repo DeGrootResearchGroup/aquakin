@@ -380,7 +380,7 @@ def test_takacs_clarifier_inventory_raises_srt(ideal_run, asm1):
 def test_bsm2_srt_counts_activated_sludge_wastage_not_dewatering_cake():
     """On BSM2 the default SRT uses the AS wastage, not the dewatering cake
     (primary + digested solids), which understated the sludge age by ~16%."""
-    from aquakin.plant.bsm import build_bsm2, bsm2_warm_start
+    from aquakin.plant.bsm import bsm2_warm_start, build_bsm2
     from aquakin.plant.bsm.bsm2 import bsm2_constant_influent, bsm2_parameters
     from aquakin.plant.results import PlantSolution
 
@@ -396,8 +396,8 @@ def test_bsm2_srt_counts_activated_sludge_wastage_not_dewatering_cake():
     m = sludge_metrics(plant, sol, params)
     explicit = sludge_metrics(plant, sol, params, effluent_port="settler.overflow",
                               waste_port="underflow_split.waste")
-    assert m.SRT == pytest.approx(explicit.SRT)
-    assert m.SRT == pytest.approx(20.9, abs=0.3)
+    assert pytest.approx(explicit.SRT) == m.SRT
+    assert pytest.approx(20.9, abs=0.3) == m.SRT
 
 
 def test_sludge_metrics_ignores_a_time_unit_override(asm1):

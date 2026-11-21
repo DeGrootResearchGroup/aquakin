@@ -6,10 +6,11 @@ import pytest
 
 from aquakin.core.context import CompileContext
 from aquakin.core.nodes import (
+    GAS_CONSTANT,
     AddNode,
     ArrheniusNode,
-    ConstantNode,
     ConditionNode,
+    ConstantNode,
     DivideNode,
     MultiplyNode,
     NegateNode,
@@ -18,7 +19,6 @@ from aquakin.core.nodes import (
     SpeciesNode,
     SubtractNode,
     pHSwitchNode,
-    GAS_CONSTANT,
 )
 
 
@@ -385,6 +385,7 @@ def test_children_covers_every_node_type():
     into every AST node without a per-type branch. Build one of each and check
     the reported children match the dataclass's AST-valued fields."""
     import dataclasses
+
     from aquakin.core import nodes as _nodes
 
     leaf = ConstantNode(1.0)

@@ -458,22 +458,24 @@ After **every code change**, before considering the task complete, review and
 act on the following:
 
 1. **Lint & format** — Run ruff locally before committing and pushing any code
-   change. The CI `lint (ruff)` job runs `ruff check aquakin aquakin_ui` **and**
+   change. The CI `lint (ruff)` job runs
+   `ruff check aquakin aquakin_ui tests scripts examples` **and**
    `ruff format --check aquakin aquakin_ui` on every PR and is a **required merge
    gate**, so an
    unformatted file (or a lint error) fails CI — a common way a refactor that
    only shortens lines trips the format gate. Run both, from the repo root:
-   - `ruff check aquakin aquakin_ui` — must report no errors.
+   - `ruff check aquakin aquakin_ui tests scripts examples` — must report no
+     errors. In a test, an unused import or variable often means an assertion
+     that was never written: look at it before deleting it.
    - `ruff format aquakin aquakin_ui` — auto-applies formatting in place (CI runs
      it with `--check`, which only verifies; running it without `--check` fixes
      the files). Re-run `ruff format --check aquakin aquakin_ui` to confirm it is
-     clean.
+     clean. `tests/`, `scripts/` and `examples/` are linted but not yet
+     formatted: do not run `ruff format` over them as part of an unrelated change.
 
    Ruff is pinned via the `lint` extra (`pip install -e ".[lint]"`); see the
    `[tool.ruff]` config in `pyproject.toml` for the rule set and per-file
    ignores. Not needed for docs/config-only changes that touch no `.py` files.
-   CI lints only the two packages; keep `tests/`, `scripts/` and `examples/`
-   free of unused imports and variables by hand.
 
 2. **Tests** — Every behaviour change comes with a test that would fail without
    it (`.claude/rules/tests.md` has the full table and the quality bar):
@@ -483,6 +485,13 @@ act on the following:
    - Bug fix → regression test, **seen to fail on the unfixed code**
    - Run the tests you touched, and the fast gate for a cross-cutting change;
      report what ran and what did not.
+   - New and changed lines are expected to be covered: Codecov's patch status
+     targets 100% (a signal, not a required check). When it is red, add the
+     test, or state in the PR which lines are uncovered and why (a defensive
+     branch no input can reach; code only `slow` tests exercise, on a PR
+     without `full-ci`, since only the fast tier uploads on a normal PR). Never
+     add `# pragma: no cover`, or a test that only executes lines, to make it
+     green. Details in `docs/ci.md`.
 
 3. **Duplication and leftovers** — Re-read the diff as a reviewer:
    - Did you copy a block that should be one shared function?

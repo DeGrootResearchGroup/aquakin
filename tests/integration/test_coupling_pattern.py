@@ -285,7 +285,7 @@ def test_plant_structural_pattern_superset_over_trajectory_bsm1():
     particular leave *no* within-unit coupling missing (the staleness #388 fixes).
     """
     from aquakin.integrate.colored_jacobian import jacobian_sparsity_pattern
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
     from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
     from aquakin.plant.influent import InfluentSeries
     from aquakin.plant.plant import default_atol

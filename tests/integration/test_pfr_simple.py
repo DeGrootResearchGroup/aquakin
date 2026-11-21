@@ -92,7 +92,6 @@ def test_pfr_direct_adjoint_enables_forward_mode(simple_model):
     """With adjoint=DirectAdjoint the PFR solve is forward-mode differentiable
     (jacfwd), which the default RecursiveCheckpointAdjoint (a reverse-only
     custom_vjp) rejects. Closes the adjoint-asymmetry gap with BatchReactor."""
-    import diffrax
 
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.PlugFlowReactor(
