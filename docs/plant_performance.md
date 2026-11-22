@@ -390,7 +390,7 @@ settings are one `StepControl` value, shared with the staggered sensitivity solv
   step-sequence variation between two valid adaptive solves, ~2e-2 on the dynamic
   BSM2). Covered by
   `tests/integration/test_forward_fast.py` (analytic decay + order, exact `t_eval`,
-  BSM1/BSM2 agreement with diffrax, the guards). NOTE the lean integrator (Kvaerno3,
+  single-CSTR and BSM2 agreement with diffrax, the guards). NOTE the lean integrator (Kvaerno3,
   3rd order) vs the diffrax default (Kvaerno5, 5th order) — both controlled to
   `rtol`, so equally `rtol`-accurate, K3 just takes more (cheaper) steps; a Kvaerno5
   forward_fast is a future option if a tighter match to the validated steady states
