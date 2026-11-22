@@ -44,8 +44,31 @@ def simple_model_module():
 _KW = dict(free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"})
 
 
+@pytest.fixture(scope="module")
+def reference_fits(noisy):
+    """The two reference fits of the one-output data that do not depend on the
+    optimizer under test: the least-squares fit and the fixed-sigma nll fit at
+    the true noise level. Computed once for both parametrizations."""
+    reactor, C0, obs_b, _ = noisy
+    mse = aquakin.calibrate(
+        reactor, C0, obs_b, T_OBS, observed_species=["B"], loss="mse", laplace=False, **_KW
+    )
+    truth = aquakin.calibrate(
+        reactor,
+        C0,
+        obs_b,
+        T_OBS,
+        observed_species=["B"],
+        loss="nll",
+        sigma=SIGMA_A,
+        laplace=LaplaceConfig(method="gauss_newton"),
+        **_KW,
+    )
+    return mse, truth
+
+
 @pytest.mark.parametrize("method", ["lbfgsb", "gauss_newton"])
-def test_estimated_sigma_and_std_match_known_noise(noisy, method):
+def test_estimated_sigma_and_std_match_known_noise(noisy, reference_fits, method):
     """One output with known noise 0.02: the estimate is the residual RMS at
     the fit, close to 0.02; the optimum is the least-squares one; and the
     Laplace std equals the fixed-sigma nll std at the estimated sigma, which is
@@ -63,9 +86,7 @@ def test_estimated_sigma_and_std_match_known_noise(noisy, method):
         laplace=LaplaceConfig(method="gauss_newton"),
         **_KW,
     )
-    mse = aquakin.calibrate(
-        reactor, C0, obs_b, T_OBS, observed_species=["B"], loss="mse", laplace=False, **_KW
-    )
+    mse, truth = reference_fits
     k_hat = est.params_named["A_to_B.k"]
     assert k_hat == pytest.approx(mse.params_named["A_to_B.k"], rel=1e-5)
     assert k_hat == pytest.approx(TRUE_K, rel=0.02)
@@ -87,17 +108,6 @@ def test_estimated_sigma_and_std_match_known_noise(noisy, method):
         observed_species=["B"],
         loss="nll",
         sigma=float(est.sigma_estimate[0]),
-        laplace=LaplaceConfig(method="gauss_newton"),
-        **_KW,
-    )
-    truth = aquakin.calibrate(
-        reactor,
-        C0,
-        obs_b,
-        T_OBS,
-        observed_species=["B"],
-        loss="nll",
-        sigma=SIGMA_A,
         laplace=LaplaceConfig(method="gauss_newton"),
         **_KW,
     )
