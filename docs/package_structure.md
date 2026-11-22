@@ -353,7 +353,12 @@ aquakin/
 ├── docs/
 │   ├── index.md
 │   ├── model_format.md
-│   └── adding_models.md
+│   ├── adding_models.md
+│   └── project_reference.md         # reference moved out of CLAUDE.md (not built)
+│
+├── .github/
+│   ├── workflows/                   # CI (docs/ci.md)
+│   └── pull_request_template.md     # the PR description's sections
 │
 ├── conftest.py                      # runs the README / user-guide examples as tests (Sybil)
 ├── pyproject.toml

@@ -62,6 +62,7 @@ Claude-facing files** at the end.
 | `docs/package_structure.md` | the annotated package file tree |
 | `docs/plant_performance.md` | the dynamic-solve performance log (the stiffness-bound regime and its levers) |
 | `docs/ci.md` | the CI architecture (sharding, gates, heavy runner, labels, the OOM memory watchdog) |
+| `docs/project_reference.md` | reference moved out of this file: the data flow and rate signature, x64 details, the technology stack, the testing layers, the docstring example, the OpenFOAM coupling plan, key literature |
 
 **Claude-facing notes (`.claude/notes/`, never auto-load — dated investigation logs, read when a
 task needs the detail):**
@@ -113,110 +114,34 @@ Both **chemistry** (ozonation, advanced oxidation, chlorine decay, ...) and
 ---
 
 
-## Technology Stack
-
-| Concern | Choice | Rationale |
-|---|---|---|
-| Language | Python | Flexibility, ecosystem |
-| Numerical backend | JAX | AD for free, jit compilation |
-| ODE integration | Diffrax | JAX-native stiff solvers, adjoint support |
-| Schema validation | Pydantic | Clear load-time errors for malformed YAML |
-| Runtime data model | Python dataclasses | JAX-friendly, no Pydantic overhead at runtime |
-| Model format | YAML | Human-readable, supports inline comments for literature citations |
-| Rate expression evaluation | Custom AST + recursive descent parser | Safe, differentiable, introspectable |
-
----
-
-
 ## Architecture
 
-### Two-Layer Data Model
-
-**Layer 1 — Pydantic schema (load time)**
-Parses and validates YAML model files. Produces clean Python objects with
-clear error messages for malformed input. Pydantic is used only during loading
-— it never appears in the runtime hot path.
-
-**Layer 2 — Compiled runtime (CompiledModel dataclass)**
-JAX-friendly dataclasses built from the validated schema via a `compile_model()`
-step. This is what the integrators and rate functions operate on. No Pydantic
-dependency at runtime.
-
-### Core Data Flow
-
-```
-YAML file
-   ↓  loader.py (Pydantic validation)
-ModelSpec
-   ↓  compile_model()
-CompiledModel  ←→  SpatialConditions
-   ↓
-rates(C, params, condition_arrays, loc_idx)
-   ↓
-Diffrax (BatchReactor / PlugFlowReactor)
-   ↓
-Solution object
-```
-
-### Rate Function Signature
-
-All compiled rate functions share this signature:
-
-```python
-rates(
-    C: jnp.ndarray,                          # (n_species,) concentration vector
-    params: jnp.ndarray,                     # (n_params,) flat parameter vector
-    condition_arrays: dict[str, jnp.ndarray],# (n_locations,) per field
-    loc_idx: int | jnp.ndarray               # spatial location index
-) -> jnp.ndarray                             # (n_reactions,) rate vector
-```
-
-The ODE right-hand side is then:
-
-```python
-dC_dt = stoich_matrix.T @ rates(C, params, condition_arrays, loc_idx)
-```
-
-Rate constants are **always external** to the rate functions (passed via
-`params`), never baked in. This is required for AD-based parameter estimation
-and sensitivity analysis.
-
-### Stoichiometry Matrix
-
-Shape `(n_reactions, n_species)`. Entry `[i, j]` is the stoichiometric
-coefficient of species j in reaction i. Built once at compile time and stored
-in `CompiledModel`.
-
----
-
+YAML → `ModelSpec` (Pydantic, load time only, never in the hot path) →
+`compile_model()` → `CompiledModel` (JAX-friendly dataclasses) → compiled
+`rates(C, params, condition_arrays, loc_idx)` → Diffrax. The ODE right-hand
+side is `stoich_matrix.T @ rates(...)`, with the stoichiometry matrix shaped
+`(n_reactions, n_species)`. Rate constants are **always external** to the rate
+functions (passed via `params`), never baked in, so AD-based estimation and
+sensitivity work. The data flow, the full rate signature and the OpenFOAM
+coupling plan are in `docs/project_reference.md`.
 
 ### JAX x64 Mode
 
-Stiff ODE integration requires 64-bit floats. `aquakin` enables x64 mode
-automatically at import time. This is **global, process-wide** JAX state, so it
-is a documented side effect of `import aquakin` (README install section). To keep
-it from being *silent*, `aquakin/__init__.py` warns (once) when it overrides what
-looks like an explicit float32 preference — JAX already imported when aquakin is
-imported, or `JAX_ENABLE_X64` set to a false value — but stays silent on a plain
-fresh import (the common case). It always enables x64 regardless; the warning is
-only a signal. See `tests/unit/test_x64_import.py` (subprocess-per-scenario, since
-the effect is process-global). Do not remove the x64 enablement.
+`import aquakin` enables JAX x64 mode process-wide, because stiff integration
+needs 64-bit floats; it warns once when it overrides an explicit float32
+preference (details in `docs/project_reference.md`). Do not remove the x64
+enablement.
 
 ---
 
-
 ## Testing Architecture
 
-### Three Layers
-
-**Unit** — test individual components in isolation, fast, run on every change.
-**Integration** — test full YAML → solution pipeline against analytical solutions.
-**Validation** — test scientific correctness against published experimental data,
-marked `@pytest.mark.validation`, run separately.
-
-How to write a test that can actually fail, what each kind of change needs, and
-which tier a test lands in are in **`.claude/rules/tests.md`** (auto-loads under
-`tests/`; read it before adding tests from elsewhere).
+The layers are **unit** (one component, fast), **integration** (YAML →
+solution against analytical solutions) and **validation** (published data,
+`@pytest.mark.validation`). How to write a test that can actually fail, what
+each kind of change needs, and which tier a test lands in are in
+**`.claude/rules/tests.md`** (auto-loads under `tests/`; read it before adding
+tests from elsewhere).
 
 ### Running
 
@@ -251,13 +176,7 @@ the closed form where one exists, otherwise a central finite difference or a
 second AD route. Finite and NaN-free is necessary, not sufficient — a gradient
 that is finite and wrong passes a finiteness check.
 
-### x64 Test
-
-```python
-def test_64bit_precision_enabled():
-    import jax
-    assert jax.config.x64_enabled
-```
+A test asserts `jax.config.x64_enabled` (the x64 test).
 
 ---
 
@@ -289,68 +208,11 @@ they are edited.
 
 ## Docstring Convention
 
-All functions, classes, and methods use **NumPy docstring format**:
-
-```python
-def solve(self, C0, params, t_span, t_eval=None):
-    """
-    Integrate the reaction model over a time span.
-
-    Parameters
-    ----------
-    C0 : jnp.ndarray
-        Initial concentration vector, shape (n_species,).
-    params : jnp.ndarray
-        Rate constant vector, shape (n_params,). Use
-        ``model.default_parameters()`` as a starting point.
-    t_span : tuple of float
-        (t_start, t_end) integration interval in seconds.
-    t_eval : jnp.ndarray, optional
-        Time points at which to record solution. If None, solver
-        chooses output times.
-
-    Returns
-    -------
-    BatchSolution
-        Solution object with attributes ``t`` (n_t,) and ``C``
-        (n_t, n_species).
-
-    Raises
-    ------
-    ValueError
-        If ``C0`` length does not match number of declared species.
-
-    Examples
-    --------
-    >>> reactor = aquakin.BatchReactor(model, conditions)
-    >>> sol = reactor.solve(model.default_concentrations(),
-    ...                     model.default_parameters(),
-    ...                     t_span=(0.0, 600.0))
-    >>> sol.C_named("BrO3-")
-    """
-```
+All functions, classes and methods use the **NumPy docstring format**
+(`Parameters`, `Returns`, `Raises`, `Examples` sections, each parameter with
+its type and shape); a full example is in `docs/project_reference.md`.
 
 ---
-
-
-## OpenFOAM Coupling (Future)
-
-The `transport/openfoam/` submodule is the Python side of the OpenFOAM
-coupling seam. The C++ plugin lives in a separate repository.
-
-**Option A (current target):** Offline coupling — run OpenFOAM for flow/RTD,
-export Lagrangian particle tracks, integrate kinetics along tracks in Python.
-No runtime coupling. Suitable for steady-state reactors.
-
-**Option C (future):** pybind11 shared library — C++ fvOptions plugin loads
-the Python rate evaluator via pybind11. The `bridge.py` interface documents
-the coupling contract that the C++ plugin must satisfy.
-
-The `SpatialConditions` interface is the seam between the two systems. The
-C++ plugin is responsible for populating it from OpenFOAM cell field data.
-
----
-
 
 ## Engineering Standards
 
@@ -395,6 +257,11 @@ codebase something; the examples are real.
 
 ### No shortcuts
 
+- **Reproduce before you fix.** A finding from reading code (a review, an
+  issue, another agent's report, a tool's claim) is a hypothesis: reproduce it
+  with a failing test or a concrete run first. If it does not reproduce, or the
+  behaviour is deliberate, say so and change nothing. The same holds for a
+  claim that something cannot be done ("this line cannot be covered"): try it.
 - **Fix the cause.** Do not special-case the failing input, clamp the symptom,
   or wrap a call in `try` / `except Exception` so the failure disappears. Catch
   the specific exception you expect and let the rest propagate.
@@ -424,8 +291,40 @@ codebase something; the examples are real.
   concern's module under `integrate/calibration/`, not `integrate/calibrate.py`.
 - A function past about 100 lines of body, or with more than about eight
   parameters, gets split or takes a config dataclass before it gets longer.
-- A behaviour-preserving refactor is its own commit (ideally its own PR) and
-  changes no test.
+
+### Behaviour-preserving refactors
+
+A refactor is its own PR (at least its own commits) and changes no test. Show
+it preserved behaviour:
+- **Capture a baseline before the first move** and compare after each commit:
+  bit-identical RHS, Jacobian, a short solve and a steady state for plant or
+  integrator code; the importable-names list (pinned by a test) for a module
+  split.
+- **Moves are mechanical commits with no logic edits**; clean-ups follow in
+  separate commits, so each move reviews as a move.
+- **A test that reaches a private name the move relocates is reported in the
+  PR, not rewritten** to follow it.
+- Codecov counts moved lines as new: state the pre-existing gaps once in the PR
+  rather than writing tests to chase the number.
+
+## Decisions that are the owner's
+
+Stop and ask, with the options and a recommendation, before:
+- changing branch protection or which CI checks are required;
+- removing or renaming public API, removing a deprecated argument, or changing
+  what a public function skips, warns about or raises;
+- changing a numerical default or a tolerance, or anything that makes a shipped
+  model or benchmark give different numbers;
+- a default that departs from a published benchmark;
+- deleting or overwriting a user's saved files or results;
+- an exception to a convention in this file;
+- adding a runtime dependency;
+- closing an issue as completed or not planned; merging a PR;
+- choosing between workable options when the choice is costly to undo later:
+  a file format or stored layout users will save data in, a public interface,
+  or a structure other code will be built on.
+
+Everything else you decide, state in the PR, and leave reversible in review.
 
 ---
 
@@ -455,6 +354,20 @@ Before pushing, run locally everything CI would tell you: ruff, pyright (for
 (`scripts/patch_coverage.py`, checklist item 2). Collect follow-up fixes into
 one push; do not push to see what CI says, and do not push again only to change
 an informational status.
+
+**Pushing and merging.**
+- When other sessions are working in the repository, look at the open PRs
+  before starting and stay out of files another PR is rewriting.
+- Check the PR's state before pushing to its branch: a commit pushed while it
+  is being merged is lost. After a merge, new work starts a new branch from
+  `main`.
+- Describe the PR with `.github/pull_request_template.md`. Write "Closes #N"
+  only when the issue is finished; otherwise "Part of #N", listing what remains.
+- Never re-run CI to get past an intermittent failure: it is a bug
+  (`.claude/rules/tests.md`).
+- A dependency added to `pyproject.toml` (any extra) is pinned in
+  `constraints.txt` in the same change, since CI and other sessions install
+  with it.
 
 > The full CI architecture — pytest-split sharding, the fast PR gate vs the
 > merge-to-main `slow`/`validation`/`heavy` suites, the memory/heavy-runner
@@ -591,14 +504,3 @@ verbatim, so most of their text still predates these guidelines: it is accurate
 but reads as a narrative log. Condense a section to its invariants when you next
 change the code it covers, moving any measurement worth keeping to
 `.claude/notes/`.
-
----
-
-## Key Literature
-
-- Acero, J.L. & von Gunten, U. (2001). Characterization of oxidation processes:
-  ozonation and the AOP O₃/H₂O₂. *J. AWWA*, 93(10), 90–100.
-- von Gunten, U. & Hoigné, J. (1994). Bromate formation during ozonation of
-  bromide-containing waters. *Environ. Sci. Technol.*, 28(7), 1234–1242.
-- Kidger, P. (2021). On neural differential equations. *PhD Thesis, University
-  of Oxford*. (Diffrax reference)
