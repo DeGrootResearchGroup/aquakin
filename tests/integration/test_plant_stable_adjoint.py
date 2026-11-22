@@ -166,6 +166,30 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
     assert g_stable == pytest.approx(fd, rel=1e-3)
 
 
+def test_stable_adjoint_endpoint_gradient_matches_closed_form(make_cstr_plant):
+    """With ``t_eval=None`` the stable adjoint returns only the endpoint, and its
+    gradient there matches the analytic transient of the single-CSTR plant:
+    A(t) = A* + (A0 - A*) exp(-lam t), lam = Q/V + k, A* = (Q/V)/lam, so
+    dA/dk = dA*/dk (1 - exp(-lam t)) - (A0 - A*) t exp(-lam t)."""
+    plant = make_cstr_plant()
+    params = plant.default_parameters()
+    k, t_end = float(params[0]), 5.0
+    a0 = float(plant.initial_state()[0])
+
+    def final_a(p):
+        sol = plant.solve(t_span=(0.0, t_end), params=p, rtol=1e-10, atol=1e-12)
+        assert sol.state.shape == (1, 2)
+        return sol.state[-1, 0]
+
+    lam = 0.1 + k
+    a_star = 0.1 / lam
+    decay = np.exp(-lam * t_end)
+    assert float(final_a(params)) == pytest.approx(a_star + (a0 - a_star) * decay, rel=1e-8)
+    expected = (-0.1 / lam**2) * (1.0 - decay) - (a0 - a_star) * t_end * decay
+    # Under jax.grad the default diff routes to the stable adjoint.
+    assert float(jax.grad(final_a)(params)[0]) == pytest.approx(expected, rel=1e-7)
+
+
 def test_stable_adjoint_colored_checks_the_solve_start_state(monkeypatch):
     """The colored backward's coverage check runs at the solve's own concrete
     start state, which the plant hands to the builder, as well as at the
