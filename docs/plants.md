@@ -294,8 +294,10 @@ print("effluent SNH:", round(float(plant.stream(sol, "aerobic.out").C_named("SNH
 With no clarifier to hold the sludge, the biomass washes out of these two
 tanks, so there is no nitrification and the effluent ammonia ends up above the
 feed's (organic nitrogen is still released). The benchmark builders show a
-full activated-sludge line. Add every unit before the first solve of a plant;
-to try a variant, build a new plant, as the sections below do.
+full activated-sludge line. A plant can still be extended after it has been
+solved: units, connections and influents added later are used by the next
+solve and by `plant.stream`. A solution from before the change keeps the old
+layout, so solve again before reading streams from the extended plant.
 
 ### The plant's time unit
 

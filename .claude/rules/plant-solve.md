@@ -52,14 +52,17 @@ continuation / arclength kernels (all solver-run memoization, keyed by
 settings, that bake in the reactor conditions) live in a
 [`SolveCache`](aquakin/plant/solve_cache.py) value object (`plant._solve_cache`,
 `.jit` / `.steady_jit` / `.continuation_kernels` / `.arclength_kernels`; the
-`plant._jit_cache` / `_steady_jit_cache` properties are thin views). Every
-condition/topology mutator calls the single **`plant._solve_cache.invalidate()`**
-rather than hand-clearing named dicts — so a mutator can't clear one cache and
-leave another stale (`set_temperature` clears all four; the old code left the
-continuation/arclength kernels stale). `set_temperature_model` also changes the
-state length, so it additionally calls `plant._colored.reset()` (the structural
-colored builders), which `set_temperature` deliberately does not (its pattern
-stays valid).
+`plant._jit_cache` / `_steady_jit_cache` properties are thin views). A
+condition mutator calls the single **`plant._solve_cache.invalidate()`**, never
+hand-clears named dicts (`set_temperature`); `set_temperature_model` changes the
+state length, so it also calls `plant._colored.reset()`.
+**Structure changes go through `plant._structure_changed()`**
+(`solve_cache.structure_changed`): `add_unit`, `connect` and `add_influent`
+call it; it clears the `SolveCache`, the colored builders,
+`RecycleResolver.reset()`, the parameter slices, the one-time recycle
+diagnostics and the controller-materialization guards (`_materialize_*` skip
+controllers already in `_derived_units`). A new mutator calls it; a new
+structure-derived memo is cleared in it, so an edited plant solves as if built so.
 **Arclength continuation must not jump branches** (`integrate/steady.py`,
 `arclength_continuation_solve`). A converged corrector step farther than
 `max_correction * dsigma` from its predictor is rejected and retried shorter:
