@@ -320,7 +320,6 @@ aquakin/
 │   │   ├── test_batch_simple.py     # validates against analytical solution
 │   │   └── test_pfr_simple.py
 │   ├── validation/
-│   │   ├── test_bromate_vongunten.py# validates against published data
 │   │   ├── test_adm1_bsm2_steadystate.py # ADM1 vs published BSM2 AD steady state
 │   │   └── test_takacs_vs_bsm1_reference.py # Takács settler vs published BSM1 settler derivative
 │   └── fixtures/
