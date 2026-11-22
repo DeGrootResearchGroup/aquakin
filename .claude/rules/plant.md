@@ -18,7 +18,7 @@ it on demand when a change elsewhere touches the topic):
 
 | Rule | Loads for | Covers |
 |---|---|---|
-| `plant-solve.md` | `plant.py`, `recycle.py`, `colored.py`, `solve_cache.py`, `steady.py` | the coloured Jacobian, the parameter-slice and compiled-solve caches, recycle resolution and the cached recycle / flow maps |
+| `plant-solve.md` | `plant.py`, `dynamic_solve.py`, `steady_solve.py`, `recycle.py`, `colored.py`, `solve_cache.py`, `steady.py` | the coloured Jacobian, the parameter-slice and compiled-solve caches, recycle resolution and the cached recycle / flow maps |
 | `plant-analysis.md` | `calibrate.py`, `identifiability.py`, `measures.py`, `sensitivity.py` | `Plant.calibrate`, Fisher / profile / sensor ranking, measured channels and measure expressions |
 | `plant-audits.md` | `units_check.py`, `balance.py`, `metrics.py` | `plant.check_units()` and `plant.mass_balance()` |
 | `plant-ifas.md` | `ifas.py`, `integrate/biofilm*.py` | the IFAS / MBBR biofilm unit |
@@ -88,6 +88,17 @@ Key types:
   [`plant/sensitivity.py`](aquakin/plant/sensitivity.py) as free functions taking
   the plant, bound onto `Plant` as methods (the public `plant.steady_state_dgsm(...)`
   API is unchanged); that layer only *consumes* the public solve API.
+  **`Plant` is split the same way**: the dynamic solve (`solve`, its four
+  paths, the jit builders) is in `plant/dynamic_solve.py` and the steady state
+  (`steady_state`, its fallback ladder, `run_to_steady_state`) in
+  `plant/steady_solve.py`, bound onto the class as methods. New solve or
+  steady-state code goes in those modules (or a new one bound the same way), not
+  back into `plant.py`. Their first argument stays named `self`:
+  `inspect.signature(Plant.solve)` is a pinned public contract
+  (`test_api_signatures.py`) and lists it. The modules import nothing from
+  `plant.py` (it imports them), so a helper both need lives in the lower module
+  and `plant.py` imports it from there; a name that is an import path of
+  `aquakin.plant.plant` stays re-exported from it.
   Calibration, identifiability and measured channels are in
   `.claude/rules/plant-analysis.md`; the coloured Jacobian, the caches and recycle
   resolution in `.claude/rules/plant-solve.md`; the unit audit and the mass

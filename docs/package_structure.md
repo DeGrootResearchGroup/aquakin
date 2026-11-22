@@ -137,6 +137,23 @@ aquakin/
 │   │   └── profile.py               # profile_likelihood(): parameter / initial-condition
 │   │                                #   profile-likelihood identifiability analysis
 │   │
+│   ├── plant/                       # plant flowsheets (units, builders: .claude/rules/plant.md)
+│   │   ├── plant.py                 # Plant: construction, wiring, layouts, RHS assembly,
+│   │   │                            #   stream reconstruction; binds the modules below
+│   │   │                            #   as methods (free functions taking the plant)
+│   │   ├── dynamic_solve.py         # Plant.solve: the router, its four paths
+│   │   │                            #   (jax_adjoint / forward_fast / stable_adjoint /
+│   │   │                            #   events) and the jit builders
+│   │   ├── steady_solve.py          # Plant.steady_state (PTC + fallback ladder),
+│   │   │                            #   Plant.run_to_steady_state
+│   │   ├── sensitivity.py           # Plant steady / dynamic sensitivity + DGSM
+│   │   ├── calibrate.py             # Plant.calibrate
+│   │   ├── spec.py                  # Plant.from_spec / to_spec: the flowsheet spec
+│   │   ├── recycle.py               # RecycleResolver: recycle flows / concentrations
+│   │   ├── colored.py               # ColoredJacobianManager: sparse plant Jacobians
+│   │   ├── solve_cache.py           # SolveCache: the compiled-solve caches
+│   │   └── steady.py                # re-exports integrate/steady.py's PTC kernels
+│   │
 │   ├── transport/
 │   │   └── openfoam/
 │   │       ├── bridge.py            # SpatialConditions <-> OpenFOAM interface
