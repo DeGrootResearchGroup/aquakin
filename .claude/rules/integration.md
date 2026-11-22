@@ -16,7 +16,7 @@ it on demand when a change elsewhere touches the topic):
 | Rule | Loads for | Covers |
 |---|---|---|
 | `integration-calibrate.md` | `calibrate.py`, the `calibration/` subpackage, `seam.py`, `_linalg.py`, `fit.py`, `fisher.py`, `profile.py`, `identifiability.py`, the experiment-design modules, and the plant calibration / identifiability modules that reuse them | `calibrate()`'s internal structure and the helpers `Plant.calibrate` shares |
-| `integration-differentiation.md` | `_common.py`, `discrete_adjoint.py`, `forward_sensitivity.py`, `forward_solve.py`, `_simultaneous_corrector.py`, `sensitivity.py`, `colored_jacobian.py`, and `plant/sensitivity.py` / `plant/dynamic_solve.py` / `plant/colored.py` | differentiating stiff models: `dtmax`, the adjoints, the discrete adjoint, forward sensitivities |
+| `integration-differentiation.md` | `_common.py` / `_config.py` / `_solver.py`, `discrete_adjoint.py`, `forward_sensitivity.py`, `forward_solve.py`, `_simultaneous_corrector.py`, `sensitivity.py`, `colored_jacobian.py`, and `plant/sensitivity.py` / `plant/dynamic_solve.py` / `plant/colored.py` | differentiating stiff models: `dtmax`, the adjoints, the discrete adjoint, forward sensitivities |
 
 ## Layering
 
@@ -24,8 +24,11 @@ it on demand when a change elsewhere touches the topic):
 body (`tests/unit/test_layering.py` checks every import). Solvers generic in
 the right-hand side that the plant also uses live here: the PTC steady-state
 kernel and the continuation drivers are in `integrate/steady.py`, which
-`plant/steady.py` re-exports. Within `integrate`, `_common.py` imports no other
-`integrate` module; the sensitivity preamble (`prepare_sensitivity`,
+`plant/steady.py` re-exports. Within `integrate`, the shared internals
+`_config.py`, `_solution.py`, `_cache.py` and `_solver.py` import no other
+`integrate` module, and `_common.py` only re-exports them (its `__all__` is
+pinned by `tests/unit/test_common_exports.py`; do not grow it, and put new
+shared code in the module for its concern); the sensitivity preamble (`prepare_sensitivity`,
 `resolve_sens_indices`) lives in `forward_sensitivity.py`.
 
 ## ODE Integration Strategy
@@ -56,7 +59,7 @@ the remedy. **For a user who rolls their own loss + optimizer through
 `reactor.solve` (outside `calibrate`/`sensitivity`),** the same silent-non-finite
 reverse-gradient footgun is exposed and nothing raises. Every reactor therefore
 carries `check_gradient_finite(grad_value, what=...)` (the `GradientCheckMixin` in
-`integrate/_common.py`): wrap a freshly computed `jax.grad` in it
+`integrate/_config.py`): wrap a freshly computed `jax.grad` in it
 (`g = reactor.check_gradient_finite(jax.grad(loss)(p))`) to convert a silent
 `NaN`/`Inf` into an actionable error whose remedy is tailored to whether the
 reactor already caps `dtmax`. The underlying free checker `check_finite_gradient`
@@ -172,7 +175,7 @@ compiled solve to avoid it:
   the cache. The stable identity is what lets the solver caches key on the
   model across calls.
 - **Reactor solves** are cached **across instances** in a module-level cache
-  (`integrate/_common.py`) keyed by `(model identity, solver settings, call
+  (`integrate/_cache.py`) keyed by `(model identity, solver settings, call
   signature)`. Two *fresh* reactors for the same model + settings + signature
   reuse one compiled solve — so building many short-lived reactors (ensembles,
   library code that constructs reactors internally) no longer recompiles each

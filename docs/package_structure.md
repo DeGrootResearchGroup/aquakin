@@ -38,7 +38,7 @@ aquakin/
 │   │   │                            #   complementarity; IFT-differentiable; -> Xeq_/projection)
 │   │   ├── tolerance.py             # default_atol: the per-component solver noise floor
 │   │   │                            #   (CompiledModel.atol and every integrator; re-exported
-│   │   │                            #   from integrate/_common.py)
+│   │   │                            #   from integrate/_solver.py and _common.py)
 │   │   └── units.py                 # prettify_units: plain-ASCII unit exponents -> Unicode superscripts
 │   │
 │   ├── schema/
@@ -47,17 +47,25 @@ aquakin/
 │   │   └── loader.py                # YAML -> (resolve extends) -> Pydantic -> CompiledModel
 │   │
 │   ├── integrate/
-│   │   ├── _common.py               # shared helpers: atol coercion, _run_diffeqsolve,
+│   │   ├── _common.py               # re-exports (via __all__) every name of the four
+│   │   │                            #   modules below; existing imports go through it
+│   │   ├── _config.py               # IntegratorConfig, DifferentiationConfig, forward_adjoint /
+│   │   │                            #   with_adjoint, check_finite_gradient + GradientCheckMixin;
+│   │   │                            #   Reactor & ConditionedReactor Protocols (the latter adds
+│   │   │                            #   `conditions`; sensitivity requires it. CFDReactor has
+│   │   │                            #   step() not solve() -> not a Reactor)
+│   │   ├── _solution.py             # _HasNamedSpecies (C_named/units_named), Plottable /
+│   │   │                            #   ExportableSolutionMixin (to_dataframe/to_csv),
+│   │   │                            #   build_dataframe, require_pandas / require_matplotlib
+│   │   ├── _cache.py                # the cross-instance compiled-solver cache
+│   │   │                            #   (cached_jitted_solver) and its settings keys
+│   │   ├── _solver.py               # build_implicit_solver / build_step_controller (the one
+│   │   │                            #   place a diffrax solver is built), _run_diffeqsolve,
 │   │   │                            #   solve_chemistry (the one stoich-hoist + RHS + solve
-│   │   │                            #   factory the Batch/PFR/Particle/CFD reactors all call,
-│   │   │                            #   parameterised by cond_fn / rate_scale / saveat),
-│   │   │                            #   validate_t_eval; init_solver_settings /
-│   │   │                            #   resolve_state_atol / validate_C0_params (shared reactor
-│   │   │                            #   construction + validation); Reactor & ConditionedReactor
-│   │   │                            #   Protocols (the latter adds `conditions`; sensitivity
-│   │   │                            #   requires it. CFDReactor has step() not solve() -> not a
-│   │   │                            #   Reactor); _HasNamedSpecies mixin (C_named/units_named/
-│   │   │                            #   to_dataframe/to_csv) + build_dataframe/require_pandas
+│   │   │                            #   factory the Batch/PFR/Particle/CFD reactors all call),
+│   │   │                            #   validate_t_eval, atol coercion / resolution,
+│   │   │                            #   init_solver_settings / validate_C0_params, time units,
+│   │   │                            #   friendly_solve_errors
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
 │   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)
 │   │   ├── steady.py                # pseudo-transient continuation steady solver +

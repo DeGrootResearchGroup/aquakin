@@ -72,7 +72,7 @@ solver + step controller independently, so the forward path's accumulated per-st
 optimizations (the decoupled-Newton root finder, the colored Jacobian, the
 `Kvaerno3`/`factormax` knobs) silently failed to reach the adjoint's forward pass —
 it kept paying dense, full-Newton, 7-stage costs. Both now build from one pair of
-helpers in [`integrate/_common.py`](aquakin/integrate/_common.py):
+helpers in [`integrate/_solver.py`](aquakin/integrate/_solver.py):
 `build_implicit_solver(rtol, atol, order=, solver=, colored_root_finder=, linear_solver=, force_root_finder=)`
 (the decoupled-Newton `Kvaerno` of the requested `order` — `5` default, `3` for the
 lean / forward-sensitivity paths — built from the `_CANONICAL_SOLVERS` table, with
@@ -118,7 +118,7 @@ hand-rolled and must track diffrax's by hand. **A drift guard
 ([`tests/unit/test_solver_config_single_source.py`](tests/unit/test_solver_config_single_source.py))
 AST-scans the package for any direct `Kvaerno*` / `PIDController` / `VeryChord` /
 `with_stepsize_controller_tols` *call* outside an explicit allowlist (just
-`_common.py`) and fails on a new one**, so a future solve path cannot silently
+`_solver.py`) and fails on a new one**, so a future solve path cannot silently
 re-introduce the drift — it must route through the helpers or add an audited
 allowlist entry (Python has no real access control, so this static AST lint is the
 enforcement, backed by the runtime trajectory-agreement guard above). The

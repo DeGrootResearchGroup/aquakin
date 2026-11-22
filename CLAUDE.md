@@ -41,7 +41,7 @@ Claude-facing files** at the end.
 | `.claude/rules/core-precipitation.md` | `core/precipitation*.py` | mineral precipitation: rate law, the `precipitation:` block, the algebraic equilibrium mode |
 | `.claude/rules/integration.md` | `aquakin/integrate/**` | solver choice, operator splitting, located events, compiled-solve caching |
 | `.claude/rules/integration-calibrate.md` | `calibrate.py`, the `integrate/calibration/` subpackage, `integrate/seam.py`, the Fisher / profile / experiment-design modules, `plant/calibrate.py`, `plant/identifiability.py` | `calibrate()`'s internal structure and the helpers `Plant.calibrate` shares |
-| `.claude/rules/integration-differentiation.md` | `integrate/_common.py`, the adjoint / forward-sensitivity modules, `plant/sensitivity.py`, `plant/dynamic_solve.py`, `plant/colored.py` | differentiating stiff models (`dtmax`, adjoints, discrete adjoint, forward sensitivities) |
+| `.claude/rules/integration-differentiation.md` | `integrate/_common.py` / `_config.py` / `_solver.py`, the adjoint / forward-sensitivity modules, `plant/sensitivity.py`, `plant/dynamic_solve.py`, `plant/colored.py` | differentiating stiff models (`dtmax`, adjoints, discrete adjoint, forward sensitivities) |
 | `.claude/rules/schema.md` | `aquakin/schema/**`, model `*.yaml` (shipped, fixtures, examples) | YAML model format + Pydantic schema rules (stoichiometry expressions, `extends:`, `auto`, `composition:`, `speciation:`, `precipitation:`) |
 | `.claude/rules/plant.md` | `aquakin/plant/**` | plant-wide simulation: the `Unit` contract, wiring, the plant clock, introspection, shipped units, shared helpers and constants |
 | `.claude/rules/plant-solve.md` | `plant/plant.py`, `dynamic_solve.py`, `steady_solve.py`, `recycle.py`, `colored.py`, `solve_cache.py`, `steady.py`, `integrate/steady.py` | coloured Jacobian, solve caches, recycle resolution and the cached recycle / flow maps |
@@ -361,8 +361,9 @@ codebase something; the examples are real.
 
 - **Search before you write.** Before adding a helper, a validation, a parser,
   a fixture or a constant, `grep` for it. The shared places are
-  `integrate/_common.py` (solver / controller builders, atol, validation, the
-  solution mixins), `integrate/_transforms.py`, `plant/_constants.py`,
+  `integrate/_solver.py` (solver / controller builders, atol, validation),
+  `integrate/_config.py`, `_solution.py` (the solution mixins) and `_cache.py`
+  (all re-exported by `integrate/_common.py`), `integrate/_transforms.py`, `plant/_constants.py`,
   `plant/_builder_support.py`, `plant/units.py` (the `Unit` contract and
   capability Protocols), `core/lexer.py` and `core/precedence.py` (the one
   tokenizer and precedence table for every expression language),
@@ -416,7 +417,7 @@ codebase something; the examples are real.
 ### Keep modules and functions small enough to read
 
 - Do not grow the large modules (`plant/plant.py`, `aquakin_ui/app.py`,
-  `integrate/_common.py`, `core/model.py`). New behaviour goes in its own
+  `core/model.py`). New behaviour goes in its own
   module as free functions taking the object (the pattern `plant/sensitivity.py`,
   `plant/calibrate.py` and `plant/spec.py` already use, bound onto `Plant` as
   methods), not as more methods on the class. New calibration code goes in its

@@ -155,7 +155,7 @@ def _apply_activity_override(spec: ModelSpec, activity_model: str) -> ModelSpec:
 # the compiled object by name therefore (a) skips re-parsing + re-compiling the
 # YAML on every call, and (b) -- the bigger win -- returns the *same* object each
 # time, so a stable ``id(model)`` lets the cross-instance compiled-solver cache
-# (see ``integrate/_common.py``) share compiled solves across every reactor and
+# (see ``integrate/_cache.py``) share compiled solves across every reactor and
 # test that loads the same model. Call ``clear_model_cache()`` to reset.
 _MODEL_CACHE: dict[str, CompiledModel] = {}
 
