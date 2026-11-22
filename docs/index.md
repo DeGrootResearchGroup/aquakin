@@ -7,7 +7,7 @@ functions that JAX can differentiate, integrated by
 
 It ships a library of ready-to-use models — ozonation and UV/H₂O₂ chemistry,
 the ASM activated-sludge family, ADM1 anaerobic digestion, WATS sewer processes,
-and mineral precipitation (see the [Model catalog](model_catalog.md)) — and the
+and mineral precipitation (see the [Model catalogue](model_catalog.md)) — and the
 tools to work with them:
 
 - **Reactors** — batch, plug-flow, particle-track and biofilm reactors, with

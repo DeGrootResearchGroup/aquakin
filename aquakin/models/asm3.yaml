@@ -2,9 +2,12 @@ model:
   name: asm3
   version: "1.0"
   description: >
-    Imported from ASM3.xlsm
+    Activated Sludge Model No. 3 (ASM3): heterotrophs first store readily
+    biodegradable substrate as internal storage products and grow on them,
+    and decay is described as endogenous respiration rather than death-
+    regeneration. 13 state variables, 12 processes.
   references:
-    - ""
+    - "Gujer, Henze, Mino & van Loosdrecht (1999). Activated Sludge Model No. 3. Water Sci. Technol. 39(1), 183-193. doi:10.1016/S0273-1223(98)00785-9"
 
 species:
   - {name: SO2, default_concentration: 1.0, units: "g_O2/m3", description: "Dissolved oxygen (O2)"}

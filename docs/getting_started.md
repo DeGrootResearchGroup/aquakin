@@ -46,7 +46,7 @@ example — bromate formation during ozonation:
 import aquakin
 import jax.numpy as jnp
 
-# 1. Load a shipped model (the Model catalog lists them all).
+# 1. Load a shipped model (the Model catalogue lists them all).
 model = aquakin.load_model("ozone_bromate")
 
 # 2. Operating conditions. Start from the model's declared defaults — they
@@ -202,7 +202,7 @@ not one of the model's species.
   such as the BSM1 and BSM2 benchmarks.
 - [Sensitivity & calibration](sensitivity_and_calibration.md) — differentiate a
   solve, run sensitivity analysis, and fit parameters to data.
-- [Model catalog](model_catalog.md) — every shipped model.
+- [Model catalogue](model_catalog.md) — every shipped model.
 - [Model file format](model_format.md) — write your own model in YAML,
   including the built-in math functions (`exp`, `log`, `sqrt`, `min`, ...) and
   rate functions of your own registered with `aquakin.register_rate_function`.

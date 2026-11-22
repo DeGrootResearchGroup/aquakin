@@ -2,9 +2,13 @@ model:
   name: asm3_biop
   version: "1.0"
   description: >
-    Imported from ASM3_BioP.xlsm
+    ASM3 extended with the EAWAG Bio-P module: phosphorus-accumulating
+    organisms (PAOs) store PHA, take up and release polyphosphate, and grow
+    aerobically and anoxically, alongside ASM3's heterotrophs and nitrifiers.
+    17 state variables, 23 processes.
   references:
-    - ""
+    - "Gujer, Henze, Mino & van Loosdrecht (1999). Activated Sludge Model No. 3. Water Sci. Technol. 39(1), 183-193. doi:10.1016/S0273-1223(98)00785-9"
+    - "Rieger, Koch, Kuehni, Gujer & Siegrist (2001). The EAWAG Bio-P module for activated sludge model No. 3. Water Res. 35(16), 3887-3903. doi:10.1016/S0043-1354(01)00110-5"
 
 species:
   - {name: SO, default_concentration: 1.0, units: "g_O2/m3", description: "Dissolved oxygen (O2)"}
