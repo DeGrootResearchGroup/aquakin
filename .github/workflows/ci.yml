@@ -206,7 +206,9 @@ jobs:
       fail-fast: false
       matrix:
         # The supported range starts at 3.11 (requires-python >= 3.11): the pinned
-        # jax/jaxlib 0.10 and diffrax 0.7 stack requires it.
+        # jax/jaxlib 0.10 and diffrax 0.7 stack requires it. `unit` and `ui` run
+        # on both 3.11 and 3.12 and are what guards the version floor; the
+        # expensive `integration` and `slow` jobs run on 3.12 only.
         python-version: ["3.11", "3.12"]
         group: [1, 2]
     steps:
@@ -278,7 +280,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        # 3.12 only: integration is the expensive fast job; the version floor is
+        # guarded by the 3.11 `unit` and `ui` jobs (see `unit`).
+        python-version: ["3.12"]
         group: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
@@ -661,7 +665,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        # 3.12 only, like `integration`: the slow suite is expensive, and the
+        # version floor is guarded by the 3.11 `unit` and `ui` jobs.
+        python-version: ["3.12"]
         group: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v4
@@ -1010,10 +1016,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           # 3.12 only: the validation suite is the heaviest in the repo, so it is
-          # run on a single interpreter as a deliberate cost-saving. The fast gate
-          # already exercises 3.11 + 3.12, so a 3.11-specific *validation* (not
-          # fast-path) regression is the accepted, narrow blind spot; widen the
-          # matrix here if that ever proves to bite.
+          # run on a single interpreter as a deliberate cost-saving, like
+          # `integration` and `slow`. The `unit` and `ui` jobs exercise 3.11 +
+          # 3.12, so a 3.11-specific *validation* (not unit-path) regression is
+          # the accepted, narrow blind spot; widen the matrix here if that ever
+          # proves to bite.
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
