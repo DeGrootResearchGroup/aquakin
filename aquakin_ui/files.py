@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from aquakin_ui.app import Editor
 
 
-def open(self: Editor, path=None, *, quiet: bool = False) -> None:
+def open_spec(self: Editor, path=None, *, quiet: bool = False) -> None:
     """Read a spec with aquakin's reader (YAML 1.2) and show it."""
     path = Path(path or self.state.spec_path).resolve()
 

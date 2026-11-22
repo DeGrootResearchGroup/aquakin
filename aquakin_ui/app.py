@@ -524,7 +524,7 @@ class Editor:
 
     # -- the flowsheet's file (files.py) -----------------------------------
 
-    open = files.open
+    open = files.open_spec
     _snapshot = files._snapshot
     _unsaved = files._unsaved
     _spec_file = files._spec_file
