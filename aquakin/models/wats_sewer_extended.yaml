@@ -17,11 +17,12 @@ model:
     nitrification + decay, methanogenesis (acetoclastic + hydrogenotrophic),
     sulfate reduction (VFA/H2 x bulk/biofilm), elemental-S reduction, and
     sulfide / elemental-S oxidation (pH-dependent aerobic bulk chemical &
-    biological, aerobic & nitrate-driven biofilm). Some pathways are zero at
-    the literature default rate constants but are retained for completeness.
+    biological, aerobic & nitrate-driven biofilm), and iron sulfide (FeS)
+    precipitation of dissolved sulfide by ferrous iron. Some pathways are zero
+    at the literature default rate constants but are retained for completeness.
 
-    Deviation from the original published sewer model: anoxic (denitrifying)
-    heterotrophic growth uses the proper lower WATS anoxic yield
+    Unlike the published model of Khalil et al. (2025), anoxic (denitrifying)
+    heterotrophic growth uses the lower WATS anoxic yield
     Y_H,NO3 = 0.30-0.40 (parameter `y_h_anox`, default 0.35) instead of reusing
     the aerobic yield 0.55. Y_H is a stoichiometric COD/electron-balance
     coefficient, so it is fixed from the literature, not calibrated.
@@ -30,8 +31,8 @@ model:
     consumption as a species approaches zero. Half-order (sqrt-type) oxidation
     kinetics use an AD-safe form `x*(x+eps)^(p-1)` (eps=1e-3) so the
     implicit-solver Jacobian stays well-conditioned at zero oxygen; this is
-    exact for x >> eps and zero-valued at x=0. Quantitative validation against
-    the published model is still outstanding.
+    exact for x >> eps and zero-valued at x=0. The model has not been
+    quantitatively validated against published data.
   references:
     - "Khalil et al. (2025). Optimizing nitrate dosing strategies for sulfide control. Water Environ. Res."
     - "Hvitved-Jacobsen, Vollertsen & Nielsen (2013). Sewer Processes (WATS), 2nd ed. (hydrolysis, growth, saturation constants, temperature coefficients)."
