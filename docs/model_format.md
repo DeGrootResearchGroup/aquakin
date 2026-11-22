@@ -1,72 +1,168 @@
 # YAML model format
 
-A model file declares species, conditions, and reactions. The top-level
-keys are:
+A model file is a YAML document that declares the species, the conditions they
+react under, the parameters, and the reactions. aquakin validates it when it is
+loaded and compiles it into a differentiable rate function, so nothing has to be
+rebuilt to change a model. This page is the reference for the format; for a
+step-by-step introduction, see [Your first model](adding_models.md).
+
+## A complete minimal model
+
+First-order decay of a species `A` into `B`:
 
 ```yaml
-model:                # metadata
+model:
+  name: first_order_decay
+  version: "1.0"
+  description: "A decays to B at a first-order rate."
+  references:
+    - "Textbook first-order kinetics."
+
+species:
+  - name: A
+    units: mol/L
+    default_concentration: 1.0e-3
+  - name: B
+    units: mol/L
+
+parameters:
+  k: {value: 0.01, units: 1/s, bounds: [1.0e-4, 1.0], transform: positive_log}
+
+reactions:
+  - name: decay
+    reference: "Textbook first-order kinetics."
+    rate: "k * [A]"
+    stoichiometry: {A: -1, B: 1}
+```
+
+Load it from its file and inspect what aquakin read:
+
+```python
+import aquakin
+
+model = aquakin.load_model_from_file("first_order_decay.yaml")
+print(model.summary())    # species, reactions, parameters, and the time unit
+```
+
+`aquakin.load_model("<name>")` loads a model shipped with aquakin by name; see
+the [Model catalogue](model_catalog.md).
+
+## Top-level keys
+
+Every key other than `model:`, `species:` and `reactions:` is optional.
+
+```yaml
+model:                    # metadata
   name: <str>
-  version: "<str>"
+  version: "<str>"                # default "1.0"
   description: <str>
-  references: [<str>, ...]
+  references: [<str>, ...]        # literature citations
+  extends: <model>                # optional: inherit a base model (see below)
 
-species:                # list of species
+species:                  # list of species
   - name: <str>
-    description: <str>          # optional
-    units: <str>                # default "mol/L"
+    description: <str>
+    units: <str>                  # default "mol/L"
     default_concentration: <float>  # default 0.0
+    composition: {<quantity>: <float>, ...}  # e.g. {COD: 1.0, N: 0.086}
 
-conditions:             # optional list of condition fields
+conditions:               # list of condition fields (pH, T, light, ...)
   - name: <str>
-    description: <str>          # optional
-    default: <float>
+    description: <str>
+    units: <str>                  # default "" (read by check_units only)
+    default: <float>              # default 0.0
 
-parameters:             # optional: model-level (shared) parameters
+parameters:               # model-level (shared) parameters
   <name>:
     value: <float>
-    units: <str>                # optional
-    bounds: [<low>, <high>]     # optional
-    transform: <str>            # optional: "none" | "positive_log" | "logit"
-    temperature:                # optional: rate constant * theta**(T - ref_T)
-      theta: <float or name>    # per-degree factor, or a parameter's name
-      ref_T: <float>            # temperature at which `value` applies
-      condition: <str>          # optional: temperature condition (default "T")
+    units: <str>                  # also sets the model's time unit (see below)
+    bounds: [<low>, <high>]
+    transform: <str>              # "none" (default) | "positive_log" | "logit"
+    prior: {mean: <float>, std: <float>}   # or {range: [<low>, <high>]}
+    temperature:                  # rate constant * theta**(T - ref_T)
+      theta: <float or name>      # per-degree factor, or a parameter's name
+      ref_T: <float>              # temperature at which `value` applies
+      condition: <str>            # temperature condition (default "T")
 
-expressions:            # optional: named intermediate rate expressions
+expressions:              # named intermediate rate expressions
   <name>: "<formula>"
-  # formulas may reference species, conditions, parameters, and *other*
-  # expressions. Cycles are rejected at load time.
 
-reactions:              # list of reactions
+conserved_for: [<quantity>, ...]  # default quantities to solve `auto` from
+
+reactions:                # list of reactions
   - name: <str>
-    description: <str>          # optional
-    reference: <str>            # optional but encouraged
-    rate: "<expression>"        # may be inline OR a reference to an
-                                # entry in `expressions:`
-    units_acknowledged: <str>   # optional: why the rate's units are
-                                # knowingly unconventional (see below)
-    parameters:                 # optional reaction-local parameters
-      <local_name>:
-        value: <float>
-        units: <str>            # optional
-        bounds: [<low>, <high>] # optional
-        transform: <str>        # optional
+    description: <str>
+    reference: <str>              # optional but encouraged
+    rate: "<expression>"          # inline, or the name of an expression
+    parameters:                   # reaction-local parameters (same keys as above)
+      <local_name>: {value: <float>, ...}
     stoichiometry:
-      <species_name>: <float>
+      <species_name>: <float, "<expression>", or auto>
+    conserved_for: [<quantity>, ...]  # overrides the model-level list
+    units_acknowledged: <str>     # why the rate's units are unconventional
+
+speciation: {...}         # a pH computed from the state (see below)
+precipitation: {...}      # mineral precipitation (see below)
+positivity_limiter: {threshold: <float>}  # see "Keeping states non-negative"
+clip_negative_states: <bool>              # default false
+
+remove: {...}             # with `extends:` only (see below)
 ```
+
+An unknown key is an error, so a misspelt key is reported when the model is
+loaded rather than silently ignored.
+
+## Units and the time unit
+
+The `units:` strings are labels: aquakin never converts a value because of
+them. They matter in two ways.
+
+**The parameter units set the model's time unit.** aquakin has no global time
+unit. `t_span` and `t_eval` are read in whatever unit the rate constants are
+written in, so the same `t_span=(0, 600)` is 600 seconds for a model whose rate
+constants are in `1/s` and 600 days for one in `1/d`. aquakin reads that unit
+from the parameter units and reports it as `model.time_unit` (`"s"`, `"min"`,
+`"h"` or `"d"`); `model.summary()` prints it. It is `None` when no parameter
+declares a time unit, or when two rate constants disagree, which is almost
+always a mistake. Declare a unit on every rate constant, and write them all on
+the same time unit.
+
+**They let `check_units` find dimensional mistakes**, as described in
+[Checking units](#checking-units).
 
 ## Shared parameters vs reaction-local parameters
 
-Most models of practical interest declare a kinetic constant (e.g.
-`muH`) once and reuse it across multiple reactions. The top-level
-`parameters:` block is the right home for these — it produces a single
-parameter slot that any number of reactions can reference by bare name.
-Calibration then tunes that single slot.
+Most models of practical interest declare a kinetic constant (e.g. `muH`) once
+and reuse it across several reactions. The top-level `parameters:` block is the
+right home for these: it produces a single parameter slot that any number of
+reactions can reference by its bare name, and calibration then tunes that one
+slot.
 
-Reaction-local `parameters:` blocks remain available for genuinely
-reaction-specific values. A name cannot appear in both a model-level
-`parameters:` block and a reaction-local `parameters:` block — the
-loader rejects shadowing.
+A reaction's own `parameters:` block holds values that belong to that reaction
+alone. Such a parameter is named `<reaction>.<name>` outside the model file, for
+example in `free_params=["decay.k"]`. A name cannot appear in both a
+model-level and a reaction-local `parameters:` block; the loader rejects the
+shadowing.
+
+## Bounds, transforms and priors
+
+These three keys describe what is known about a parameter, for calibration and
+analysis. None of them changes a forward solve.
+
+- `bounds: [low, high]` are hard limits. `fit`, `calibrate`,
+  `profile_likelihood` and the design optimizers keep the parameter inside them.
+- `transform:` chooses the scale on which calibration and sensitivity analysis
+  work. Use `positive_log` for a quantity that must stay positive and can span
+  orders of magnitude, such as a rate constant: the optimizer then works on its
+  logarithm, so a step is a relative change. Use `logit` for a fraction that
+  must stay between 0 and 1, such as a yield. The default `none` works on the
+  value itself.
+- `prior:` is a Gaussian belief about the value, added to the calibration
+  objective. Write a measured value with its uncertainty as
+  `prior: {mean: 0.67, std: 0.02}`, or a literature range as
+  `prior: {range: [0.6, 0.75]}`, which is read as a Gaussian centred on the
+  midpoint with the range spanning ±2 standard deviations. The shipped `asm1`
+  and `adm1` models declare priors on their calibration parameters.
 
 ## Temperature corrections
 
@@ -74,7 +170,7 @@ A rate constant with a `temperature:` block is multiplied by
 `theta**(T - ref_T)` when the rates are evaluated, so its `value` is the
 value at `ref_T`. `theta` is usually a number. It can also be the name of
 another parameter, which makes the temperature sensitivity something you can
-calibrate and analyse like any other parameter:
+calibrate and analyze like any other parameter:
 
 ```yaml
 parameters:
@@ -92,12 +188,16 @@ labelled `"-"`. Its sensitivity is zero at `T = ref_T`, so estimating it needs
 data at a temperature other than `ref_T` (and data at two or more temperatures
 to estimate it together with the rate constant it scales).
 
+The correction applies to rate constants only. A parameter used in the
+stoichiometry, such as a yield, is never temperature-scaled.
+
 ## Named rate expressions
 
 The `expressions:` block lets you factor out repeated sub-formulas. A
 reaction's `rate:` can then be either an inline formula or a reference to
-a named expression by bare name. Expressions can reference other
-expressions; the loader topologically resolves them and rejects cycles.
+a named expression by bare name. Expressions can reference species, conditions,
+parameters and other expressions; the loader resolves them in order and rejects
+cycles.
 
 Example:
 
@@ -116,6 +216,30 @@ reactions:
 ```
 
 ## Rate expression grammar
+
+A rate expression is built from three kinds of name, numbers, arithmetic and
+function calls:
+
+- **Species names** are delimited by square brackets, e.g. `[O3]`, `[Br-]`,
+  `[BrO3-]`. Charge suffixes and digits inside the brackets are accepted.
+- **Condition references** are delimited by curly braces, e.g. `{pH}`,
+  `{fluence_rate}`, `{OH_scavenging}`. The named field must be declared in
+  the `conditions:` block, or be produced by a `speciation:` or
+  `precipitation:` block.
+- **Identifiers without parentheses** name a parameter or a named expression.
+  A reaction-local parameter is looked up first and is named
+  `<reaction>.<name>` outside the model file; a model-level parameter or an
+  expression keeps its bare name.
+- **Identifiers with parentheses** call one of the
+  [functions](#built-in-functions) below.
+
+Examples mixing all three reference forms:
+
+```yaml
+rate: "k_photo * {fluence_rate} * [H2O2]"            # photolysis
+rate: "k * [O3] * 10 ** ({pH} - 14)"                  # OH- catalyzed
+rate: "{OH_scavenging} * [OH]"                        # lumped sink
+```
 
 Rate expressions are parsed by a hand-written recursive-descent parser. The
 grammar:
@@ -154,18 +278,11 @@ traced: there are no comparisons, no `if`/`else`, and no `%` or `//`. `^` is not
 an operator either — it is exclusive-or in Python and a power to most readers,
 so rather than quietly meaning one of them it is refused. Write a power as `**`.
 
-- **Species names** are delimited by square brackets, e.g. `[O3]`, `[Br-]`,
-  `[BrO3-]`. Charge suffixes and digits inside the brackets are accepted.
-- **Condition references** are delimited by curly braces, e.g. `{pH}`,
-  `{fluence_rate}`, `{OH_scavenging}`. The named field must be declared in
-  the `conditions:` block.
-- **Identifiers without parentheses** are rate-constant references. They are
-  resolved against the owning reaction's `parameters:` block and namespaced
-  as `<reaction_name>.<name>` internally.
 ## Stoichiometry coefficients
 
-Each entry of a reaction's `stoichiometry:` block is either a **numeric
-literal** or a **string expression** in the model's parameters. Numeric
+Each entry of a reaction's `stoichiometry:` block is a **numeric literal**, a
+**string expression** in the model's parameters, or **`auto`** (see
+[Conservation](#conservation-composition-and-auto-coefficients)). Numeric
 literals are precomputed; string expressions are evaluated at the start of
 every `solve()` call from the current parameter vector, which means
 yield / N-content / fraction parameters can be calibrated alongside
@@ -184,12 +301,11 @@ reactions:
       SO:   "-(1 - Y_H) / Y_H"
 ```
 
-Stoichiometric expressions may only reference numeric constants, parameters
-(reaction-local or model-level), and the arithmetic / negation operators.
-**Species references (`[X]`), condition references (`{X}`), named
-expressions, and domain functions (`monod`, `arrhenius`, ...) are not
-allowed** — stoichiometry must be state-independent so it can be evaluated
-once per integration rather than every ODE step.
+A stoichiometric expression may only use numbers, parameters (reaction-local
+or model-level) and arithmetic, including `**`. **Species references (`[X]`),
+condition references (`{X}`), named expressions and function calls of any kind
+are not allowed**: stoichiometry must be state-independent so it can be
+evaluated once per integration rather than every ODE step.
 
 The shipped `asm1.yaml` is the worked example: yields (`Y_H`, `Y_A`),
 nitrogen content (`i_XB`, `i_XP`), and the decay fraction (`f_P`) are all
@@ -197,15 +313,56 @@ model-level parameters with symbolic stoichiometry. Calibrating `Y_H`
 adjusts every coefficient that depends on it across aerobic and anoxic
 heterotrophic growth in one step.
 
+## Conservation: composition and `auto` coefficients
+
+A species can declare its content of conserved quantities, in its own measure,
+with `composition:`. The quantity names are yours to choose (`COD`, `N`, `P`,
+`S`, `charge`, ...): `{COD: 1.0}` for an organic measured as COD, `{COD: -1.0}`
+for dissolved oxygen (an electron acceptor), `{COD: -2.86, N: 1.0}` for
+nitrate-N. `model.check_conservation()` then multiplies each reaction's
+stoichiometry by these contents and reports every reaction that does not
+balance; it is a check you run, and loading never fails because of it.
+
+With the contents declared, a coefficient that a balance determines need not be
+worked out by hand. Write it as `auto` (or `?`), and name the quantities to
+balance in `conserved_for:`, on the reaction or once for the whole model:
+
+```yaml
+conserved_for: [COD]
+
+species:
+  - {name: SS,   units: g_COD/m3, composition: {COD: 1.0}}
+  - {name: XB_H, units: g_COD/m3, composition: {COD: 1.0}}
+  - {name: SO,   units: g_O2/m3,  composition: {COD: -1.0}}
+
+parameters:
+  Y_H: {value: 0.67, units: g_COD/g_COD, transform: logit}
+  muH: {value: 6.0, units: 1/d, transform: positive_log}
+
+reactions:
+  - name: aerobic_growth
+    rate: "muH * [XB_H]"
+    stoichiometry: {SS: "-1 / Y_H", XB_H: 1, SO: auto}
+```
+
+aquakin solves the oxygen coefficient from the COD balance when the model is
+compiled, here `-(1 - Y_H) / Y_H`. Because it follows `Y_H`, the reaction stays
+balanced for every value calibration tries. There must be one conserved
+quantity per `auto` coefficient when any other coefficient is an expression,
+and every species in the reaction needs the relevant `composition:` entries.
+The shipped WATS sewer models declare `composition:` on every species.
+
 ## Built-in functions
 
 The following functions may be called in any rate expression.
 
 ### Domain functions
 
-- `arrhenius(A, Ea)` — `A * exp(-Ea / (R * T))`. Requires a condition field
-  named `T` (Kelvin).
-- `pH_switch(pKa)` — `1 / (1 + 10^(pH - pKa))`, the protonated fraction.
+- `arrhenius(A, Ea)` — `A * exp(-Ea / (R * T))`, with `R` = 8.314 J/(mol·K), so
+  `Ea` is in J/mol. Requires a condition field named `T` (Kelvin). For the
+  `theta**(T - ref_T)` form the activated-sludge models use, give the rate
+  constant a [`temperature:` block](#temperature-corrections) instead.
+- `pH_switch(pKa)` — `1 / (1 + 10**(pH - pKa))`, the protonated fraction.
   Requires a condition field named `pH`.
 - `pH_inhibit(pH_LL, pH_UL)` — lower-pH Hill inhibition, `1` at high pH and
   `0` at low pH, spanning roughly the `[pH_LL, pH_UL]` window. Requires a
@@ -241,9 +398,9 @@ For rate laws the domain vocabulary above does not cover.
 - `sqrt(x)` — square root, the clearer spelling of half-order kinetics than
   `[X] ** 0.5`. Halves the argument's units, so a half-order rate constant
   must carry the matching half-order units.
-- `min(a, b)` — elementwise minimum; the ceiling counterpart of `max`. A
+- `min(a, b, ...)` — elementwise minimum; the ceiling counterpart of `max`. A
   two-sided clip is `min(hi, max(lo, x))`.
-- `max(a, b)` — elementwise maximum. Use it for a one-sided clip, e.g.
+- `max(a, b, ...)` — elementwise maximum. Use it for a one-sided clip, e.g.
   `max(0, P_gas - P_atm)` so an overpressure-driven flux only ever stops,
   never reverses.
 
@@ -257,14 +414,6 @@ value there is `-inf` and no stand-in is invented. A model using `log` must
 keep its argument positive — set `clip_negative_states: true`, or write the
 term so the argument cannot reach zero, e.g. `log(1 + [X]/K)`.
 
-Examples mixing all three reference forms:
-
-```yaml
-rate: "k_photo * {fluence_rate} * [H2O2]"            # photolysis
-rate: "k * [O3] * 10 ** ({pH} - 14)"                  # OH- catalysed
-rate: "{OH_scavenging} * [OH]"                        # lumped sink
-```
-
 ### Rate functions of your own
 
 When your rate law needs a function none of the above provides, register one
@@ -275,11 +424,13 @@ calibration, sensitivity and identifiability.
 A rate function is a node class: a frozen dataclass whose fields are its
 arguments, carrying the call spelling (`FUNCTION_NAME`), a kernel key (`KIND`)
 and the arithmetic itself (`op`), written with `jax.numpy` so it differentiates.
+It subclasses `_OperatorNode` from `aquakin.core.nodes`, which is the one
+internal name a model author imports: there is no public alias for it yet.
 
 ```python
 from dataclasses import dataclass
-import jax.numpy as jnp
 import aquakin
+import jax.numpy as jnp
 from aquakin.core.nodes import ASTNode, _OperatorNode
 
 @dataclass(frozen=True)
@@ -299,6 +450,8 @@ class HillNode(_OperatorNode):
 aquakin.register_rate_function(HillNode)
 ```
 
+`register_rate_function` returns the class, so it also works as a decorator
+(`@aquakin.register_rate_function` above `@dataclass(frozen=True)`).
 `hill(X, K, n)` is now callable in any rate expression, and its constants are
 ordinary model parameters:
 
@@ -310,7 +463,7 @@ A registered function is not second class. It parses, evaluates, reaches the
 same batched rate kernel (bit-identically to its own scalar path), and
 differentiates exactly as a built-in does.
 
-Two things to know:
+Three things to know:
 
 - **Register before loading.** A model compiles its rate expressions when it is
   built and `load_model` caches the result, so registration has to happen
@@ -320,6 +473,11 @@ Two things to know:
   would change what every existing model file using that name means. Defining a
   node class is never on its own enough to add a function — only
   `register_rate_function` is.
+- **Your `op` gets no guards.** The built-in functions keep their gradients
+  finite at a depleted species; plain `jax.numpy` arithmetic does not. In the
+  example, `x**n` with a fractional `n` has an infinite derivative at `x = 0`,
+  and a negative `x` gives `NaN`. Write the arithmetic so it stays finite over
+  the states your model reaches.
 
 Optionally, declare how the result's dimension follows from the arguments', so
 `check_units` can check expressions using it. Without this the dimension is
@@ -336,15 +494,138 @@ simply unknown and the check is skipped for that subexpression:
 `aquakin.core.registry.unregister_rate_function(name)` removes one — useful
 when iterating in a notebook.
 
+## Keeping states non-negative
+
+A stiff solve can step a nearly depleted species slightly below zero, where a
+Monod or ratio term gives a large, wrong rate and the solve can blow up. Two
+opt-in keys guard against it. Both leave the solution unchanged wherever every
+concentration is non-negative.
+
+- `clip_negative_states: true` evaluates the rates (and a state-derived pH)
+  with negative concentrations treated as zero. Transport and the reported
+  states still use the unclipped values, so mass balances stay exact. The
+  shipped `asm1` model sets it.
+- `positivity_limiter: {threshold: 1.0e-3}` scales down the net consumption of
+  a species once its concentration falls below `threshold`, so it approaches
+  zero without crossing it. The shipped `asm2d` and WATS sewer models use it.
+
+They act at different points: the clip protects the rate laws from a negative
+input, and the limiter keeps the state from going negative in the first place.
+A model can use both.
+
+## pH and precipitation
+
+Two blocks add aqueous chemistry that is solved from the state as it changes,
+rather than supplied as a fixed condition.
+
+**`speciation:`** computes the pH from a charge balance on every evaluation of
+the rates and provides it as a condition field (named `pH` unless `field:` says
+otherwise), so `{pH}`, `pH_switch` and `pH_inhibit` follow the chemistry. You
+map your species onto the acid/base systems aquakin knows (`carbonate`,
+`acetate`, `propionate`, `butyrate`, `valerate`, `ammonia`, `phosphate`,
+`sulfide`) and list the strong ions:
+
+```yaml
+speciation:
+  field: pH
+  temperature_field: T
+  temperature_units: celsius        # or kelvin
+  z_cation_eq: 3.28e-3              # net fixed cation charge (eq/L)
+  totals:
+    carbonate: {species: S_CO2, molar_mass: 12000}   # g C/m3 -> mol/L
+    ammonia:   {species: S_NH,  molar_mass: 14000}   # g N/m3 -> mol/L
+  strong_anions:
+    - {species: S_SO4, molar_mass: 32000, charge: 2}
+```
+
+`molar_mass` converts the species' own units to mol/L: a molecular weight (in
+g/mol, times 1000 for g/m³) for a mass-based species, a power of ten for a
+molar one. A value that does not fit the species' declared units raises a
+`SpeciationUnitsWarning` when the model is loaded. `activity_model:` (`none`,
+`davies` or `debye_huckel`) adds activity corrections. The shipped `adm1` and
+`wats_sewer` models are complete examples.
+
+**`precipitation:`** declares minerals that precipitate and dissolve at a rate
+driven by their saturation index, computed from the free-ion activities at the
+current pH. Each mineral gives its solubility product, its ions, and, to have
+the precipitation reaction written for you, the precipitate species and a rate
+constant:
+
+```yaml
+precipitation:
+  pH_field: pH
+  temperature_field: T
+  temperature_units: kelvin
+  activity_model: davies
+  minerals:
+    - name: calcite
+      pKsp: 8.48
+      order: 2
+      solid: X_calcite
+      rate_constant: {value: 10.0, units: 1/d, transform: positive_log}
+      ions:
+        - {species: S_Ca, molar_mass: 1000, count: 1, charge: 2}
+        - {species: S_IC, molar_mass: 1000, count: 1, charge: 2, fraction: carbonate}
+```
+
+The reaction written for you is `<name>_precipitation`, with rate
+`k * [solid] * {R_<name>}`: it is proportional to the solid already present, so
+give the solid a small seed `default_concentration` or nothing precipitates.
+Each mineral also provides its saturation index `{SI_<name>}` and rate factor
+`{R_<name>}` as condition fields, for a reaction you write yourself.
+`fraction:` takes the free ion from an acid/base total at the current pH; an
+ion without it is taken as fully free. `mode: equilibrium` solves the
+precipitate to its solubility limit algebraically instead, and
+`supersaturation_form: bounded` keeps a very insoluble mineral's kinetics
+well-conditioned. The shipped `precipitation_struvite_calcite`,
+`precipitation_metal_phosphate` (with its `_bounded` and `_equilibrium`
+variants) and `asm2d_chemp` models show each form.
+
+## Inheriting a model: `extends:`
+
+A model that differs from another by a few parameters or rates can inherit it
+instead of copying it, so a correction to the base reaches every variant.
+`model.extends:` names a shipped model, or a file path relative to the
+extending file (anything containing `/` or ending in `.yaml`):
+
+```yaml
+model:
+  name: asm1_cold
+  extends: asm1
+  description: "ASM1 with a slower autotroph growth rate and no ammonification."
+
+parameters:
+  muA: {value: 0.5}          # changes only the value; units, bounds and prior stay
+
+remove:
+  reactions: [ammonification]
+```
+
+The derived file is merged onto the base before it is validated:
+
+- In `species:`, `conditions:` and `reactions:`, an entry whose `name` matches
+  one in the base changes only the fields it gives (override a reaction's
+  `rate` and it keeps its `stoichiometry`); a new name is added at the end.
+- Every other block merges key by key; a value that is not a mapping, such as a
+  list or a number, replaces the base's.
+- `remove:` then drops named entries from `species`, `conditions`,
+  `reactions`, `parameters` or `expressions`. Removing a name that is not
+  there is an error.
+
+New parameters are added after the base's, so the order of the parameter vector
+can differ from a hand-written copy; refer to parameters by name. The shipped
+`asm1_ammonia_limitation` model is `asm1` plus one extra switch, written this
+way.
+
 ## Checking units
 
-The `units:` strings on species, parameters and conditions are not used to
-convert anything, but `model.check_units()` reads them to check every rate
-expression for dimensional consistency. It is currency-aware: `g_COD/m3` and
-`g_N/m3` are different units, so it catches a Monod term comparing two
-currencies, a sum of unlike terms, a dropped concentration factor, or rate
-constants written on different time units. A blank or unparseable unit is
-skipped, so declaring units on every parameter is what makes the check useful.
+`model.check_units()` reads the `units:` strings on species, parameters and
+conditions to check every rate expression for dimensional consistency. It is
+currency-aware: `g_COD/m3` and `g_N/m3` are different units, so it catches a
+Monod term comparing two currencies, a sum of unlike terms, a dropped
+concentration factor, or rate constants written on different time units. A
+blank or unparseable unit is skipped, so declaring units on every parameter is
+what makes the check useful.
 
 It also checks each rate against the stoichiometry. A species whose
 coefficient is a fixed `+1` or `-1` changes by exactly the rate, so the rate

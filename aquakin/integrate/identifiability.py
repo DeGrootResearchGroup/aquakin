@@ -27,15 +27,11 @@ from itertools import combinations
 
 import numpy as np
 
+from aquakin.integrate._linalg import _NULL_LOADING_TOL, _NULL_RTOL
 from aquakin.integrate._transforms import dphysical_dunconstrained
+from aquakin.integrate.calibration.result import CalibrationResult
+from aquakin.integrate.fisher import FisherInformation
 
-# Eigenvalues at or below this fraction of the largest are treated as exactly
-# zero (a structurally non-identifiable direction), so the parameters loading on
-# them get an infinite standard error rather than a round-off-sized finite one.
-_NULL_RTOL = 1e-10
-# Default smallest loading on a null direction that counts as involvement (see
-# ``null_loading_tol``); calibrate's Laplace covariance uses the same value.
-_NULL_LOADING_TOL = 1e-2
 # Loadings below this fraction of a direction's largest are ignored when fixing
 # the eigenvector's sign convention.
 _LOADING_TOL = 1e-6
@@ -213,9 +209,6 @@ class IdentifiabilityResult:
 def _source_fields(source, names, values, transforms):
     """``(F, names, values, transforms, at_bound)`` from a FisherInformation, a
     CalibrationResult, or a bare matrix."""
-    from aquakin.integrate.calibrate import CalibrationResult
-    from aquakin.integrate.fisher import FisherInformation
-
     if isinstance(source, FisherInformation):
         return source.matrix, source.names, source.values, source.transforms, {}
     if isinstance(source, CalibrationResult):

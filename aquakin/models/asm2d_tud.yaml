@@ -2,7 +2,10 @@ model:
   name: asm2d_tud
   version: "1.0"
   description: >
-    Imported from ASM2D_TUD.xlsm
+    The TU Delft variant of ASM2d: the PAO storage and growth cycle is
+    described metabolically (PHA, polyphosphate and glycogen pools with
+    stoichiometry derived from the PAO metabolism) in place of ASM2d's
+    empirical bio-P kinetics. 18 state variables, 22 processes.
   references:
     - "Meijer, van Loosdrecht & Heijnen (2001). Metabolic modelling of full-scale biological nitrogen and phosphorus removing WWTP's. Water Res. 35(11), 2711-2723. doi:10.1016/S0043-1354(00)00567-4"
     - "Murnleitner, Kuba, van Loosdrecht & Heijnen (1997). An integrated metabolic model for the aerobic and denitrifying biological phosphorus removal. Biotechnol. Bioeng. 54(5), 434-450."

@@ -75,6 +75,11 @@ lint = ["ruff>=0.15,<0.16"]
 # interface never imports aquakin or JAX (it asks an `aquakin serve` worker).
 # trame-client pins the Vue the widget is built against (Vue 3.5).
 ui = ["trame>=3.6", "trame-vuetify>=2.7", "trame-client>=3.6"]
+# `browser` drives the editor in Chromium for `tests/browser` (Playwright). Not
+# part of `test`: it needs a browser download (`python -m playwright install
+# chromium`), which only the `browser` CI job and a developer running those
+# tests want.
+browser = ["playwright>=1.63"]
 # `docs` pins the Sphinx documentation toolchain (Read the Docs build + the CI
 # docs job). Floors are the known-good minimums; kept in one place so the RTD
 # build and CI resolve the same set. `myst-parser` lets the docs stay Markdown;

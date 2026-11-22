@@ -101,7 +101,26 @@ aquakin/
 │   │   │                            #   Plant.solve_sensitivity's default corrector
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
-│   │   │                            #   optimizer, posterior-predictive bands
+│   │   │                            #   optimizer, posterior-predictive bands. Holds only
+│   │   │                            #   the entry point; re-exports every name it ever
+│   │   │                            #   exported from calibration/ (pinned by a test)
+│   │   ├── calibration/             # calibrate()'s implementation, one concern each:
+│   │   │   ├── config.py            #   OptimizerConfig / LaplaceConfig / FreeICConfig
+│   │   │   ├── observation.py       #   observe(), observation_fn handling (+ fisher.py)
+│   │   │   ├── loss.py              #   loss / residual builders, NaN masking, sigma,
+│   │   │   │                        #   observation-unit conversion
+│   │   │   ├── coords.py            #   free-IC log-pool / simplex coordinates + names
+│   │   │   ├── result.py            #   CalibrationResult, PredictiveBand
+│   │   │   ├── problem.py           #   _ReactorForwardModel (forward-solve seam),
+│   │   │   │                        #   _CalibrationProblem and its resolver helpers
+│   │   │   ├── objective.py         #   _FitConfig, jit-cached objective / residual / Jacobian
+│   │   │   ├── multistart.py        #   starts, optimizer bounds, the multistart loop
+│   │   │   ├── laplace.py           #   Laplace posterior, at-bound checks
+│   │   │   └── driver.py            #   _run_fit / _fit_result: shared with Plant.calibrate
+│   │   ├── seam.py                  # the private calibration names aquakin.plant reuses,
+│   │   │                            #   listed in one place (the only route; test-checked)
+│   │   ├── _linalg.py               # null-direction tolerances shared by the Laplace
+│   │   │                            #   covariance and identifiability
 │   │   ├── candidate_design.py      # design_from_candidates(): budgeted choice from a
 │   │   │                            #   pool of per-candidate Fisher matrices (relaxed,
 │   │   │                            #   greedy, exchange, exhaustive)

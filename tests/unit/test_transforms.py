@@ -57,17 +57,12 @@ def test_unknown_transform_raises():
             fn(0.5, "softplus")
 
 
-def test_calibrate_wrappers_delegate_unchanged():
-    # The calibrate.py wrappers must reproduce their historical values exactly.
-    from aquakin.integrate.calibrate import (
-        _from_unconstrained,
-        _jacobian_physical_wrt_theta,
-        _to_unconstrained,
-    )
-
+def test_calibration_values_unchanged():
+    # The values calibration uses (it calls these functions directly) must match
+    # their historical ones exactly.
     for kind in VALID_TRANSFORMS:
         theta = jnp.asarray(0.3)  # unconstrained value
-        phys = _from_unconstrained(theta, kind)
+        phys = from_unconstrained(theta, kind)
         # positive_log: exp; logit: sigmoid; none: identity
         expected = {
             "none": 0.3,
@@ -75,11 +70,11 @@ def test_calibrate_wrappers_delegate_unchanged():
             "logit": float(jax.nn.sigmoid(0.3)),
         }[kind]
         assert float(phys) == pytest.approx(expected, rel=1e-12)
-        # round-trip through the wrappers
-        assert float(_to_unconstrained(phys, kind)) == pytest.approx(0.3, rel=1e-9)
+        # round trip
+        assert float(to_unconstrained(phys, kind)) == pytest.approx(0.3, rel=1e-9)
         # delta-method Jacobian dp/dtheta == d/dtheta from_unconstrained
-        jac = float(_jacobian_physical_wrt_theta(theta, kind))
-        ad = float(jax.grad(lambda z: _from_unconstrained(z, kind))(theta))
+        jac = float(dphysical_dunconstrained(from_unconstrained(theta, kind), kind))
+        ad = float(jax.grad(lambda z: from_unconstrained(z, kind))(theta))
         assert jac == pytest.approx(ad, rel=1e-9, abs=1e-12)
 
 

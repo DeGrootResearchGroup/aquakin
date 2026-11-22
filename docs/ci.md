@@ -154,7 +154,20 @@ nor concentrating it in a few files makes the whole suite fast.
   `aquakin_ui/icons/`, `pyproject.toml`, the script, this workflow): on any other
   change its steps are skipped and it passes. It is **not** part of `fast gate`
   and not a required check. The release build runs the same package check on
-  the wheel it publishes. The Playwright tests in `tests/browser/` run in no job.
+  the wheel it publishes.
+- The **`browser`** job (**`browser tests (editor in Chromium)`**) runs
+  `tests/browser`: it serves the editor and drives it with Playwright, which
+  is the only way to check the canvas's sync rules (the `ui` job drives the
+  `Editor` without a page). It installs the `browser` extra (Playwright, pinned
+  in `constraints.txt`) and Chromium (`python -m playwright install --with-deps
+  chromium`), and fails if Playwright does not import, since the tests would
+  otherwise skip themselves. It is path-filtered on the editor (`aquakin_ui/`,
+  `ui-widget/`, `tests/browser/`), the worker commands it sends
+  (`aquakin/__main__.py`, `aquakin/plant/catalog.py`, `aquakin/plant/spec.py`),
+  the BSM1 project the tests open, `pyproject.toml`, `constraints.txt` and this
+  workflow. Like `widget`, it is **not** part of `fast gate` and not a required
+  check: a browser download and a served page are more moving parts than the
+  merge gate should depend on.
 - The **`slow`** job (`pytest -m "slow and not validation and not heavy"`,
   3.11/3.12) and **`validation`** job (`pytest -m "validation and not heavy"`,
   3.12) run **only on push to `main`** (`if: github.event_name == 'push'`). They carry the multi-minute

@@ -1,4 +1,4 @@
-# Model catalog
+# Model catalogue
 
 `aquakin` ships a library of ready-to-use reaction models spanning oxidation
 chemistry, biological wastewater treatment, anaerobic digestion, sewer
@@ -17,8 +17,12 @@ descriptions, and default parameter and concentration vectors — see
 [Getting started](getting_started.md) for the loading and inspection API, and
 the [Model file format](model_format.md) if you want to write your own.
 
-Each entry below lists the model's size as *(species, reactions)*. The counts
-and citations are those reported by the compiled model itself.
+Each entry below lists the model's size as *(species, reactions)*, as reported
+by the compiled model itself; `model.references` lists the full citations.
+
+A model's rate constants set the unit its time axis is read in: the
+oxidation-chemistry models integrate in **seconds**, and the biological models
+in **days**. `model.time_unit` reports it, and `model.summary()` prints it.
 
 ## Oxidation chemistry
 
@@ -31,7 +35,7 @@ and citations are those reported by the compiled model itself.
 
 `uv_h2o2`
 : UV/H₂O₂ advanced oxidation of a generic target micropollutant: hydrogen
-  peroxide photolysis generates hydroxyl radicals that oxidise the target, in
+  peroxide photolysis generates hydroxyl radicals that oxidize the target, in
   competition with background scavenging. *(4 species, 4 reactions.)* After
   Glaze et al. (1987) with rate constants from Buxton et al. (1988).
 
@@ -39,8 +43,9 @@ and citations are those reported by the compiled model itself.
 
 The IWA Activated Sludge Models are the standard framework for biological
 carbon and nutrient removal in wastewater treatment. `aquakin` ships the
-reference models and several literature extensions. All are in units of
-`g/m³` (COD, N, P) and integrate in **days**.
+reference models and several literature extensions. Concentrations are in
+`g/m³` of COD, N or P (alkalinity in mol/m³ or kmol/m³, and suspended solids in
+g TSS/m³), and they integrate in **days**.
 
 `asm1`
 : Activated Sludge Model No. 1, the reference model for carbon oxidation,
@@ -51,20 +56,20 @@ reference models and several literature extensions. All are in units of
 `asm1_ammonia_limitation`
 : `asm1` plus a nutrient-availability switch: both heterotrophic growth rates
   carry an extra `[SNH]/(KNH_H + [SNH])` factor that shuts growth down as
-  ammonia is exhausted. A recognised vendor-style extension (not part of the
+  ammonia is exhausted. A recognized vendor-style extension (not part of the
   reference matrix); it is inert in ammonia-rich influent — matching `asm1`
   there — and only acts where ammonia is driven low. *(13 species, 8 reactions.)*
 
 `asm2d`
 : Activated Sludge Model No. 2d: ASM1 extended with biological phosphorus
   removal by polyphosphate-accumulating organisms (PAOs), denitrifying PAOs,
-  and simple chemical phosphorus precipitation (Henze et al. 2000, IWA STR
-  No. 9). *(19 species, 21 reactions.)*
+  and simple chemical phosphorus precipitation (Henze et al. 1999).
+  *(19 species, 21 reactions.)*
 
 `asm2d_tud`
 : The Delft (TU Delft) variant of ASM2d, with a metabolic description of the
-  PAO storage/growth cycle in place of ASM2d's black-box bio-P kinetics.
-  *(18 species, 22 reactions.)*
+  PAO storage/growth cycle in place of ASM2d's black-box bio-P kinetics
+  (Meijer et al. 2001; Murnleitner et al. 1997). *(18 species, 22 reactions.)*
 
 `asm2d_chemp`
 : ASM2d with **saturation-index-driven** chemical phosphorus precipitation
@@ -83,8 +88,10 @@ reference models and several literature extensions. All are in units of
   *(13 species, 12 reactions.)*
 
 `asm3_biop`
-: ASM3 extended with a biological phosphorus-removal module. *(17 species, 23
-  reactions.)*
+: ASM3 extended with the EAWAG Bio-P module (Rieger et al. 2001):
+  phosphorus-accumulating organisms store PHA, take up and release
+  polyphosphate, and grow aerobically and anoxically alongside ASM3's
+  heterotrophs and nitrifiers. *(17 species, 23 reactions.)*
 
 ### Two-step nitrogen variants
 
@@ -95,7 +102,7 @@ comammox. Each closes COD, nitrogen, and charge balances to machine precision.
 `asm3_2step`
 : ASM3 with **two-step nitrification and denitrification** (Kaelin et al.
   2009): nitrite (NO₂) is carried explicitly, the single autotroph splits into
-  ammonia-oxidising (AOB) and nitrite-oxidising (NOB) organisms, and each
+  ammonia-oxidizing (AOB) and nitrite-oxidizing (NOB) organisms, and each
   denitrification step is resolved separately. Resolves nitrite peaks and the
   nitrite shunt, and is the basis for the N₂O, anammox, and comammox variants.
   *(15 species, 19 reactions.)*
@@ -108,15 +115,15 @@ comammox. Each closes COD, nitrogen, and charge balances to machine precision.
   dissolved oxygen. *(18 species, 23 reactions.)*
 
 `asm3_2step_anammox`
-: `asm3_2step` extended with **anammox** (anaerobic ammonium-oxidising)
-  bacteria (Strous et al. 1998, 1999), which oxidise ammonium with nitrite
+: `asm3_2step` extended with **anammox** (anaerobic ammonium-oxidizing)
+  bacteria (Strous et al. 1998, 1999), which oxidize ammonium with nitrite
   directly to dinitrogen. With AOB, NOB, and anammox all present the model
   supports partial-nitritation/anammox (PN/A) deammonification for sidestream
   autotrophic nitrogen removal. *(16 species, 22 reactions.)*
 
 `asm3_2step_comammox`
-: `asm3_2step` extended with a **complete-ammonia-oxidising (comammox)**
-  organism parameterised from Kits et al. (2017). Comammox performs complete
+: `asm3_2step` extended with a **complete-ammonia-oxidizing (comammox)**
+  organism parameterized from Kits et al. (2017). Comammox performs complete
   nitrification (NH₄ → NO₃) in a single organism with a very high ammonia
   affinity, so it out-competes canonical AOB at low ammonium — the documented
   niche differentiation. *(16 species, 22 reactions.)*
@@ -154,21 +161,56 @@ extensions. These integrate in **days**.
   *(20 species, 47 reactions.)*
 
 `wats_sewer_khalil_paper`
-: A faithful re-implementation of the published sewer nitrate-dosing model of
+: A re-implementation of the published sewer nitrate-dosing model of
   Khalil et al. (2025): the full WATS carbon-and-sulfur backbone plus the
   paper's nitrate-driven two-step sulfur oxidation, with pH supplied as a fixed
-  operating condition. *(18 species, 27 reactions.)* Companion models
-  `wats_sewer_khalil_paper_balanced` (a mass- and electron-balanced counterpart
-  that additionally tracks iron/FeS precipitation and nitrogen — *20 species, 28
-  reactions*) and `wats_sewer_khalil_thesis` (the thesis specification, with
-  half-order biofilm kinetics — *18 species, 44 reactions*) are provided for
-  side-by-side comparison. A family of structural variants (e.g. half-order
-  vs. Monod biofilm kinetics, one- vs. two-step nitrate demand) is also shipped
-  for model-structure and identifiability studies.
+  operating condition. *(18 species, 27 reactions.)*
+
+`wats_sewer_khalil_paper_balanced`
+: A mass- and electron-balanced counterpart of `wats_sewer_khalil_paper` that
+  also tracks iron/FeS precipitation and nitrogen. *(20 species, 28 reactions.)*
+
+`wats_sewer_khalil_thesis`
+: The nitrate-dosing model as specified with half-order biofilm kinetics.
+  *(18 species, 44 reactions.)*
+
+### Structural variants
+
+These variants each change one structural assumption of a base model, for
+comparing model structures and studying identifiability. Everything not listed
+is the same as in the base.
+
+| Model | Base | Change | Size |
+|---|---|---|---|
+| `wats_sewer_extended_v0` | `wats_sewer_extended` | Earlier parameter values and a single anoxic yield; same reactions | 18, 46 |
+| `wats_sewer_extended_halforder` | `wats_sewer_extended` | Half-order instead of Monod kinetics for the nitrate-driven biofilm sulfur oxidations | 18, 46 |
+| `wats_sewer_extended_directsulfate` | `wats_sewer_extended` | Nitrate oxidizes sulfide directly to sulfate, with no elemental-sulfur intermediate | 18, 46 |
+| `wats_sewer_extended_srbsubstrate` | `wats_sewer_extended` | Sulfate and elemental-sulfur reducers consume fermentable substrate instead of VFA | 18, 46 |
+| `wats_sewer_extended_combined` | `wats_sewer_extended` | The three changes above together | 18, 46 |
+| `wats_sewer_khalil_paper_halforder` | `wats_sewer_khalil_paper` | Half-order biofilm sulfur oxidation | 18, 27 |
+| `wats_sewer_khalil_paper_directsulfate` | `wats_sewer_khalil_paper` | Direct sulfide-to-sulfate oxidation | 18, 27 |
+| `wats_sewer_khalil_paper_srbsubstrate` | `wats_sewer_khalil_paper` | Reducers consume fermentable substrate | 18, 27 |
+| `wats_sewer_khalil_paper_stopatS0` | `wats_sewer_khalil_paper` | Nitrate-driven oxidation stops at elemental sulfur | 18, 26 |
+| `wats_sewer_khalil_paper_combined` | `wats_sewer_khalil_paper` | The half-order, direct-sulfate and reducer-substrate changes together | 18, 27 |
+| `wats_sewer_khalil_paper_balanced_halforder` | `wats_sewer_khalil_paper_balanced` | Half-order biofilm sulfur oxidation | 20, 28 |
+| `wats_sewer_khalil_paper_balanced_directsulfate` | `wats_sewer_khalil_paper_balanced` | Direct sulfide-to-sulfate oxidation | 20, 28 |
+| `wats_sewer_khalil_paper_balanced_stopatS0` | `wats_sewer_khalil_paper_balanced` | Nitrate-driven oxidation stops at elemental sulfur | 20, 27 |
+| `wats_sewer_khalil_paper_balanced_combined` | `wats_sewer_khalil_paper_balanced` | The half-order and direct-sulfate changes together (the balanced base already uses fermentable substrate for the reducers) | 20, 28 |
+
+### Depth-resolved biofilm models
+
+These run with `aquakin.BiofilmReactor`, which resolves the sewer biofilm over
+its depth.
+
+| Model | What it resolves | Size |
+|---|---|---|
+| `wats_sewer_khalil_paper_balanced_biofilm` | The balanced model's chemistry, with the combined bulk-and-biofilm reactions split into bulk and biofilm halves; the lumped model is its well-mixed limit | 20, 31 |
+| `wats_sewer_khalil_paper_balanced_biofilm_biomass` | Heterotroph biomass as a growing and decaying state in each layer | 20, 24 |
+| `wats_sewer_khalil_paper_balanced_biofilm_multispecies` | Separate biomass for sulfate reducers, methanogens and sulfide oxidizers in each layer | 23, 27 |
 
 ## Mineral precipitation
 
-These use the generalised saturation-index precipitation framework of Kazadi
+These use the generalized saturation-index precipitation framework of Kazadi
 Mbamba et al. (2015): each mineral declares its constituent ions, solubility
 product, and supersaturation order, and the engine drives precipitation or
 dissolution from the free-ion activities at the operating pH.
