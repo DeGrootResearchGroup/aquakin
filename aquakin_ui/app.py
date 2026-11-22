@@ -505,10 +505,7 @@ class Editor:
     # -- the Studies tab and dialogs (study_page.py) -----------------------
 
     _studies_panel = study_page._studies_panel
-    _observables_editor = staticmethod(study_page._observables_editor)
-    _candidate_fields = study_page._candidate_fields
     _study_settings_dialog = study_page._study_settings_dialog
-    _table = staticmethod(study_page._table)
     _results_dialog = study_page._results_dialog
     _study_dialog = study_page._study_dialog
 
