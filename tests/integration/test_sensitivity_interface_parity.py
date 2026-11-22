@@ -100,36 +100,31 @@ def test_dynamic_operating_is_forward_only():
             operating=op, mode="reverse", y0=y0)
 
 
-@pytest.mark.slow
-def test_steady_and_dynamic_operating_sensitivity_agree():
-    """The steady IFT and the dynamic variational stacks compute the SAME operating
-    sensitivity: on a constant influent the dynamic effluent-ammonia sensitivity to
-    the influent-load scale, run toward steady state, matches the steady-state
-    operating column."""
-    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
-    asm1 = aquakin.load_model("asm1")
-    infl = asm1.influent({"SS": 60., "SNH": 25., "XS": 200., "XB_H": 50.,
-                          "SI": 30., "XI": 25., "SND": 6., "XND": 10.,
-                          "SALK": 7.}, Q=18446.0)
-    p = build_bsm1()
-    p.add_influent("feed", infl)
-    y0 = bsm1_warm_start(p)
+def test_steady_and_dynamic_operating_sensitivity_agree(cstr_plant):
+    """The steady IFT and the dynamic variational stacks compute the SAME kinetic
+    and operating sensitivity. On the single CSTR (A -> B at rate k [A], Q/V =
+    0.1, feed A = 1) the steady effluent is A* = 0.1 s / (0.1 + k) for a feed
+    scale s, so dA*/dk = -0.1 / (0.1 + k)^2 and dA*/ds = 0.1 / (0.1 + k). Started
+    at that steady state, the dynamic sensitivity after time T is the steady one
+    times 1 - exp(-(0.1 + k) T), which is 1 to round-off at T = 200. Both stacks
+    must match the closed form: the steady one to its solve tolerance, the
+    dynamic one a decade above its ``rtol``."""
+    p = cstr_plant
     base = p.default_parameters()
-    p._build_state_layout()
-    s0, _ = p._state_layout["tank5"]
-    snh = s0 + asm1.species_index["SNH"]
-    op = [{"kind": "influent_concentration", "port": "feed", "species": "SNH"}]
+    k = float(base[p.parameter_index("simple_decay.A_to_B.k")])
+    expected = np.array([-0.1 / (0.1 + k) ** 2, 0.1 / (0.1 + k)])
+    wrt = ["simple_decay.A_to_B.k"]
+    op = [{"kind": "influent_concentration", "port": "feed", "species": "A"}]
 
     Ss = np.asarray(p.steady_state_sensitivity(
-        base, output_fn=lambda y: jnp.array([y[snh]]), wrt=["asm1.muA"],
-        operating=op, mode="forward"))
-    y_star = p.steady_state(base, y0=y0).state
-    T = 40.0
-    Sd = np.asarray(p.dynamic_sensitivity(
-        base, output_fn=lambda sol: jnp.array([sol.C_named("tank5", "SNH")[-1]]),
-        t_span=(0.0, T), t_eval=jnp.array([T]), wrt=["asm1.muA"], operating=op,
-        mode="forward", y0=y_star, max_steps=200_000))
+        base, output_fn=lambda y: jnp.array([y[0]]), wrt=wrt, operating=op,
+        mode="forward", tol=1e-12))
+    np.testing.assert_allclose(Ss[0], expected, rtol=1e-8)
 
-    # Both the kinetic and the operating column agree at the steady limit.
-    assert Sd[0, 0] == pytest.approx(Ss[0, 0], rel=3e-2)   # muA
-    assert Sd[0, 1] == pytest.approx(Ss[0, 1], rel=3e-2)   # influent-load scale
+    y_star = p.steady_state(base, tol=1e-12).state
+    T = 200.0
+    Sd = np.asarray(p.dynamic_sensitivity(
+        base, output_fn=lambda sol: jnp.array([sol.C_named("tank", "A")[-1]]),
+        t_span=(0.0, T), t_eval=jnp.array([T]), wrt=wrt, operating=op,
+        mode="forward", y0=y_star, rtol=1e-8, atol=1e-10))
+    np.testing.assert_allclose(Sd[0], expected, rtol=1e-7)
