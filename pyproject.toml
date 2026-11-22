@@ -69,6 +69,10 @@ plot = ["matplotlib>=3.5"]
 # the gate red without a deliberate bump. Capped to the 0.15 series for the same
 # reason; raise the cap intentionally.
 lint = ["ruff>=0.15,<0.16"]
+# `release` is the changelog tool a maintainer runs when cutting a release:
+# `towncrier build --version X.Y.Z` turns the fragments in changelog.d/ into the
+# release's CHANGELOG.md section (see RELEASING.md). Nothing else imports it.
+release = ["towncrier>=24.8"]
 # `ui` is the browser flowsheet editor, `aquakin-ui` (the `aquakin_ui` package):
 # trame serves the page and Vuetify draws it; the canvas is one Vue Flow widget
 # shipped pre-built in the package, so it needs no JavaScript toolchain. The
@@ -155,6 +159,51 @@ omit = ["aquakin/models/_make_*.py"]
 
 [tool.coverage.report]
 show_missing = false
+
+# ---------------------------------------------------------------------------
+# towncrier -- the changelog. Each change adds a fragment to changelog.d/ (one
+# file per entry, named `<name>.<type>.md`; see changelog.d/README.md) instead of
+# editing CHANGELOG.md, so two PRs never conflict over the same lines. At release,
+# `towncrier build --version X.Y.Z` writes the fragments into CHANGELOG.md as a
+# Keep a Changelog section and deletes them. tests/unit/test_changelog_fragments.py
+# checks every fragment's name against the types below.
+[tool.towncrier]
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+start_string = "<!-- towncrier release notes start -->\n"
+title_format = "## [{version}] - {project_date}"
+issue_format = "[#{issue}](https://github.com/DeGrootResearchGroup/aquakin/issues/{issue})"
+underlines = ["", "", ""]
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "deprecated"
+name = "Deprecated"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "removed"
+name = "Removed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "security"
+name = "Security"
+showcontent = true
 
 # ---------------------------------------------------------------------------
 # pyright -- type checker for the editor package. The CI `typecheck` job runs
