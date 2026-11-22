@@ -110,6 +110,25 @@ than copying it.
   (`--cov=aquakin --cov-report=term-missing`). CI is unaffected: it takes
   `source` from `pyproject.toml` rather than passing `--cov` targets.
 
+## Coverage before the push
+
+Codecov's patch status targets 100% of the lines a PR adds or changes. Find the
+gaps **locally**, before pushing: every push runs the whole CI again, and a push
+made only to add the test Codecov asked for is a wasted run.
+
+```bash
+pytest <the tests that exercise the change> -m "not validation and not slow" \
+    --cov=aquakin --cov=aquakin_ui --cov-branch --cov-report=xml
+python scripts/patch_coverage.py
+```
+
+It lists each changed line that is missed or only partly covered (a branch not
+taken) and exits non-zero below 100%. For each one: write the test that checks
+what the line does, or note in the PR why it cannot be covered. A line covered
+only by `slow` tests reads as missed on an ordinary PR; cover it from the fast
+tier or say the PR needs `full-ci`. Never close a gap with `# pragma: no cover`
+or a test that only executes the line.
+
 ## What to test for a change
 
 | Change | Test |

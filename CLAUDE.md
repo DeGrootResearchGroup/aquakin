@@ -448,6 +448,13 @@ Run ruff before committing or pushing (Post-Change Checklist item 1). The
 committed pre-push hook (`.githooks/pre-push`) runs the same gate; enable it
 once per clone with `git config core.hooksPath .githooks`.
 
+**Every push to a PR branch starts a full CI run, so push finished work, once.**
+Before pushing, run locally everything CI would tell you: ruff, pyright (for
+`aquakin_ui`), the tests the change touches, and the patch coverage
+(`scripts/patch_coverage.py`, checklist item 2). Collect follow-up fixes into
+one push; do not push to see what CI says, and do not push again only to change
+an informational status.
+
 > The full CI architecture — pytest-split sharding, the fast PR gate vs the
 > merge-to-main `slow`/`validation`/`heavy` suites, the memory/heavy-runner
 > rationale, and the `full-ci` / `skip-heavy` labels — is in **`docs/ci.md`**.
@@ -498,9 +505,16 @@ act on the following:
    - Bug fix → regression test, **seen to fail on the unfixed code**
    - Run the tests you touched, and the fast gate for a cross-cutting change;
      report what ran and what did not.
+   - **Measure patch coverage locally before you push**; do not find out from
+     CI. Run the fast tier (or the tests that exercise the change) with
+     `--cov=aquakin --cov=aquakin_ui --cov-branch --cov-report=xml`, then
+     `python scripts/patch_coverage.py`, which lists every changed line that is
+     missed or only partly covered and exits non-zero below 100%. A push whose
+     only purpose is to turn Codecov green costs a full CI run.
    - New and changed lines are expected to be covered: Codecov's patch status
-     targets 100% (a signal, not a required check). When it is red, add the
-     test, or state in the PR which lines are uncovered and why (a defensive
+     targets 100% (a signal, not a required check). When the local measure is
+     short, add the test before pushing, or state in the PR which lines are
+     uncovered and why (a defensive
      branch no input can reach; code only `slow` tests exercise, on a PR
      without `full-ci`, since only the fast tier uploads on a normal PR). Never
      add `# pragma: no cover`, or a test that only executes lines, to make it
