@@ -20,37 +20,46 @@ import pytest
 
 import aquakin
 from aquakin.integrate._common import DifferentiationConfig
-from aquakin.integrate.calibrate import (
+from aquakin.integrate.calibrate import CalibrationResult, calibrate
+from aquakin.integrate.calibration.config import _resolve_laplace
+from aquakin.integrate.calibration.coords import (
     _DEFAULT_IC_BOUNDS,
-    CalibrationResult,
-    _at_bound_named,
-    _at_bound_sides,
-    _build_loss,
-    _build_residual,
-    _CalibrationProblem,
-    _check_start_gradient,
-    _data_term,
-    _FitConfig,
-    _forward_jac,
     _free_ic_fields,
     _ic_coordinate_names,
     _ic_theta_from_pools,
-    _is_solve_failure,
     _joint_names,
-    _laplace_covariance,
-    _laplace_posterior,
-    _missing_mask,
-    _ObjectiveBundle,
-    _optimizer_bounds,
     _per_species_ic_bounds,
-    _predict,
-    _ReactorForwardModel,
-    _resolve_laplace,
-    _resolve_problem,
-    _run_multistart,
     _simplex_fraction_cov,
     _simplex_pools,
-    calibrate,
+)
+from aquakin.integrate.calibration.laplace import (
+    _at_bound_named,
+    _at_bound_sides,
+    _laplace_covariance,
+    _laplace_posterior,
+)
+from aquakin.integrate.calibration.loss import (
+    _build_loss,
+    _build_residual,
+    _data_term,
+    _missing_mask,
+)
+from aquakin.integrate.calibration.multistart import (
+    _is_solve_failure,
+    _optimizer_bounds,
+    _run_multistart,
+)
+from aquakin.integrate.calibration.objective import (
+    _check_start_gradient,
+    _FitConfig,
+    _forward_jac,
+    _ObjectiveBundle,
+)
+from aquakin.integrate.calibration.problem import (
+    _CalibrationProblem,
+    _predict,
+    _ReactorForwardModel,
+    _resolve_problem,
 )
 
 

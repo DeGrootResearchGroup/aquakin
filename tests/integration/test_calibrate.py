@@ -16,6 +16,7 @@ from aquakin.integrate._transforms import (
     to_unconstrained,
 )
 from aquakin.schema.model_spec import PriorSpec
+from tests.conftest import FIXTURES
 
 # ---------- transform roundtrips ----------
 
@@ -60,8 +61,18 @@ def test_unknown_transform_rejected():
 # ---------- end-to-end calibration ----------
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
+def simple_model():
+    """The simple A -> B model, loaded once for this module so the
+    module-scoped data and fits below can share it. Nothing here mutates it."""
+    return aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
+
+
+@pytest.fixture(scope="module")
 def setup(simple_model):
+    """A reactor on the A -> B model and noise-free observations of B from
+    k = 0.25. Module-scoped: every element is immutable (JAX arrays, a float)
+    or, for the reactor, only read by the tests and by ``calibrate``."""
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = jnp.asarray([1.0, 0.0])
     true_k = 0.25
@@ -70,6 +81,28 @@ def setup(simple_model):
     sol = reactor.solve(C0, params=true_params, t_span=(0.0, 10.0), t_eval=t_obs)
     obs_clean = sol.C_named("B")
     return reactor, C0, t_obs, obs_clean, true_k
+
+
+@pytest.fixture(scope="module")
+def band_fit(setup):
+    """The NLL + Laplace fit of the clean ``setup`` data (sigma = 0.02), shared
+    by the tests that read its posterior. ``CalibrationResult`` methods do not
+    modify the result and its arrays are immutable JAX arrays, so one test
+    cannot change what another sees."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    result = aquakin.calibrate(
+        reactor,
+        C0,
+        observations=obs_clean,
+        t_obs=t_obs,
+        free_params=["A_to_B.k"],
+        transforms={"A_to_B.k": "positive_log"},
+        observed_species=["B"],
+        loss="nll",
+        sigma=jnp.asarray(0.02),
+        laplace=True,
+    )
+    return reactor, C0, t_obs, obs_clean, result
 
 
 def test_recovers_known_parameter_mse(setup):
@@ -268,20 +301,8 @@ def test_recovers_known_parameter_nll_with_noise(setup):
     assert 0.0 < std < 1.0
 
 
-def test_laplace_returns_positive_definite_cov(setup):
-    reactor, C0, t_obs, obs_clean, _ = setup
-    result = aquakin.calibrate(
-        reactor,
-        C0,
-        observations=obs_clean,
-        t_obs=t_obs,
-        free_params=["A_to_B.k"],
-        transforms={"A_to_B.k": "positive_log"},
-        observed_species=["B"],
-        loss="nll",
-        sigma=jnp.asarray(0.02),
-        laplace=True,
-    )
+def test_laplace_returns_positive_definite_cov(band_fit):
+    *_, result = band_fit
     cov = np.asarray(result.posterior_cov)
     assert cov.shape == (1, 1)
     assert np.all(np.isfinite(cov))
@@ -576,11 +597,15 @@ def test_start_list_matches_best_of_separate_calls(setup, method):
     reactor, C0, t_obs, obs_clean, true_k = setup
     p0 = reactor.model.default_parameters()
     ks = [0.01, 0.8, 3.0]
+    # The fits differ only in their starts, which the compiled objective takes
+    # as arguments, so they share one compiled program.
+    cache = {}
     separate = [
         aquakin.calibrate(
             reactor,
             C0,
             initial_params=p0.at[0].set(k),
+            _compiled_cache=cache,
             **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(method=method)),
         )
         for k in ks
@@ -590,6 +615,7 @@ def test_start_list_matches_best_of_separate_calls(setup, method):
     listed = aquakin.calibrate(
         reactor,
         C0,
+        _compiled_cache=cache,
         **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(method=method, starts=starts)),
     )
     assert listed.loss == pytest.approx(best.loss, rel=1e-6, abs=1e-14)
@@ -713,10 +739,16 @@ def test_single_start_list_matches_initial_params(setup):
     2-D array of vectors."""
     reactor, C0, t_obs, obs_clean, _ = setup
     p = reactor.model.default_parameters().at[0].set(0.8)
-    ref = aquakin.calibrate(reactor, C0, initial_params=p, **_decay_kw(obs_clean, t_obs))
+    cache = {}  # the fits differ only in how the start is given: one program
+    ref = aquakin.calibrate(
+        reactor, C0, initial_params=p, _compiled_cache=cache, **_decay_kw(obs_clean, t_obs)
+    )
     for starts in ([{"A_to_B.k": 0.8}], (p,), np.asarray(p)[None, :]):
         r = aquakin.calibrate(
-            reactor, C0, **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(starts=starts))
+            reactor,
+            C0,
+            _compiled_cache=cache,
+            **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(starts=starts)),
         )
         assert r.loss == pytest.approx(ref.loss, rel=1e-12, abs=1e-18)
         assert r.params_named["A_to_B.k"] == pytest.approx(ref.params_named["A_to_B.k"], rel=1e-12)
@@ -727,13 +759,20 @@ def test_start_list_reproducible_order_and_duplicates(setup):
     repeating a start does not change which optimum is kept."""
     reactor, C0, t_obs, obs_clean, true_k = setup
     starts = [{"A_to_B.k": k} for k in (0.01, 0.8, 3.0)]
+    # The fits differ only in their starts and share one compiled program,
+    # except ``b``, which compiles its own so that "the same fit on every call"
+    # still covers a fresh call.
+    cache = {}
 
-    def fit(s):
+    def fit(s, compiled_cache=cache):
         return aquakin.calibrate(
-            reactor, C0, **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(starts=s))
+            reactor,
+            C0,
+            _compiled_cache=compiled_cache,
+            **_decay_kw(obs_clean, t_obs, optimizer=OptimizerConfig(starts=s)),
         )
 
-    a, b = fit(starts), fit(starts)
+    a, b = fit(starts), fit(starts, compiled_cache=None)
     assert a.loss == b.loss
     assert a.params_named == b.params_named
     rev = fit(starts[::-1])
@@ -882,10 +921,11 @@ reactions:
 """
 
 
-@pytest.fixture
-def bounded_setup(tmp_path):
-    """Data generated with k = 0.25, fitted by a model that declares k <= 0.2."""
-    path = tmp_path / "bounded_decay.yaml"
+@pytest.fixture(scope="module")
+def bounded_setup(tmp_path_factory):
+    """Data generated with k = 0.25, fitted by a model that declares k <= 0.2.
+    Module-scoped: the tests only unpack ``common`` into new dicts."""
+    path = tmp_path_factory.mktemp("bounded") / "bounded_decay.yaml"
     path.write_text(_BOUNDED_DECAY_YAML)
     model = aquakin.load_model_from_file(path)
     reactor = aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1))
@@ -912,10 +952,14 @@ def test_declared_bound_stops_the_fit(bounded_setup, method):
     move with the start."""
     reactor, C0, common = bounded_setup
     model = reactor.model
+    # The bounds and starts are not baked into the compiled objective, so every
+    # fit here shares one compiled program.
+    cache = {}
     multi = aquakin.calibrate(
         reactor,
         C0,
         optimizer=OptimizerConfig(method=method, n_starts=5, jitter=1.0, seed=0),
+        _compiled_cache=cache,
         **common,
     )
     assert multi.params_named["A_to_B.k"] == pytest.approx(0.2, rel=1e-6)
@@ -925,6 +969,7 @@ def test_declared_bound_stops_the_fit(bounded_setup, method):
             C0,
             initial_params=model.default_parameters().at[0].set(k_start),
             optimizer=OptimizerConfig(method=method),
+            _compiled_cache=cache,
             **common,
         )
         assert r.params_named["A_to_B.k"] == pytest.approx(0.2, rel=1e-6)
@@ -1296,27 +1341,10 @@ def test_programming_error_in_solve_is_not_swallowed(setup, monkeypatch):
 # ---------- posterior-predictive band ----------
 
 
-def _band_setup(setup):
-    reactor, C0, t_obs, obs_clean, true_k = setup
-    result = aquakin.calibrate(
-        reactor,
-        C0,
-        observations=obs_clean,
-        t_obs=t_obs,
-        free_params=["A_to_B.k"],
-        transforms={"A_to_B.k": "positive_log"},
-        observed_species=["B"],
-        loss="nll",
-        sigma=jnp.asarray(0.02),
-        laplace=True,
-    )
-    return reactor, C0, t_obs, obs_clean, result
-
-
-def test_predictive_band_brackets_truth(setup):
+def test_predictive_band_brackets_truth(band_fit):
     """The 95% band envelopes lo <= median <= hi and contains the (noise-free)
     truth at essentially every observation time."""
-    reactor, C0, t_obs, obs_clean, result = _band_setup(setup)
+    reactor, C0, t_obs, obs_clean, result = band_fit
     band = result.predictive_band(reactor, C0, t_obs, observed_species=["B"], n_draw=200, seed=0)
     assert band.lo.shape == band.hi.shape == band.median.shape == (len(t_obs), 1)
     assert band.n_valid > 0
@@ -1327,15 +1355,15 @@ def test_predictive_band_brackets_truth(setup):
     assert inside.mean() > 0.8
 
 
-def test_predictive_band_reproducible(setup):
-    reactor, C0, t_obs, _, result = _band_setup(setup)
+def test_predictive_band_reproducible(band_fit):
+    reactor, C0, t_obs, _, result = band_fit
     b1 = result.predictive_band(reactor, C0, t_obs, observed_species=["B"], seed=7)
     b2 = result.predictive_band(reactor, C0, t_obs, observed_species=["B"], seed=7)
     assert np.allclose(b1.lo, b2.lo) and np.allclose(b1.hi, b2.hi)
 
 
-def test_predictive_band_all_species_shape(setup):
-    reactor, C0, t_obs, _, result = _band_setup(setup)
+def test_predictive_band_all_species_shape(band_fit):
+    reactor, C0, t_obs, _, result = band_fit
     band = result.predictive_band(reactor, C0, t_obs, n_draw=50, seed=0)
     # No observed_species -> all model species (A and B) as columns.
     assert band.median.shape == (len(t_obs), reactor.model.n_species)
@@ -1359,8 +1387,8 @@ def test_predictive_band_requires_laplace(setup):
         result.predictive_band(reactor, C0, t_obs)
 
 
-def test_predictive_band_eig_keep_is_deprecated(setup):
-    reactor, C0, t_obs, _, result = _band_setup(setup)
+def test_predictive_band_eig_keep_is_deprecated(band_fit):
+    reactor, C0, t_obs, _, result = band_fit
     with pytest.warns(DeprecationWarning, match="eig_keep"):
         result.predictive_band(reactor, C0, t_obs, observed_species=["B"], n_draw=10, eig_keep=1e-2)
 
@@ -1446,11 +1474,9 @@ def test_laplace_config_eig_keep_is_deprecated():
         LaplaceConfig(eig_keep=1e-2)
 
 
-def test_calibrate_joint_std_matches_full_inverse(simple_model):
+def test_calibrate_joint_std_matches_full_inverse(decay_fit):
     """End-to-end: the reported std is the full-inverse std of the Hessian."""
-    result, _ = _decay_fit(
-        simple_model, LaplaceConfig(method="gauss_newton", include_ic=True, ridge=0.0)
-    )
+    result, _ = decay_fit(LaplaceConfig(method="gauss_newton", include_ic=True, ridge=0.0))
     full_std = np.sqrt(np.diag(np.linalg.inv(np.asarray(result.joint_hessian))))
     assert np.allclose(np.asarray(result.posterior_std_unconstrained), full_std[:1], rtol=1e-8)
 
@@ -1534,11 +1560,11 @@ def test_calibrate_nll_small_scale_observable_gives_finite_posterior(setup):
     assert res.params_named_std["A_to_B.k"] > 0.0
 
 
-def test_band_and_std_share_the_truncation(setup):
+def test_band_and_std_share_the_truncation(band_fit):
     """params_named_std and predictive_band draw from the SAME posterior_cov, so
     they regularise identically -- the draws' empirical covariance matches the
     reported posterior_cov (the #7 consistency)."""
-    reactor, C0, t_obs, _, result = _band_setup(setup)
+    reactor, C0, t_obs, _, result = band_fit
     # Reconstruct the draws the band uses (1 free param here) and check their
     # spread matches posterior_cov[0,0].
     cov00 = float(np.asarray(result.posterior_cov)[0, 0])
@@ -1782,17 +1808,15 @@ def test_free_ic_laplace_is_over_rates_only(simple_model):
 _DECAY_K, _DECAY_A0, _DECAY_SIGMA = 0.25, 1.5, 0.01
 
 
-def _decay_fit(
-    simple_model,
-    laplace,
-    *,
-    free_ic=True,
-    n_datasets=1,
-    ic_prior_log_std=None,
-    priors=None,
-    a0_start=1.0,
-):
-    """Fit k and A0 of A -> B to noise-free observations of A alone."""
+@pytest.fixture(scope="module")
+def decay_fit(simple_model):
+    """Fit k and A0 of A -> B to noise-free observations of A alone.
+
+    Returns ``fit(laplace, *, free_ic=True, n_datasets=1, ic_prior_log_std=None,
+    priors=None, a0_start=1.0) -> (result, t_obs)``, memoized on its arguments
+    so tests asking for the same fit share one ``calibrate`` call. The tests
+    only read the result (``dataclasses.replace`` makes a copy), so sharing it
+    cannot leak a change from one test into another."""
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     true_params = simple_model.default_parameters().at[0].set(_DECAY_K)
     t_obs = jnp.linspace(0.5, 12.0, 25)
@@ -1800,26 +1824,43 @@ def _decay_fit(
         jnp.asarray([_DECAY_A0, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t_obs
     )
     obs = sol.C_named("A")
-    C0 = jnp.asarray([a0_start, 0.0])
-    return aquakin.calibrate(
-        reactor,
-        [C0] * n_datasets if n_datasets > 1 else C0,
-        observations=[obs] * n_datasets if n_datasets > 1 else obs,
-        t_obs=[t_obs] * n_datasets if n_datasets > 1 else t_obs,
-        free_params=["A_to_B.k"],
-        transforms={"A_to_B.k": "positive_log"},
-        observed_species=["A"],
-        loss="nll",
-        sigma=jnp.asarray(_DECAY_SIGMA),
-        priors=priors,
-        laplace=laplace,
-        free_ic=(
-            FreeICConfig(["A"], bounds=(0.1, 10.0), prior_log_std=ic_prior_log_std)
-            if free_ic
-            else None
-        ),
-        optimizer=OptimizerConfig(method="gauss_newton"),
-    ), t_obs
+    fits = {}
+
+    def fit(
+        laplace, *, free_ic=True, n_datasets=1, ic_prior_log_std=None, priors=None, a0_start=1.0
+    ):
+        key = (
+            laplace,
+            free_ic,
+            n_datasets,
+            ic_prior_log_std,
+            None if priors is None else tuple(sorted(priors.items())),
+            a0_start,
+        )
+        if key not in fits:
+            C0 = jnp.asarray([a0_start, 0.0])
+            fits[key] = aquakin.calibrate(
+                reactor,
+                [C0] * n_datasets if n_datasets > 1 else C0,
+                observations=[obs] * n_datasets if n_datasets > 1 else obs,
+                t_obs=[t_obs] * n_datasets if n_datasets > 1 else t_obs,
+                free_params=["A_to_B.k"],
+                transforms={"A_to_B.k": "positive_log"},
+                observed_species=["A"],
+                loss="nll",
+                sigma=jnp.asarray(_DECAY_SIGMA),
+                priors=priors,
+                laplace=laplace,
+                free_ic=(
+                    FreeICConfig(["A"], bounds=(0.1, 10.0), prior_log_std=ic_prior_log_std)
+                    if free_ic
+                    else None
+                ),
+                optimizer=OptimizerConfig(method="gauss_newton"),
+            )
+        return fits[key], t_obs
+
+    return fit
 
 
 def _decay_fisher(t_obs):
@@ -1834,11 +1875,11 @@ def _decay_fisher(t_obs):
 _EXACT_LAPLACE = dict(ridge=1e-12)
 
 
-def test_joint_ic_gauss_newton_hessian_matches_closed_form_fisher(simple_model):
+def test_joint_ic_gauss_newton_hessian_matches_closed_form_fisher(decay_fit):
     """The joint Gauss-Newton Hessian over (log k, log A0) is the closed-form
     Fisher information, and its inverse is the joint covariance."""
-    result, t_obs = _decay_fit(
-        simple_model, LaplaceConfig(method="gauss_newton", include_ic=True, **_EXACT_LAPLACE)
+    result, t_obs = decay_fit(
+        LaplaceConfig(method="gauss_newton", include_ic=True, **_EXACT_LAPLACE)
     )
     F = _decay_fisher(t_obs)
     assert result.joint_names == ["A_to_B.k", "ic[0].A"]
@@ -1846,12 +1887,12 @@ def test_joint_ic_gauss_newton_hessian_matches_closed_form_fisher(simple_model):
     np.testing.assert_allclose(np.asarray(result.joint_cov), np.linalg.inv(F), rtol=1e-4)
 
 
-def test_joint_ic_rate_std_is_marginal_over_pools(simple_model):
+def test_joint_ic_rate_std_is_marginal_over_pools(decay_fit):
     """With include_ic the rate std is the marginal sqrt(inv(F)[0, 0]), wider
     than the default rate-only std sqrt(1 / F[0, 0]) conditional on A0."""
     lap = dict(method="gauss_newton", **_EXACT_LAPLACE)
-    joint, t_obs = _decay_fit(simple_model, LaplaceConfig(include_ic=True, **lap))
-    rate_only, _ = _decay_fit(simple_model, LaplaceConfig(**lap))
+    joint, t_obs = decay_fit(LaplaceConfig(include_ic=True, **lap))
+    rate_only, _ = decay_fit(LaplaceConfig(**lap))
     F = _decay_fisher(t_obs)
     std_joint = float(joint.posterior_std_unconstrained[0])
     std_rate_only = float(rate_only.posterior_std_unconstrained[0])
@@ -1871,19 +1912,18 @@ def test_joint_ic_rate_std_is_marginal_over_pools(simple_model):
     assert joint.params_named_std["A_to_B.k"] == pytest.approx(_DECAY_K * std_joint, rel=1e-3)
 
 
-def test_joint_ic_fd_hessian_matches_gauss_newton(simple_model):
+def test_joint_ic_fd_hessian_matches_gauss_newton(decay_fit):
     """At a zero-residual fit the FD loss Hessian equals J^T J."""
-    fd, t_obs = _decay_fit(simple_model, LaplaceConfig(method="fd", include_ic=True))
+    fd, t_obs = decay_fit(LaplaceConfig(method="fd", include_ic=True))
     np.testing.assert_allclose(np.asarray(fd.joint_hessian), _decay_fisher(t_obs), rtol=1e-3)
 
 
-def test_joint_ic_fd_hessian_includes_rate_and_ic_priors(simple_model):
+def test_joint_ic_fd_hessian_includes_rate_and_ic_priors(decay_fit):
     """The FD joint Hessian adds the rate-prior and pool-prior precisions. Both
     priors are centred on the truth so the MAP stays zero-residual and FD equals
     Gauss-Newton exactly."""
     s_k, s_ic = 0.1, 0.5
-    fd, t_obs = _decay_fit(
-        simple_model,
+    fd, t_obs = decay_fit(
         LaplaceConfig(method="fd", include_ic=True),
         ic_prior_log_std=s_ic,
         priors={"A_to_B.k": (_DECAY_K, s_k)},
@@ -1894,11 +1934,10 @@ def test_joint_ic_fd_hessian_includes_rate_and_ic_priors(simple_model):
     np.testing.assert_allclose(np.asarray(fd.joint_hessian), expected, rtol=1e-3)
 
 
-def test_joint_ic_includes_ic_prior(simple_model):
+def test_joint_ic_includes_ic_prior(decay_fit):
     """A log-space pool prior adds 1 / prior_log_std^2 to the pool diagonal."""
     s = 0.5
-    result, t_obs = _decay_fit(
-        simple_model,
+    result, t_obs = decay_fit(
         LaplaceConfig(method="gauss_newton", include_ic=True, **_EXACT_LAPLACE),
         ic_prior_log_std=s,
     )
@@ -1906,10 +1945,9 @@ def test_joint_ic_includes_ic_prior(simple_model):
     np.testing.assert_allclose(np.asarray(result.joint_hessian), expected, rtol=1e-4)
 
 
-def test_joint_ic_multi_dataset_layout(simple_model):
+def test_joint_ic_multi_dataset_layout(decay_fit):
     """Two datasets: one shared rate plus one pool per dataset."""
-    result, _ = _decay_fit(
-        simple_model,
+    result, _ = decay_fit(
         LaplaceConfig(method="gauss_newton", include_ic=True),
         n_datasets=2,
     )
@@ -1919,12 +1957,10 @@ def test_joint_ic_multi_dataset_layout(simple_model):
     assert [list(d) for d in result.ic_named_std] == [["A"], ["A"]]
 
 
-def test_joint_fields_absent_by_default_and_without_free_ic(simple_model):
+def test_joint_fields_absent_by_default_and_without_free_ic(decay_fit):
     """The default stays rate-only, and include_ic is a no-op without free_ic."""
-    default, _ = _decay_fit(simple_model, LaplaceConfig(method="gauss_newton"))
-    no_ic, _ = _decay_fit(
-        simple_model, LaplaceConfig(method="gauss_newton", include_ic=True), free_ic=False
-    )
+    default, _ = decay_fit(LaplaceConfig(method="gauss_newton"))
+    no_ic, _ = decay_fit(LaplaceConfig(method="gauss_newton", include_ic=True), free_ic=False)
     for r in (default, no_ic):
         assert r.joint_cov is None
         assert r.joint_hessian is None
@@ -2089,10 +2125,10 @@ def test_logit_initial_out_of_range_rejected(simple_model):
 # ---------- posterior draws ----------
 
 
-def test_posterior_draws_match_laplace_posterior(simple_model):
+def test_posterior_draws_match_laplace_posterior(simple_model, decay_fit):
     """Draws are full parameter vectors: the free parameter is distributed as the
     Laplace posterior in its unconstrained (log) space, the rest are fixed."""
-    result, _ = _decay_fit(simple_model, LaplaceConfig(method="gauss_newton"), free_ic=False)
+    result, _ = decay_fit(LaplaceConfig(method="gauss_newton"), free_ic=False)
     draws = result.posterior_draws(simple_model, n_draw=4000, seed=1)
     assert draws.shape == (4000, simple_model.n_params)
     i = simple_model.param_index["A_to_B.k"]
@@ -2105,16 +2141,16 @@ def test_posterior_draws_match_laplace_posterior(simple_model):
     np.testing.assert_array_equal(draws, result.posterior_draws(simple_model, 4000, seed=1))
 
 
-def test_posterior_draws_require_laplace(simple_model):
-    result, _ = _decay_fit(simple_model, False, free_ic=False)
+def test_posterior_draws_require_laplace(simple_model, decay_fit):
+    result, _ = decay_fit(False, free_ic=False)
     with pytest.raises(ValueError, match="laplace=True"):
         result.posterior_draws(simple_model)
 
 
-def test_posterior_draws_reject_degenerate_covariance(simple_model):
+def test_posterior_draws_reject_degenerate_covariance(simple_model, decay_fit):
     import dataclasses
 
-    result, _ = _decay_fit(simple_model, LaplaceConfig(method="gauss_newton"), free_ic=False)
+    result, _ = decay_fit(LaplaceConfig(method="gauss_newton"), free_ic=False)
     degenerate = dataclasses.replace(result, posterior_cov=jnp.zeros((1, 1)))
     with pytest.raises(ValueError, match="no positive-variance"):
         degenerate.posterior_draws(simple_model)

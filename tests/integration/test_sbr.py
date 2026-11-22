@@ -6,6 +6,8 @@ aeration switched per phase, and the settle phase clarifying the decanted
 effluent. Phase transitions are located events the plant lands on exactly.
 """
 
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -106,12 +108,43 @@ def test_cycle_events_at_phase_boundaries(asm1):
 # live JAX buffers push the hosted runner into an OOM reclaim. The cheap
 # construction / unit-level tests above and below stay on the fast gate.
 
+# The save grids the cycle tests read. All three come from one solve of the same
+# plant over (0, 1.3) on their union: the event solver integrates each segment
+# with an adaptive step sequence that does not depend on ``t_eval`` and reads
+# every save point independently from that segment's dense output (or its exact
+# end state), so each grid's rows are the values its own solve would give.
+_GRID_VOLUME = jnp.linspace(0.005, 1.295, 80)
+_GRID_EVENT_ALIGNED = jnp.linspace(0.0, 1.3, 131)  # hits 0.1, 0.4, ...
+# A fine grid with several interior samples inside each decant phase
+# ([0.5, 0.6) and [1.15, 1.25)), none relying on a phase boundary.
+_GRID_DECANT = jnp.linspace(0.0, 1.3, 261)
+
+
+@pytest.fixture(scope="module")
+def cycle_run(asm1):
+    """The default SBR plant solved once over two cycles on the union of the
+    cycle tests' save grids.
+
+    Returns a function ``on(grid) -> (plant, sol)`` giving the plant and the
+    solution restricted to the rows of ``grid``.
+    """
+    p = _plant(asm1, _sbr(asm1))
+    grids = [np.asarray(g) for g in (_GRID_VOLUME, _GRID_EVENT_ALIGNED, _GRID_DECANT)]
+    t_all = np.unique(np.concatenate(grids))
+    sol = p.solve(t_span=(0.0, 1.3), t_eval=jnp.asarray(t_all))
+
+    def on(grid):
+        grid = np.asarray(grid)
+        idx = np.searchsorted(t_all, grid)
+        assert np.array_equal(t_all[idx], grid)   # every point is in the union
+        return p, dataclasses.replace(sol, t=sol.t[idx], state=sol.state[idx])
+
+    return on
+
 
 @pytest.mark.slow
-def test_volume_cycles_fill_and_decant(asm1):
-    sbr = _sbr(asm1)
-    p = _plant(asm1, sbr)
-    sol = p.solve(t_span=(0.0, 1.3), t_eval=jnp.linspace(0.005, 1.295, 80))
+def test_volume_cycles_fill_and_decant(asm1, cycle_run):
+    _, sol = cycle_run(_GRID_VOLUME)
     V = np.asarray(sol.state[:, asm1.n_species])
     assert np.all(np.isfinite(np.asarray(sol.state)))
     assert V.max() == pytest.approx(1000.0, abs=5.0)   # fills to full
@@ -119,28 +152,22 @@ def test_volume_cycles_fill_and_decant(asm1):
 
 
 @pytest.mark.slow
-def test_event_aligned_save_grid_is_finite(asm1):
+def test_event_aligned_save_grid_is_finite(cycle_run):
     """A save grid that lands exactly on phase-boundary event times must stay
     finite -- the segment-endpoint emission, not a dense edge-evaluation."""
-    sbr = _sbr(asm1)
-    p = _plant(asm1, sbr)
-    sol = p.solve(t_span=(0.0, 1.3), t_eval=jnp.linspace(0.0, 1.3, 131))  # hits 0.1,0.4,...
+    _, sol = cycle_run(_GRID_EVENT_ALIGNED)
     assert np.all(np.isfinite(np.asarray(sol.state)))
     assert sol.events_log and len(sol.events_log) >= 8   # phase switches logged
 
 
 @pytest.mark.slow
-def test_decant_is_clarified(asm1):
+def test_decant_is_clarified(asm1, cycle_run):
     """*Every* decant draw -- not just the phase boundary -- is clarified: the
     particulates stay far below the bulk throughout the decant, and solubles pass
     through unchanged. Sampling the whole decant span (not one grid-lucky point)
     is what pins that clarity is held across the draw, rather than washed out by
     re-mixing once the quiescent decant begins."""
-    sbr = _sbr(asm1)
-    p = _plant(asm1, sbr)
-    # A fine grid with several interior samples inside each decant phase
-    # ([0.5, 0.6) and [1.15, 1.25)), none relying on a phase boundary.
-    sol = p.solve(t_span=(0.0, 1.3), t_eval=jnp.linspace(0.0, 1.3, 261))
+    p, sol = cycle_run(_GRID_DECANT)
     eff = p.stream(sol, "sbr.effluent")
     q = np.asarray(eff.Q)
     decant = np.where(q > 1e-6)[0]

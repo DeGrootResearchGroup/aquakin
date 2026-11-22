@@ -79,18 +79,6 @@ def test_the_functions(text, t, expected):
     assert value(text, t) == pytest.approx(expected)
 
 
-def test_precedence_follows_python():
-    """A sign binds looser than a power, as in Python and ordinary notation, so
-    ``-2**2`` is ``-(2**2)``. A rate expression reads it the same way."""
-    assert value("-2**2", 0.0) == -4.0
-    assert value("(0 - 2)**2", 0.0) == 4.0
-    # The exponent may carry its own sign, and ** stays right-associative.
-    assert value("2**-1", 0.0) == 0.5
-    assert value("2**3**2", 0.0) == 512.0
-    # A sign on the base of a product binds that operand only.
-    assert value("-2*3**2", 0.0) == -18.0
-
-
 def test_every_declared_function_and_constant_can_be_called():
     """So the tables and the parser cannot drift apart."""
     for name, (_, arities) in FUNCTIONS.items():

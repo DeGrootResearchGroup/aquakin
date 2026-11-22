@@ -44,7 +44,6 @@ from aquakin.integrate._common import (
     with_adjoint,
 )
 from aquakin.integrate._config import STABLE_REVERSE_DIFF
-from aquakin.integrate._linalg import _NULL_LOADING_TOL, _NULL_RTOL
 from aquakin.integrate._transforms import (
     dphysical_dunconstrained,
     from_unconstrained,
@@ -52,111 +51,37 @@ from aquakin.integrate._transforms import (
 )
 from aquakin.integrate.calibration.config import (
     _VALID_LOSSES,
-    _VALID_OPTIMIZERS,
     FreeICConfig,
     LaplaceConfig,
     OptimizerConfig,
-    _resolve_laplace,
 )
-from aquakin.integrate.calibration.coords import (
-    _DEFAULT_IC_BOUNDS,
-    _free_ic_fields,
-    _ic_coordinate_names,
-    _ic_theta_from_pools,
-    _joint_names,
-    _per_species_ic_bounds,
-    _resolve_ic_coords,
-    _simplex_fraction_cov,
-    _simplex_pools,
-)
-from aquakin.integrate.calibration.driver import (
-    _check_start_args,
-    _fit_result,
-    _initial_point,
-    _run_fit,
-)
-from aquakin.integrate.calibration.laplace import (
-    _AT_BOUND_ATOL,
-    _AT_BOUND_RTOL,
-    _at_bound_named,
-    _at_bound_sides,
-    _laplace_covariance,
-    _laplace_posterior,
-    _LaplaceOut,
-)
+from aquakin.integrate.calibration.coords import _free_ic_fields
+from aquakin.integrate.calibration.driver import _check_start_args, _run_fit
+from aquakin.integrate.calibration.laplace import _laplace_covariance
 from aquakin.integrate.calibration.loss import (
-    _SSE_FLOOR,
-    _build_loss,
-    _build_masked_loss,
-    _build_masked_residual,
-    _build_residual,
     _check_sigma_arg,
-    _coerce_sigma,
     _convert_observations,
-    _data_term,
-    _fill_missing,
-    _is_sigma_estimate,
-    _masked_parts,
-    _missing_mask,
-    _n_obs_per_output,
     _observation_unit_factors,
-    _observed_counts,
-    _pooled_sse,
-    _sigma_per_dataset,
 )
-from aquakin.integrate.calibration.multistart import (
-    _IRLS_MAX_ITER,
-    _SOLVE_FAILURE_HINT,
-    _clip_start,
-    _is_solve_failure,
-    _optimizer_bounds,
-    _OptOut,
-    _resolve_starts,
-    _run_multistart,
-)
-from aquakin.integrate.calibration.objective import (
-    _build_objective,
-    _check_start_gradient,
-    _FitConfig,
-    _forward_jac,
-    _ObjectiveBundle,
-    _residual_parts,
-)
+from aquakin.integrate.calibration.objective import _FitConfig
 from aquakin.integrate.calibration.observation import (
     observation_size,
     observation_takes_time,
     observe,
 )
-from aquakin.integrate.calibration.problem import (
-    _array_digest,
-    _bound_to_unconstrained,
-    _CalibrationProblem,
-    _noise_estimate,
-    _predict,
-    _ReactorForwardModel,
-    _resolve_problem,
-    _resolve_rate_bounds,
-)
-from aquakin.integrate.calibration.result import (
-    CalibrationResult,
-    PredictiveBand,
-)
+from aquakin.integrate.calibration.problem import _ReactorForwardModel, _resolve_problem
+from aquakin.integrate.calibration.result import CalibrationResult, PredictiveBand
 
-# Every name this module has exported. The implementation lives in the
-# ``aquakin.integrate.calibration`` subpackage; the names are re-exported here so
-# existing imports (tests, ``fisher.py``, ``profile.py``, the plant layer) keep
-# working. ``tests/unit/test_calibrate_exports.py`` pins the list.
+# ``calibrate`` and the configs and results it takes and returns, plus the
+# non-underscore helpers this module has always exported (whether those stay is
+# a public-API decision, so they are kept). The implementation lives in the
+# ``aquakin.integrate.calibration`` subpackage, whose private helpers are
+# imported from their own modules (or, by the plant layer, from
+# ``aquakin.integrate.seam``), never through here. ``_laplace_covariance`` is
+# still re-exported because ``tests/integration/test_calibrate.py`` imports it
+# from here; it leaves once that test imports it from
+# ``aquakin.integrate.calibration.laplace``.
 __all__ = [
-    "_AT_BOUND_ATOL",
-    "_AT_BOUND_RTOL",
-    "_DEFAULT_IC_BOUNDS",
-    "_IRLS_MAX_ITER",
-    "_NULL_LOADING_TOL",
-    "_NULL_RTOL",
-    "_SOLVE_FAILURE_HINT",
-    "_SSE_FLOOR",
-    "_VALID_LOSSES",
-    "_VALID_OPTIMIZERS",
     "CalibrationResult",
     "DifferentiationConfig",
     "FreeICConfig",
@@ -164,61 +89,7 @@ __all__ = [
     "OptimizerConfig",
     "PredictiveBand",
     "Reactor",
-    "_CalibrationProblem",
-    "_FitConfig",
-    "_LaplaceOut",
-    "_ObjectiveBundle",
-    "_OptOut",
-    "_ReactorForwardModel",
-    "_array_digest",
-    "_at_bound_named",
-    "_at_bound_sides",
-    "_bound_to_unconstrained",
-    "_build_loss",
-    "_build_masked_loss",
-    "_build_masked_residual",
-    "_build_objective",
-    "_build_residual",
-    "_check_sigma_arg",
-    "_check_start_args",
-    "_check_start_gradient",
-    "_clip_start",
-    "_coerce_sigma",
-    "_convert_observations",
-    "_data_term",
-    "_fill_missing",
-    "_fit_result",
-    "_forward_jac",
-    "_free_ic_fields",
-    "_ic_coordinate_names",
-    "_ic_theta_from_pools",
-    "_initial_point",
-    "_is_sigma_estimate",
-    "_is_solve_failure",
-    "_joint_names",
     "_laplace_covariance",
-    "_laplace_posterior",
-    "_masked_parts",
-    "_missing_mask",
-    "_n_obs_per_output",
-    "_noise_estimate",
-    "_observation_unit_factors",
-    "_observed_counts",
-    "_optimizer_bounds",
-    "_per_species_ic_bounds",
-    "_pooled_sse",
-    "_predict",
-    "_residual_parts",
-    "_resolve_ic_coords",
-    "_resolve_laplace",
-    "_resolve_problem",
-    "_resolve_rate_bounds",
-    "_resolve_starts",
-    "_run_fit",
-    "_run_multistart",
-    "_sigma_per_dataset",
-    "_simplex_fraction_cov",
-    "_simplex_pools",
     "calibrate",
     "check_finite_gradient",
     "dphysical_dunconstrained",

@@ -12,7 +12,11 @@ import pytest
 
 import aquakin
 from aquakin import Experiment, LaplaceConfig, OptimizerConfig
-from aquakin.integrate.calibrate import observation_size, observation_takes_time, observe
+from aquakin.integrate.calibration.observation import (
+    observation_size,
+    observation_takes_time,
+    observe,
+)
 from aquakin.integrate.experiment_design import _structure_key
 from aquakin.integrate.fisher import _FisherSetup
 
