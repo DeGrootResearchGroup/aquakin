@@ -106,9 +106,9 @@ def test_the_error_class_is_the_language_s_own():
         error = Mine
 
     # Both tokenizing and parsing raise it, so one language means one error type.
-    with pytest.raises(Mine):
+    with pytest.raises(Mine, match="Unexpected character '@' at position 2"):
         Lang("a @ b").parse()
-    with pytest.raises(Mine):
+    with pytest.raises(Mine, match="unexpected 'b' at position 2"):
         Lang("a b").parse()
 
 

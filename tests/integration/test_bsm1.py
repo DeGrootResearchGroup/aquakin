@@ -28,12 +28,12 @@ from aquakin.plant.influent import InfluentSeries
 pytestmark = pytest.mark.slow
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def asm1():
     return aquakin.load_model("asm1")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def constant_influent(asm1):
     """Constant inlet at the documented BSM1 average composition."""
     from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
@@ -60,10 +60,32 @@ def _run(plant, t_end=30.0, n_save=4, **kwargs):
     )
 
 
-def test_bsm1_builds_and_solves(asm1, constant_influent):
+@pytest.fixture(scope="module")
+def bsm1_plant(asm1, constant_influent):
+    """BSM1 under the constant influent, shared by the tests that only solve it
+    (``plant.solve`` does not mutate the plant)."""
     plant = build_bsm1(model=asm1)
     plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
-    sol = _run(plant, t_end=10.0)
+    return plant
+
+
+@pytest.fixture(scope="module")
+def sol_10d(bsm1_plant):
+    """The 10-day constant-influent solve saved daily (11 points). The tests
+    that read only the end point share it with the metric tests that average
+    over the whole window: the save times do not change the adaptive step
+    sequence, so the end point is the same as on a coarser grid."""
+    return _run(bsm1_plant, t_end=10.0, n_save=11)
+
+
+@pytest.fixture(scope="module")
+def sol_15d(bsm1_plant):
+    """The 15-day constant-influent solve (4 save points)."""
+    return _run(bsm1_plant, t_end=15.0)
+
+
+def test_bsm1_builds_and_solves(sol_10d):
+    sol = sol_10d
     assert jnp.all(jnp.isfinite(sol.state))
 
 
@@ -101,11 +123,9 @@ def test_recycle_passes_validated_and_configurable(asm1):
     assert Plant("p", time_unit="d").recycle_passes == 3  # default
 
 
-def test_bsm1_nitrification_active(asm1, constant_influent):
+def test_bsm1_nitrification_active(sol_15d):
     """Under aerobic conditions in tank 5, NH4 should be largely oxidised."""
-    plant = build_bsm1(model=asm1)
-    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
-    sol = _run(plant, t_end=15.0)
+    sol = sol_15d
     tank5_SNH = float(sol.C_named("tank5", "SNH")[-1])
     tank5_SNO = float(sol.C_named("tank5", "SNO")[-1])
     # Influent SNH = 31.56; tank 5 SNH should be <50% of that.
@@ -113,11 +133,9 @@ def test_bsm1_nitrification_active(asm1, constant_influent):
     assert tank5_SNO > 1.0, f"SNO not produced: {tank5_SNO}"
 
 
-def test_bsm1_biomass_sustained(asm1, constant_influent):
+def test_bsm1_biomass_sustained(sol_15d):
     """RAS recycle should keep biomass concentrations elevated."""
-    plant = build_bsm1(model=asm1)
-    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
-    sol = _run(plant, t_end=15.0)
+    sol = sol_15d
     # Heterotrophic biomass should grow well above the influent value
     # (which is 28.17) via the recycled mass.
     xbh = float(sol.C_named("tank3", "XB_H")[-1])
@@ -127,11 +145,9 @@ def test_bsm1_biomass_sustained(asm1, constant_influent):
     assert xba > 10.0, f"XB_A washed out: {xba}"
 
 
-def test_bsm1_aerobic_anoxic_separation(asm1, constant_influent):
+def test_bsm1_aerobic_anoxic_separation(sol_10d):
     """Aerobic tanks should have positive SO; anoxic tanks ~zero."""
-    plant = build_bsm1(model=asm1)
-    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
-    sol = _run(plant, t_end=10.0)
+    sol = sol_10d
     so1 = float(sol.C_named("tank1", "SO")[-1])
     so3 = float(sol.C_named("tank3", "SO")[-1])
     so5 = float(sol.C_named("tank5", "SO")[-1])
@@ -226,11 +242,9 @@ def test_bsm1_takacs_dry_weather_runs(asm1):
     assert float(sol.C_named("tank5", "SNH")[-1]) < 5.0
 
 
-def test_metrics_compute_finite(asm1, constant_influent):
+def test_metrics_compute_finite(asm1, bsm1_plant, sol_10d):
     """The metrics module produces finite values on a BSM1 trajectory."""
-    plant = build_bsm1(model=asm1)
-    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
-    sol = _run(plant, t_end=10.0, n_save=11)
+    plant, sol = bsm1_plant, sol_10d
 
     # Effluent = the clarifier overflow, reconstructed from the saved states.
     eff = plant.stream(sol, "clarifier.overflow")
@@ -244,12 +258,10 @@ def test_metrics_compute_finite(asm1, constant_influent):
     assert float(tss) > 0.0
 
 
-def test_metrics_accept_stream_series(asm1, constant_influent):
+def test_metrics_accept_stream_series(asm1, bsm1_plant, sol_10d):
     """The metric kernels take a StreamSeries directly (model from the stream),
     giving the same result as the unpacked-array call."""
-    plant = build_bsm1(model=asm1)
-    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
-    sol = _run(plant, t_end=10.0, n_save=11)
+    plant, sol = bsm1_plant, sol_10d
     eff = plant.stream(sol, "clarifier.overflow")
 
     # StreamSeries form == explicit-array form.

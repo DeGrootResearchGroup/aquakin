@@ -60,6 +60,13 @@ continuation/arclength kernels stale). `set_temperature_model` also changes the
 state length, so it additionally calls `plant._colored.reset()` (the structural
 colored builders), which `set_temperature` deliberately does not (its pattern
 stays valid).
+**Arclength continuation must not jump branches** (`integrate/steady.py`,
+`arclength_continuation_solve`). A converged corrector step farther than
+`max_correction * dsigma` from its predictor is rejected and retried shorter:
+near a fold the step's hyperplane also cuts the other branch, and accepting a
+corrector that lands there hides the fold and reports that branch as the
+operating point. Keep this check when changing the step control or the
+corrector.
 **Recycle resolution** — the methods named below (`_resolve_flows`,
 `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
 `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)
@@ -137,10 +144,8 @@ not converged — the backstop for the non-affine case.
   solve reaches tolerance for `rho` up to 0.99 where the fixed 3-pass leaves
   13–97%, and its IFT gradient matches central finite differences to ~2e-10; on
   the real BSM2 reject loop the adaptive forward fixed point matches a 14-pass
-  deep sweep to ~4e-15, its IFT tangent matches the deep-sweep gradient to
-  ~6e-19, and a short BSM2 solve matches the fixed-pass trajectory to ~3e-8
-  (within the solver tolerance — the adaptive path is the more-converged of the
-  two). `recycle_tol` is read inside `_resolve_recycle_concentrations`, so it
+  deep sweep to ~4e-15, and its IFT tangent matches the deep-sweep gradient to
+  ~6e-19. `recycle_tol` is read inside `_resolve_recycle_concentrations`, so it
   reaches every solve path automatically (no per-path threading); the cached
   affine `recycle_map` still supplies the warm-start seed. Because the default
   routes every plant solve through `jax.lax.custom_root`, the
@@ -214,8 +219,7 @@ not converged — the backstop for the non-affine case.
   kinetic *and* a flow-setpoint param both match the per-call-probe gradient
   bit-for-bit). The cached map must be `stop_gradient`'d before being closed over
   (it is a params-derived value inside the `custom_vjp`; its parameter dependence
-  is the vjp's job). Both the cached jitted forward and the under-trace
-  calibration-gradient path go through the shared `Plant._esdirk_stable_adjoint`.
+  is the vjp's job). The path runs through `Plant._esdirk_stable_adjoint`.
   Falls back to per-call probing when `M` is not state-invariant
   (`_recycle_map_constant` not True). **Measured (clean serial min-of-8 timing):
   a modest reverse-gradient win where the recycle probe is non-trivial — BSM2

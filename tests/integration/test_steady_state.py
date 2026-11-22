@@ -114,6 +114,54 @@ def test_arclength_solves_reachable_and_detects_past_fold():
     assert r_fold.branch is None
 
 
+def test_arclength_does_not_jump_branches_across_a_fold():
+    """A bistable field: F(y, k) = 0.1 (10 - y) - k y / (1 + y^2). Along the
+    steady states k(y) = 0.1 (10 - y)(1 + y^2) / y, whose high arm ends in a fold
+    at the local maximum k ~ 2.604 (y ~ 4.78) and whose low arm continues past it.
+    From the high arm at k = 2, continuing to k = 3 must report the fold, not the
+    low arm's steady state at k = 3 (y ~ 0.364); at the default step cap a step's
+    hyperplane cuts the low arm, and the corrector used to converge there. A
+    reachable target on the high arm still converges to its root."""
+    from scipy.optimize import brentq
+
+    from aquakin.plant.steady import arclength_continuation_solve
+
+    def rhs(y, p):
+        return jnp.array([0.1 * (10.0 - y[0]) - p[0] * y[0] / (1.0 + y[0] ** 2)])
+
+    def high_root(k):
+        return brentq(lambda a: 0.1 * (10.0 - a) - k * a / (1.0 + a * a), 4.79, 10.0)
+
+    pk, yk = jnp.array([2.0]), jnp.array([high_root(2.0)])
+    kw = dict(ptc_kwargs=dict(scale_floor=jnp.asarray(1.0)))
+    past = arclength_continuation_solve(rhs, pk, yk, jnp.array([3.0]), **kw)
+    assert past.status == "past_fold"
+    a = float(past.state[0])
+    k_of_a = 0.1 * (10.0 - a) * (1.0 + a * a) / a
+    assert 4.0 < a < float(yk[0]) and 2.5 < k_of_a <= 2.6044  # the high arm, near the nose
+
+    reach = arclength_continuation_solve(rhs, pk, yk, jnp.array([2.4]), **kw)
+    assert reach.status == "converged"
+    np.testing.assert_allclose(np.asarray(reach.state), [high_root(2.4)], rtol=1e-6)
+
+
+def test_arclength_reports_failed_when_no_step_converges():
+    # With no corrector iterations allowed no step converges, so the step shrinks
+    # below dsigma_min and the solve reports "failed" from the known point (no
+    # fold was seen, so it is not "past_fold").
+    from aquakin.plant.steady import arclength_continuation_solve
+
+    def rhs(y, p):
+        return jnp.array([p[0] - y[0] ** 2])
+
+    r = arclength_continuation_solve(rhs, jnp.array([1.0]), jnp.array([1.0]), jnp.array([4.0]),
+                                     scale=jnp.array([1.0]), corrector_iters=0,
+                                     ptc_kwargs=dict(scale_floor=jnp.array([1.0])))
+    assert r.status == "failed"
+    assert float(r.s_max) == 0.0
+    np.testing.assert_allclose(np.asarray(r.state), [1.0], rtol=1e-12)
+
+
 def test_arclength_record_branch_traces_the_curve():
     """``record_branch=True`` returns the traced ``(s, y)`` path and still reports
     the fold; every recorded point lies on the branch ``y**2 = p``."""
@@ -747,9 +795,6 @@ def test_plant_steady_state_arclength_rung_reports_past_fold():
     # From the high branch at k = 2 (A = 7.3166, the root above the fold) toward
     # k = 3, past the fold: the operating branch does not reach the target, so the
     # ladder reports it as not existing and returns the last point before the nose.
-    # The arclength step is capped small: at the default cap the corrector can land
-    # on the low branch across the fold and report that branch's steady state as
-    # the operating point.
     from scipy.optimize import brentq
 
     plant = _fold_cstr_plant()
@@ -759,8 +804,7 @@ def test_plant_steady_state_arclength_rung_reports_past_fold():
     ss = plant.steady_state(p_known.at[0].set(3.0), y0=jnp.asarray([1.0e4]), max_iter=8,
                             dt0=1.0, scale_floor=1.0, fallback=False,
                             continuation_from=(p_known, jnp.asarray([a_known])),
-                            continuation_kwargs={"max_continuation_steps": 1},
-                            arclength_kwargs={"dsigma_max": 0.05})
+                            continuation_kwargs={"max_continuation_steps": 1})
     assert ss.method == "past_fold"
     assert not bool(ss.converged) and ss.operating_point_exists is False
     # The returned state is a steady state on the high arm short of the nose: the
@@ -948,14 +992,14 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
 
 
 @pytest.mark.slow
-def test_steady_state_forward_mode_ad():
+def test_steady_state_forward_mode_ad(bsm1):
     """The steady-state IFT gradient is now a ``custom_jvp``, so the plant steady
     state is differentiable in BOTH directions: forward-mode ``jacfwd`` flows
     through ``plant.steady_state`` (previously rejected by the reverse-only
     ``custom_vjp``), and it agrees with reverse-mode ``jax.grad`` and with finite
     differences. This is the forward-mode capability the many-output sensitivity
     screen needs."""
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     i = plant.parameter_index("asm1.muA")
     si = asm1.species_index
@@ -975,12 +1019,12 @@ def test_steady_state_forward_mode_ad():
 
 
 @pytest.mark.slow
-def test_steady_state_sensitivity_helper():
+def test_steady_state_sensitivity_helper(bsm1):
     """``plant.steady_state_sensitivity`` returns the exact IFT output sensitivity
     in either AD direction from a single steady-state solve. Forward and reverse
     give the same result; it matches a ``jax.grad`` through ``steady_state`` and
     finite differences; the elasticity option is finite."""
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     si = asm1.species_index
 
@@ -1030,14 +1074,14 @@ def test_steady_state_sensitivity_helper():
 
 
 @pytest.mark.slow
-def test_steady_state_dgsm_matches_dgsm():
+def test_steady_state_dgsm_matches_dgsm(bsm1):
     """plant.steady_state_dgsm screens the steady state globally (DGSM) by reusing
     the IFT helper per sample. With the same Sobol seed it draws the same points
     and applies the same Sobol total-index formula as the generic aquakin.dgsm, so
     the bounds are identical -- just computed more cheaply (one dF/dy factorisation
     per sample). The convergence() sample-size study runs from the retained
     per-sample data."""
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     si = asm1.species_index
     screen = ["asm1.muH", "asm1.muA", "asm1.etag", "asm1.bA"]
@@ -1075,13 +1119,13 @@ def test_steady_state_dgsm_matches_dgsm():
     assert float(se[-1, 0, j]) < float(se[0, 0, j])     # std error shrinks with N
 
 
-def test_steady_state_dgsm_normal_input():
+def test_steady_state_dgsm_normal_input(bsm1):
     """The Gaussian-prior input path (``input_dist="normal"``) samples each
     parameter in its calibration-transform space (log-normal for a rate) and
     bounds the Sobol index with the sigma^2 Poincare constant in place of the
     uniform (b-a)^2/pi^2. It runs end-to-end, records the per-parameter Poincare
     constant on the result, and convergence() re-aggregates on it consistently."""
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     si = asm1.species_index
     screen = ["asm1.muH", "asm1.muA", "asm1.bA"]

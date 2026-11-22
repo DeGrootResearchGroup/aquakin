@@ -368,6 +368,9 @@ an informational status.
   `main`.
 - Describe the PR with `.github/pull_request_template.md`. Write "Closes #N"
   only when the issue is finished; otherwise "Part of #N", listing what remains.
+- After opening a PR, watch it for CI results and review comments until it is
+  merged or closed, without asking first: fix what the change broke and answer
+  reviewers, since nobody else is watching it.
 - Never re-run CI to get past an intermittent failure: it is a bug
   (`.claude/rules/tests.md`).
 - A dependency added to `pyproject.toml` (any extra) is pinned in
