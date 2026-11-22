@@ -141,9 +141,22 @@ the controller's kLa. Because the stripping is part of the plant equations,
 `jax.grad` and the sensitivity tools see how the emission depends on the
 kinetic parameters and the DO setpoint, and `plant.mass_balance` counts the
 stripped gases in its gas term. The shipped nitrous-oxide model
-`asm3_2step_n2o` is described in the [Model catalogue](model_catalog.md).
-`direct_n2o_emission(plant, sol)` reports the N₂O a solve stripped, for a model
-that names dissolved oxygen `SO` as ASM1 does.
+`asm3_2step_n2o` is described in the [Model catalogue](model_catalog.md). It
+names dissolved oxygen `SO2`, so its aerated tanks name that species too:
+
+```python
+from aquakin.plant import Aeration
+
+n2o_model = aquakin.load_model("asm3_2step_n2o")
+n2o_aeration = Aeration(do_setpoint=2.0, species="SO2", stripped={"SN2O": 1.0})
+bsm1_n2o = build_bsm1(n2o_model, aeration={f"tank{i}": n2o_aeration for i in (3, 4, 5)})
+```
+
+Wire an influent in that model's species (`bsm1_n2o.add_influent(...)`) and
+solve as for ASM1. `direct_n2o_emission(bsm1_n2o, sol)` then reports the N₂O-N
+the solve stripped (kg N/d), time-averaged over the solution; it reads each
+tank's oxygen kLa from the species its `Aeration` names, so it works whatever
+the model calls oxygen.
 
 ## Steady state, faster
 
