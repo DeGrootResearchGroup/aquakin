@@ -102,7 +102,8 @@ def compare_scenarios(
     output_names : sequence of str, optional
         Output column names.
     batched : bool
-        vmap the scenarios (default) or evaluate one at a time.
+        vmap the scenarios (default) or evaluate one at a time. Either way
+        ``fn`` runs under :func:`jax.jit`, so it must be traceable.
 
     Returns
     -------
