@@ -10,8 +10,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 import aquakin
 
 # The package root to put on the subprocess's path so it imports *this* aquakin.

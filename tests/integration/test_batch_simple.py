@@ -41,7 +41,7 @@ def test_max_steps_is_exposed_and_enforced(simple_model):
         simple_model, conditions,
         integrator=aquakin.IntegratorConfig(max_steps=2))
     assert r_tight.max_steps == 2
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match=r"step budget \(max_steps=2\)"):
         r_tight.solve(C0, params=params, t_span=(0.0, 20.0), t_eval=t_eval)
 
     r_ok = aquakin.BatchReactor(
@@ -107,19 +107,31 @@ def test_solve_positional_tuple_is_t_span_not_params(simple_model):
                       simple_model.default_parameters())
 
 
-def test_grad_through_solve_finite(simple_model):
+def test_grad_through_solve_matches_closed_form(simple_model):
+    """``jax.grad`` through the solve gives the closed-form gradient.
+
+    With ``B(t) = 1 - exp(-k t)`` the loss ``sum_t B(t)**2`` has
+    ``dL/dk = sum_t 2 B(t) t exp(-k t)``.
+    """
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.BatchReactor(simple_model, conditions)
     C0 = jnp.asarray([1.0, 0.0])
+    t_eval = jnp.linspace(0.0, 10.0, 11)
 
     def loss(params):
-        sol = reactor.solve(C0, params=params, t_span=(0.0, 10.0), t_eval=jnp.linspace(0.0, 10.0, 11))
+        sol = reactor.solve(C0, params=params, t_span=(0.0, 10.0), t_eval=t_eval)
         return jnp.sum(sol.C_named("B") ** 2)
 
-    g = jax.grad(loss)(simple_model.default_parameters())
+    params = simple_model.default_parameters()
+    g = jax.grad(loss)(params)
     assert jnp.all(jnp.isfinite(g))
-    # d/dk should be positive (increasing k drives more B).
-    assert float(g[0]) > 0.0
+
+    k = float(params[0])
+    decay = jnp.exp(-k * t_eval)
+    expected = float(jnp.sum(2.0 * (1.0 - decay) * t_eval * decay))
+    # The forward solve matches the closed form to rtol 1e-4 (see above); the
+    # gradient through the same adaptive solve is held to a decade looser.
+    assert float(g[0]) == pytest.approx(expected, rel=1e-3)
 
 
 def test_C0_shape_validated(simple_model):
@@ -200,6 +212,7 @@ def test_solve_chemistry_helper_matches_analytical_and_scales(simple_model):
     (the PFR's 1/velocity device): a span of 2*T at scale 0.5 equals a span of
     T at scale 1."""
     import diffrax
+
     from aquakin.integrate._common import solve_chemistry
 
     net = simple_model

@@ -92,12 +92,21 @@ than copying it.
   selects by marker. Mark every test there (a module-level
   `pytestmark = pytest.mark.validation` is simplest).
 - `tests/ui/` runs in the fast gate as its own unsharded `ui` job, the only job
-  that imports the editor and measures `aquakin_ui` coverage.
+  that imports the editor and measures `aquakin_ui` coverage. `tests/browser/`
+  (the editor driven in Chromium with Playwright) runs in **no** CI job; run it
+  by hand when a change touches the canvas or the form (`.claude/rules/ui.md`).
 - Keep the fast gate meaningful: a feature whose only tests are `slow` is
   unprotected on a normal PR. Give it a small-plant or unit-level test in the
   fast tier that exercises the same code path, and keep the full-scale one slow.
 - New test file in `tests/integration` or `tests/unit`: the shard split reads
   `.test_durations`; CI refreshes it, so do not edit it by hand.
+- **Measure coverage with `--cov=aquakin`, never `--cov=<dotted.module.path>`.**
+  A dotted target makes coverage resolve it with `find_spec` from inside its own
+  trace callback, which imports JAX re-entrantly and aborts the interpreter --
+  SIGABRT, no traceback, and no output at all unless stdout is unredirected. To
+  scope a report, measure the package and read the rows you want
+  (`--cov=aquakin --cov-report=term-missing`). CI is unaffected: it takes
+  `source` from `pyproject.toml` rather than passing `--cov` targets.
 
 ## What to test for a change
 

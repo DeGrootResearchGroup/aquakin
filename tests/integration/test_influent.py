@@ -24,7 +24,7 @@ def _csv_text(model):
     from aquakin.plant.influent import _BSM1_COLUMN_ORDER
 
     header = ",".join(_BSM1_COLUMN_ORDER)
-    zeros = {name: 0.0 for name in _BSM1_COLUMN_ORDER}
+    zeros = dict.fromkeys(_BSM1_COLUMN_ORDER, 0.0)
     rows = []
     for i, tval in enumerate((0.0, 0.25)):
         vals = dict(zeros, t=tval, Q=18000.0 + i, SNH=30.0, SS=70.0)
@@ -135,7 +135,7 @@ def test_influent_from_text_captures_T_column(asm1):
 
     order = _BSM1_COLUMN_ORDER + ["T"]
     header = ",".join(order)
-    zeros = {name: 0.0 for name in order}
+    zeros = dict.fromkeys(order, 0.0)
     rows = []
     for tval, temp in ((0.0, 12.0), (0.25, 16.0)):
         vals = dict(zeros, t=tval, Q=18000.0, T=temp)

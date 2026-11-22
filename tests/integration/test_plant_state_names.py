@@ -19,9 +19,9 @@ from aquakin.plant import (
     SBRPhase,
     SBRUnit,
 )
-from aquakin.plant.takacs import TakacsClarifier
 from aquakin.plant.bsm import build_bsm1, build_bsm2
 from aquakin.plant.catalog import build_unit
+from aquakin.plant.takacs import TakacsClarifier
 
 
 def _buildable():
@@ -113,7 +113,7 @@ def test_partial_and_misspelled_named_states():
     one = np.asarray(p.state_from_named({"tank2": {"SO": 1.5}}))
     changed = np.flatnonzero(one != y0)
     assert changed.tolist() == [p._state_layout["tank2"][0] + 7] and one[changed[0]] == 1.5
-    with pytest.raises(KeyError, match="has no state entry 'SNHH'.*Did you mean: SNH"):
+    with pytest.raises(KeyError, match=r"has no state entry 'SNHH'.*Did you mean: SNH"):
         p.state_from_named({"tank2": {"SNHH": 1.0}})
     with pytest.raises(plant.UnknownUnitError, match="no unit with a state named 'tank9'"):
         p.state_from_named({"tank9": {"SO": 1.0}})

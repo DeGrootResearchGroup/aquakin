@@ -103,7 +103,7 @@ def test_bad_studies_are_refused_and_leave_nothing(project):
         create_study(project, "bad", {**simulate, "max_iter": "many"})
     with pytest.raises(StudyError, match="a fisher study needs"):
         create_study(project, "bad", {"kind": "fisher"})
-    with pytest.raises(StudyError, match="data: missing.csv does not exist"):
+    with pytest.raises(StudyError, match=r"data: missing\.csv does not exist"):
         create_study(
             project,
             "bad",
@@ -171,7 +171,7 @@ def test_an_initial_state_from_another_study_is_copied_in(project):
     assert (second / "final_state.yaml").exists()
     # A file of the same name but other content is not overwritten.
     (first / "results" / "final_state.yaml").write_text("tank1: {SO: 1.0}\n")
-    with pytest.raises(StudyError, match="already holds another final_state.yaml"):
+    with pytest.raises(StudyError, match=r"already holds another final_state\.yaml"):
         update_study(
             second,
             {**read_study(second), "initial_state": "studies/first/results/final_state.yaml"},

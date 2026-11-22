@@ -13,7 +13,13 @@ import yaml
 
 import aquakin
 from aquakin.__main__ import main
-from aquakin.plant import CSTRUnit, InfluentSeries, Plant, plant_fisher_information
+from aquakin.plant import (
+    CSTRUnit,
+    InfluentSeries,
+    Plant,
+    UnknownUnitError,
+    plant_fisher_information,
+)
 from aquakin.study import (
     StudyError,
     check_study,
@@ -338,7 +344,7 @@ def test_a_run_replaces_results_only_when_it_succeeds(project):
     # A study whose only run failed has no results to replace: it runs again as is.
     bad = _study(project, "bad_run", {"kind": "simulate", "streams": ["nowhere"]})
     (bad / "results").mkdir()  # files no finished run recorded (an older aquakin's leftovers)
-    with pytest.raises(Exception):
+    with pytest.raises(UnknownUnitError, match="Unknown unit 'nowhere'"):
         run_study(bad)
     assert check_study(bad).state == "failed" and not (bad / "results").exists()
     (bad / "study.yaml").write_text(
@@ -352,7 +358,7 @@ def test_a_study_names_the_data_columns_it_cannot_find(project):
     _synthetic_data(project, folder, 4.0)
     study = {**FIT, "observables": [{"stream": "effluent", "channels": ["SNO"]}], "sigma": 0.1}
     (folder / "study.yaml").write_text(yaml.safe_dump({"study": {"kind": "calibrate", **study}}))
-    with pytest.raises(StudyError, match="has no column effluent.SNO"):
+    with pytest.raises(StudyError, match=r"has no column effluent\.SNO"):
         run_study(folder)
     assert check_study(folder).state == "failed"
 
@@ -531,10 +537,10 @@ def test_staleness_names_each_kind_of_change(project):
 
 def test_missing_files_and_misuse_of_freeze_unfreeze_and_copy(project):
     folder = _study(project, "misuse", {**DYNAMIC, "initial_state": "nowhere.yaml"})
-    with pytest.raises(StudyError, match="initial_state: .*nowhere.yaml does not exist"):
+    with pytest.raises(StudyError, match=r"initial_state: .*nowhere\.yaml does not exist"):
         run_study(folder)
     data = _study(project, "nodata", {**FIT, "kind": "calibrate", "data": "missing.csv"})
-    with pytest.raises(StudyError, match="data: .*missing.csv does not exist"):
+    with pytest.raises(StudyError, match=r"data: .*missing\.csv does not exist"):
         run_study(data)
     (data / "missing.csv").write_text("x,y\n1,2\n")
     with pytest.raises(StudyError, match="not a trajectory table"):
@@ -555,7 +561,7 @@ def test_a_failed_freeze_leaves_no_snapshot(project):
     folder = _study(project, "freeze_fail", DYNAMIC)
     (folder / "snapshot").mkdir()  # left over from before
     (project / "models" / "asm1_local.yaml").write_text("model: [\n")
-    with pytest.raises(Exception):
+    with pytest.raises(yaml.YAMLError, match="expected the node content"):
         freeze_study(folder)
     assert not (folder / "snapshot").exists() and not (folder / "frozen.yaml").exists()
 

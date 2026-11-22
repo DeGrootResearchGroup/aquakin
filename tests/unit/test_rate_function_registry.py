@@ -18,7 +18,6 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-import aquakin
 from aquakin.core.context import CompileContext
 from aquakin.core.nodes import ASTNode, MonodNode, _OperatorNode
 from aquakin.core.parser import ParseError, parse_rate_expression

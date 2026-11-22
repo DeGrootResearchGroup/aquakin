@@ -12,6 +12,8 @@ things keep that safe at assembly time:
   with a clear error, not a deep ``KeyError`` from the first jitted solve.
 """
 
+from typing import ClassVar
+
 import jax.numpy as jnp
 import pytest
 
@@ -44,8 +46,8 @@ class _SignalConsumer:
         self._signal = signal_name
 
     state_size = 0
-    input_ports: list = []
-    output_ports: list = []
+    input_ports: ClassVar[list[str]] = []
+    output_ports: ClassVar[list[str]] = []
 
     @property
     def required_signals(self):
@@ -127,8 +129,8 @@ def test_unknown_publisher_skips_validation(asm1):
     class CustomController:
         name = "custom"
         state_size = 0
-        input_ports: list = []
-        output_ports: list = []
+        input_ports: ClassVar[list[str]] = []
+        output_ports: ClassVar[list[str]] = []
 
         def initial_state(self):
             return jnp.zeros((0,))

@@ -9,7 +9,6 @@ These tests check it compiles with the expected shape, solves pH from the state,
 and is finite and differentiable end-to-end.
 """
 
-import os
 
 import jax
 import jax.numpy as jnp

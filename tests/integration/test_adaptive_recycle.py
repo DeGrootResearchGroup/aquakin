@@ -25,7 +25,6 @@ import pytest
 import aquakin
 from aquakin.plant.plant import Plant
 
-
 # ---------------------------------------------------------------------------
 # Fast (PR-gate) synthetic tests: drive _adaptive_recycle_refine directly with a
 # tunable-rho fixed-point map. No plant solve, so these run on the fast gate.
@@ -130,10 +129,13 @@ def test_recycle_tol_construction_validation():
 
 @pytest.fixture(scope="module")
 def bsm2():
-    from aquakin.plant.bsm import bsm2_warm_start, bsm2_constant_influent
+    from aquakin.plant.bsm import bsm2_constant_influent, bsm2_warm_start
     from aquakin.plant.bsm.bsm2 import (
-        build_bsm2, bsm2_asm1_model, bsm2_parameters,
-        BSM2_CONSTANT_INFLUENT_T)
+        BSM2_CONSTANT_INFLUENT_T,
+        bsm2_asm1_model,
+        bsm2_parameters,
+        build_bsm2,
+    )
     asm1 = bsm2_asm1_model()
     adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)

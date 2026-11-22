@@ -99,7 +99,7 @@ def test_reactive_particulate_evolves_and_conserves(net, cond):
     ia, ib = net.species_index["A"], net.species_index["B"]
     soluble = jnp.array([True, False])  # A diffuses, B does not
     p = net.default_parameters()  # A_to_B.k > 0
-    n_comp = cond_layers = 5
+    n_comp = 5
     y0 = jnp.zeros((n_comp, net.n_species)).at[:, ia].set(1.0)
 
     reactive = _reactor(net, cond, n_layers=n_comp - 1,

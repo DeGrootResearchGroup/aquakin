@@ -37,11 +37,9 @@ spreadsheet-dependent tool run by hand; this gate needs nothing but the shipped
 models and runs in the PR fast gate.
 """
 
-import jax.numpy as jnp
 import pytest
 
 import aquakin
-
 
 # Per model: the published facts the conservation suite cannot see. See the
 # module docstring for the structure and the literature anchor.

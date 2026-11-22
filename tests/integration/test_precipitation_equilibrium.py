@@ -134,7 +134,6 @@ def test_bounded_dynamics_relax_to_the_projection_equilibrium():
     r = aquakin.BatchReactor(bd, bd.default_conditions())
     sol = r.solve(bd.default_concentrations(), params=bd.default_parameters(),
                   t_span=(0.0, 20.0), t_eval=jnp.array([20.0]))
-    i = bd.species_index["S_PO4"]
     target = float(eq.precipitation_equilibrium()[eq.species_index["S_PO4"]])
     assert float(sol.C_named("S_PO4")[-1]) == pytest.approx(target, abs=0.02)
 
@@ -196,6 +195,7 @@ reactions:
 
 def test_vant_hoff_shifts_equilibrium_with_temperature(tmp_path):
     import math
+
     from aquakin.core.temperature import R_GAS as _R_SI
 
     def residual_M(dH, T):

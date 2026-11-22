@@ -402,7 +402,7 @@ def test_compile_stage_helpers():
     """The compile_model stage helpers behave as a pipeline: parameter index
     is model-level-then-reaction-local in order, and _unresolved_params flags
     only names resolving to neither scope."""
-    from aquakin.core.model import _build_param_index, _unresolved_params
+    from aquakin.core.model import _unresolved_params
     from aquakin.core.parser import parse_rate_expression
 
     # ASM1 has both model-level (Y_H, ...) and reaction-local params.

@@ -1,12 +1,10 @@
 """Imports between aquakin's subpackages point downward.
 
 The layering is ``core`` < ``schema`` < ``integrate`` < ``plant`` < ``study``: a
-package may import the ones below it, never one above. Every import statement in
-the package is checked, including those inside function bodies and relative
+package may import the ones below it, never one above. ``utils`` sits on the
+``core`` level (the two import each other). Every import statement in the
+package is checked, including those inside function bodies and relative
 imports, so an upward import cannot hide in a lazy import.
-
-``utils`` is not in the chain: it and ``core`` import each other, and
-``utils.composition`` reads the shipped models through ``schema.loader``.
 """
 
 import ast
@@ -14,12 +12,19 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).parents[2] / "aquakin"
 
-LAYERS = ["core", "schema", "integrate", "plant", "study"]
+LEVELS = {"core": 0, "utils": 0, "schema": 1, "integrate": 2, "plant": 3, "study": 4}
 
-# The one sanctioned upward import: ``CompiledModel.influent`` is a convenience
-# constructor for a plant influent, kept on the model because ``net.influent(...)``
-# is how every plant example builds its feed. Keyed by (file, imported module).
-ALLOWED = {("core/model.py", "aquakin.plant.influent")}
+# The sanctioned upward imports, keyed by (file, imported module):
+# - ``CompiledModel.influent`` is a convenience constructor for a plant influent,
+#   kept on the model because ``net.influent(...)`` is how every plant example
+#   builds its feed.
+# - ``CompiledModel.composition()`` falls back to a shipped model's composition
+#   table, and choosing that table compares the model's species with the shipped
+#   model's, which only the loader can produce.
+ALLOWED = {
+    ("core/model.py", "aquakin.plant.influent"),
+    ("utils/composition.py", "aquakin.schema.loader"),
+}
 
 
 def _imported_modules(source: str, package: list[str]):
@@ -46,9 +51,9 @@ def _upward_imports():
     found = []
     for path in sorted(PACKAGE.rglob("*.py")):
         layer = path.relative_to(PACKAGE).parts[0]
-        if layer not in LAYERS:
+        if layer not in LEVELS:
             continue
-        above = {f"aquakin.{name}" for name in LAYERS[LAYERS.index(layer) + 1 :]}
+        above = {f"aquakin.{name}" for name, level in LEVELS.items() if level > LEVELS[layer]}
         rel = path.relative_to(PACKAGE).as_posix()
         package = ["aquakin", *path.relative_to(PACKAGE).parts[:-1]]
         for lineno, module in _imported_modules(path.read_text(), package):

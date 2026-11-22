@@ -68,9 +68,10 @@ jobs:
   # ---- Lint gate: ruff (fast, always-on) --------------------------------------
   # Static checks only -- no JAX import, no compile -- so it is cheap and runs on
   # every push/PR (skipped on the bare `labeled` event and the schedule/dispatch
-  # refresh, like the fast gate). Runs `ruff check` and `ruff format --check` over
-  # the package; the rule set, line width and per-file ignores live in
-  # `pyproject.toml`.
+  # refresh, like the fast gate). Runs `ruff check` over the two packages and
+  # `tests/`, `scripts/`, `examples/`, and `ruff format --check` over the two
+  # packages only (the other directories are not formatted yet); the rule set,
+  # line width and per-file ignores live in `pyproject.toml`.
   lint:
     name: lint (ruff)
     if: >-
@@ -92,7 +93,7 @@ jobs:
           pip install -e ".[lint]"
 
       - name: Run ruff check
-        run: ruff check aquakin aquakin_ui
+        run: ruff check aquakin aquakin_ui tests scripts examples
 
       - name: Run ruff format --check
         run: ruff format --check aquakin aquakin_ui
@@ -352,6 +353,74 @@ jobs:
           path: coverage.xml
           if-no-files-found: warn
           retention-days: 3
+
+  # ---- The editor's widget: committed bundle == a fresh build, and packaged ----
+  # `aquakin_ui/widget/serve/` is built from `ui-widget/src` and committed (so
+  # installing the editor needs no JavaScript toolchain); nothing else checks the
+  # two agree. This rebuilds it with the locked dependencies and fails on any
+  # difference, then builds the wheel and checks it carries the bundle and every
+  # icon (scripts/check_ui_package.py). Path-filtered, and NOT a required check:
+  # a run that touches neither the widget, the icons nor the packaging skips the
+  # work and passes.
+  widget:
+    name: widget bundle and package
+    if: >-
+      github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+      && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            widget:
+              - 'ui-widget/**'
+              - 'aquakin_ui/widget/**'
+              - 'aquakin_ui/icons/**'
+              - 'pyproject.toml'
+              - 'scripts/check_ui_package.py'
+              - '.github/workflows/ci.yml'
+
+      - name: Set up Node
+        if: steps.changes.outputs.widget == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui-widget/package-lock.json
+
+      - name: Rebuild the bundle and compare it with the committed one
+        if: steps.changes.outputs.widget == 'true'
+        working-directory: ui-widget
+        run: |
+          npm ci
+          npm run build
+          cd ..
+          if [ -n "$(git status --porcelain -- aquakin_ui/widget/serve)" ]; then
+            git status --short -- aquakin_ui/widget/serve
+            echo "::error::aquakin_ui/widget/serve differs from a fresh build of ui-widget/src; run 'npm ci && npm run build' in ui-widget and commit the bundle"
+            exit 1
+          fi
+          echo "The committed bundle is a fresh build of ui-widget/src."
+
+      - name: Set up Python
+        if: steps.changes.outputs.widget == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the wheel and check the widget and icons are in it
+        if: steps.changes.outputs.widget == 'true'
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+          python scripts/check_ui_package.py dist/*.whl
 
   # ---- Fast-tier coverage: ONE Codecov upload after every fast shard -----------
   # Each fast shard keeps its coverage.xml as an artifact and this job uploads

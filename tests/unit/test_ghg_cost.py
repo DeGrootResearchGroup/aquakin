@@ -11,8 +11,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin as ak
-from aquakin.plant.ghg import GWP_CH4, GWP_N2O, _N2O_PER_N
-
+from aquakin.plant.ghg import _N2O_PER_N, GWP_CH4, GWP_N2O
 
 # --- GHG kernels -------------------------------------------------------------
 

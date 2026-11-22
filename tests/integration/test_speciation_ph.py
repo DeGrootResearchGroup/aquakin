@@ -5,12 +5,10 @@ Exercises the full path YAML speciation -> compiled derived-condition fn ->
 """
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import pytest
 import yaml
 
-import aquakin
 from aquakin import BatchReactor, SpatialConditions, compile_model
 from aquakin.core.ph_solver import solve_ph
 from aquakin.schema.model_spec import ModelSpec

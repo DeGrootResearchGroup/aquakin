@@ -209,7 +209,7 @@ def test_to_dataframe_profile(net, cond):
 def test_with_adjoint_clone_does_not_reuse_compiled_solve(net, cond):
     """A ``with_adjoint`` copy must not reuse a solve compiled with the old
     adjoint: forward-mode sensitivity after a plain solve must work."""
-    out = lambda s: s.C_named("A")[-1]  # noqa: E731
+    out = lambda s: s.C_named("A")[-1]
     fwd = aquakin.DifferentiationConfig(mode="forward", method="through_solve")
     r = _tiny(net, cond)
     C0 = net.concentrations({"A": 1.0})

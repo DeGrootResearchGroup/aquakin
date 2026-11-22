@@ -16,7 +16,7 @@ Run:
 import jax.numpy as jnp
 
 import aquakin
-from aquakin.plant import build_a2o, a2o_influent, a2o_warm_start
+from aquakin.plant import a2o_influent, a2o_warm_start, build_a2o
 
 
 def main():

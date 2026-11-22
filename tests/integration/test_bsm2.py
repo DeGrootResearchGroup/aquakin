@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
-from aquakin.plant.bsm.bsm2 import build_bsm2, BSM2_Q_REF
+from aquakin.plant.bsm.bsm2 import BSM2_Q_REF, build_bsm2
 from aquakin.plant.influent import InfluentSeries
 
 
@@ -119,8 +119,8 @@ def test_bsm2_flow_balance(plant):
     from aquakin.plant.bsm.bsm2 import BSM2_CARBON_FLOW
     effluent = float(fl[("settler", "overflow")])
     dewater_disposal = float(fl[("dewatering", "underflow")])
-    assert (BSM2_Q_REF + BSM2_CARBON_FLOW) == pytest.approx(
-        effluent + dewater_disposal, rel=1e-3)
+    assert pytest.approx(
+        effluent + dewater_disposal, rel=1e-3) == (BSM2_Q_REF + BSM2_CARBON_FLOW)
 
 
 def test_bsm2_primary_filters_its_hrt_flow(plant, asm1):
