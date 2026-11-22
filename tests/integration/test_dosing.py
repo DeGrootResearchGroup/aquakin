@@ -139,6 +139,31 @@ def test_feedback_dose_solves_and_publishes_signal(asm1):
     assert flow == pytest.approx(10.0, abs=1e-6)
 
 
+def test_feedback_dosing_plant_extended_after_a_solve(asm1):
+    """A unit added after a solve re-runs the controller set-up, which keeps the
+    dosing controller it already derived (not a second one, which would collide
+    by name) and solves exactly as a plant built with the unit from the start."""
+    def extend(p):
+        p.add_unit(_tank(asm1, "tank2"))
+        p.connect("tank.out", "tank2.in")
+
+    t_eval = jnp.array([0.5, 1.0])
+    edited = _feedback_plant(asm1, flow_max=10.0)
+    edited.solve(t_span=(0.0, 1.0), t_eval=t_eval)
+    extend(edited)
+    sol = edited.solve(t_span=(0.0, 1.0), t_eval=t_eval)
+
+    fresh = _feedback_plant(asm1, flow_max=10.0)
+    extend(fresh)
+    ref = fresh.solve(t_span=(0.0, 1.0), t_eval=t_eval)
+    # The edited plant derived its controller before tank2 was added, so the
+    # add order (and with it the state layout) differs: compare by unit.
+    assert sorted(edited.list_units()) == sorted(fresh.list_units())
+    assert edited.list_units().count("carbon_dosing") == 1
+    for name in fresh.list_units():
+        assert jnp.allclose(sol.unit_state(name), ref.unit_state(name), rtol=1e-12, atol=0.0)
+
+
 def test_grad_flows_through_feedback_dosing(asm1):
     p = _feedback_plant(asm1, flow_max=10.0)
     base = p.default_parameters()
