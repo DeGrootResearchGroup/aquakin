@@ -81,15 +81,16 @@ def main():
         "VFA, maintenance, fast/slow hydrolysis in all redox regimes, "
         "fermentation -- plus the sulfur cycle: sulfate reduction and "
         "chemical/biological sulfide oxidation in bulk and biofilm) extended "
-        "with Khalil's thesis Table 4-1 nitrate-dosing additions "
-        "(methanogenesis, elemental-sulfur reduction, and nitrate-driven "
-        "two-step sulfide->S0->sulfate oxidation). Same reaction structure as "
-        "wats_sewer_extended, with the non-WATS/non-thesis pieces removed (charge-balance "
-        "pH solver replaced by a fixed operating pH; nitrification/autotrophs "
-        "dropped) and parameters reverted to thesis/paper values (single yield "
-        "0.55; k_h1=12, k_h2=5; q_ferm=2; Table 4-1 sulfur kinetics). Generated "
-        "by _make_khalil_thesis.py to test reproduction of the published batch "
-        "nitrate-dosing results."
+        "with the nitrate-dosing processes of Khalil et al. (2025): "
+        "methanogenesis, elemental-sulfur reduction, and nitrate-driven "
+        "two-step sulfide->S0->sulfate oxidation. It has the reaction structure "
+        "and rate forms of wats_sewer_extended, including the WATS half-order "
+        "biofilm terms that wats_sewer_khalil_paper writes in Monod form, "
+        "without nitrification, autotroph decay or FeS precipitation; pH is a "
+        "fixed operating condition rather than solved by charge balance. "
+        "Parameters: a single heterotroph yield of 0.55 for aerobic and anoxic "
+        "growth; hydrolysis k_h1=12, k_h2=5 1/d; fermentation q_ferm=2 gCOD/gCOD/d; and the "
+        "nitrate-dosing sulfur kinetics."
     )
 
     # (1) Drop the charge-balance pH solver; supply pH as a fixed condition so
@@ -100,8 +101,7 @@ def main():
         net["conditions"].append(
             {
                 "name": "pH",
-                "description": "Fixed operating pH of the batch (thesis uses a "
-                "fixed pH rather than a charge-balance solver).",
+                "description": "Fixed operating pH (no charge-balance solver).",
                 "units": "-",
                 "default": PH_FIXED,
             }
