@@ -50,6 +50,8 @@ from aquakin.integrate.calibrate import (
     FreeICConfig,
     LaplaceConfig,
     OptimizerConfig,
+)
+from aquakin.integrate.seam import (
     _array_digest,
     _build_loss,
     _build_objective,
@@ -57,21 +59,24 @@ from aquakin.integrate.calibrate import (
     _CalibrationProblem,
     _check_sigma_arg,
     _check_start_args,
+    _check_start_in_domain,
     _coerce_sigma,
     _convert_observations,
     _FitConfig,
     _free_ic_fields,
+    _is_multi_dataset,
     _is_sigma_estimate,
     _n_obs_per_output,
     _observation_unit_factors,
     _observed_counts,
     _resolve_ic_coords,
+    _resolve_priors,
     _resolve_rate_bounds,
+    _resolve_transforms,
     _run_fit,
     _run_multistart,
     _sigma_per_dataset,
 )
-from aquakin.integrate.fisher import _resolve_transforms
 from aquakin.plant.measures import channel_name, measure_map
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -440,30 +445,14 @@ def _resolve_plant_problem(
     p0_full = jnp.asarray(params) if params is not None else plant.default_parameters()
     free_indices = jnp.asarray([ns.param_index[n] for n in free_params])
 
-    for name, t in zip(free_params, resolved_transforms):
-        v = float(p0_full[ns.param_index[name]])
-        if t == "positive_log" and v <= 0.0:
-            raise ValueError(
-                f"Parameter '{name}' has transform 'positive_log' but initial value {v} <= 0."
-            )
-        if t == "logit" and not (0.0 < v < 1.0):
-            raise ValueError(
-                f"Parameter '{name}' has transform 'logit' but initial value {v} is not in (0, 1)."
-            )
+    _check_start_in_domain(free_params, resolved_transforms, p0_full, ns.param_index)
 
     # --- Datasets: one plant run, or several sharing the parameter vector ---
     # A multi-batch fit is the plant analogue of the reactor's joint multi-batch:
     # the batches share the plant, parameters and prior and their data terms are
     # summed, differing in the per-dataset initial state ``y0`` (and its
     # observations / window). It is detected as a *list* of observation arrays.
-    def _is_multi(x) -> bool:
-        return (
-            isinstance(x, (list, tuple))
-            and len(x) > 0
-            and isinstance(x[0], (list, tuple, np.ndarray, jnp.ndarray))
-        )
-
-    multi = _is_multi(observations)
+    multi = _is_multi_dataset(observations)
     obs_list = list(observations) if multi else [observations]
     tobs_list = list(t_obs) if multi else [t_obs]
     n_datasets = len(obs_list)
@@ -606,18 +595,9 @@ def _resolve_plant_problem(
     use_c0_as_y0 = multi or bool(m_ic)
 
     # Priors: model-declared (use_priors) then explicit overrides.
-    active_priors: dict[str, tuple[float, float]] = {}
-    if use_priors:
-        for name in free_params:
-            if name in ns.parameter_priors:
-                active_priors[name] = ns.parameter_priors[name]
-    if priors:
-        for name, ms in priors.items():
-            if name in free_params:
-                active_priors[name] = (float(ms[0]), float(ms[1]))
-    prior_mean = jnp.asarray([active_priors.get(n, (0.0, 1.0))[0] for n in free_params])
-    prior_std = jnp.asarray([active_priors.get(n, (0.0, 1.0))[1] for n in free_params])
-    prior_mask = jnp.asarray([1.0 if n in active_priors else 0.0 for n in free_params])
+    active_priors, prior_mean, prior_std, prior_mask = _resolve_priors(
+        ns.parameter_priors, free_params, priors, use_priors
+    )
 
     sigma_estimate = _is_sigma_estimate(sigma)
     # Each output's noise is estimated from its observed (non-NaN) entries.

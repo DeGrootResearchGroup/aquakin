@@ -10,10 +10,10 @@ from pydantic import ValidationError
 
 import aquakin
 from aquakin import FreeICConfig, LaplaceConfig, OptimizerConfig
-from aquakin.integrate.calibrate import (
-    _from_unconstrained,
-    _jacobian_physical_wrt_theta,
-    _to_unconstrained,
+from aquakin.integrate._transforms import (
+    dphysical_dunconstrained,
+    from_unconstrained,
+    to_unconstrained,
 )
 from aquakin.schema.model_spec import PriorSpec
 
@@ -35,8 +35,8 @@ from aquakin.schema.model_spec import PriorSpec
 )
 def test_transform_roundtrip(transform, value):
     v = jnp.asarray(value)
-    theta = _to_unconstrained(v, transform)
-    back = _from_unconstrained(theta, transform)
+    theta = to_unconstrained(v, transform)
+    back = from_unconstrained(theta, transform)
     assert float(back) == pytest.approx(float(v), rel=1e-6, abs=1e-12)
 
 
@@ -44,17 +44,17 @@ def test_transform_jacobian_matches_jax_grad():
     """Analytical Jacobian must match jax.grad of the inverse transform."""
     for transform, val in [("none", 1.7), ("positive_log", 1.7), ("logit", 0.4)]:
         v = jnp.asarray(val)
-        theta = _to_unconstrained(v, transform)
-        analytical = float(_jacobian_physical_wrt_theta(theta, transform))
-        auto = float(jax.grad(lambda t: _from_unconstrained(t, transform))(theta))
+        theta = to_unconstrained(v, transform)
+        analytical = float(dphysical_dunconstrained(from_unconstrained(theta, transform), transform))
+        auto = float(jax.grad(lambda t: from_unconstrained(t, transform))(theta))
         assert analytical == pytest.approx(auto, rel=1e-6)
 
 
 def test_unknown_transform_rejected():
     with pytest.raises(ValueError):
-        _to_unconstrained(jnp.asarray(1.0), "exp")
+        to_unconstrained(jnp.asarray(1.0), "exp")
     with pytest.raises(ValueError):
-        _from_unconstrained(jnp.asarray(1.0), "exp")
+        from_unconstrained(jnp.asarray(1.0), "exp")
 
 
 # ---------- end-to-end calibration ----------

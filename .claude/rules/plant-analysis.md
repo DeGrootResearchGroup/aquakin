@@ -17,8 +17,8 @@ of `.claude/rules/plant.md`. The reactor machinery these reuse is described in
 observed_channels=, y0=, ...)` ([`plant/calibrate.py`](aquakin/plant/calibrate.py),
 bound as a method) MAP-fits by-name plant parameters (`"<model>.<param>"`)
 against an output stream. It **reuses the reactor-calibration machinery**
-(`integrate/calibrate.py`: `_CalibrationProblem`, `_FitConfig.from_configs`, and
-`_run_fit` — the same driver `aquakin.calibrate` runs, so it resolves only its
+(`integrate/calibration/`, imported through `integrate/seam.py`:
+`_CalibrationProblem`, `_FitConfig.from_configs`, and `_run_fit` — the same driver `aquakin.calibrate` runs, so it resolves only its
 problem and forward model and must not grow its own fit loop) through the
 forward-model seam — the
 plant supplies a `_PlantForwardModel` (`plant.solve` + stream reconstruction; the
