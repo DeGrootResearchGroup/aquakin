@@ -33,6 +33,7 @@ from aquakin.plant.bsm.bsm2 import (
     build_bsm2,
 )
 from aquakin.plant.cstr import Aeration, CSTRUnit
+from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.plant import _TEMPERATURE_KEY
 
 
@@ -205,3 +206,58 @@ def test_set_temperature_model_clears_colored_builders():
     assert plant._colored._adjoint_builder is None
     assert plant._colored._steady_builder is None
     assert plant._jit_cache == {}
+
+
+# ----- tracing (jax.jit / vmap / monte_carlo) ------------------------------
+
+def test_heatbalance_initial_state_builds_under_jit():
+    """The heat-balance initial state is built inside a traced solve (a solve
+    without ``y0`` calls ``plant.initial_state()``), so it must not convert a
+    traced value to a Python float. It once did (``float(T)`` of each unit's
+    reference temperature), and ``jax.jit`` of the solve raised
+    ``ConcretizationTypeError``."""
+    asm1 = bsm2_asm1_model()
+    plant, _ = _one_cstr_plant(
+        asm1, volume=1000.0, model=aquakin.HeatBalanceTemperature(), T_in_K=283.15)
+    plant._build_state_layout()
+    y0 = plant.initial_state()
+    ts, _ = plant._temperature_block
+    assert float(y0[ts]) == pytest.approx(288.15)        # the tank's declared T
+    assert jnp.array_equal(jax.jit(plant.initial_state)(), y0)
+
+
+def test_monte_carlo_over_heatbalance_plant_matches_closed_form(simple_model):
+    """``aquakin.monte_carlo`` jits ``fn`` even with ``batched=False``, so a
+    heat-balance plant solve inside it is traced. On the one-tank A -> B plant
+    (V = 100, Q = 10, A_in = 1) each sample's effluent must match the closed
+    forms ``A(t) = A* + (1 - A*) exp(-(Q/V + k) t)`` with ``A* = (Q/V)/(Q/V + k)``
+    and ``T(t) = T_in + (T0 - T_in) exp(-(Q/V) t)``, and the direct (untraced)
+    solve at the same samples."""
+    plant = aquakin.Plant("one_tank", time_unit="s")
+    plant.add_unit(CSTRUnit(name="tank", model=simple_model, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    T_in, T0, rate, t_end = 283.15, 293.15, 0.1, 5.0
+    plant.add_influent("feed", InfluentSeries(
+        t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
+        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), T=jnp.asarray([T_in, T_in]),
+        model=simple_model), to="tank.inlet")
+    plant.set_temperature_model(aquakin.HeatBalanceTemperature())
+    p0 = plant.default_parameters()
+    i_k = plant.parameter_index("simple_decay.A_to_B.k")
+
+    def effluent(x):
+        run = plant.solve(t_span=(0.0, t_end), params=p0.at[i_k].set(x[0]),
+                          rtol=1e-10, atol=1e-12)
+        out = plant.stream(run, "tank.out")
+        return jnp.stack([out.C_named("A")[-1], out.T[-1]])
+
+    mc = aquakin.monte_carlo(effluent, {"k": (0.05, 0.5)}, n_samples=2, batched=False)
+    assert mc.n_valid == 2
+    k = mc.samples[:, 0]
+    a_star = rate / (rate + k)
+    A_exact = a_star + (1.0 - a_star) * jnp.exp(-(rate + k) * t_end)
+    T_exact = T_in + (T0 - T_in) * jnp.exp(-rate * t_end)
+    assert jnp.allclose(mc.outputs[:, 0], A_exact, rtol=1e-7)
+    assert jnp.allclose(mc.outputs[:, 1], T_exact, rtol=1e-9)
+    direct = jnp.stack([effluent(jnp.asarray(x)) for x in mc.samples])
+    assert jnp.allclose(mc.outputs, direct, rtol=1e-8)

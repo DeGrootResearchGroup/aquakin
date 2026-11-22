@@ -486,7 +486,7 @@ def test_exp_node_evaluates():
 
 def test_log_node_evaluates_and_is_minus_inf_below_its_domain():
     """log(x) is exact on its domain and -inf at/below zero -- no invented
-    finite stand-in value (see _safe_log)."""
+    finite stand-in value (see safe_log)."""
     from aquakin.core.parser import parse_rate_expression
 
     lg = parse_rate_expression("log([A])")
@@ -610,7 +610,7 @@ def test_math_function_arity_is_checked(expr, arity):
     ],
 )
 def test_the_power_guard_changes_no_value(base, exp):
-    """``_safe_pow`` moves the derivative at a singular point, never a value.
+    """``safe_pow`` moves the derivative at a singular point, never a value.
 
     Every combination must equal plain ``**`` exactly, including the sign of a
     signed zero (``(-0.0) ** -1`` is ``-inf``, not ``inf``) and a NaN for a
