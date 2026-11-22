@@ -273,6 +273,26 @@ def test_selecting_one_unit_opens_its_form_and_several_select_none(make_editor):
     assert _with(ed.state.sel_rows, "volume", None) is not None
 
 
+def test_a_refused_selection_is_sent_back_to_the_canvas(make_editor):
+    """When the form's edits cannot be read, Python keeps their unit selected
+    and sends the canvas nodes marking it, each time a list that differs from
+    the last one sent (trame sends nothing for an unchanged value)."""
+    ed, _ = make_editor(BSM1)
+    ed.on_select({"nodes": ["tank1"], "edges": []})
+    rows = _with(ed.state.sel_rows, "volume", "lots")
+    ed.on_select({"nodes": ["tank2"], "edges": []}, pending=rows)
+    first = ed.state.nodes
+    assert ed.state.selected == "tank1"
+    assert [n["id"] for n in first if n["selected"]] == ["tank1"]
+    ed.on_select({"nodes": ["tank3"], "edges": []}, pending=rows)
+    second = ed.state.nodes
+    assert [n["id"] for n in second if n["selected"]] == ["tank1"]
+    assert second != first
+    assert [n for n in second if n["id"] != "tank1"] == [n for n in first if n["id"] != "tank1"]
+    ed.publish(checks=False)  # an ordinary redraw carries no revision
+    assert all("revision" not in n for n in ed.state.nodes)
+
+
 def test_selection_is_marked_by_python(make_editor):
     ed, _ = make_editor(BSM1)
     ed.on_select({"nodes": ["tank2"], "edges": []})
