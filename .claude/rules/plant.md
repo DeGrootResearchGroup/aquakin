@@ -196,6 +196,14 @@ Key types:
     leaving a heated fixed-`T` unit like the digester untouched; clears the
     compiled-solve cache and returns `self`. See the seasonal-temperature notes
     below.
+  - **Everything `solve` calls must trace.** `monte_carlo`, `compare_scenarios`
+    and `dgsm` run the user's function under `jax.jit` even with
+    `batched=False`, so `plant.solve` (including `initial_state()` and a
+    `TemperatureModel`'s `initial_state` / `state_rhs`) runs under a trace. Do
+    not call `float()` / `np.asarray` / a Python `if` on a value built with
+    `jnp` ops there: under `jit` even `jnp.asarray(293.15).reshape(-1)` is a
+    tracer. Return arrays; keep Python scalars only for static layout data read
+    from unit attributes.
   - **Warm-starting.** `plant.initial_state(overrides={"tank1": vec, ...})`
     builds the flat initial-state vector with selected units' states replaced
     by name (each vector must match the unit's `state_size`) — the supported

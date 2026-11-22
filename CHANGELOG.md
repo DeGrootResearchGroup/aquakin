@@ -42,6 +42,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- A plant with `HeatBalanceTemperature` can now be solved inside `jax.jit` or
+  `jax.vmap`, so `aquakin.monte_carlo`, `aquakin.compare_scenarios` and
+  `aquakin.dgsm` work over it (they jit the function even with
+  `batched=False`). Building its initial temperatures converted a traced value
+  to a Python float and raised `ConcretizationTypeError`.
 - `aquakin-ui` no longer leaves aquakin worker processes behind. A worker that
   stopped reading was replaced but kept running (with JAX loaded) until the
   editor closed, and a worker that timed out stayed a zombie; both are now
