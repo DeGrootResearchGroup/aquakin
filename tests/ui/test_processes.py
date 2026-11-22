@@ -5,6 +5,7 @@ can be forced."""
 import gc
 import sys
 import textwrap
+import time
 
 import pytest
 
@@ -51,6 +52,65 @@ def test_a_worker_that_exits_is_started_again_for_the_next_request():
         assert first != second
     finally:
         w.stop()
+
+
+def test_a_worker_that_stopped_reading_is_replaced_and_the_request_resent(tmp_path):
+    """The first stand-in answers, then closes its input but stays alive, so the
+    next request finds it running and its write breaks the pipe: a fresh
+    process is started and given the same request."""
+    marker = tmp_path / "closed"
+    w = AquakinWorker(
+        command=_script(
+            f"""
+            import json, os, sys, time
+            marker = {str(marker)!r}
+            fresh = not os.path.exists(marker)
+            req = json.loads(sys.stdin.readline())
+            print(json.dumps({{"id": req["id"], "ok": True, "result": fresh}}), flush=True)
+            if fresh:
+                os.close(0)  # stop reading, and only then say so
+                open(marker, "w").close()
+                time.sleep(60)
+            else:
+                sys.stdin.read()
+            """
+        )
+    )
+    first_proc = None
+    try:
+        assert w.request("ping") is True
+        first_proc = w._proc.proc
+        deadline = time.monotonic() + 30
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.exists() and first_proc.poll() is None  # alive, input closed
+        assert w.request("ping") is False  # answered by the second process
+        assert w._proc.proc is not first_proc
+    finally:
+        w.stop()
+        if first_proc is not None:
+            first_proc.kill()
+            first_proc.wait(30)
+
+
+def test_stop_kills_a_worker_that_does_not_end_when_its_input_closes():
+    """A stand-in that answers and then never reads again outlives the closed
+    input; stop waits its few seconds, then kills it."""
+    w = AquakinWorker(
+        command=_script(
+            """
+            import json, sys, time
+            req = json.loads(sys.stdin.readline())
+            print(json.dumps({"id": req["id"], "ok": True, "result": 1}), flush=True)
+            time.sleep(60)
+            """
+        )
+    )
+    assert w.request("ping") == 1
+    proc = w._proc.proc
+    w.stop()
+    assert w._proc is None and w.log_path is None
+    assert proc.wait(30) != 0  # killed, not a clean exit
 
 
 def test_a_worker_that_dies_silently_says_only_that():
