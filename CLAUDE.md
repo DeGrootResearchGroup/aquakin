@@ -505,8 +505,35 @@ earns its place only if it changes what gets written.
   each rule's `paths:` and Index row), recording the files already over it.
 - **Change a rule in the same commit as the code it describes**, and delete the
   rule text for anything removed. A rule that names a function that no longer
-  exists is worse than no rule.
+  exists is worse than no rule. `tests/unit/test_rule_references.py` checks that
+  the repository paths, pytest node ids and private or repo-qualified
+  Python names in backticks in this file and the rules still exist; bare public
+  names are not checked, so look for those yourself after a rename.
 - **A new rule file gets a row in the Index above.**
+
+### Proposing a rule
+
+When a task turns up a mistake that a rule or a check would have prevented
+(yours, an earlier agent's, or one a reviewer caught), **propose** it under
+"Rule proposals" in the PR description, and in the hand-off when there is no
+PR. Do not stop the task to ask, and do not add the rule in the same PR unless
+the owner says so: a new rule is a convention, so it is the owner's decision.
+Each proposal gives:
+
+- **What went wrong**, concretely: the file, commit, review comment or failed run.
+- **Whether a check could replace prose.** Prefer, in order: a test or lint
+  check (as `test_size_limits.py` and `test_rule_references.py` do), a hook, a
+  path-scoped rule, this file. A check cannot go unread and costs no context.
+- **The rule text** in the "do / do not / must + one-sentence why" form above.
+- **Where it goes**, and why that file's `paths:` would have loaded it at the
+  moment the mistake was made. A rule that exists but sat in a file that was not
+  loaded needs moving, not a duplicate.
+- **What it replaces or makes redundant**, so the rules do not only grow.
+
+The bar is "would this rule have changed what got written?" If an existing rule
+was loaded and ignored anyway, propose rewording or relocating it rather than
+adding another. Leave the section empty when there is nothing to propose; a
+proposal written to fill it is noise.
 
 The topic files were split out of `plant.md`, `integration.md` and `core.md`
 verbatim, so most of their text still predates these guidelines: it is accurate

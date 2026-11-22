@@ -7,10 +7,12 @@ per-step Jacobian is still colored forward-mode AD -- the *same* exact matrix th
 differentiable path uses -- so the trajectory matches a valid adaptive solution
 to the same tolerance; only end-to-end differentiability is given up. These tests
 pin the integrator math (analytic decay + order), the exact ``t_eval`` output,
-the agreement with the diffrax solve on BSM1/BSM2, and the guards.
+the agreement with the diffrax solve on BSM2, and the guards (on the
+one-tank plant).
 """
 
 import diffrax
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -77,23 +79,36 @@ def test_dense_output_save_grid_independent():
 
 
 def test_order_is_three():
-    """Kvaerno3 is 3rd order: error should drop ~8x per halving of tolerance-
-    driven step (checked via a stiff scalar with a tight vs loose tol)."""
+    """Kvaerno3 is third order: at a fixed step ``h`` the global error falls as
+    ``h**3``, so halving ``h`` divides it by 8.
+
+    ``y' = -10 (y - sin t)``, ``y(0) = 0`` has the closed form
+    ``y = (10 sin t - cos t + exp(-10 t)) * 10/101``. The step is pinned by
+    ``h0 = dtmax = h`` with tolerances too loose to reject a step; the problem
+    is linear and the Jacobian exact, so each stage solve is exact and only the
+    method's truncation error remains. The observed order
+    ``log2(e(h) / e(h/2))`` approaches 3 from below as ``h`` shrinks (2.89,
+    2.94, 2.97 for ``h`` = 0.02, 0.01, 0.005): the next term of the error
+    expansion is one power of ``h`` smaller. At ``h = 0.01`` it is within 0.1
+    of 3; a second- or fourth-order method would be about 1 away.
+    """
     def rhs(t, y, args):
         return -10.0 * (y - jnp.sin(t))
 
     def jac(t, y, args):
         return jnp.array([[-10.0]])
 
-    y0 = jnp.array([0.0])
-    te = jnp.array([0.0, 2.0])
-    truth = forward_solve(rhs, jac, y0, None, 0.0, 2.0, te,
-                          rtol=1e-11, atol=1e-12)[-1]
-    e_loose = abs(float(forward_solve(rhs, jac, y0, None, 0.0, 2.0, te,
-                                      rtol=1e-4, atol=1e-7)[-1, 0] - truth[0]))
-    e_tight = abs(float(forward_solve(rhs, jac, y0, None, 0.0, 2.0, te,
-                                      rtol=1e-6, atol=1e-9)[-1, 0] - truth[0]))
-    assert e_tight < e_loose                                   # converges with tol
+    t1 = 2.0
+    exact = 10.0 / 101.0 * (10.0 * np.sin(t1) - np.cos(t1) + np.exp(-10.0 * t1))
+
+    def error(h):
+        ys = forward_solve(rhs, jac, jnp.array([0.0]), None, 0.0, t1,
+                           jnp.array([0.0, t1]), rtol=1e3, atol=1e3,
+                           control=StepControl(h0=h, dtmax=h))
+        return abs(float(ys[-1, 0]) - exact)
+
+    order = np.log2(error(0.01) / error(0.005))
+    assert abs(order - 3.0) < 0.1
 
 
 def test_step_budget_exhaustion_raises():
@@ -105,7 +120,7 @@ def test_step_budget_exhaustion_raises():
         return -args[0] * jnp.eye(1)
 
     te = jnp.linspace(0.0, 10.0, 5)
-    with pytest.raises(Exception, match="maximum number of solver steps"):
+    with pytest.raises(eqx.EquinoxRuntimeError, match="maximum number of solver steps"):
         forward_solve(rhs, jac, jnp.array([1.0]), jnp.array([0.3]), 0.0, 10.0, te,
                       rtol=1e-6, atol=1e-9, control=StepControl(max_steps=3))
     # The step-budget message is recognized by friendly_solve_errors.
@@ -126,40 +141,22 @@ def test_stalled_solve_raises():
         return 2.0 * y * jnp.eye(1)
 
     te = jnp.linspace(0.0, 2.0, 5)
-    with pytest.raises(Exception, match=r"stalled|maximum number"):
+    with pytest.raises(eqx.EquinoxRuntimeError, match="the solve stalled"):
         forward_solve(rhs, jac, jnp.array([1.0]), None, 0.0, 2.0, te,
                       rtol=1e-6, atol=1e-9,
                       control=StepControl(max_steps=100_000))
 
 
 # --------------------------------------------------------------------------
-# Plant guards (fast: reject before any solve).
+# Plant guards and knobs, on the one-tank plant: they do not depend on the
+# plant's size.
 # --------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def bsm1():
-    """One BSM1 plant and its warm start, shared by the module. The tests only
-    solve it (filling its per-instance compiled-solve caches, keyed by the
-    solve settings) and never add units, influents or events to it, so sharing
-    saves a build and a compile per test without coupling their results."""
-    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
-    from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
-    from aquakin.plant.influent import InfluentSeries
-
-    asm1 = aquakin.load_model("asm1")
-    p = build_bsm1(model=asm1)
-    C0 = asm1.concentrations({
-        "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
-        "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0})
-    inf = InfluentSeries(t=jnp.array([0.0, 100.0]),
-                         Q=jnp.full((2,), BSM1_Q_AVG),
-                         C=jnp.tile(C0, (2, 1)), model=asm1)
-    p.add_influent("feed", inf, to="inlet_mix.fresh")
-    return p, bsm1_warm_start(p)
+_Y0 = jnp.array([0.2, 0.0])
 
 
-def test_forward_fast_rejects_events_and_grad(bsm1):
-    plant, y0 = bsm1
+def test_forward_fast_rejects_events_and_grad(cstr_plant):
+    plant, y0 = cstr_plant, _Y0
     params = plant.default_parameters()
     te = jnp.array([1.0])
     with pytest.raises(ValueError, match="forward_fast"):
@@ -192,8 +189,8 @@ def test_forward_fast_rejects_events_and_grad(bsm1):
     ({"colored_jacobian": False}, None),
     ({"dtmax": 0.1}, aquakin.DifferentiationConfig(method="through_solve")),
 ])
-def test_forward_fast_rejects_unhonored_integrator_knobs(bsm1, override, diff):
-    plant, y0 = bsm1
+def test_forward_fast_rejects_unhonored_integrator_knobs(cstr_plant, override, diff):
+    plant, y0 = cstr_plant, _Y0
     params = plant.default_parameters()
     te = jnp.array([1.0])
     kw = {} if diff is None else {"diff": diff}
@@ -208,20 +205,32 @@ def test_forward_fast_rejects_unhonored_integrator_knobs(bsm1, override, diff):
 # one integrator field forward_fast threads through; the other knob a forward_fast
 # user routinely sets.) This is the "honors, not silently drops" half of the
 # (mode x knob) contract.
-def test_forward_fast_accepts_honored_knobs(bsm1):
-    plant, y0 = bsm1
+def test_forward_fast_accepts_honored_knobs(cstr_plant):
+    """A forward_fast solve that sets rtol / atol / max_steps runs, and matches
+    the default diffrax solve at the same tolerances and the closed form.
+
+    The tank's ``A`` obeys ``dA/dt = 0.1 (1 - A) - k A`` with ``k = 0.1``, so
+    ``A(t) = 0.5 + (A0 - 0.5) exp(-0.2 t)``. Two adaptive solutions at
+    ``rtol = 1e-7`` agree with each other and with the closed form to well
+    within ``1e-5``, two decades above the tolerance.
+    """
+    plant, y0 = cstr_plant, _Y0
     params = plant.default_parameters()
-    te = jnp.array([0.0, 1.0])
-    sol = plant.solve(t_span=(0.0, 1.0), t_eval=te, params=params, y0=y0,
-                      rtol=1e-5, atol=1e-3, forward_fast=True,
-                      integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
-    assert sol.state.shape[0] == te.shape[0]
-    assert np.all(np.isfinite(np.asarray(sol.state)))
+    te = jnp.linspace(0.0, 10.0, 6)
+    kw = dict(t_span=(0.0, 10.0), t_eval=te, params=params, y0=y0,
+              rtol=1e-7, atol=1e-10,
+              integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
+    fast = np.asarray(plant.solve(**kw, forward_fast=True).state)
+    reference = np.asarray(plant.solve(**kw).state)
+    np.testing.assert_array_equal(fast[0], np.asarray(y0))         # t0 exact
+    np.testing.assert_allclose(fast, reference, rtol=1e-5, atol=1e-8)
+    exact_A = 0.5 + (float(y0[0]) - 0.5) * np.exp(-0.2 * np.asarray(te))
+    np.testing.assert_allclose(fast[:, 0], exact_A, rtol=1e-5)
 
 
-def test_forward_fast_honours_max_steps(bsm1):
+def test_forward_fast_honours_max_steps(cstr_plant):
     """The plant's ``max_steps`` reaches the forward_fast integrator."""
-    plant, y0 = bsm1
+    plant, y0 = cstr_plant, _Y0
     params = plant.default_parameters()
     with pytest.raises(RuntimeError, match="step budget"):
         plant.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), params=params,
@@ -232,25 +241,6 @@ def test_forward_fast_honours_max_steps(bsm1):
 # --------------------------------------------------------------------------
 # Plant agreement (slow: full solves).
 # --------------------------------------------------------------------------
-
-@pytest.mark.slow
-def test_forward_fast_matches_diffrax_bsm1(bsm1):
-    plant, y0 = bsm1
-    params = plant.default_parameters()
-    te = jnp.linspace(0.0, 8.0, 17)
-    kw = dict(t_span=(0.0, 8.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-5, atol=1e-3,
-              integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
-    ff = plant.solve(**kw, forward_fast=True)
-    ref = plant.solve(**kw)
-    a = np.asarray(ff.state)
-    b = np.asarray(ref.state)
-    assert ff.state.shape == ref.state.shape
-    assert np.all(np.isfinite(a))
-    assert np.allclose(a[0], b[0])                              # t0 exact
-    rel = np.max(np.abs(a - b) / (np.abs(b) + 1e-3))
-    assert rel < 1e-2          # two valid adaptive solutions to the same rtol
-
 
 @pytest.mark.slow
 def test_forward_fast_matches_diffrax_bsm2():

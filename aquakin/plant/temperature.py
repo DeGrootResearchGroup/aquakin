@@ -46,19 +46,23 @@ OPERATING_T_SIGNAL = "__operating_T__"
 _DEFAULT_REF_T_K = 288.15
 
 
-def _unit_reference_T(unit) -> float:
+def _unit_reference_T(unit) -> jnp.ndarray:
     """The unit's declared static operating temperature (K), else the default.
 
     Reactors carry a ``conditions`` dict with a ``"T"`` entry; non-reactive
     volume units (clarifiers, settlers) need not, so fall back to the AS
     reference. Only used to seed the temperature state -- the heat balance
     relaxes it to the resolved inlet temperature within ``V/Q`` hours.
+
+    Returns a 0-d array, never a Python ``float``: the plant builds its initial
+    state inside a traced solve (``jax.jit``, ``jax.vmap``, ``aquakin.monte_carlo``),
+    where the array operations below give a tracer that ``float`` cannot convert.
     """
     conditions = getattr(unit, "conditions", None) or {}
     T = conditions.get("T") if hasattr(conditions, "get") else None
     if T is None:
-        return _DEFAULT_REF_T_K
-    return float(jnp.asarray(T).reshape(-1)[0])
+        return jnp.asarray(_DEFAULT_REF_T_K, dtype=float)
+    return jnp.asarray(T, dtype=float).reshape(-1)[0]
 
 
 class TemperatureModel(ABC):
@@ -142,7 +146,7 @@ class HeatBalanceTemperature(TemperatureModel):
         names = self.tracked_units(plant)
         if not names:
             return jnp.zeros((0,))
-        return jnp.asarray([_unit_reference_T(plant.units[n]) for n in names], dtype=float)
+        return jnp.stack([_unit_reference_T(plant.units[n]) for n in names])
 
     def state_rhs(self, plant, temp_state, inlet_by_unit: dict) -> jnp.ndarray:
         # The tracked-unit list and their volumes are fixed for the plant's
