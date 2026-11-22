@@ -24,3 +24,5 @@ its reason. Omit for a change with no .py lines. -->
 ## Found on the way, not changed here
 
 <!-- Bugs or debt you noticed and left alone. -->
+
+<!-- Do not add a link to the Claude session that wrote the change. -->
