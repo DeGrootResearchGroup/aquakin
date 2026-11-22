@@ -367,12 +367,12 @@ and MBR all get it. The open-loop theta factor scales the gas kLa too, but the
 `C_s(T)` saturation ratio is applied to the oxygen entry only (`o2_mask`; the
 no-gas path keeps the historic whole-vector multiply, bit-identical).
 `required_signals` de-duplicates, since the gas and oxygen read one signal.
-**Consumers of `_controlled_kla` / `_kla_vec` must not assume only `SO` is
-there**: the balance's O₂ term reads the aerated species' entry only, and
-`direct_n2o_emission` (`kla_ratio=None` default) takes each reactor's in-solve
-ratio and saturation from `unit._av.stripped`, so the post-solve emission equals
-the in-solve flux whenever the aeration temperature correction is off (its
-`_kla_history` reconstruction ignores that correction). Without in-solve
+**Read a tank's aeration through the public `AerationUnit` readers, never a
+species name** (`asm3_2step_n2o` calls oxygen `SO2`): `oxygen_kla(signals)`,
+`kla_vector(signals)` (closed-loop entries via the one `_apply_controlled_kla`
+the RHS uses), `saturation_vector`, `stripped_gases`. So `direct_n2o_emission`
+equals the in-solve flux whenever the aeration temperature correction (which
+the readers do not apply) is off. Without in-solve
 stripping the function remains a post-solve estimate at ratio 1. The
 `plant.mass_balance` content table falls back on a model's declared species
 `composition:` when there is no shipped table. Note a closed-loop plant whose
