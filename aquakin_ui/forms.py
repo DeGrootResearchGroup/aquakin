@@ -98,7 +98,7 @@ def _placeholder(s: dict) -> str:
     return f"{_text(s['default'])} (default)"
 
 
-def _row(key, label, widget="text", value="", **extra) -> dict:
+def _row(key, label, widget="text", value: object = "", **extra) -> dict:
     return {
         "key": key,
         "label": label,
@@ -181,7 +181,7 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
                     hint=s["help"],
                 )
             )
-            if mode != "none":
+            if mode != "none" and value:  # a mode other than none is read from value
                 clock = (doc.meta.get("options") or {}).get("time_unit") or "d"
                 oxygen = (value or {}).get("species") or _oxygen(species) or ""
                 units = {s["name"]: s.get("unit", "") for s in info["species"]} if info else {}

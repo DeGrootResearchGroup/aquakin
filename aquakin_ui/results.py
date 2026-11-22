@@ -409,7 +409,7 @@ def _profile_view(results: dict, summary: dict, lines: list, tables: list, chart
         f"Best of the grid: {parameter} = {fmt(summary.get('mle'))}. 95 % interval: "
         f"{bounds[0]} to {bounds[1]} (where the curve stays under the threshold)."
     )
-    if parameter in table:
+    if isinstance(parameter, str) and parameter in table:
         charts.append(
             {
                 "channel": parameter,
@@ -429,7 +429,9 @@ def _profile_view(results: dict, summary: dict, lines: list, tables: list, chart
                 [parameter, "loss", "rise from the best"],
                 [
                     [fmt(x), fmt(v), fmt(d)]
-                    for x, v, d in zip(table[parameter], table.get("loss"), table.get("delta_loss"))
+                    for x, v, d in zip(
+                        table[parameter], table.get("loss") or [], table.get("delta_loss") or []
+                    )
                 ],
             )
         )

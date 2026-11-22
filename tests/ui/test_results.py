@@ -131,6 +131,11 @@ def test_each_analysis_is_shown_as_tables_and_charts():
     assert "0.9000 to above the grid" in profile["lines"][0]
     assert 'class="ak-chart-ref"' in profile["charts"][0]["svg"]
     assert profile["tables"][0]["rows"][1] == ["1.000", "1.000", "0"]
+    # A table without its loss columns gives an empty profile table, not an error.
+    bare = analysis_view(
+        {"kind": "profile", "summary": {"parameter": "m.a"}, "table": {"m.a": [0.8, 1.0]}}
+    )
+    assert bare["tables"][0]["rows"] == []
     # A study that did not converge says so; one without a summary says nothing.
     assert (
         "did not converge"

@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -155,7 +156,8 @@ class Editor:
         self._pending_rows = None
         self._runs: dict[str, StudyRun] = {}
         self._loop = None
-        self._opened: tuple[Path, str] | None = None  # the file opened, and its sha256
+        # The file opened, and its sha256 (None when it had gone by the time it was read).
+        self._opened: tuple[Path, str | None] | None = None
         self._study_action = None
         self._study_form: dict | None = None  # the worker's study_form, asked once
         self._saved: str | None = None  # the document as last opened or saved
@@ -663,6 +665,10 @@ class Editor:
         if then is None or choice == "cancel":
             return
         if choice == "save":
+            if self._opened is None:
+                # "Save first" is offered only for a flowsheet with a file of its own.
+                self.say("this flowsheet has no file yet; type where to keep it, then Save")
+                return
             self.save(then=then, path=self._opened[0])
         else:
             then()
@@ -827,24 +833,24 @@ class Editor:
         if self._simulation() in self._runs:
             self.state.panel = "studies"
             return
-        if self._spec_file() is None:
+        spec = self._spec_file()
+        if spec is None:
             self.say(
                 "the flowsheet has no file yet: type where to keep it in the path field "
                 "(a .yaml file in the folder of its project), then Simulate"
             )
             return
-        if self._unsaved() or not self._spec_file().exists():
-            self.save(then=self._run_simulation, path=self._spec_file())
+        if self._unsaved() or not spec.exists():
+            self.save(then=lambda: self._run_simulation(spec), path=spec)
         else:
-            self._run_simulation()
+            self._run_simulation(spec)
 
     def _simulation(self) -> str:
         """The name of the open spec's Simulate study."""
         spec = self._spec_file()
         return simulation_name(spec) if spec is not None else SIMULATION
 
-    def _run_simulation(self) -> None:
-        spec = self._spec_file()
+    def _run_simulation(self, spec: Path) -> None:
         project = spec.parent
         name = simulation_name(spec)
 
@@ -961,9 +967,9 @@ class Editor:
             ports = [f"{uid}.{port}" for uid in self.doc.units for port in self.doc.ports(uid)[1]]
             return {"streams": ports, "parameters": [], "channels": {}}
 
-    def _open_study_dialog(self, *, title: str, kind: str, study: dict | None, editing: str):
-        form = self._study_form
-
+    def _open_study_dialog(
+        self, form: dict, *, title: str, kind: str, study: dict | None, editing: str
+    ):
         def done(choices):
             if isinstance(choices, Exception):
                 choices = {"streams": [], "parameters": [], "channels": {}}
@@ -983,10 +989,10 @@ class Editor:
 
         self._off_page(self._plant_choices, done)
 
-    def _with_form(self, then) -> None:
-        """Run ``then()`` once the worker's study form is known."""
+    def _with_form(self, then: Callable[[dict], None]) -> None:
+        """Run ``then(form)`` once the worker's study form is known."""
         if self._study_form is not None:
-            then()
+            then(self._study_form)
             return
 
         def done(form):
@@ -994,7 +1000,7 @@ class Editor:
                 self.say(f"could not read the study settings: {form}")
                 return
             self._study_form = form
-            then()
+            then(form)
 
         self._off_page(lambda: self.worker.request("study_form"), done)
 
@@ -1005,8 +1011,8 @@ class Editor:
             return
         self.state.study_name = ""
         self._with_form(
-            lambda: self._open_study_dialog(
-                title="New study", kind="simulate", study=None, editing=""
+            lambda form: self._open_study_dialog(
+                form, title="New study", kind="simulate", study=None, editing=""
             )
         )
 
@@ -1024,7 +1030,8 @@ class Editor:
             # The form has no flowsheet field: the study keeps the spec it follows.
             self._study_flowsheet = settings.get("flowsheet")
             self._with_form(
-                lambda: self._open_study_dialog(
+                lambda form: self._open_study_dialog(
+                    form,
                     title=f"Edit {name}",
                     kind=settings["kind"],
                     study=settings,
@@ -1036,18 +1043,25 @@ class Editor:
 
     def set_study_kind(self, kind: str, draft: dict) -> None:
         """Change the dialog's kind, keeping the values of the fields both kinds have."""
-        fresh = draft_for(self._study_form, kind)
-        for name in fresh:
-            if name in draft:
-                fresh[name] = draft[name]
-        self.state.study_kind = kind
-        self.state.study_fields = fields_for(self._study_form, kind)
-        self.state.study_draft = fresh
+
+        def change(form: dict) -> None:
+            fresh = draft_for(form, kind)
+            for name in fresh:
+                if name in draft:
+                    fresh[name] = draft[name]
+            self.state.study_kind = kind
+            self.state.study_fields = fields_for(form, kind)
+            self.state.study_draft = fresh
+
+        self._with_form(change)
 
     def save_study_dialog(self, name: str, kind: str, draft: dict) -> None:
         """Write the study the dialog describes (create it, or replace its settings)."""
+        self._with_form(lambda form: self._write_study(form, name, kind, draft))
+
+    def _write_study(self, form: dict, name: str, kind: str, draft: dict) -> None:
         try:
-            study = study_from(self._study_form, kind, draft)
+            study = study_from(form, kind, draft)
         except ValueError as exc:
             self.state.study_error = str(exc)
             return
@@ -1056,7 +1070,7 @@ class Editor:
         if not editing and not name:
             self.state.study_error = "Give the study a name."
             return
-        needed = missing(self._study_form, kind, study)
+        needed = missing(form, kind, study)
         if needed:
             self.state.study_error = needed
             return

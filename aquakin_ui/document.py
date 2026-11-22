@@ -279,7 +279,7 @@ class Flowsheet:
 
     def default_model(self) -> str:
         """The model a new unit starts with: the one most units already use."""
-        used = [u.settings.get("model") for u in self.units.values() if u.settings.get("model")]
+        used = [m for u in self.units.values() if (m := u.settings.get("model"))]
         return max(set(used), key=used.count) if used else "asm1"
 
     # -- checks and drawing -------------------------------------------------
