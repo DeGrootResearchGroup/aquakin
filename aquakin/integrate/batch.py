@@ -116,10 +116,14 @@ class BatchReactor(GradientCheckMixin):
     order of convenience:
 
     - build the reactor with a ``dtmax`` cap (the simplest fix);
-    - differentiate in **forward mode** (``jax.jacfwd`` with
-      ``adjoint=aquakin.forward_adjoint()``), finite at any step;
-    - use :func:`aquakin.calibrate` (``gradient="stable_adjoint"``, cap-free) or
-      :func:`aquakin.sensitivity`, which handle it internally;
+    - differentiate in **forward mode** (``jax.jacfwd`` through a reactor built
+      with ``diff=aquakin.DifferentiationConfig(mode="forward",
+      method="through_solve")``), finite at any step;
+    - use :func:`aquakin.calibrate` (cap-free with
+      ``diff=aquakin.DifferentiationConfig(method="stable")``) or
+      :func:`aquakin.sensitivity` (with
+      ``diff=aquakin.DifferentiationConfig(mode="forward")``), which handle it
+      internally;
     - guard your own gradient with :meth:`check_gradient_finite`
       (``g = reactor.check_gradient_finite(jax.grad(loss)(params))``), which
       raises an actionable error instead of returning silent ``NaN``.

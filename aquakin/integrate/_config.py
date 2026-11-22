@@ -185,18 +185,43 @@ class DifferentiationConfig:
         return None
 
 
+# --- The differentiation settings that error messages advise ------------------
+#
+# Every remedy that tells a user how to change the AD direction or adjoint names
+# one of these, so the advice cannot drift from the real keyword arguments.
+
+#: The forward-mode setting of an entry point that builds the forward-capable
+#: adjoint itself (``sensitivity``, ``dgsm``).
+FORWARD_DIFF = 'diff=aquakin.DifferentiationConfig(mode="forward")'
+#: The forward-mode setting of a reactor (or ``Plant.solve``) or of ``calibrate``:
+#: forward-mode autodiff *through* the solve. ``method="stable"`` is the reverse
+#: discrete adjoint, so a bare ``mode="forward"`` does not give this.
+FORWARD_THROUGH_SOLVE_DIFF = (
+    'diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")'
+)
+#: The cap-free reverse-mode setting (the hand-written discrete adjoint).
+STABLE_REVERSE_DIFF = 'diff=aquakin.DifferentiationConfig(method="stable")'
+#: How to make a solve the user builds forward-mode differentiable.
+FORWARD_REACTOR_REMEDY = (
+    f"build the reactor with {FORWARD_THROUGH_SOLVE_DIFF} (or pass that diff= to "
+    "Plant.solve), which gives the solve a forward-capable adjoint"
+)
+
+
 # --- AD-mode helpers (hide the diffrax adjoint plumbing) ---------------------
 
 
 def forward_adjoint() -> diffrax.AbstractAdjoint:
     """Return the diffrax adjoint that supports forward-mode autodiff.
 
-    A thin, dependency-free alias for ``diffrax.DirectAdjoint()`` so a user
-    script that needs forward-mode AD through a reactor solve (e.g. the reactor
-    inside a ``dgsm(ad_mode="forward")`` ``fn``) can write
-    ``adjoint=aquakin.forward_adjoint()`` without importing ``diffrax`` or
-    knowing that the default ``RecursiveCheckpointAdjoint`` registers a
-    ``custom_vjp`` that rejects forward mode.
+    A thin, dependency-free alias for ``diffrax.DirectAdjoint()``, the adjoint a
+    reactor carries when built with
+    ``diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")``
+    (see :meth:`DifferentiationConfig.reactor_adjoint`). The default
+    ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp`` that rejects
+    forward mode. Reactors take the ``diff=`` config, not an adjoint object; use
+    this alias only where a raw diffrax adjoint is wanted (a hand-written
+    ``diffrax.diffeqsolve``, or :func:`with_adjoint`).
     """
     return diffrax.DirectAdjoint()
 
@@ -207,8 +232,9 @@ def with_adjoint(reactor, adjoint):
     Reactors are stateless after construction and read ``self.adjoint`` at solve
     time, so a shallow copy with a swapped ``adjoint`` is a valid forward-/
     reverse-capable variant of the same reactor. Used by ``calibrate`` /
-    ``sensitivity`` to build the right adjoint internally from an ``ad_mode``
-    string, so ``diffrax`` never appears in user code.
+    ``sensitivity`` to build the right adjoint internally from the
+    ``diff.mode`` of their :class:`DifferentiationConfig`, so ``diffrax`` never
+    appears in user code.
 
     The clone gets fresh, empty per-instance compile caches (every ``*_cache``
     dict attribute, e.g. ``_jit_cache`` / ``_sens_jit_cache``). A shallow copy
@@ -292,11 +318,12 @@ class GradientCheckMixin:
             remedy = (
                 "A reverse-mode gradient through a stiff solve overflows in the "
                 "backward pass when the integrator step is uncapped. Build the "
-                "reactor with a dtmax cap (a small multiple of the fastest "
-                "reaction timescale), or differentiate in forward mode "
-                "(jax.jacfwd with adjoint=aquakin.forward_adjoint()). "
-                "aquakin.calibrate (gradient='stable_adjoint', cap-free) and "
-                "aquakin.sensitivity handle this for you."
+                "reactor with a dtmax cap (integrator=aquakin.IntegratorConfig("
+                "dtmax=...), a small multiple of the fastest reaction timescale), "
+                "or differentiate in forward mode (jax.jacfwd): "
+                f"{FORWARD_REACTOR_REMEDY}. aquakin.calibrate (cap-free with "
+                f"{STABLE_REVERSE_DIFF}) and aquakin.sensitivity (with "
+                f"{FORWARD_DIFF}) handle this for you."
             )
         else:
             remedy = (

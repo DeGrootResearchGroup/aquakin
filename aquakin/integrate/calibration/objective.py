@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.integrate._common import check_finite_gradient
+from aquakin.integrate._config import FORWARD_THROUGH_SOLVE_DIFF, STABLE_REVERSE_DIFF
 from aquakin.integrate.calibration.config import _resolve_laplace
 from aquakin.integrate.calibration.loss import _data_term, _pooled_sse
 from aquakin.integrate.calibration.multistart import _is_solve_failure
@@ -303,28 +304,26 @@ def _check_start_gradient(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0):
             "direct cause above."
         ) from exc
     # Forward-mode only enters through the Gauss-Newton Jacobian; L-BFGS-B always
-    # uses a reverse scalar gradient, so its cap-free fix is gradient='stable_adjoint'.
+    # uses a reverse scalar gradient, so its cap-free fix is the stable adjoint.
     on_finite_path = cfg.gradient == "stable_adjoint" or (
         cfg.ad_mode == "forward" and cfg.optimizer == "gauss_newton"
     )
     if on_finite_path:
+        method = "stable" if cfg.gradient == "stable_adjoint" else "through_solve"
         remedy = (
             "It was already on a finite-by-construction path "
-            f"(ad_mode={cfg.ad_mode!r}, gradient={cfg.gradient!r}, "
-            f"optimizer={cfg.optimizer!r}); check the model, data, and "
-            "parameter ranges."
-        )
-    elif cfg.optimizer == "gauss_newton":
-        remedy = (
-            "Pass ad_mode='forward' (forward-mode, finite through a stiff "
-            "solve) or gradient='stable_adjoint' (cap-free reverse-mode); "
-            "either is handled internally with no diffrax or dtmax in your "
-            "code."
+            f"(diff=DifferentiationConfig(mode={cfg.ad_mode!r}, method={method!r}), "
+            f"OptimizerConfig(method={cfg.optimizer!r})); check the model, data, "
+            "and parameter ranges."
         )
     else:
+        # The stable adjoint serves a reactor and a plant fit; the forward-mode
+        # Gauss-Newton Jacobian is a reactor-fit option only.
         remedy = (
-            "Pass gradient='stable_adjoint' (cap-free reverse-mode, handled "
-            "internally), or switch to optimizer='gauss_newton' with "
-            "ad_mode='forward'."
+            f"Pass {STABLE_REVERSE_DIFF} (cap-free reverse-mode, handled "
+            "internally), or, for a reactor fit, "
+            'optimizer=aquakin.OptimizerConfig(method="gauss_newton") with '
+            f"{FORWARD_THROUGH_SOLVE_DIFF} (forward-mode, finite through a stiff "
+            "solve). Neither needs diffrax or a dtmax cap in your code."
         )
     check_finite_gradient(probe, what="calibration gradient", remedy=remedy)

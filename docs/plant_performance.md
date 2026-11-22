@@ -936,9 +936,12 @@ exception itself is clean. The **same** context manager also catches the other
 opaque solve-time failure — a `jax.jacfwd`/`jax.jvp` (forward-mode AD) through
 the default reverse-only adjoint, which JAX rejects with "can't apply
 forward-mode autodiff (jvp) to a custom_vjp function". That is re-raised as a
-`RuntimeError` naming the cure, `aquakin.forward_adjoint()` (build the reactor
-with that adjoint, or take a reverse-mode gradient). `sensitivity`/`dgsm` with
-`ad_mode="forward"` set the forward-capable adjoint for you and so never hit it.
+`RuntimeError` naming the cure (build the reactor with
+`diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")`, or
+take a reverse-mode gradient). `sensitivity` with
+`diff=aquakin.DifferentiationConfig(mode="forward")` sets the forward-capable
+adjoint for you and so never hits it; `dgsm` cannot, because its `fn` builds the
+reactor.
 
 **Dynamic influent now works too — flow-controlled recycle pumps (issue #30).**
 The dynamic (time-varying-influent) run *used* to hit the step ceiling, which

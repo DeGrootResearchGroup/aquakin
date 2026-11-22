@@ -43,6 +43,7 @@ from aquakin.integrate._common import (
     native_time_factor,
     with_adjoint,
 )
+from aquakin.integrate._config import STABLE_REVERSE_DIFF
 from aquakin.integrate._linalg import _NULL_LOADING_TOL, _NULL_RTOL
 from aquakin.integrate._transforms import (
     dphysical_dunconstrained,
@@ -464,13 +465,13 @@ def calibrate(
             "mode='forward', method='through_solve' (forward-mode through the "
             "diffrax solve) OR mode='reverse', method='stable' (cap-free reverse)."
         )
-    # ad_mode='forward' needs a forward-capable adjoint; build it internally so
+    # diff.mode='forward' needs a forward-capable adjoint; build it internally so
     # diffrax never appears in user code.
     if ad_mode == "forward":
         reactor = with_adjoint(reactor, forward_adjoint())
     if gradient == "stable_adjoint" and not hasattr(reactor, "conditions"):
         raise ValueError(
-            "gradient='stable_adjoint' is implemented for batch reactors "
+            f"{STABLE_REVERSE_DIFF} is implemented for batch reactors "
             "(those exposing a single-location `conditions`); got a reactor "
             f"without one ({type(reactor).__name__})."
         )

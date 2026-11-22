@@ -10,6 +10,7 @@ monolith is covered by the full-fit tests in
 """
 
 import dataclasses
+import re
 import sys
 
 import jax
@@ -726,7 +727,8 @@ def test_calibrate_stable_adjoint_requires_batch_reactor(simple_model):
         model = simple_model
 
     C0, obs, t_obs = _cal_args(simple_model)
-    with pytest.raises(ValueError, match="gradient='stable_adjoint' is implemented for batch"):
+    msg = 'diff=aquakin.DifferentiationConfig(method="stable") is implemented for batch'
+    with pytest.raises(ValueError, match=re.escape(msg)):
         calibrate(
             _NoConditions(),
             C0,

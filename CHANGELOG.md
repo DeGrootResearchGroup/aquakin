@@ -42,6 +42,17 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- Error messages and docstrings about differentiating a solve now name the
+  arguments that exist. They advised `ad_mode='forward'`, `gradient=
+  'stable_adjoint'` and building a reactor with `adjoint=aquakin.forward_adjoint()`,
+  all of which raise `TypeError`; they now say
+  `diff=aquakin.DifferentiationConfig(mode="forward")` for `sensitivity` / `dgsm`,
+  `diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")`
+  for a reactor (including the one built inside a `dgsm` `fn`) and for a
+  forward-mode `calibrate`, and `diff=aquakin.DifferentiationConfig(method="stable")`
+  for the cap-free reverse gradient. Affects the non-finite-gradient errors of
+  `calibrate` and `sensitivity`, the forward-mode errors of `dgsm` and of
+  `jax.jacfwd` through a reactor, and `reactor.check_gradient_finite`.
 - `aquakin-ui` no longer leaves aquakin worker processes behind. A worker that
   stopped reading was replaced but kept running (with JAX loaded) until the
   editor closed, and a worker that timed out stayed a zombie; both are now
