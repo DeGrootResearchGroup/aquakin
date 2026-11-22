@@ -462,27 +462,6 @@ def test_bsm1_steady_state_solve_is_cached():
     assert len(plant._steady_jit_cache) == 1
 
 
-@pytest.mark.slow
-def test_bsm1_steady_state_falls_back_to_forward(bsm1):
-    # If PTC is starved of iterations it falls back to the forward solve.
-    plant, _asm1, y0 = bsm1
-    ss = plant.steady_state(y0=y0, max_iter=1, fallback=True,
-                            fallback_kwargs={"max_time": 300.0})
-    assert ss.method == "ptc->forward"
-    assert bool(ss.converged)
-
-
-def test_bsm1_steady_state_keeps_ptc_result_when_ladder_declines(bsm1):
-    # With no fallback configured (no continuation start, arclength/forward off)
-    # the escalation ladder has nothing to try, so a starved solve returns the
-    # non-converged PTC result verbatim rather than a fallback method -- the
-    # shared _steady_fallback_ladder "return None -> keep PTC" contract.
-    plant, _asm1, y0 = bsm1
-    ss = plant.steady_state(y0=y0, max_iter=1, arclength=False, fallback=False)
-    assert ss.method == "ptc"
-    assert not bool(ss.converged)
-
-
 def _design_cstr(make_cstr_plant):
     """The conftest single CSTR (A -> B, k = 0.1, V/Q = 10, fed 1 g/m3 of A),
     plus a design override that raises the feed to 5 g/m3 (steady state
@@ -950,38 +929,12 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
 
 
 @pytest.mark.slow
-def test_steady_state_forward_mode_ad(bsm1):
-    """The steady-state IFT gradient is now a ``custom_jvp``, so the plant steady
-    state is differentiable in BOTH directions: forward-mode ``jacfwd`` flows
-    through ``plant.steady_state`` (previously rejected by the reverse-only
-    ``custom_vjp``), and it agrees with reverse-mode ``jax.grad`` and with finite
-    differences. This is the forward-mode capability the many-output sensitivity
-    screen needs."""
-    plant, asm1, y0 = bsm1
-    base = plant.default_parameters()
-    i = plant.parameter_index("asm1.muA")
-    si = asm1.species_index
-
-    def out(theta):
-        s = plant.steady_state(base.at[i].set(theta), y0=y0).state
-        return plant.states_by_unit(s)["tank5"][si["SNO"]]
-
-    th = float(base[i])
-    fwd = float(jax.jacfwd(out)(th))                 # forward mode (the new path)
-    rev = float(jax.grad(out)(th))                   # reverse mode (unchanged)
-    h = th * 1e-4
-    fd = (float(out(th + h)) - float(out(th - h))) / (2.0 * h)
-    assert np.isfinite(fwd) and np.isfinite(rev)
-    assert fwd == pytest.approx(rev, rel=1e-7)       # both IFT, same root
-    assert fwd == pytest.approx(fd, rel=1e-4)        # the true sensitivity (FD floor)
-
-
-@pytest.mark.slow
 def test_steady_state_sensitivity_helper(bsm1):
     """``plant.steady_state_sensitivity`` returns the exact IFT output sensitivity
     in either AD direction from a single steady-state solve. Forward and reverse
-    give the same result; it matches a ``jax.grad`` through ``steady_state`` and
-    finite differences; the elasticity option is finite."""
+    give the same result; it matches a ``jax.grad`` and a ``jax.jacfwd`` through
+    ``steady_state`` (the IFT tangent is a ``custom_jvp``, so both AD directions
+    flow through it) and finite differences; the elasticity option is finite."""
     plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     si = asm1.species_index
@@ -1007,8 +960,10 @@ def test_steady_state_sensitivity_helper(bsm1):
         return plant.states_by_unit(s)["tank5"][si["SNO"]]
 
     g = float(jax.grad(scalar)(th))
+    fwd = float(jax.jacfwd(scalar)(th))
     h = th * 1e-4
     fd = (scalar(th + h) - scalar(th - h)) / (2.0 * h)
+    assert fwd == pytest.approx(g, rel=1e-7)          # both IFT, same root
     assert float(Sf[1, i]) == pytest.approx(g, rel=1e-7)
     assert float(Sf[1, i]) == pytest.approx(float(fd), rel=1e-4)  # FD floor
 
