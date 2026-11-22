@@ -35,12 +35,10 @@ Split out of `.claude/rules/integration.md`.
   where `test_calibrate.py` monkeypatches it; `_IRLS_MAX_ITER` lives with
   `_run_multistart`, where a unit test patches it. Keep both where the patch
   lands when moving code.
-- **`aquakin.plant` takes every private name of the calibration family from
-  `integrate/seam.py`**, which lists them (unchanged names, so the plant tests'
-  stubs on `aquakin.plant.calibrate` still apply).
-  `tests/unit/test_integrate_seam.py` fails on a bypassing import and on a seam
-  name with no plant caller: add a name to the seam in the same change as its
-  first plant use, remove it with its last.
+- `aquakin.plant` takes the calibration family's private names, like every
+  private `integrate` name, from `integrate/seam.py` (the rule is in
+  `plant.md`); the names are unchanged, so the plant tests' stubs on
+  `aquakin.plant.calibrate` still apply.
 
 ### `calibrate()` internal structure
 

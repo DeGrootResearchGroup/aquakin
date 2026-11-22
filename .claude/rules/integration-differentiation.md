@@ -1,6 +1,8 @@
 ---
 paths:
   - "aquakin/integrate/_common.py"
+  - "aquakin/integrate/_config.py"
+  - "aquakin/integrate/_solver.py"
   - "aquakin/integrate/discrete_adjoint.py"
   - "aquakin/integrate/forward_sensitivity.py"
   - "aquakin/integrate/forward_solve.py"

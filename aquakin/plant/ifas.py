@@ -34,7 +34,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.conditions import SpatialConditions
-from aquakin.integrate.biofilm import BiofilmReactor, _default_soluble_mask
+from aquakin.integrate.biofilm import BiofilmReactor
 from aquakin.integrate.biofilm_growth import (
     BALANCED_DETACHMENT,
     DETACHMENT_LAWS,
@@ -44,6 +44,7 @@ from aquakin.integrate.biofilm_growth import (
     surface_detachment,
     thickness_derivative,
 )
+from aquakin.integrate.seam import _default_soluble_mask
 from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import (

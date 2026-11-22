@@ -2,7 +2,7 @@
 
 Every implicit ODE solve in aquakin must build its diffrax solver and step
 controller through the shared helpers ``build_implicit_solver`` /
-``build_step_controller`` (``aquakin.integrate._common``). Those helpers are the
+``build_step_controller`` (``aquakin.integrate._solver``). Those helpers are the
 mechanism that keeps the reactor and plant solve paths on ONE common solver mode
 -- the decoupled-Newton ESDIRK + PID controller -- instead of drifting apart (the
 bug class that let the plant's stable forward-sensitivity config diverge from the
@@ -29,7 +29,7 @@ _FORBIDDEN = {"Kvaerno3", "Kvaerno5", "PIDController", "VeryChord",
 
 # Files allowed to construct these directly, each with the reason it is exempt.
 _ALLOW = {
-    "integrate/_common.py":
+    "integrate/_solver.py":
         "the single-source-of-truth builders (build_implicit_solver / "
         "build_step_controller) and the _CANONICAL_SOLVERS table live here",
 }
@@ -67,7 +67,7 @@ def test_no_solver_construction_outside_helpers():
         "diffrax solver / controller / root finder constructed outside the "
         "single-source-of-truth helpers:\n  " + "\n  ".join(offenders)
         + "\n\nBuild it through build_implicit_solver / build_step_controller "
-        "(aquakin.integrate._common), or -- if it is a genuine new exception -- "
+        "(aquakin.integrate._solver), or -- if it is a genuine new exception -- "
         "add the file to _ALLOW in this test with a reason.")
 
 

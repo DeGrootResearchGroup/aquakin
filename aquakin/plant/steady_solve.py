@@ -22,11 +22,8 @@ import diffrax
 import jax
 import jax.numpy as jnp
 
-from aquakin.integrate._common import (
-    IntegratorConfig,
-    _run_diffeqsolve,
-    friendly_solve_errors,
-)
+from aquakin.integrate._common import IntegratorConfig, friendly_solve_errors
+from aquakin.integrate.seam import _run_diffeqsolve
 from aquakin.plant.results import (
     SteadyStateResult,
 )

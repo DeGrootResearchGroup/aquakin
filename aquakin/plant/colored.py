@@ -387,7 +387,7 @@ class ColoredJacobianManager:
             materialize_colored_jacobian,
             pattern_coverage_misses,
         )
-        from aquakin.integrate.discrete_adjoint import _autonomize
+        from aquakin.integrate.seam import _autonomize
 
         plant = self.plant
         if self._adjoint_builder is not None:
