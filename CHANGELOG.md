@@ -47,6 +47,9 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- The shipped sewer (`wats_sewer*`) and `adm1` model descriptions shown by
+  `model.summary()` now describe the model and how a variant differs from its
+  base, instead of its development history; the models themselves are unchanged.
 - A plant with `HeatBalanceTemperature` can now be solved inside `jax.jit` or
   `jax.vmap`, so `aquakin.monte_carlo`, `aquakin.compare_scenarios` and
   `aquakin.dgsm` work over it (they jit the function even with

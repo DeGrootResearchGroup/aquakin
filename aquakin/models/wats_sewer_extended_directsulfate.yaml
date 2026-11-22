@@ -1,65 +1,28 @@
+# Calibration finding (unconstrained best fit to one nitrate-dosing batch):
+# the direct pathway brings the elemental-sulfur oxidation rate to the
+# measured value (k_s0_anox_f about 2.3 against a measured 2.2, versus about
+# 5.5 in the two-step base), but the sulfate and sulfide fits get worse. With
+# the half-order result this shows a fit-versus-physical-rate tension that no
+# single structural change resolves.
 model:
   name: wats_sewer_extended_directsulfate
   version: "0.2"
   description: >
-    STRUCTURAL VARIANT of `wats_sewer_extended` for the model-structure study. The ONLY
-    change from the `wats_sewer_extended` baseline is the nitrate-driven sulfide
-    oxidation PATHWAY: sulfide is oxidized DIRECTLY to sulfate in one step
-    (sumS -> S_SO4, consuming the same total nitrate the two-step route did,
-    0.225 + 0.525 = 0.75 N per S), instead of the two-step route
-    sulfide -> elemental sulfur -> sulfate. The pre-existing elemental-sulfur
-    pool keeps its own nitrate-driven oxidation reaction. Rationale: peer review
-    doubts that elemental sulfur is appreciably oxidized to sulfate (not
-    energetically favorable) and notes the source does not describe anoxic
-    sulfide oxidation as two-step; our AD diagnosis shows the two-step route
-    requires the elemental-S oxidation step to run ~3x its measured rate to
-    supply the observed sulfate. This variant tests whether a direct
-    sulfide -> sulfate route reproduces the sulfate with a literature-consistent
-    rate (bypassing the slow elemental-S oxidation bottleneck). Everything else
-    is identical to `wats_sewer_extended`.
+    Structural variant of wats_sewer_extended: nitrate-driven sulfide
+    oxidation goes directly to sulfate in one step (sumS -> S_SO4, consuming
+    the same total nitrate as the two-step route, 0.225 + 0.525 = 0.75 g N
+    per g S) instead of through elemental sulfur. Elemental sulfur already
+    present keeps its own nitrate-driven oxidation reaction. Unlike
+    wats_sewer_extended, it has no iron sulfide precipitation (no
+    S_Fe2 / X_FeS species) and uses the sulfur-process temperature
+    coefficient a_s = 1.05 rather than 1.03. Everything else is identical to
+    wats_sewer_extended.
 
-    Result (unconstrained best fit to the calibration batch): the direct pathway
-    DOES make the elemental-S oxidation rate literature-consistent
-    (k_s0_anox_f -> ~2.3 ~= the measured 2.2, vs ~5.5 = 2.5x in the two-step
-    baseline), confirming the two-step route was the source of the inflated
-    rate. HOWEVER the overall fit is worse (sulfate and sulfide RMSE both rise).
-    Together with the half-order result this reveals a fit-vs-physical-rate
-    tension that no single structural change resolves: the data are reproduced
-    well only with an unphysical rate, or with physical rates only at a worse
-    fit -- quantitative support for the reviewer's structural-inadequacy /
-    over-parametrization critique. Next variant to test: sulfate-reducer
-    substrate (S_B + H2, not VFA-only) with VFA accumulating as byproduct.
-
-    Extended WATS sewer-process model: anaerobic/anoxic/aerobic carbon
-    turnover, fermentation, methanogenesis, sulfate reduction and a two-step
-    (sulfide -> elemental sulfur -> sulfate) sulfur cycle, with biological
-    nitrate-driven sulfide control. pH is NOT supplied externally: it is
-    solved from the instantaneous acid/base speciation (carbonate, ammonia,
-    acetate, phosphate, sulfide) plus strong ions and a fixed cation charge,
-    via the differentiable charge-balance solver declared in the `speciation`
-    block.
-
-    Reaction structure: heterotrophic growth (bulk+biofilm, aerobic/anoxic),
-    hydrolysis (fast/slow x aerobic/anoxic/anaerobic x bulk/biofilm),
-    endogenous energy maintenance (substrate + biomass paths), fermentation,
-    nitrification + decay, methanogenesis (acetoclastic + hydrogenotrophic),
-    sulfate reduction (VFA/H2 x bulk/biofilm), elemental-S reduction, and
-    sulfide / elemental-S oxidation (pH-dependent aerobic bulk chemical &
-    biological, aerobic & nitrate-driven biofilm). Some pathways are zero at
-    the literature default rate constants but are retained for completeness.
-
-    Deviation from the original published sewer model: anoxic (denitrifying)
-    heterotrophic growth uses the proper lower WATS anoxic yield
-    Y_H,NO3 = 0.30-0.40 (parameter `y_h_anox`, default 0.35) instead of reusing
-    the aerobic yield 0.55. Y_H is a stoichiometric COD/electron-balance
-    coefficient, so it is fixed from the literature, not calibrated.
-
-    Numerical hardening: the `positivity_limiter` block throttles net
-    consumption as a species approaches zero. Half-order (sqrt-type) oxidation
-    kinetics use an AD-safe form `x*(x+eps)^(p-1)` (eps=1e-3) so the
-    implicit-solver Jacobian stays well-conditioned at zero oxygen; this is
-    exact for x >> eps and zero-valued at x=0. Quantitative validation against
-    the published model is still outstanding.
+    The base is the extended WATS sewer-process model:
+    anaerobic/anoxic/aerobic carbon turnover, fermentation, methanogenesis,
+    sulfate reduction and a two-step (sulfide -> elemental sulfur ->
+    sulfate) sulfur cycle with nitrate-driven sulfide control, and pH solved
+    by charge balance.
   references:
     - "Khalil et al. (2025). Optimizing nitrate dosing strategies for sulfide control. Water Environ. Res."
     - "Hvitved-Jacobsen, Vollertsen & Nielsen (2013). Sewer Processes (WATS), 2nd ed. (hydrolysis, growth, saturation constants, temperature coefficients)."

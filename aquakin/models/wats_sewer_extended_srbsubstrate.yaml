@@ -1,65 +1,29 @@
+# Calibration finding (unconstrained best fit to one nitrate-dosing batch):
+# routing sulfate reduction onto S_B gives a realistic VFA trajectory (28.2 ->
+# about 13 plateau, the measured shape) with VFA no longer over-consumed. The
+# per-species RMSE is similar to the VFA-substrate base and the elemental-
+# sulfur oxidation rate inflation (k_s0_anox_f about 5.5, 2.5x measured) is
+# unchanged: that is a sulfur-pathway issue, not a carbon-substrate one.
 model:
   name: wats_sewer_extended_srbsubstrate
   version: "0.2"
   description: >
-    STRUCTURAL VARIANT of `wats_sewer_extended` for the model-structure study. The ONLY
-    change from the `wats_sewer_extended` baseline is the SULFATE-REDUCER SUBSTRATE: the
-    active biofilm sulfate-reduction and elemental-sulfur-reduction reactions
-    consume readily-biodegradable substrate S_B (fermentable) instead of VFA.
-    Rationale: peer review holds that sulfide-forming organisms in force mains
-    use fermentable substrate (and H2), NOT acetate/VFA -- which is precisely
-    why VFA accumulates in real force mains. The baseline lets sulfate reducers
-    feed on VFA only, which both reviewers (and the AD diagnosis: VFA is the one
-    species never fit at any parameter set) flag as wrong. With the substrate
-    switched to S_B, VFA is produced by fermentation but no longer consumed by
-    sulfate reduction, so it accumulates as a byproduct. This variant tests
-    whether that fixes the persistent VFA misfit (and how it shifts the
-    carbon -> sulfide -> sulfate flux). The H2 sulfate-reduction paths (a
-    legitimate substrate per the review) are unchanged; the inactive bulk VFA
-    sulfate-reduction reactions (rate 0 at the default rate constants) are left
-    as-is. Everything else is identical to `wats_sewer_extended`.
+    Structural variant of wats_sewer_extended: the biofilm sulfate-reduction
+    and elemental-sulfur-reduction reactions consume readily biodegradable
+    (fermentable) substrate S_B instead of VFA, so VFA produced by
+    fermentation accumulates rather than being consumed by sulfate
+    reduction. The H2-driven reduction reactions and the bulk VFA sulfate-
+    reduction reactions (zero at the default rate constants) are unchanged.
+    Unlike wats_sewer_extended, it has no iron sulfide
+    precipitation (no S_Fe2 / X_FeS species) and uses the sulfur-process
+    temperature coefficient a_s = 1.05 rather than 1.03. Everything else is
+    identical to wats_sewer_extended.
 
-    Result (unconstrained best fit to the calibration batch): routing sulfate
-    reduction onto S_B reproduces a realistic VFA trajectory (28.2 -> ~13
-    plateau, matching the measured shape) with VFA no longer over-consumed, so
-    the substrate structure is the more defensible one. For this single batch
-    the per-species RMSE is similar to the VFA-substrate baseline, and the
-    sulfur-oxidation rate inflation (k_s0_anox_f ~5.5, 2.5x measured) is
-    unchanged -- that is a sulfur-pathway issue, not a carbon-substrate one.
-    Like the other single-change variants it addresses its targeted critique
-    without resolving the overall fit-vs-physical-rate tension; the structural
-    defects are intertwined (see a combined variant, and richer VFA data).
-
-    Extended WATS sewer-process model: anaerobic/anoxic/aerobic carbon
-    turnover, fermentation, methanogenesis, sulfate reduction and a two-step
-    (sulfide -> elemental sulfur -> sulfate) sulfur cycle, with biological
-    nitrate-driven sulfide control. pH is NOT supplied externally: it is
-    solved from the instantaneous acid/base speciation (carbonate, ammonia,
-    acetate, phosphate, sulfide) plus strong ions and a fixed cation charge,
-    via the differentiable charge-balance solver declared in the `speciation`
-    block.
-
-    Reaction structure: heterotrophic growth (bulk+biofilm, aerobic/anoxic),
-    hydrolysis (fast/slow x aerobic/anoxic/anaerobic x bulk/biofilm),
-    endogenous energy maintenance (substrate + biomass paths), fermentation,
-    nitrification + decay, methanogenesis (acetoclastic + hydrogenotrophic),
-    sulfate reduction (VFA/H2 x bulk/biofilm), elemental-S reduction, and
-    sulfide / elemental-S oxidation (pH-dependent aerobic bulk chemical &
-    biological, aerobic & nitrate-driven biofilm). Some pathways are zero at
-    the literature default rate constants but are retained for completeness.
-
-    Deviation from the original published sewer model: anoxic (denitrifying)
-    heterotrophic growth uses the proper lower WATS anoxic yield
-    Y_H,NO3 = 0.30-0.40 (parameter `y_h_anox`, default 0.35) instead of reusing
-    the aerobic yield 0.55. Y_H is a stoichiometric COD/electron-balance
-    coefficient, so it is fixed from the literature, not calibrated.
-
-    Numerical hardening: the `positivity_limiter` block throttles net
-    consumption as a species approaches zero. Half-order (sqrt-type) oxidation
-    kinetics use an AD-safe form `x*(x+eps)^(p-1)` (eps=1e-3) so the
-    implicit-solver Jacobian stays well-conditioned at zero oxygen; this is
-    exact for x >> eps and zero-valued at x=0. Quantitative validation against
-    the published model is still outstanding.
+    The base is the extended WATS sewer-process model:
+    anaerobic/anoxic/aerobic carbon turnover, fermentation, methanogenesis,
+    sulfate reduction and a two-step (sulfide -> elemental sulfur ->
+    sulfate) sulfur cycle with nitrate-driven sulfide control, and pH solved
+    by charge balance.
   references:
     - "Khalil et al. (2025). Optimizing nitrate dosing strategies for sulfide control. Water Environ. Res."
     - "Hvitved-Jacobsen, Vollertsen & Nielsen (2013). Sewer Processes (WATS), 2nd ed. (hydrolysis, growth, saturation constants, temperature coefficients)."

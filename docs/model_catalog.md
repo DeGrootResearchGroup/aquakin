@@ -178,7 +178,10 @@ extensions. These integrate in **days**.
 
 These variants each change one structural assumption of a base model, for
 comparing model structures and studying identifiability. Everything not listed
-is the same as in the base.
+is the same as in the base, except that the `wats_sewer_extended_*` variants
+have no iron sulfide precipitation (hence two fewer species and one fewer
+reaction) and use a sulfur-process temperature coefficient `a_s` of 1.05 rather
+than 1.03.
 
 | Model | Base | Change | Size |
 |---|---|---|---|
