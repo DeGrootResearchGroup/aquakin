@@ -60,6 +60,13 @@ continuation/arclength kernels stale). `set_temperature_model` also changes the
 state length, so it additionally calls `plant._colored.reset()` (the structural
 colored builders), which `set_temperature` deliberately does not (its pattern
 stays valid).
+**Arclength continuation must not jump branches** (`integrate/steady.py`,
+`arclength_continuation_solve`). A converged corrector step farther than
+`max_correction * dsigma` from its predictor is rejected and retried shorter:
+near a fold the step's hyperplane also cuts the other branch, and accepting a
+corrector that lands there hides the fold and reports that branch as the
+operating point. Keep this check when changing the step control or the
+corrector.
 **Recycle resolution** — the methods named below (`_resolve_flows`,
 `_resolve_recycle_concentrations`, `_adaptive_recycle_refine`,
 `_recycle_context`, `_compute_recycle_map`, `_check_recycle_map_constant`, …)
