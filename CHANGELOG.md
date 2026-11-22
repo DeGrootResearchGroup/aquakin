@@ -42,6 +42,12 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- A plant extended after it has been solved now works as if it had been built
+  that way. Adding a unit, connection or influent after a solve left some of
+  what the plant had worked out about its old layout in place, so a later
+  solve ran but `plant.stream(sol, "<new unit>.out")` raised a `KeyError`, and
+  a closed-loop aerated tank (or feedback dosing unit) added after a solve was
+  refused because its controller was never created.
 - `Plant.steady_state`'s pseudo-arclength fallback (and
   `arclength_continuation_solve`) no longer reports a steady state on a
   different branch as the operating point past a fold. Near a saddle-node the

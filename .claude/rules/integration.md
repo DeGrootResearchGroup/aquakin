@@ -224,9 +224,9 @@ computation. The key materialises `atol` values, which is impossible **under
 tracing** (a calibration loss differentiating through `solve`); in that case the
 key is `None` and the cache is bypassed (the solve is traced into the outer
 computation, which JAX compiles as a whole, so caching gives nothing there
-anyway). Both caches assume the model / plant is not structurally mutated
-after the first solve — the same assumption reactors already make about their
-fixed model and conditions.
+anyway). The reactor cache assumes the model is not mutated after the first
+solve; the plant's is dropped by `Plant._structure_changed()` whenever a unit,
+connection or influent is added (`.claude/rules/plant-solve.md`).
 
 **What this is and isn't.** It removes *duplicate* compiles; it does not remove
 the first compile of each distinct `(model/plant, settings, signature)`, and
