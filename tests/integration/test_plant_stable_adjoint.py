@@ -587,27 +587,29 @@ def test_stable_adjoint_flow_setpoint_gradient_preserves_dM_dtheta():
     assert grad_cached == pytest.approx(grad_probed, rel=1e-5)
 
 
-@pytest.mark.slow
-def test_stable_adjoint_colored_jacobian_matches_dense():
-    """``colored_jacobian=True`` colors the per-step ``df/dy`` Jacobian build in
-    the stable_adjoint **backward** pass (its dominant cost for a large plant).
-    The colored Jacobian equals the dense one on its superset sparsity pattern,
-    so the gradient must match the dense-Jacobian gradient. Guards the colored
-    backward path: a missed pattern entry would change the gradient by O(1) in a
-    component, which this catches; the float-order difference of the exact case
-    is ~1e-15 here."""
+@pytest.fixture(scope="module")
+def bsm1_colored_backward():
+    """The stable-adjoint gradient of a BSM1 trajectory loss w.r.t. a kinetic
+    parameter (``asm1.muH``) and a flow setpoint (the RAS recycle flow
+    ``underflow_split.ras``), with the dense and the colored backward Jacobian.
+
+    One gradient of the 2-vector gives both partials from one dense and one
+    colored solve; each component is the gradient a scalar-parameter test would
+    take. Returns the plant, the colored adjoint builder as it stands after the
+    colored gradient, and the two gradients (index 0: muH, index 1: RAS)."""
     asm1 = aquakin.load_model("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     y0 = bsm1_warm_start(plant)
     base = plant.default_parameters()
-    gidx = plant.parameter_index("asm1.muH")
-    theta0 = float(base[gidx])
+    idx = jnp.asarray([plant.parameter_index("asm1.muH"),
+                       plant.parameter_index("underflow_split.ras")])
+    theta0 = base[idx]
     T = 0.3
     kw = dict(rtol=1e-6, atol=1e-3)
 
     def g(theta, colored):
-        p = base.at[gidx].set(theta)
+        p = base.at[idx].set(theta)
         sol = plant.solve((0.0, T), t_eval=jnp.array([0.15, T]), params=p, y0=y0,
                           diff=aquakin.DifferentiationConfig(method="stable"),
                           integrator=aquakin.IntegratorConfig(
@@ -615,12 +617,28 @@ def test_stable_adjoint_colored_jacobian_matches_dense():
                           **kw)
         return jnp.sum(sol.state ** 2)
 
-    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
-    g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
+    g_dense = np.asarray(jax.grad(lambda th: g(th, False))(theta0))
+    g_colored = np.asarray(jax.grad(lambda th: g(th, True))(theta0))
     # The colored builder is derived from the plant's default operating point the
     # first time the colored backward runs -- under the grad trace, with no concrete
     # probe solve needed (it touches only concrete plant defaults).
-    builder = plant._colored._adjoint_builder
+    return dict(plant=plant, builder=plant._colored._adjoint_builder,
+                g_dense=g_dense, g_colored=g_colored)
+
+
+@pytest.mark.slow
+def test_stable_adjoint_colored_jacobian_matches_dense(bsm1_colored_backward):
+    """``colored_jacobian=True`` colors the per-step ``df/dy`` Jacobian build in
+    the stable_adjoint **backward** pass (its dominant cost for a large plant).
+    The colored Jacobian equals the dense one on its superset sparsity pattern,
+    so the gradient must match the dense-Jacobian gradient. Guards the colored
+    backward path: a missed pattern entry would change the gradient by O(1) in a
+    component, which this catches; the float-order difference of the exact case
+    is ~1e-15 here."""
+    plant = bsm1_colored_backward["plant"]
+    builder = bsm1_colored_backward["builder"]
+    g_dense = bsm1_colored_backward["g_dense"][0]           # d/d muH
+    g_colored = bsm1_colored_backward["g_colored"][0]
     assert builder is not None and builder[2] is True       # guard passed (ok)
     assert builder[1] < plant._total_state_size             # fewer colors than states
     assert np.isfinite(g_colored)
@@ -630,45 +648,38 @@ def test_stable_adjoint_colored_jacobian_matches_dense():
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
 
 
-@pytest.mark.slow
 def test_stable_adjoint_colored_jacobian_auto_decision_size_gated():
     """``colored_jacobian="auto"`` (the default) decides by plant SIZE: the colored
     backward is enabled iff ``n_states >= _COLORED_BACKWARD_MIN_STATES``. BSM1 is
     below the threshold, so "auto" deterministically chooses dense. The decision is a
     pure structural property -- no wall-clock measurement and no concrete probe solve
-    -- so it is available immediately and reproducible. Guards the decision and that
-    the gradient is correct (equal to the explicit-dense gradient) whichever the size
-    gate selects."""
+    -- so it is available immediately, before any solve. (That the colored gradient
+    equals the dense one is test_stable_adjoint_colored_jacobian_matches_dense; that
+    the solve follows the gate is test_auto_colored_backward_is_size_gated.)"""
     asm1 = aquakin.load_model("asm1")
     plant = build_bsm1(asm1)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
-    y0 = bsm1_warm_start(plant)
-    base = plant.default_parameters()
-    gidx = plant.parameter_index("asm1.muH")
-    theta0 = float(base[gidx])
-    T = 0.3
-    kw = dict(rtol=1e-6, atol=1e-3)
-
-    def g(theta, colored):
-        p = base.at[gidx].set(theta)
-        sol = plant.solve((0.0, T), t_eval=jnp.array([0.15, T]), params=p, y0=y0,
-                          diff=aquakin.DifferentiationConfig(method="stable"),
-                          integrator=aquakin.IntegratorConfig(
-                              max_steps=20_000, colored_jacobian=colored),
-                          **kw)
-        return jnp.sum(sol.state ** 2)
-
-    # Deterministic size-gate decision, available WITHOUT solving (it is a structural
-    # property of the plant): BSM1 is a small plant, so "auto" -> dense.
     choice, n = plant.colored_jacobian_decision()
     assert n < plant._COLORED_BACKWARD_MIN_STATES        # BSM1 is below the gate
     assert choice == "dense"
 
-    # The forced-colored gradient equals the explicit-dense gradient whichever the
-    # size gate selects (the colored Jacobian is exact on the superset pattern --
-    # only float summation order differs).
-    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
-    g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
+
+@pytest.mark.slow
+def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense(bsm1_colored_backward):
+    """The intersection of the two backward features: ``colored_jacobian`` AND a
+    FLOW-SETPOINT parameter (the RAS recycle flow). The primal/``rhs`` split puts
+    the cached recycle map on every ``df/dy`` Jacobian build (now colored) while
+    the ``df/dtheta`` vjp keeps the map-recomputing ``rhs`` -- so coloring the
+    backward Jacobian must NOT drop the ``dM/dtheta`` term. The colored gradient
+    w.r.t. RAS (where ``dM/dtheta != 0``) must equal the dense-Jacobian gradient.
+    The kinetic-param colored test cannot catch a dropped ``dM/dtheta`` (it is 0
+    there); this is the test that does."""
+    builder = bsm1_colored_backward["builder"]
+    g_dense = bsm1_colored_backward["g_dense"][1]           # d/d RAS
+    g_colored = bsm1_colored_backward["g_colored"][1]
+    assert builder is not None and builder[2] is True       # guard passed
+    assert np.isfinite(g_colored)
+    assert g_colored != 0.0                                 # RAS moves M (dM/dtheta != 0)
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
 
 
@@ -779,46 +790,6 @@ def test_forward_solve_caches_and_grad_bypasses_cache():
         params=base.at[0].set(th), **kw).C_named("tank1", "SNO")[-1]
     )(float(base[0]))
     assert len(plant._jit_cache) == n_before
-
-
-@pytest.mark.slow
-def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense():
-    """The intersection of the two backward features: ``colored_jacobian`` AND a
-    FLOW-SETPOINT parameter (the RAS recycle flow). The primal/``rhs`` split puts
-    the cached recycle map on every ``df/dy`` Jacobian build (now colored) while
-    the ``df/dtheta`` vjp keeps the map-recomputing ``rhs`` -- so coloring the
-    backward Jacobian must NOT drop the ``dM/dtheta`` term. The colored gradient
-    w.r.t. RAS (where ``dM/dtheta != 0``) must equal the dense-Jacobian gradient.
-    The kinetic-param colored test cannot catch a dropped ``dM/dtheta`` (it is 0
-    there); this is the test that does."""
-    asm1 = aquakin.load_model("asm1")
-    plant = build_bsm1(asm1)
-    plant.add_influent("influent", load_bsm1_influent("dry", asm1))
-    y0 = bsm1_warm_start(plant)
-    base = plant.default_parameters()
-    gidx = plant.parameter_index("underflow_split.ras")     # RAS recycle flow
-    theta0 = float(base[gidx])
-    T = 0.3
-    kw = dict(rtol=1e-6, atol=1e-3)
-
-    def g(theta, colored):
-        p = base.at[gidx].set(theta)
-        sol = plant.solve((0.0, T), t_eval=jnp.array([0.15, T]), params=p, y0=y0,
-                          diff=aquakin.DifferentiationConfig(method="stable"),
-                          integrator=aquakin.IntegratorConfig(
-                              max_steps=20_000, colored_jacobian=colored),
-                          **kw)
-        return jnp.sum(sol.state ** 2)
-
-    g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
-    g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
-    # The colored builder is derived under the grad trace (from plant defaults), no
-    # concrete probe solve needed.
-    builder = plant._colored._adjoint_builder
-    assert builder is not None and builder[2] is True       # guard passed
-    assert np.isfinite(g_colored)
-    assert g_colored != 0.0                                 # RAS moves M (dM/dtheta != 0)
-    assert g_colored == pytest.approx(g_dense, rel=1e-8)
 
 
 @pytest.mark.slow

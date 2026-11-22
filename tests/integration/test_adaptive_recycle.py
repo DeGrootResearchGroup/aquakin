@@ -124,7 +124,7 @@ def test_recycle_tol_construction_validation():
 
 # ---------------------------------------------------------------------------
 # Slow (merge-tier) BSM2 tests: the adaptive solve on a real two-model plant
-# reaches the same fixed point as a deep fixed-pass sweep, forward and gradient.
+# reaches the same fixed point as a deep fixed-pass sweep, streams and tangent.
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -142,10 +142,9 @@ def bsm2():
     p = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     p.add_influent("feed", bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
     y0 = bsm2_warm_start(p)
-    # Prime the layouts / caches with a tiny solve.
-    p.solve(t_span=(0.0, 0.02), t_eval=jnp.array([0.02]), params=params, y0=y0,
-            rtol=1e-3, atol=1e-2,
-            integrator=aquakin.IntegratorConfig(max_steps=100_000))
+    # The tests call the RHS pieces directly, which need only the layouts.
+    p._build_state_layout()
+    p._build_parameter_layout()
     return p, params, y0
 
 
