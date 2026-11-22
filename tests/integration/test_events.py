@@ -331,6 +331,44 @@ def test_plant_time_unit_converts_event_times(cstr_plant):
     assert minutes.events_log == [(pytest.approx(1.0), "dose")]
 
 
+def _tank_closed_form(t, A0, B0):
+    """The one-tank plant's state from ``(A0, B0)`` after a time ``t``.
+
+    With dilution ``Q/V = 0.1`` and ``k = 0.1``, ``dA/dt = 0.1 (1 - A) - 0.1 A``
+    gives ``A = 0.5 + c exp(-0.2 t)`` with ``c = A0 - 0.5``, and
+    ``dB/dt = 0.1 A - 0.1 B`` gives ``B = 0.5 - c exp(-0.2 t) + d exp(-0.1 t)``
+    with ``d = B0 - 0.5 + c``.
+    """
+    c = A0 - 0.5
+    d = B0 - 0.5 + c
+    A = 0.5 + c * np.exp(-0.2 * t)
+    B = 0.5 - c * np.exp(-0.2 * t) + d * np.exp(-0.1 * t)
+    return np.stack([A, B], axis=-1)
+
+
+def test_plant_time_event_reset_matches_closed_form(cstr_plant):
+    """A time event at ``t = 5`` resets the tank's ``A`` to 5. The trajectory
+    follows the closed form from ``y0`` up to the event (the save at ``t = 5``
+    reports the pre-reset value) and the closed form from the reset state
+    after it, with ``B`` carried through the reset unchanged."""
+    y0 = jnp.array([0.2, 0.0])
+    ev = Event(at_times=[5.0], apply=lambda t, y, a: y.at[0].set(5.0),
+               name="dose")
+    teval = jnp.linspace(0.0, 10.0, 11)
+    sol = cstr_plant.solve((0.0, 10.0), teval, y0=y0, events=[ev],
+                           rtol=1e-9, atol=1e-12)
+
+    assert sol.events_log == [(5.0, "dose")]
+    t = np.asarray(teval)
+    before = _tank_closed_form(t[:6], 0.2, 0.0)
+    at_event = _tank_closed_form(5.0, 0.2, 0.0)
+    after = _tank_closed_form(t[6:] - 5.0, 5.0, at_event[1])
+    expected = np.concatenate([before, after])
+    # An adaptive solve at rtol = 1e-9: two decades above it.
+    np.testing.assert_allclose(np.asarray(sol.state), expected,
+                               rtol=1e-7, atol=1e-10)
+
+
 # --- Plant integration (slow: a real BSM1 solve) -----------------------------
 
 @pytest.mark.slow
