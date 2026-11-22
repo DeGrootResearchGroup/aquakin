@@ -97,7 +97,7 @@ def test_aeration_system_replaces_AE_with_blower_energy(evaluated):
     assert ev_default.air_flow is None
 
 
-def test_aeration_energy_matches_fixed_kla(evaluated, asm1, adm1):
+def test_aeration_energy_matches_fixed_kla(evaluated):
     """For the open-loop plant kLa is fixed, so the aeration energy equals the
     closed-form ``S_sat / (1.8e3) * Σ_i V_i kLa_i`` independent of the horizon."""
     from aquakin.plant.bsm.bsm2 import (
