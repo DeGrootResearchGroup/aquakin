@@ -3,6 +3,7 @@
 import diffrax
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
@@ -86,20 +87,27 @@ def test_check_gradient_finite_remedy_depends_on_dtmax(simple_model):
 
 
 def test_check_gradient_finite_guards_a_real_gradient(simple_model):
-    """End-to-end: a real reverse-mode gradient through a (finite) solve passes
-    the guard, mirroring how a user wraps their own jax.grad."""
+    """End-to-end: a real reverse-mode gradient through a solve (keyword
+    ``params``, the documented DIY-loss pattern) passes the guard unchanged and
+    equals the closed form. For ``A -> B`` at rate ``k [A]``,
+    ``B(t) = A0 (1 - exp(-k t))``, so ``dB(t)/dk = A0 t exp(-k t)``."""
     reactor = aquakin.BatchReactor(
         simple_model, aquakin.SpatialConditions.uniform(1, T=293.15)
     )
-    C0 = jnp.asarray([1.0, 0.0])
+    A0, t_end = 1.0, 10.0
+    C0 = jnp.asarray([A0, 0.0])
+    params = simple_model.default_parameters()
+    k = float(params[0])
 
     def loss(p):
-        return reactor.solve(C0, params=p, t_span=(0.0, 10.0)).C[-1, 1]
+        return reactor.solve(C0, params=p, t_span=(0.0, t_end)).C[-1, 1]
 
-    g = reactor.check_gradient_finite(
-        jax.grad(loss)(simple_model.default_parameters()), what="my gradient"
-    )
-    assert jnp.all(jnp.isfinite(g))
+    raw = jax.grad(loss)(params)
+    g = reactor.check_gradient_finite(raw, what="my gradient")
+    assert g is raw
+    # The default solve meets the closed form to about rtol 1e-4, so its
+    # gradient is held to a decade above that.
+    assert float(g[0]) == pytest.approx(A0 * t_end * np.exp(-k * t_end), rel=1e-3)
 
 
 # --- DifferentiationConfig decode (centralized on the config) --------------
