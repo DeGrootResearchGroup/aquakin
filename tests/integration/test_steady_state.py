@@ -615,6 +615,27 @@ def test_plant_steady_state_ladder_falls_through_to_forward(make_cstr_plant):
                                rtol=1e-8)
 
 
+def test_plant_steady_state_arclength_rung_needs_a_known_point(make_cstr_plant):
+    # The arclength rung is on by default but continues from continuation_from;
+    # without one it declines, and with the forward rung off the starved PTC
+    # result comes back as it is.
+    plant = make_cstr_plant()
+    ss = plant.steady_state(y0=jnp.asarray([1.0e4, 1.0e4]), max_iter=2, scale_floor=1.0,
+                            fallback=False)
+    assert ss.method == "ptc"
+    assert not bool(ss.converged) and ss.iterations == 2
+    assert not plant._solve_cache.arclength_kernels
+
+
+def test_colored_steady_state_without_a_recycle_map_uses_the_dense_solve(make_cstr_plant):
+    # The colored PTC is built on the cached recycle map; a plant with no recycle
+    # has none, so colored_jacobian=True falls back to the dense solve.
+    plant = make_cstr_plant()
+    ss = plant.steady_state(tol=1e-10, colored_jacobian=True)
+    assert bool(ss.converged)
+    np.testing.assert_allclose(np.asarray(ss.state), _cstr_steady(0.1), rtol=1e-8)
+
+
 def test_run_to_steady_state_with_explicit_atol_reaches_closed_form(make_cstr_plant):
     plant = make_cstr_plant()
     fwd = plant.run_to_steady_state(atol=1e-12, criterion="scaled_residual", tol=1e-10,
