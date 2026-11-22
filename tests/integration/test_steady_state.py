@@ -13,6 +13,7 @@ import pytest
 
 import aquakin
 from aquakin.plant.steady import ptc_forward, solve_steady_state
+from tests.conftest import FIXTURES
 
 # --- solver core, no plant (fast) --------------------------------------------
 
@@ -522,6 +523,117 @@ def test_steady_state_design_no_skip_warning_without_continuation():
         warnings.filterwarnings("error", message=r"steady_state\(design=")
         ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False)
     assert ss.method == "ptc"
+
+
+# --- the continuation rungs of Plant.steady_state's fallback ladder -----------
+#
+# The single-CSTR plant (conftest ``make_cstr_plant``: A -> B at rate k[A],
+# Q/V = 0.1, feed A = 1) has the closed-form steady state A = 0.1/(0.1 + k),
+# B = 10 k A. The direct PTC solve is made to fail by starting it far from that
+# state on a small iteration budget; continuation starts from the known solution
+# instead of the warm start, so it is what reaches the target.
+
+def _cstr_steady(k):
+    a = 0.1 / (0.1 + k)
+    return np.array([a, 10.0 * k * a])
+
+
+def _cstr_continuation_case(plant):
+    p_known = plant.default_parameters()
+    p_target = p_known.at[0].multiply(4.0)
+    y_known = jnp.asarray(_cstr_steady(float(p_known[0])))
+    # ``scale_floor`` is explicit: by default it is |y0|, which this far warm
+    # start would turn into a 1e-2 absolute tolerance.
+    kw = dict(y0=jnp.asarray([1.0e4, 1.0e4]), max_iter=8, dt0=1.0, scale_floor=1.0,
+              tol=1e-6, fallback=False)
+    return p_known, p_target, y_known, kw
+
+
+def test_plant_steady_state_continuation_rung_reaches_closed_form(make_cstr_plant):
+    plant = make_cstr_plant()
+    p_known, p_target, y_known, kw = _cstr_continuation_case(plant)
+    direct = plant.steady_state(p_target, arclength=False, **kw)
+    assert direct.method == "ptc" and not bool(direct.converged)
+
+    ss = plant.steady_state(p_target, arclength=False,
+                            continuation_from=(p_known, y_known), **kw)
+    assert ss.method == "continuation"
+    assert bool(ss.converged) and ss.residual <= 1e-6
+    # A scaled residual of 1e-6 bounds the state error by about tol*|y|/(Q/V + k),
+    # under 1e-5 here.
+    np.testing.assert_allclose(np.asarray(ss.state), _cstr_steady(float(p_target[0])),
+                               atol=1e-5)
+    # The jitted continuation kernels are cached per settings: a second target
+    # from the same known point reuses them.
+    assert len(plant._solve_cache.continuation_kernels) == 1
+    p_second = p_known.at[0].multiply(3.0)
+    ss2 = plant.steady_state(p_second, arclength=False,
+                             continuation_from=(p_known, y_known), **kw)
+    assert ss2.method == "continuation"
+    np.testing.assert_allclose(np.asarray(ss2.state), _cstr_steady(float(p_second[0])),
+                               atol=1e-5)
+    assert len(plant._solve_cache.continuation_kernels) == 1
+
+
+def test_plant_steady_state_arclength_rung_reaches_closed_form(make_cstr_plant):
+    # Natural-parameter continuation is held to one step, so it does not reach
+    # the target and the ladder moves on to pseudo-arclength continuation.
+    plant = make_cstr_plant()
+    p_known, p_target, y_known, kw = _cstr_continuation_case(plant)
+    ss = plant.steady_state(p_target, continuation_from=(p_known, y_known),
+                            continuation_kwargs={"max_continuation_steps": 1}, **kw)
+    assert ss.method == "arclength"
+    assert bool(ss.converged) and ss.operating_point_exists is True
+    np.testing.assert_allclose(np.asarray(ss.state), _cstr_steady(float(p_target[0])),
+                               atol=1e-5)
+    assert len(plant._solve_cache.arclength_kernels) == 1
+
+
+def _fold_cstr_plant():
+    """A CSTR (Q/V = 0.1, feed A = 10) with substrate-inhibited uptake
+    k[A]/(1 + [A]^2). Steady states solve 0.1 (10 - A) = k A / (1 + A^2), so
+    k(A) = 0.1 (10 - A)(1 + A^2) / A along the branch; its high-A arm ends in a
+    fold at the local maximum k ~ 2.604 (A ~ 4.78)."""
+    from aquakin.plant import CSTRUnit, Plant
+    from aquakin.plant.influent import InfluentSeries
+
+    net = aquakin.load_model_from_file(FIXTURES / "substrate_inhibition.yaml")
+    plant = Plant("fold", time_unit="s")
+    plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.add_influent("feed", InfluentSeries(t=jnp.asarray([0.0, 100.0]),
+                                              Q=jnp.asarray([10.0, 10.0]),
+                                              C=jnp.asarray([[10.0], [10.0]]), model=net),
+                       to="tank.inlet")
+    return plant
+
+
+def test_plant_steady_state_arclength_rung_reports_past_fold():
+    # From the high branch at k = 2 (A = 7.3166, the root above the fold) toward
+    # k = 3, past the fold: the operating branch does not reach the target, so the
+    # ladder reports it as not existing and returns the last point before the nose.
+    # The arclength step is capped small: at the default cap the corrector can land
+    # on the low branch across the fold and report that branch's steady state as
+    # the operating point.
+    from scipy.optimize import brentq
+
+    plant = _fold_cstr_plant()
+    p_known = plant.default_parameters()
+    assert float(p_known[0]) == 2.0
+    a_known = brentq(lambda a: 0.1 * (10.0 - a) - 2.0 * a / (1.0 + a * a), 4.79, 10.0)
+    ss = plant.steady_state(p_known.at[0].set(3.0), y0=jnp.asarray([1.0e4]), max_iter=8,
+                            dt0=1.0, scale_floor=1.0, fallback=False,
+                            continuation_from=(p_known, jnp.asarray([a_known])),
+                            continuation_kwargs={"max_continuation_steps": 1},
+                            arclength_kwargs={"dsigma_max": 0.05})
+    assert ss.method == "past_fold"
+    assert not bool(ss.converged) and ss.operating_point_exists is False
+    # The returned state is a steady state on the high arm short of the nose: the
+    # k it solves for lies between the known k = 2 and the fold's k ~ 2.604.
+    a = float(ss.state[0])
+    k_of_a = 0.1 * (10.0 - a) * (1.0 + a * a) / a
+    assert 1.14 < a < a_known
+    assert 2.5 < k_of_a <= 2.6044
 
 
 @pytest.mark.slow
