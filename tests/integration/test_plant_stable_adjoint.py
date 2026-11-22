@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 
 import aquakin
-from aquakin.plant import CSTRUnit, Plant
+from aquakin.plant import Plant
 from aquakin.plant.bsm import (
     bsm1_warm_start,
     bsm2_warm_start,
@@ -34,7 +34,6 @@ from aquakin.plant.bsm.bsm2 import (
     bsm2_parameters,
     build_bsm2,
 )
-from aquakin.plant.influent import InfluentSeries
 
 
 def _grad_diff(gradient):
@@ -111,27 +110,6 @@ def test_stable_adjoint_rejects_adjoint_and_dtmax():
 
 # --- fast small-model correctness (a single-CSTR plant) ------------------
 
-def _single_cstr_plant(net):
-    """A one-unit plant: a CSTR on the toy decay model fed a constant flow.
-
-    Small and non-stiff, so the stable-adjoint gradient through the *plant*
-    solve can be checked against the standard ``jax_adjoint`` gradient and a
-    finite difference in the fast gate -- the BSM2 versions of this check are
-    validation-marked because the whole plant is expensive to integrate.
-    """
-    plant = Plant("single_cstr", time_unit="s")
-    plant.add_unit(CSTRUnit(
-        name="tank", model=net, volume=100.0,
-        input_port_names=["inlet"], conditions={"T": 293.15},
-    ))
-    influent = InfluentSeries(
-        t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
-        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net,
-    )
-    plant.add_influent("feed", influent, to="tank.inlet")
-    return plant
-
-
 @pytest.mark.parametrize(
     "integrator",
     [
@@ -141,7 +119,7 @@ def _single_cstr_plant(net):
     ],
     ids=["default", "kvaerno5_no_factormax", "explicit_kvaerno3"],
 )
-def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd(integrator):
+def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd(integrator, make_cstr_plant):
     """On a small single-CSTR plant the cap-free stable-adjoint gradient equals
     the standard through-the-solve (jax_adjoint) gradient and a central FD.
 
@@ -150,9 +128,8 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd(integrator):
     ESDIRK tableau and step controller the forward uses, so every ``solver=`` /
     ``order=`` / ``factormax=`` choice must give the exact gradient of its own
     forward solve."""
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    plant = _single_cstr_plant(net)
-    base = net.default_parameters()
+    plant = make_cstr_plant()
+    base = plant.default_parameters()
     gidx = plant.parameter_index("simple_decay.A_to_B.k")
     theta0 = float(base[gidx])
     T = 40.0
@@ -206,16 +183,15 @@ def test_stable_adjoint_endpoint_gradient_matches_closed_form(make_cstr_plant):
     assert float(jax.grad(final_a)(params)[0]) == pytest.approx(expected, rel=1e-7)
 
 
-def test_stable_adjoint_colored_checks_the_solve_start_state(monkeypatch):
+def test_stable_adjoint_colored_checks_the_solve_start_state(make_cstr_plant, monkeypatch):
     """The colored backward's coverage check runs at the solve's own concrete
     start state, which the plant hands to the builder, as well as at the
     default and perturbed states; it passes there, the colored backward is used,
     and the gradient equals the dense-backward gradient."""
     from aquakin.integrate import colored_jacobian as cj
 
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    plant = _single_cstr_plant(net)
-    base = net.default_parameters()
+    plant = make_cstr_plant()
+    base = plant.default_parameters()
     gidx = plant.parameter_index("simple_decay.A_to_B.k")
     theta0 = float(base[gidx])
     y0 = jnp.asarray([0.7, 0.2])                 # not the plant's default state
@@ -246,14 +222,15 @@ def test_stable_adjoint_colored_checks_the_solve_start_state(monkeypatch):
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
 
 
-def test_colored_adjoint_builder_without_a_start_state_checks_default_states(monkeypatch):
+def test_colored_adjoint_builder_without_a_start_state_checks_default_states(
+        make_cstr_plant, monkeypatch):
     """Built with no concrete start state (as under a trace), the builder checks
     only the default state and its perturbed copies, and still accepts a
     covering pattern."""
     from aquakin.integrate import colored_jacobian as cj
     from aquakin.plant.colored import ColoredJacobianManager
 
-    plant = _single_cstr_plant(aquakin.load_model_from_file("tests/fixtures/simple_model.yaml"))
+    plant = make_cstr_plant()
     plant._build_state_layout()
     plant._build_parameter_layout()
     seen = []
@@ -266,13 +243,14 @@ def test_colored_adjoint_builder_without_a_start_state_checks_default_states(mon
     assert len(seen) == 1 + ColoredJacobianManager._ADJOINT_GUARD_N_PERTURBED
 
 
-def test_colored_adjoint_builder_skips_the_coverage_check_after_a_failed_guard(monkeypatch):
+def test_colored_adjoint_builder_skips_the_coverage_check_after_a_failed_guard(
+        make_cstr_plant, monkeypatch):
     """When the colored/dense comparison already rejects the pattern, the builder
     falls back to dense without running the coverage check."""
     from aquakin.integrate import colored_jacobian as cj
     from aquakin.plant.colored import ColoredJacobianManager
 
-    plant = _single_cstr_plant(aquakin.load_model_from_file("tests/fixtures/simple_model.yaml"))
+    plant = make_cstr_plant()
     plant._build_state_layout()
     plant._build_parameter_layout()
     real_build = ColoredJacobianManager._build_and_guard
@@ -291,14 +269,13 @@ def test_colored_adjoint_builder_skips_the_coverage_check_after_a_failed_guard(m
     assert ok is False and builder is None and rf is None
 
 
-def test_stable_adjoint_low_memory_matches_saved_stage_gradient():
+def test_stable_adjoint_low_memory_matches_saved_stage_gradient(make_cstr_plant):
     """``DifferentiationConfig(adjoint_low_memory=True)`` recomputes the backward
     stages instead of saving the dense-stage buffer; the plant gradient must equal
     the default saved-stage path (it is the same discrete adjoint, the stages
     obtained two ways)."""
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    plant = _single_cstr_plant(net)
-    base = net.default_parameters()
+    plant = make_cstr_plant()
+    base = plant.default_parameters()
     gidx = plant.parameter_index("simple_decay.A_to_B.k")
     theta0 = float(base[gidx])
     T = 40.0
@@ -318,7 +295,7 @@ def test_stable_adjoint_low_memory_matches_saved_stage_gradient():
     assert g_low == pytest.approx(g_saved, rel=1e-6)
 
 
-def test_stable_adjoint_initial_state_gradient_matches_jax_adjoint():
+def test_stable_adjoint_initial_state_gradient_matches_jax_adjoint(make_cstr_plant):
     """The cap-free stable-adjoint gradient w.r.t. the INITIAL STATE y0 (not just
     parameters) is finite and equals the standard jax_adjoint gradient.
 
@@ -329,8 +306,7 @@ def test_stable_adjoint_initial_state_gradient_matches_jax_adjoint():
     a leaked tracer. ``default_atol`` now ``stop_gradient``s the floor (it is a
     non-differentiable solver tolerance), so the initial-condition gradient flows
     -- the direction the standard adjoint already handled."""
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    plant = _single_cstr_plant(net)
+    plant = make_cstr_plant()
     params = plant.default_parameters()
     y0 = plant.initial_state()
     T = 40.0
