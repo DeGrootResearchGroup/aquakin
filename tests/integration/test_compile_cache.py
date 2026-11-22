@@ -13,7 +13,6 @@ import pytest
 
 import aquakin
 from aquakin.integrate import _common
-from aquakin.plant import CSTRUnit, InfluentSeries, Plant
 from tests.conftest import FIXTURES
 
 # ----- load_model caching -----------------------------------------------
@@ -42,10 +41,10 @@ def _batch(net):
     return aquakin.BatchReactor(net, cond)
 
 
-def test_fresh_reactors_share_one_compiled_solver():
+def test_fresh_reactors_share_one_compiled_solver(simple_model):
     """Two fresh reactors for the same model + settings + signature reuse a
     single compiled solve (no second compile entry), with identical results."""
-    net = aquakin.load_model("asm1")
+    net = simple_model
     C0, p = net.default_concentrations(), net.default_parameters()
     t_eval = jnp.array([1.0])
 
@@ -56,15 +55,22 @@ def test_fresh_reactors_share_one_compiled_solver():
     assert np.allclose(np.asarray(s1.C), np.asarray(s2.C))
 
 
-def test_different_settings_do_not_collide():
-    """A different tolerance is a different compile (no false cache hit)."""
-    net = aquakin.load_model("asm1")
+def test_different_settings_do_not_collide(simple_model):
+    """A different tolerance is a different compile (no false cache hit): the
+    loose and tight solves differ, and the tight one has the tight solve's
+    accuracy against the closed form ``A(1) = exp(-k)``."""
+    net = simple_model
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0, p = net.default_concentrations(), net.default_parameters()
     s_loose = aquakin.BatchReactor(net, cond, rtol=1e-4).solve(C0, (0.0, 1.0), params=p)
     s_tight = aquakin.BatchReactor(net, cond, rtol=1e-9).solve(C0, (0.0, 1.0), params=p)
-    assert np.all(np.isfinite(np.asarray(s_loose.C)))
-    assert np.all(np.isfinite(np.asarray(s_tight.C)))
+    A_loose = np.asarray(s_loose.C_named("A"))[-1]
+    A_tight = np.asarray(s_tight.C_named("A"))[-1]
+    exact = np.exp(-float(p[0]))
+    # A false hit would hand the tight call the loose call's compiled solve.
+    assert A_loose != A_tight
+    # An adaptive solve at rtol = 1e-9: two decades above it.
+    assert A_tight == pytest.approx(exact, rel=1e-7)
 
 
 def test_each_compile_affecting_setting_keys_the_cache():
@@ -115,41 +121,31 @@ def test_each_compile_affecting_setting_keys_the_cache():
     ), "adjoint not in cache key"
 
 
-@pytest.mark.slow  # heavy: jax.grad through ASM1 solve
-def test_solver_cache_bypassed_under_tracing():
-    """solve() under jax.grad (atol is materialised for the key, which is
-    impossible while tracing) must bypass the cache, not crash."""
-    net = aquakin.load_model("asm1")
+def test_solver_cache_bypassed_under_tracing(simple_model):
+    """A reactor whose ``atol`` is traced (built inside a jitted loss) cannot
+    form a cache key, so its solve bypasses the cache: the traced gradient adds
+    no cache entry, and it is the closed form ``dA(t)/dk = -t A0 exp(-k t)``."""
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
-    r = aquakin.BatchReactor(net, cond)
-    C0, p = net.default_concentrations(), net.default_parameters()
+    C0 = jnp.asarray([1.0, 0.0])
+    p = simple_model.default_parameters()
 
-    def loss(params):
-        return r.solve(C0, (0.0, 1.0), jnp.array([1.0]), params=params).C.sum()
+    def loss(params, atol):
+        reactor = aquakin.BatchReactor(simple_model, cond, rtol=1e-10, atol=atol)
+        return reactor.solve(C0, (0.0, 1.0), jnp.array([1.0]), params=params).C[-1, 0]
 
-    g = jax.grad(loss)(p)
-    assert jnp.all(jnp.isfinite(g))
+    n_before = len(_common._SOLVER_CACHE)
+    g = jax.jit(jax.grad(loss))(p, jnp.asarray(1e-12))
+    assert len(_common._SOLVER_CACHE) == n_before
+    k = float(p[0])
+    # An adaptive solve at rtol = 1e-10, differentiated: within 1e-7.
+    assert float(g[0]) == pytest.approx(-1.0 * np.exp(-k * 1.0), rel=1e-7)
 
 
 # ----- Per-instance plant solve cache -------------------------------------
 
-def _one_cstr_plant(net):
-    plant = Plant("cache-test", time_unit="d")
-    plant.add_unit(CSTRUnit(
-        name="r1", model=net, volume=1000.0, input_port_names=["inlet"],
-        conditions={n: net._condition_defaults[n] for n in net.conditions_required},
-    ))
-    C = net.default_concentrations()
-    infl = InfluentSeries(t=jnp.array([0.0, 1.0e4]), Q=jnp.full((2,), 1000.0),
-                          C=jnp.tile(C, (2, 1)), model=net)
-    plant.add_influent("feed", infl, to="r1.inlet")
-    return plant
-
-
-def test_plant_reuses_compiled_solve():
+def test_plant_reuses_compiled_solve(make_cstr_plant):
     """Repeat solves of the same plant + signature reuse one compile and match."""
-    net = aquakin.load_model("asm1")
-    plant = _one_cstr_plant(net)
+    plant = make_cstr_plant()
     p = plant.default_parameters()
     s1 = plant.solve((0.0, 1.0), t_eval=jnp.array([1.0]), params=p)
     assert len(plant._jit_cache) == 1
@@ -170,25 +166,36 @@ def test_plant_solve_with_traced_t_eval_bypasses_the_cache(make_cstr_plant):
     assert len(plant._jit_cache) == 1  # nothing added for the traced call
 
 
-def test_plant_different_signature_compiles_separately():
-    net = aquakin.load_model("asm1")
-    plant = _one_cstr_plant(net)
+def test_plant_different_signature_compiles_separately(make_cstr_plant):
+    plant = make_cstr_plant()
     p = plant.default_parameters()
     plant.solve((0.0, 1.0), t_eval=jnp.array([1.0]), params=p)
     plant.solve((0.0, 2.0), t_eval=jnp.array([1.0, 2.0]), params=p)  # new sig
     assert len(plant._jit_cache) == 2
 
 
-@pytest.mark.slow  # heavy: jax.grad through plant solve
-def test_plant_solve_grad_bypasses_cache():
-    """A traced plant solve (jax.grad) bypasses the cache without crashing."""
-    net = aquakin.load_model("asm1")
-    plant = _one_cstr_plant(net)
+def test_plant_solve_grad_bypasses_cache(make_cstr_plant):
+    """A traced plant solve (jax.grad) bypasses the cache: it adds no entry to
+    the one the eager solve compiled, and the gradient is the closed form.
+
+    The tank's ``A`` obeys ``dA/dt = 0.1 (1 - A) - k A``, so with
+    ``s = 0.1 + k`` and ``a = 0.1 / s``, ``A(t) = a + (A0 - a) exp(-s t)`` and
+    ``dA/dk = -(0.1 / s**2) (1 - exp(-s t)) - (A0 - a) t exp(-s t)``.
+    """
+    plant = make_cstr_plant()
     p = plant.default_parameters()
+    A0, t = 0.2, 5.0
 
-    def loss(params):
-        return plant.solve((0.0, 1.0), t_eval=jnp.array([1.0]),
-                           params=params).state.sum()
+    def A_end(params):
+        return plant.solve((0.0, t), t_eval=jnp.array([t]), params=params,
+                           y0=jnp.array([A0, 0.0]), rtol=1e-10, atol=1e-12).state[-1, 0]
 
-    g = jax.grad(loss)(p)
-    assert jnp.all(jnp.isfinite(g))
+    A_end(p)
+    assert len(plant._jit_cache) == 1
+    g = jax.grad(A_end)(p)
+    assert len(plant._jit_cache) == 1  # nothing added for the traced call
+    s = 0.1 + float(p[0])
+    a = 0.1 / s
+    exact = -(0.1 / s**2) * (1.0 - np.exp(-s * t)) - (A0 - a) * t * np.exp(-s * t)
+    # An adaptive solve at rtol = 1e-10, differentiated: within 1e-7.
+    assert float(g[0]) == pytest.approx(exact, rel=1e-7)

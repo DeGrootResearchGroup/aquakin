@@ -1,68 +1,35 @@
+# Calibration finding (unconstrained best fit to one nitrate-dosing batch):
+# combining the three changes does not rescue the model. Sulfate is the worst
+# fit of any variant (RMSE about 4.1 against 2.78 for the base) and sulfide is
+# worse, while VFA stays realistic and the effective elemental-sulfur
+# oxidation rate falls toward (but not to) the measured value (about 1.6x
+# against 2.5x for the base). Across the variants the base fits best only with
+# an unphysical rate, and every move toward physical rates degrades the fit;
+# reproducing this single batch with physical rates needs a different
+# structure or richer data. Unconstrained best fits may sit in local minima,
+# but the pattern is consistent across all five variants.
 model:
   name: wats_sewer_extended_combined
   version: "0.2"
   description: >
-    COMBINED STRUCTURAL VARIANT of `wats_sewer_extended` -- all three peer-review /
-    AD-diagnosed structural fixes applied together, the capstone of the
-    model-structure study. Tests whether fixing every structural critique at
-    once rescues the model (a good fit AND literature-consistent rates) or
-    whether the fit-vs-physical-rate tension persists in the fully restructured
-    model. The three changes (each isolated in its own variant YAML):
-      1. half-order (from wats_sewer_extended_halforder): the nitrate-driven biofilm
-         sulfur-oxidation reactions use WATS half-order kinetics, not Monod.
-      2. direct-sulfate (from wats_sewer_extended_directsulfate): nitrate-driven sulfide
-         oxidation goes directly to sulfate in one step (sumS -> S_SO4, 0.75 N
-         per S), not via the elemental-sulfur intermediate; the pre-existing
-         elemental-sulfur pool keeps its own (now half-order) oxidation.
-      3. SRB-substrate (from wats_sewer_extended_srbsubstrate): the active biofilm
-         sulfate-reduction and elemental-S-reduction reactions consume S_B
-         (fermentable substrate), not VFA, so VFA accumulates as a byproduct.
-    Everything else is identical to `wats_sewer_extended`.
+    Structural variant of wats_sewer_extended combining the changes of
+    wats_sewer_extended_halforder, _directsulfate and _srbsubstrate: (1) the
+    nitrate-driven biofilm sulfur-oxidation reactions use WATS half-order
+    kinetics instead of Monod; (2) nitrate-driven sulfide oxidation goes
+    directly to sulfate in one step (0.75 g N per g S), with elemental
+    sulfur already present keeping its own (half-order) oxidation; (3) the
+    biofilm sulfate- and elemental-sulfur-reduction reactions consume
+    fermentable substrate S_B instead of VFA, so VFA accumulates. Unlike
+    wats_sewer_extended, it has no iron sulfide precipitation (no
+    S_Fe2 / X_FeS species) and uses the sulfur-process temperature
+    coefficient a_s = 1.05 rather than 1.03. Everything else is identical to
+    wats_sewer_extended.
 
-    Result (unconstrained best fit to the calibration batch): combining all
-    three structural fixes does NOT rescue the model. Sulfate is the worst fit
-    of any variant (RMSE ~4.1 vs 2.78 for the baseline), sulfide is worse, while
-    VFA stays realistic and the effective elemental-S oxidation rate falls
-    toward (but not to) the measured value (~1.6x vs 2.5x for the baseline).
-    Across the whole variant chain the baseline fits best ONLY with an
-    unphysical rate, and every move toward physical defensibility degrades the
-    fit -- the fit-vs-physical-rate tension is irreducible within this reaction
-    model. Conclusion: no physically-defensible version of this structure
-    reproduces the single-batch data well; the model needs either fundamental
-    restructuring or much richer data. This is the central AD-derived finding of
-    the model-structure study (caveat: unconstrained best-fits may sit in local
-    minima, but the pattern is consistent across all five variants).
-
-    Extended WATS sewer-process model: anaerobic/anoxic/aerobic carbon
-    turnover, fermentation, methanogenesis, sulfate reduction and a two-step
-    (sulfide -> elemental sulfur -> sulfate) sulfur cycle, with biological
-    nitrate-driven sulfide control. pH is NOT supplied externally: it is
-    solved from the instantaneous acid/base speciation (carbonate, ammonia,
-    acetate, phosphate, sulfide) plus strong ions and a fixed cation charge,
-    via the differentiable charge-balance solver declared in the `speciation`
-    block.
-
-    Reaction structure: heterotrophic growth (bulk+biofilm, aerobic/anoxic),
-    hydrolysis (fast/slow x aerobic/anoxic/anaerobic x bulk/biofilm),
-    endogenous energy maintenance (substrate + biomass paths), fermentation,
-    nitrification + decay, methanogenesis (acetoclastic + hydrogenotrophic),
-    sulfate reduction (VFA/H2 x bulk/biofilm), elemental-S reduction, and
-    sulfide / elemental-S oxidation (pH-dependent aerobic bulk chemical &
-    biological, aerobic & nitrate-driven biofilm). Some pathways are zero at
-    the literature default rate constants but are retained for completeness.
-
-    Deviation from the original published sewer model: anoxic (denitrifying)
-    heterotrophic growth uses the proper lower WATS anoxic yield
-    Y_H,NO3 = 0.30-0.40 (parameter `y_h_anox`, default 0.35) instead of reusing
-    the aerobic yield 0.55. Y_H is a stoichiometric COD/electron-balance
-    coefficient, so it is fixed from the literature, not calibrated.
-
-    Numerical hardening: the `positivity_limiter` block throttles net
-    consumption as a species approaches zero. Half-order (sqrt-type) oxidation
-    kinetics use an AD-safe form `x*(x+eps)^(p-1)` (eps=1e-3) so the
-    implicit-solver Jacobian stays well-conditioned at zero oxygen; this is
-    exact for x >> eps and zero-valued at x=0. Quantitative validation against
-    the published model is still outstanding.
+    The base is the extended WATS sewer-process model:
+    anaerobic/anoxic/aerobic carbon turnover, fermentation, methanogenesis,
+    sulfate reduction and a two-step (sulfide -> elemental sulfur ->
+    sulfate) sulfur cycle with nitrate-driven sulfide control, and pH solved
+    by charge balance.
   references:
     - "Khalil et al. (2025). Optimizing nitrate dosing strategies for sulfide control. Water Environ. Res."
     - "Hvitved-Jacobsen, Vollertsen & Nielsen (2013). Sewer Processes (WATS), 2nd ed. (hydrolysis, growth, saturation constants, temperature coefficients)."

@@ -2,44 +2,23 @@ model:
   name: wats_sewer_extended_v0
   version: "0.2"
   description: >
-    PRISTINE BASELINE (v0) for the model-structure study: the sewer model as
-    originally submitted, BEFORE the literature parameter corrections and the
-    anoxic-yield split that the `wats_sewer_extended` model now carries. Use this as
-    the unambiguous starting point of the structural-variant chain. Differences
-    from `wats_sewer_extended` are parameter VALUES and the anoxic yield only (the
-    reaction structure is identical): original hydrolysis (k_h1=4.5, k_h2=1.0,
-    k_x1=0.5, no separate k_x2), fermentation (q_ferm=20, eta_an=1.0),
-    methanogenesis (k_ch4_acid=2.8, k_ch4_hyd=1.0), elemental-S reduction
-    (k_s0_acid=0.2), the aerobic yield 0.55 reused for anoxic growth, and no
-    Gaussian priors. The saturation constants are at the study's calibrated
-    values (as the published figures used). This reproduces the published model
-    behaviour (including the compensating parameter errors). Kept fixed as the
-    reference against which each structural variant is compared.
+    wats_sewer_extended with an earlier parameter set; the reaction
+    structure is otherwise the same. Hydrolysis k_h1 = 4.5, k_h2 = 1.0 and
+    k_x1 = 0.5 (one saturation constant for both hydrolysis fractions, no
+    k_x2); fermentation q_ferm = 20 and eta_an = 1.0; methanogenesis
+    k_ch4_acid = 2.8 and k_ch4_hyd = 1.0; elemental-sulfur reduction
+    k_s0_acid = 0.2; the aerobic yield 0.55 is also used for anoxic growth
+    (no separate y_h_anox); and no parameter priors. It also has no iron
+    sulfide precipitation (no S_Fe2 / X_FeS species) and uses a_s = 1.05
+    rather than 1.03. It is the reference point the structural variants
+    (wats_sewer_extended_halforder, _directsulfate, _srbsubstrate and
+    _combined) are compared against.
 
-    Extended WATS sewer-process model: anaerobic/anoxic/aerobic carbon
-    turnover, fermentation, methanogenesis, sulfate reduction and a two-step
-    (sulfide -> elemental sulfur -> sulfate) sulfur cycle, with biological
-    nitrate-driven sulfide control. pH is NOT supplied externally: it is
-    solved from the instantaneous acid/base speciation (carbonate, ammonia,
-    acetate, phosphate, sulfide) plus strong ions and a fixed cation charge,
-    via the differentiable charge-balance solver declared in the `speciation`
-    block.
-
-    Reaction structure: heterotrophic growth (bulk+biofilm, aerobic/anoxic),
-    hydrolysis (fast/slow x aerobic/anoxic/anaerobic x bulk/biofilm),
-    endogenous energy maintenance (substrate + biomass paths), fermentation,
-    nitrification + decay, methanogenesis (acetoclastic + hydrogenotrophic),
-    sulfate reduction (VFA/H2 x bulk/biofilm), elemental-S reduction, and
-    sulfide / elemental-S oxidation (pH-dependent aerobic bulk chemical &
-    biological, aerobic & nitrate-driven biofilm). Some pathways are zero at
-    the literature default rate constants but are retained for completeness.
-
-    Numerical hardening: the `positivity_limiter` block throttles net
-    consumption as a species approaches zero. Half-order (sqrt-type) oxidation
-    kinetics use an AD-safe form `x*(x+eps)^(p-1)` (eps=1e-3) so the
-    implicit-solver Jacobian stays well-conditioned at zero oxygen; this is
-    exact for x >> eps and zero-valued at x=0. Quantitative validation against
-    the published model is still outstanding.
+    The base is the extended WATS sewer-process model:
+    anaerobic/anoxic/aerobic carbon turnover, fermentation, methanogenesis,
+    sulfate reduction and a two-step (sulfide -> elemental sulfur ->
+    sulfate) sulfur cycle with nitrate-driven sulfide control, and pH solved
+    by charge balance.
   references:
     - "Sharma, Yuan, et al. Extended WATS sewer process model."
     - "Hvitved-Jacobsen, T. et al. Sewer Processes (WATS), 2nd ed."

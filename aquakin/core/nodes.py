@@ -12,7 +12,7 @@ import jax.numpy as jnp
 
 from aquakin.core.context import CompileContext
 from aquakin.core.hints import did_you_mean
-from aquakin.core.kernels import _safe_log, _safe_pow, _safe_sqrt
+from aquakin.core.kernels import safe_log, safe_pow, safe_sqrt
 
 RateCallable = Callable[
     [jnp.ndarray, jnp.ndarray, dict[str, jnp.ndarray], int | jnp.ndarray], jnp.ndarray
@@ -67,7 +67,7 @@ class ASTNode(ABC):
     single source of truth for their arithmetic: a ``KIND`` string (the kernel
     key) and an ``op(operands)`` staticmethod evaluated by both the scalar
     closure here and the batched kernel in :mod:`aquakin.core.vector_kernel`.
-    See :class:`_OperatorNode`.
+    See :class:`RateFunction`.
     """
 
     # Operator nodes override these; leaves keep the defaults (KIND ``None``
@@ -246,22 +246,73 @@ class ConditionNode(ASTNode):
 # --- Operator nodes -----------------------------------------------------
 
 
-class _OperatorNode(ASTNode):
-    """Base for every non-leaf node -- the arithmetic lives in one place.
+class RateFunction(ASTNode):
+    """
+    Base class for a rate function: subclass it to add one of your own.
 
-    A subclass declares ``KIND`` (its kernel key), an ``op(operands)``
-    staticmethod (the elementwise arithmetic), and optionally
-    ``EXTRA_CONDITIONS`` (condition fields it reads beyond its AST children).
-    :meth:`compile` here is generic: it evaluates each operand -- the node's AST
-    children in field order, then its ``EXTRA_CONDITIONS`` -- and applies
+    Every function and operator in a rate expression is a ``RateFunction`` --
+    the built-ins (``monod``, ``exp``, ``+``, ``**``, ...) and the ones a user
+    adds with :func:`aquakin.register_rate_function` alike. A subclass is a
+    frozen dataclass whose fields are its arguments (each holds a parsed
+    sub-expression, an :class:`ASTNode`), and declares its arithmetic once, as
+    ``op``. :meth:`compile` here is generic: it evaluates each operand -- the
+    node's fields in order, then its ``EXTRA_CONDITIONS`` -- and applies
     ``op``. The **same** ``op`` is what :mod:`aquakin.core.vector_kernel`
     evaluates in batch, so the scalar and vectorized paths are identical by
     construction (bit-identical arithmetic, not two hand-aligned copies).
 
-    ``op`` takes a single tuple of operand values -- scalars in this scalar
-    closure, arrays in the batched kernel -- and returns the node's value. Every
-    op is written with plain JAX elementwise operations, which are agnostic to
-    that distinction.
+    Attributes
+    ----------
+    FUNCTION_NAME : str
+        How the function is spelled in a rate expression. Required to register
+        it.
+    KIND : str
+        The batched kernel's key for this node type; unique across all rate
+        functions.
+    op : callable
+        A staticmethod ``op(operands) -> value`` taking ONE tuple of operand
+        values -- scalars in the scalar closure, arrays in the batched kernel
+        -- written with ``jax.numpy`` elementwise operations so it works on
+        both and is differentiable.
+    EXTRA_CONDITIONS : tuple of str, optional
+        Condition fields the function reads beyond its arguments, appended to
+        the operands in this order.
+    DIMENSION : callable, optional
+        A staticmethod ``DIMENSION(arg_dims)`` giving the result's dimension
+        from the arguments' (each a ``Dimension`` or ``None``), so
+        ``check_units`` can check expressions using it. Without it the
+        dimension is unknown and the check is skipped.
+
+    Notes
+    -----
+    **A custom** ``op`` **gets none of the built-in guards.** The built-ins
+    keep their gradients finite at a depleted species; plain ``jax.numpy``
+    arithmetic does not. A fractional power at zero has an infinite derivative
+    (``d/dx x**0.5`` is ``inf`` at ``x = 0``), and an infinite derivative there
+    poisons the whole parameter gradient of a solve. Use the guarded helpers
+    in :mod:`aquakin.core.kernels` -- :func:`~aquakin.core.kernels.safe_pow`
+    for ``**``, :func:`~aquakin.core.kernels.safe_sqrt` and
+    :func:`~aquakin.core.kernels.safe_log` -- where your arithmetic can reach
+    such a point.
+
+    Examples
+    --------
+    >>> from dataclasses import dataclass
+    >>> import aquakin
+    >>> from aquakin.core.kernels import safe_pow
+    >>> from aquakin.core.nodes import ASTNode
+    >>> @dataclass(frozen=True)
+    ... class HillNode(aquakin.RateFunction):
+    ...     X: ASTNode
+    ...     K: ASTNode
+    ...     n: ASTNode
+    ...     KIND = "hill"
+    ...     FUNCTION_NAME = "hill"
+    ...     @staticmethod
+    ...     def op(o):
+    ...         x, k, n = o
+    ...         return safe_pow(x, n) / (safe_pow(k, n) + safe_pow(x, n))
+    >>> aquakin.register_rate_function(HillNode)  # doctest: +SKIP
     """
 
     #: ``op(operands: tuple) -> value``. Operand order is the node's AST-child
@@ -287,7 +338,7 @@ class _OperatorNode(ASTNode):
 
 
 @dataclass(frozen=True)
-class _BinaryNode(_OperatorNode):
+class _BinaryNode(RateFunction):
     """Shared field layout for binary arithmetic AST nodes."""
 
     left: ASTNode
@@ -317,17 +368,17 @@ class DivideNode(_BinaryNode):
 class PowerNode(_BinaryNode):
     """``base ** exponent``.
 
-    Guarded by :func:`~aquakin.core.kernels._safe_pow`, so a fractional
+    Guarded by :func:`~aquakin.core.kernels.safe_pow`, so a fractional
     exponent over a zero base has a finite derivative. Values are unchanged;
     see that function for what it does and does not cover.
     """
 
     KIND = "pow"
-    op = staticmethod(lambda o: _safe_pow(o[0], o[1]))
+    op = staticmethod(lambda o: safe_pow(o[0], o[1]))
 
 
 @dataclass(frozen=True)
-class NegateNode(_OperatorNode):
+class NegateNode(RateFunction):
     """Unary minus."""
 
     operand: ASTNode
@@ -340,7 +391,7 @@ class NegateNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class ArrheniusNode(_OperatorNode):
+class ArrheniusNode(RateFunction):
     """
     Temperature-dependent rate factor: ``A * exp(-Ea / (R * T))``.
 
@@ -361,7 +412,7 @@ class ArrheniusNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class MonodNode(_OperatorNode):
+class MonodNode(RateFunction):
     """Saturation Monod term: ``X / (K + X)``.
 
     Standard in microbial kinetics: substrate-limited growth fraction.
@@ -381,7 +432,7 @@ class MonodNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class MonodInhibitionNode(_OperatorNode):
+class MonodInhibitionNode(RateFunction):
     """Inhibition Monod term: ``K / (K + X)``.
 
     Equal to ``1 - monod(X, K)``. Used as an aerobic-off / anoxic-on
@@ -401,7 +452,7 @@ class MonodInhibitionNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class MonodRatioNode(_OperatorNode):
+class MonodRatioNode(RateFunction):
     """Surface-ratio Monod term: ``(A/B) / (K + A/B)``.
 
     The kinetic form used in ASM1/2/3 hydrolysis where the rate-limiting
@@ -426,7 +477,7 @@ class MonodRatioNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class MonodInhibitionRatioNode(_OperatorNode):
+class MonodInhibitionRatioNode(RateFunction):
     """Inhibition ratio Monod term: ``K / (K + A/B)``.
 
     The inhibition counterpart of :class:`MonodRatioNode`. Appears in
@@ -449,7 +500,7 @@ class MonodInhibitionRatioNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class SafeDivideNode(_OperatorNode):
+class SafeDivideNode(RateFunction):
     """Division ``num / denom`` that returns 0 where ``denom == 0``.
 
     The ``safe_div(num, denom)`` rate function. Use it for a ratio whose
@@ -484,7 +535,7 @@ class SafeDivideNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class ExpNode(_OperatorNode):
+class ExpNode(RateFunction):
     """Natural exponential ``exp(x)`` -- the ``exp(x)`` rate function.
 
     For a rate law with an exponential factor that is not an Arrhenius
@@ -509,14 +560,14 @@ class ExpNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class LogNode(_OperatorNode):
+class LogNode(RateFunction):
     """Natural logarithm ``log(x)`` -- the ``log(x)`` rate function.
 
     For a logarithmic driving force: a free-energy term ``R*T*log(Q/K)``, a
     logarithmic inhibition. The argument must be dimensionless (take the ratio
     first), which ``check_units`` enforces.
 
-    Guarded by :func:`_safe_log`, which keeps the *gradient* finite at and
+    Guarded by :func:`safe_log`, which keeps the *gradient* finite at and
     below zero but leaves the value at ``-inf`` there -- see that function for
     why no finite stand-in value is invented. For a base-10 logarithm divide by
     ``log(10)``.
@@ -529,11 +580,11 @@ class LogNode(_OperatorNode):
 
     @staticmethod
     def op(o):
-        return _safe_log(o[0])
+        return safe_log(o[0])
 
 
 @dataclass(frozen=True)
-class SqrtNode(_OperatorNode):
+class SqrtNode(RateFunction):
     """Square root ``sqrt(x)`` -- the ``sqrt(x)`` rate function.
 
     Half-order kinetics, written as what it is rather than as ``[X] ** 0.5``.
@@ -541,7 +592,7 @@ class SqrtNode(_OperatorNode):
     concentration is a valid (if unusual) rate factor and ``check_units``
     checks it as such.
 
-    Guarded by :func:`_safe_sqrt`, so the derivative at a fully depleted
+    Guarded by :func:`safe_sqrt`, so the derivative at a fully depleted
     species is 0 rather than ``inf``.
     """
 
@@ -552,11 +603,11 @@ class SqrtNode(_OperatorNode):
 
     @staticmethod
     def op(o):
-        return _safe_sqrt(o[0])
+        return safe_sqrt(o[0])
 
 
 @dataclass(frozen=True)
-class MinNode(_OperatorNode):
+class MinNode(RateFunction):
     """Elementwise minimum ``min(a, b)`` -- the ``min(a, b)`` rate function.
 
     The companion to :class:`MaxNode`: a ceiling rather than a floor, e.g. a
@@ -577,7 +628,7 @@ class MinNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class MaxNode(_OperatorNode):
+class MaxNode(RateFunction):
     """Elementwise maximum ``max(a, b)`` -- the ``max(a, b)`` rate function.
 
     Used to one-sidedly clip a quantity, e.g. ``max(0, P_gas - P_atm)`` so an
@@ -598,7 +649,7 @@ class MaxNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class pHSwitchNode(_OperatorNode):
+class pHSwitchNode(RateFunction):
     """
     Acid/base speciation fraction: ``1 / (1 + 10^(pH - pKa))``.
 
@@ -622,7 +673,7 @@ class pHSwitchNode(_OperatorNode):
 
 
 @dataclass(frozen=True)
-class pHInhibitNode(_OperatorNode):
+class pHInhibitNode(RateFunction):
     """
     ADM1 lower-pH (Hill) inhibition factor
 

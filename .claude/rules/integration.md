@@ -152,7 +152,7 @@ prerequisite for the SBR unit (#273) and relay/on-off control studies.
 Demonstrated in `examples/event_handling.py` (scheduled ozone re-dosing + a
 bromate-limit terminal cut-off); tested in `tests/integration/test_events.py`
 (reset/terminal/direction/multi-event, AD through a time event, the runaway
-guard, and BSM1 plant resets).
+guard, and plant resets checked against the closed form).
 
 
 ### Compiled-solve caching

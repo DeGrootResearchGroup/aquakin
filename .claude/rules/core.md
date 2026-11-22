@@ -84,14 +84,14 @@ injecting it as a condition field)
 - `ExpNode(x)` — `exp(x)`. Unguarded: finite and smooth everywhere, and an
   overflow to `inf` is an honest report of an ill-scaled model. `check_units`
   requires a dimensionless argument.
-- `LogNode(x)` — `log(x)` (natural). Guarded by `_safe_log`: the double-where
+- `LogNode(x)` — `log(x)` (natural). Guarded by `safe_log`: the double-where
   keeps the **gradient** finite at and below zero, but the *value* there stays
   `-inf` — a logarithm has no finite limit at zero to adopt, and inventing one
   would silently change the model. So unlike `_safe_ratio` the guard protects
   AD only, and a model using `log` must keep its argument positive
   (`clip_negative_states`, or write `log(1 + [X]/K)`). `check_units` requires a
   dimensionless argument.
-- `SqrtNode(x)` — `sqrt(x)`. Guarded by `_safe_sqrt`: the value is exact
+- `SqrtNode(x)` — `sqrt(x)`. Guarded by `safe_sqrt`: the value is exact
   (`sqrt(0) == 0`) and the derivative at and below zero is 0 rather than `inf`.
   Same reasoning as the `powc` kernel — half-order kinetics sit at `x == 0`
   whenever the species depletes, which is the common case, not a corner one.
@@ -99,7 +99,7 @@ injecting it as a condition field)
 - `MinNode(a, b)` — `min(a, b)`, the ceiling counterpart of `MaxNode`; a
   two-sided clip is `min(hi, max(lo, x))`.
 
-`_safe_log` / `_safe_sqrt` live in **`core/kernels.py`**, not in `nodes.py`:
+`safe_log` / `safe_sqrt` live in **`core/kernels.py`**, not in `nodes.py`:
 `sqrt` and `log` are offered by more than one of aquakin's expression
 languages, and a function whose derivative is non-finite somewhere needs the
 same guard wherever it is evaluated — otherwise the same spelling means two
@@ -110,13 +110,13 @@ language.
 
 All three use the same double-where shape. What each returns *off* the domain
 differs deliberately and is a modelling decision per function, not a mechanical
-one: `_safe_ratio` and `_safe_sqrt` return the physical limit 0, while
-`_safe_log` keeps `-inf`, since a logarithm has no finite limit at zero to
+one: `_safe_ratio` and `safe_sqrt` return the physical limit 0, while
+`safe_log` keeps `-inf`, since a logarithm has no finite limit at zero to
 adopt and inventing one would silently change the model. So `log`'s guard
 protects the gradient only, and its caller still has to keep the argument
 positive.
 
-`_safe_pow` guards the **`**` operator** for the same reason, since `[X] ** 0.5`
+`safe_pow` guards the **`**` operator** for the same reason, since `[X] ** 0.5`
 is the other spelling of `sqrt([X])` and the two must agree: `d/dx x**e` is
 infinite at zero whenever `e < 1`. It fires only at an exactly-zero base with
 an exponent below one, computes that branch under `stop_gradient` so the value
@@ -170,12 +170,22 @@ registration does. (Demonstrated: a subclass of `MonodNode` declaring
 - `registry._refresh()` projects its `_REGISTERED` map into both and calls
   `parser.refresh_function_registry()` / `vector_kernel.refresh_kernels()`.
 
+**The base is public and is one class.** A user's function subclasses
+`aquakin.RateFunction` (defined in `core/nodes.py`, re-exported in
+`aquakin.__all__`), the same class every built-in operator node derives from,
+and `register_rate_function` refuses anything not derived from it. Do not add a
+private twin or an alias: the documented extension point must not depend on a
+private name. A custom `op` gets none of the built-in guards, so the guarded
+numerics a user may need (`safe_pow`, `safe_sqrt`, `safe_log` in
+`core/kernels.py`) are public, named in `RateFunction`'s docstring and in
+`docs/model_format.md`; renaming one is an API change.
+
 Registration refuses a `FUNCTION_NAME` or `KIND` that collides with a built-in,
 a non-frozen dataclass, a zero-argument node, a field with a default (the
 parser requires one parsed argument per field, so a default can never be used)
 and an `op` that does not take a single operand tuple. Keep the validations
 there rather than discovering breakage at solve time. `to_latex` has a generic
-`\mathrm{name}(args)` fallback for any `_OperatorNode` carrying a
+`\mathrm{name}(args)` fallback for any `RateFunction` carrying a
 `FUNCTION_NAME`, so a registered function renders — and so a future built-in
 added without a LaTeX branch renders plainly instead of crashing export. A node
 may optionally declare `DIMENSION(arg_dims)` for `check_units`; without it the
@@ -184,13 +194,13 @@ Covered by `tests/unit/test_rate_function_registry.py` and
 `tests/integration/test_registered_rate_function.py`.
 
 New domain-specific node types are added here as needed. An **operator** node
-(everything but the four leaves) subclasses `_OperatorNode` and declares its
+(everything but the four leaves) subclasses `RateFunction` and declares its
 arithmetic **once**, as a single `op(operands)` staticmethod plus a `KIND`
 string:
 
 ```python
 @dataclass(frozen=True)
-class MonodNode(_OperatorNode):
+class MonodNode(RateFunction):
     X: ASTNode
     K: ASTNode
     KIND = "monod"              # kernel key
@@ -203,11 +213,11 @@ class MonodNode(_OperatorNode):
         return _safe_ratio(x, k + x)
 ```
 
-`_OperatorNode.compile` is generic (evaluates the operands and applies `op`), so
+`RateFunction.compile` is generic (evaluates the operands and applies `op`), so
 there is no per-node `compile`. That one `op` is the single source of truth:
 **everything else derives from the node class** —
 
-- the **scalar** rate closure (`_OperatorNode.compile`) calls `op`;
+- the **scalar** rate closure (`RateFunction.compile`) calls `op`;
 - the **vectorized kernel** table (`vector_kernel._KERNELS`) is built by walking
   the node hierarchy and maps each `KIND` to the node's own `op` — so the two
   paths run the *identical* function (bit-identicality is structural, not two
