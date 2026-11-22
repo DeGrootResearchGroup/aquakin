@@ -140,14 +140,11 @@ def open_sol(bsm2_open_loop_10d):
     return bsm2_open_loop_10d[1]
 
 
-def test_closed_loop_builds_and_is_finite(closed_plant, closed_sol):
+def test_do_setpoint_tracking(closed_plant, closed_sol, params):
+    """The PI loop holds reactor-4 oxygen at the DO setpoint."""
     assert jnp.all(jnp.isfinite(closed_sol.state))
     # The controller carries one integral state.
     assert closed_plant.units["do_control"].state_size == 1
-
-
-def test_do_setpoint_tracking(closed_plant, closed_sol, params):
-    """The PI loop holds reactor-4 oxygen at the DO setpoint."""
     so4 = float(closed_sol.C_named("tank4", "SO")[-1])
     assert so4 == pytest.approx(BSM2_DO_SETPOINT, abs=0.1)
     # Aerated reactors hold oxygen; the anoxic reactors do not.
