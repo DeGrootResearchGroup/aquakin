@@ -28,8 +28,12 @@ kernel and the continuation drivers are in `integrate/steady.py`, which
 `_config.py`, `_solution.py`, `_cache.py` and `_solver.py` import no other
 `integrate` module, and `_common.py` only re-exports them (its `__all__` is
 pinned by `tests/unit/test_common_exports.py`; do not grow it, and put new
-shared code in the module for its concern); the sensitivity preamble (`prepare_sensitivity`,
-`resolve_sens_indices`) lives in `forward_sensitivity.py`.
+shared code in the module for its concern). The private names the plant
+layer reuses are listed in `integrate/seam.py`, the only route `plant` and
+`study` may take to them (`tests/unit/test_integrate_seam.py`), so renaming one
+means updating the seam and its plant caller in the same change. The
+sensitivity preamble (`prepare_sensitivity`, `resolve_sens_indices`) lives in
+`forward_sensitivity.py`.
 
 ## ODE Integration Strategy
 

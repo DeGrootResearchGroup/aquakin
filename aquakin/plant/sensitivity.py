@@ -45,7 +45,7 @@ from aquakin.integrate._transforms import (
 # ``sample_mask`` and, for Gaussian inputs, an explicit ``poincare`` constant.
 # Re-exported here so ``from aquakin.plant.sensitivity import _dgsm_aggregate``
 # keeps working.
-from aquakin.integrate.global_sensitivity import _dgsm_aggregate
+from aquakin.integrate.seam import _dgsm_aggregate
 from aquakin.plant.results import PlantSolution
 
 logger = logging.getLogger(__name__)

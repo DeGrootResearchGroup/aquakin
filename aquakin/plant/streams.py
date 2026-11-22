@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
-from aquakin.integrate._common import PlottableSolutionMixin, _HasNamedSpecies
+from aquakin.integrate._common import PlottableSolutionMixin
+from aquakin.integrate.seam import _HasNamedSpecies
 from aquakin.plant._constants import EPS_Q
 
 if TYPE_CHECKING:  # pragma: no cover

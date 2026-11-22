@@ -25,6 +25,16 @@ it on demand when a change elsewhere touches the topic):
 | `plant-settling.md` | `takacs.py`, `settling.py`, the clarifier / separator modules | the Takács clarifier (soluble holdup, composition mode, interface flux), shared separator helpers |
 | `plant-spec.md` | `spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | time expressions, influent records / patterns, the unit catalogue, the flowsheet spec |
 
+## Importing `integrate` internals
+
+- **Take every private (`_`-prefixed) name of `aquakin.integrate` from
+  `integrate/seam.py`**, never from its defining module, including inside a
+  function body. The seam lists the internals the plant reuses, so a rename in
+  `integrate` shows up as a change to one list. `tests/unit/test_integrate_seam.py`
+  fails on a bypassing import and on a seam name with no caller: add a name to
+  the seam in the same change as its first plant use, and remove it with its
+  last. Public names still come from their own modules.
+
 ## Plant-Wide Simulation
 
 `aquakin.plant` composes kinetic reactors with non-reactive unit ops into

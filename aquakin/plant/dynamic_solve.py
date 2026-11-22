@@ -26,14 +26,13 @@ import jax.numpy as jnp
 from aquakin.integrate._common import (
     DifferentiationConfig,
     IntegratorConfig,
-    _coerce_atol,
-    _run_diffeqsolve,
     concrete_settings_key,
     friendly_solve_errors,
     to_native_time,
 )
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.integrate.events import Event, events_to_native_time, solve_with_events
+from aquakin.integrate.seam import _coerce_atol, _run_diffeqsolve
 from aquakin.plant.results import (
     PlantSolution,
 )
