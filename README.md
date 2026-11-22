@@ -113,6 +113,13 @@ fit = aquakin.calibrate(reactor, C0, measured, t_obs, ["decay.k"],
 fit.params_named, fit.params_named_std  # k = 0.0501 ± 0.0009 h⁻¹
 ```
 
+<!-- invisible-code-block: python
+assert round(float(sol.final_named(["HOCl"])["HOCl"]), 3) == 0.602
+assert round(float(jax.grad(final_chlorine)(model.default_parameters())[0]), 2) == -14.46
+assert round(fit.params_named["decay.k"], 4) == 0.0501
+assert round(fit.params_named_std["decay.k"], 4) == 0.0009
+-->
+
 Solutions carry species names and units through to results:
 `sol.C_named("HOCl")`, `sol.to_dataframe()`, `sol.plot("HOCl")`.
 
@@ -136,6 +143,11 @@ ss = plant.run_to_steady_state()     # integrate until the plant settles
 eff = plant.stream(ss.solution, "effluent")
 eff.final_named(["SNH", "SNO"])      # {'SNH': 0.46, 'SNO': 11.6} g N/m³
 ```
+
+<!-- invisible-code-block: python
+effluent = eff.final_named(["SNH", "SNO"])
+assert round(effluent["SNH"], 2) == 0.46 and round(effluent["SNO"], 1) == 11.6
+-->
 
 From there you can:
 

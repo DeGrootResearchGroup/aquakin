@@ -19,6 +19,7 @@ first-order rate.
 Save this as `chlorine_decay.yaml`:
 
 ```yaml
+# chlorine_decay.yaml
 model:
   name: chlorine_decay
   version: "1.0"

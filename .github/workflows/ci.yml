@@ -381,6 +381,41 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+  # ---- The code examples in the README and the user guide ----------------------
+  # Sybil (configured in the root conftest.py) runs each page's python blocks in
+  # order, in one namespace, so an example that stops working fails here instead
+  # of reaching a reader. These are explicit paths, not in `testpaths`: a page's
+  # blocks share a namespace, so they must stay on one worker (`--dist
+  # loadfile`) and must never be split across pytest-split shards. The two
+  # pages of whole-plant solves are marked `slow` and run in
+  # `docs-examples-slow`.
+  docs-examples:
+    name: docs examples
+    if: >-
+      github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+      && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" -c constraints.txt
+
+      - name: Run the README and user-guide examples
+        run: >-
+          pytest README.md docs -m "$FAST_MARKERS" -q -rs -n 2 --dist loadfile
+          --durations=10 --timeout=600 --timeout-method=thread
+
   # ---- The editor's widget: committed bundle == a fresh build, and packaged ----
   # `aquakin_ui/widget/serve/` is built from `ui-widget/src` and committed (so
   # installing the editor needs no JavaScript toolchain); nothing else checks the
@@ -570,7 +605,7 @@ jobs:
   # for branch protection.
   fast-gate:
     name: fast gate
-    needs: [unit, integration, ui]
+    needs: [unit, integration, ui, docs-examples]
     if: >-
       always() && github.event_name != 'schedule'
       && github.event_name != 'workflow_dispatch'
@@ -581,7 +616,8 @@ jobs:
           status=0
           for pair in "unit=${{ needs.unit.result }}" \
                       "integration=${{ needs.integration.result }}" \
-                      "ui=${{ needs.ui.result }}"; do
+                      "ui=${{ needs.ui.result }}" \
+                      "docs-examples=${{ needs.docs-examples.result }}"; do
             job="${pair%%=*}"; result="${pair#*=}"
             echo "$job matrix result: $result"
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
@@ -678,6 +714,40 @@ jobs:
           flags: slow
           name: slow-py${{ matrix.python-version }}-g${{ matrix.group }}
           fail_ci_if_error: false
+
+  # ---- The user-guide pages of whole-plant solves -----------------------------
+  # docs/plants.md and docs/sensitivity_and_calibration.md, marked `slow` by the
+  # root conftest.py. Same triggers as the slow suite. Not part of it: that suite
+  # is split across shards by pytest-split, which could separate a page's blocks
+  # from the namespace they share. Each page runs on its own worker
+  # (`--dist loadfile`), so at most two whole-plant solves are resident at once.
+  docs-examples-slow:
+    name: docs examples (slow pages)
+    if: >-
+      github.event_name == 'push'
+      || (github.event_name == 'pull_request'
+          && contains(github.event.pull_request.labels.*.name, 'full-ci'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" -c constraints.txt
+
+      - name: Run the slow user-guide examples
+        run: >-
+          pytest docs -m "slow" -q -rs -n 2 --dist loadfile
+          --durations=10 --timeout=1800 --timeout-method=thread
 
   # ---- Heavy whole-plant stable-adjoint gradient tests -------------------------
   # The `heavy` set is the 15 whole-plant checks (9 BSM2 + 6 BSM1): the
