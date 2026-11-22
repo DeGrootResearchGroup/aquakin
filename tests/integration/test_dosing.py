@@ -116,6 +116,14 @@ def _feedback_plant(asm1, **dose_kw):
     return p
 
 
+@pytest.fixture(scope="module")
+def feedback_plant(asm1):
+    """One saturating feedback-dosing plant, shared by the read-only solve tests
+    below so a solve compiled by one is reused by the other (the compiled solve
+    is cached on the plant instance)."""
+    return _feedback_plant(asm1, flow_max=10.0)
+
+
 def test_feedback_dose_auto_wires_controller(asm1):
     p = _feedback_plant(asm1, flow_max=10.0)
     p._build_state_layout()
@@ -128,8 +136,8 @@ def test_feedback_dose_auto_wires_controller(asm1):
                for c in p.connections)
 
 
-def test_feedback_dose_solves_and_publishes_signal(asm1):
-    p = _feedback_plant(asm1, flow_max=10.0)
+def test_feedback_dose_solves_and_publishes_signal(feedback_plant):
+    p = feedback_plant
     sol = p.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]))
     assert bool(jnp.all(jnp.isfinite(sol.state)))
     sig = p.signals_at(jnp.asarray(2.0), sol.state[-1])
@@ -139,8 +147,8 @@ def test_feedback_dose_solves_and_publishes_signal(asm1):
     assert flow == pytest.approx(10.0, abs=1e-6)
 
 
-def test_grad_flows_through_feedback_dosing(asm1):
-    p = _feedback_plant(asm1, flow_max=10.0)
+def test_grad_flows_through_feedback_dosing(feedback_plant):
+    p = feedback_plant
     base = p.default_parameters()
 
     def loss(scale):
