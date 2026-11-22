@@ -31,8 +31,6 @@ Split out of `.claude/rules/integration.md`.
   goes in the `integrate/calibration/` module for its concern** (`config`,
   `observation`, `loss`, `coords`, `result`, `problem`, `objective`,
   `multistart`, `laplace`, `driver`), never back into `calibrate.py`.
-  `_laplace_covariance` is the one leftover re-export, until
-  `tests/integration/test_calibrate.py` imports it from `calibration/laplace.py`.
 - `calibration/*` modules must not import `calibrate.py` (it imports them), and
   `calibration/__init__.py` stays a docstring with no imports, so `fisher.py`
   can import the pieces without a cycle. Cross-module references that are only

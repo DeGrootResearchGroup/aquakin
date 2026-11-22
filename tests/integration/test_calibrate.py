@@ -1360,7 +1360,7 @@ def test_laplace_covariance_null_direction_gives_inf_std():
     """An exactly null eigen-direction cannot be inverted: it is left out of the
     covariance and every parameter loading on it gets an infinite std, rather
     than the zero variance a truncated pseudo-inverse would report."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     H = _ROT2 @ np.diag([100.0, 0.0]) @ _ROT2.T
     cov, std = _laplace_covariance(H, ridge=1e-6)
@@ -1373,7 +1373,7 @@ def test_laplace_covariance_null_direction_gives_inf_std():
 
 def test_laplace_covariance_null_direction_only_flags_involved_parameters():
     """A parameter with no loading on the null direction keeps its finite std."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     H = np.diag([0.0, 4.0])
     _, std = _laplace_covariance(H, ridge=0.0)
@@ -1383,7 +1383,7 @@ def test_laplace_covariance_null_direction_only_flags_involved_parameters():
 
 def test_laplace_covariance_is_full_inverse_when_well_conditioned():
     """A well-conditioned Hessian gives inv(H + ridge)."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     H = np.diag([10.0, 20.0])
     cov, std = _laplace_covariance(H, ridge=1e-6)
@@ -1396,7 +1396,7 @@ def test_laplace_covariance_keeps_weak_direction_variance():
     largest) keeps its variance. The covariance used to drop every direction
     below 1e-2 of the largest, giving it zero variance and understating the
     std of the parameters on it by orders of magnitude."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     rng = np.random.default_rng(0)
     Q, _ = np.linalg.qr(rng.standard_normal((3, 3)))
@@ -1418,7 +1418,7 @@ def test_laplace_covariance_relative_to_largest_for_small_scale_hessian():
     full: the null test is RELATIVE to the largest eigenvalue, not an absolute
     floor, so a trace-species observable (JᵀJ ~1e-2) is not reported
     degenerate."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     H = _ROT2 @ np.diag([9.1e-3, 1e-7]) @ _ROT2.T
     cov, std = _laplace_covariance(H, ridge=0.0)
