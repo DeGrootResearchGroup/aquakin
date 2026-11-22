@@ -361,18 +361,14 @@ def test_plant_time_event_resets_state():
     assert np.all(np.isfinite(sol.state))
 
 
-@pytest.mark.slow
-def test_plant_events_reject_unsupported_integrator():
+def test_plant_events_reject_unsupported_integrator(cstr_plant):
     """The located-event segmented solve manages its own integrator, so an
     explicit colored-Jacobian / custom solver (which it cannot honour) is
     rejected. The default IntegratorConfig (the fast stack) is accepted -- events
     run their own segmented solve regardless of the differentiation config."""
     import diffrax
 
-    from aquakin.plant.bsm import build_bsm1
-
-    net = aquakin.load_model("asm1")
-    plant = build_bsm1(net)
+    plant = cstr_plant
     ev = Event(at_times=[1.0])
     with pytest.raises(ValueError, match="not supported"):
         plant.solve((0.0, 2.0), events=[ev],
