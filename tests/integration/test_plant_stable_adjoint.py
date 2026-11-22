@@ -132,9 +132,24 @@ def _single_cstr_plant(net):
     return plant
 
 
-def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
+@pytest.mark.parametrize(
+    "integrator",
+    [
+        None,                                                    # Kvaerno3 + factormax=3
+        aquakin.IntegratorConfig(order=5, factormax=None),       # Kvaerno5, no step cap
+        aquakin.IntegratorConfig(solver=diffrax.Kvaerno3()),     # explicit solver=
+    ],
+    ids=["default", "kvaerno5_no_factormax", "explicit_kvaerno3"],
+)
+def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd(integrator):
     """On a small single-CSTR plant the cap-free stable-adjoint gradient equals
-    the standard through-the-solve (jax_adjoint) gradient and a central FD."""
+    the standard through-the-solve (jax_adjoint) gradient and a central FD.
+
+    Run for the default integrator, for ``order=5, factormax=None`` and for an
+    explicit ``solver=``: the discrete adjoint builds its backward from whatever
+    ESDIRK tableau and step controller the forward uses, so every ``solver=`` /
+    ``order=`` / ``factormax=`` choice must give the exact gradient of its own
+    forward solve."""
     net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     plant = _single_cstr_plant(net)
     base = net.default_parameters()
@@ -142,11 +157,12 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd():
     theta0 = float(base[gidx])
     T = 40.0
     teval = jnp.array([T])
+    integrator_kw = {} if integrator is None else {"integrator": integrator}
 
     def g(theta, gradient):
         p = base.at[gidx].set(theta)
         sol = plant.solve(t_span=(0.0, T), t_eval=teval, params=p,
-                          diff=_grad_diff(gradient))
+                          diff=_grad_diff(gradient), **integrator_kw)
         return sol.C_named("tank", "B")[-1]   # product at the outlet
 
     # Forward primal agrees regardless of the gradient backend (the two paths
@@ -329,6 +345,98 @@ def test_stable_adjoint_initial_state_gradient_matches_jax_adjoint():
     assert np.all(np.isfinite(g_stable))
     assert np.any(g_stable != 0.0)
     assert np.allclose(g_stable, g_jax, rtol=1e-3, atol=1e-9)
+
+
+def test_auto_colored_backward_is_size_gated(make_cstr_plant):
+    """``colored_jacobian="auto"`` (the default) colors the stable-adjoint
+    backward only on a plant of at least ``_COLORED_BACKWARD_MIN_STATES``
+    states, the size ``colored_jacobian_decision()`` reports. The two-state
+    tank is below the gate, so "auto" leaves the colored builder unbuilt; with
+    the gate lowered to two states the same gradient builds and uses it. The
+    gradient is the same either way (the colored backward is exact)."""
+
+    def grad(plant):
+        params = plant.default_parameters()
+
+        def final_b(k):
+            sol = plant.solve(t_span=(0.0, 5.0), params=params.at[0].set(k),
+                              rtol=1e-10, atol=1e-12)
+            return sol.state[-1, 1]
+
+        return float(jax.grad(final_b)(float(params[0])))
+
+    small = make_cstr_plant()
+    assert small.colored_jacobian_decision() == ("dense", 2)
+    g_dense = grad(small)
+    assert small._colored._adjoint_builder is None          # dense backward
+
+    gated = make_cstr_plant()
+    gated._COLORED_BACKWARD_MIN_STATES = 2                  # this instance only
+    assert gated.colored_jacobian_decision() == ("colored", 2)
+    g_colored = grad(gated)
+    builder, _n_colors, ok, _n, _rf = gated._colored._adjoint_builder
+    assert ok is True and builder is not None                # colored backward
+    assert g_dense != 0.0
+    assert g_colored == pytest.approx(g_dense, rel=1e-8)
+
+
+def test_stable_adjoint_solve_is_jittable_cstr(make_cstr_plant):
+    """The stable-adjoint plant solve can be wrapped in ``jax.jit``: its ``atol``
+    does not force concretization. The jitted value and gradient match the
+    eager ones. Jitting the calibration loss is what amortizes the solve compile
+    across optimizer iterations."""
+    plant = make_cstr_plant()
+    base = plant.default_parameters()
+    T = 5.0
+
+    def g(k):
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=base.at[0].set(k),
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          rtol=1e-8, atol=1e-10)
+        return sol.C_named("tank", "B")[-1]
+
+    k0 = float(base[0])
+    # value-and-gradient in one pass, eager and jitted. The jitted pass compiling
+    # at all exercises the atol concretization fix; its value and gradient must
+    # match the eager pass.
+    f_e, g_e = jax.value_and_grad(g)(k0)
+    f_j, g_j = jax.jit(jax.value_and_grad(g))(k0)
+    assert float(g_e) != 0.0
+    assert float(f_j) == pytest.approx(float(f_e), rel=1e-6)
+    assert float(g_j) == pytest.approx(float(g_e), rel=1e-6)
+
+
+def test_default_diff_routes_a_gradient_to_the_stable_adjoint(make_cstr_plant, monkeypatch):
+    """With the default ``diff`` (reverse, stable) a concrete forward solve takes
+    the jax_adjoint path and a solve under ``jax.grad`` takes the cap-free stable
+    adjoint, whose gradient matches the through-the-solve one."""
+    plant = make_cstr_plant()
+    base = plant.default_parameters()
+    T = 5.0
+    kw = dict(t_span=(0.0, T), t_eval=jnp.array([T]), rtol=1e-8, atol=1e-10)
+
+    stable_calls = []
+    real_stable = plant._solve_stable_adjoint
+
+    def recording_stable(*a, **k):
+        stable_calls.append(a)
+        return real_stable(*a, **k)
+
+    monkeypatch.setattr(plant, "_solve_stable_adjoint", recording_stable)
+
+    def final_b(k, **solve_kw):
+        return plant.solve(params=base.at[0].set(k), **kw, **solve_kw).C_named("tank", "B")[-1]
+
+    k0 = float(base[0])
+    final_b(k0)
+    assert stable_calls == []                         # concrete forward: jax_adjoint
+    g_default = float(jax.grad(final_b)(k0))
+    assert len(stable_calls) == 1                     # gradient: the stable adjoint
+    g_through = float(jax.grad(lambda k: final_b(
+        k, diff=aquakin.DifferentiationConfig(method="through_solve")))(k0))
+    assert len(stable_calls) == 1
+    assert g_default != 0.0
+    assert g_default == pytest.approx(g_through, rel=1e-6)
 
 
 # --- the cross-interface gradient (slow: integrates the whole plant) -------
