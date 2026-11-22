@@ -142,12 +142,15 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd(integrator, ma
                           diff=_grad_diff(gradient), **integrator_kw)
         return sol.C_named("tank", "B")[-1]   # product at the outlet
 
-    # Forward primal agrees regardless of the gradient backend (the two paths
-    # take slightly different adaptive step grids, so this is to solver tol).
-    assert float(g(theta0, "stable_adjoint")) == pytest.approx(
-        float(g(theta0, "jax_adjoint")), rel=1e-6)
+    # The stable adjoint runs its own ESDIRK forward only under differentiation
+    # (a concrete solve takes the jax_adjoint path whatever ``diff`` says), so its
+    # primal is read from the same value_and_grad pass as its gradient. It agrees
+    # with the concrete diffrax forward to solver tolerance (the two take
+    # slightly different adaptive step grids).
+    f_stable, g_stable = jax.value_and_grad(lambda th: g(th, "stable_adjoint"))(theta0)
+    f_stable, g_stable = float(f_stable), float(g_stable)
+    assert f_stable == pytest.approx(float(g(theta0, "jax_adjoint")), rel=1e-6)
 
-    g_stable = float(jax.grad(lambda th: g(th, "stable_adjoint"))(theta0))
     g_jax = float(jax.grad(lambda th: g(th, "jax_adjoint"))(theta0))
     assert np.isfinite(g_stable)
     assert g_stable != 0.0
