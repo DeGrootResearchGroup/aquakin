@@ -43,6 +43,14 @@ hides the gap from the coverage number.
   `pytest.raises(ValueError)` where the function has several `ValueError`s.
   Every new `raise` gets a test.
 
+## Intermittent failures
+
+- **A test that fails intermittently is a bug**: find the cause, or open an
+  issue naming the test and the suspected race. Never re-run CI to get past it,
+  because the next failure lands on someone else's PR.
+- **Never use `sleep` as synchronization in a test**: wait on the condition
+  itself, with a timeout, so a slow runner cannot make it fail.
+
 ## Gradients
 
 Every integration suite that solves has an AD test, and it **checks the value**:
@@ -138,7 +146,7 @@ or a test that only executes the line.
 | new AST node / rate function | `tests/unit/test_nodes.py` (value, gradient at the edge of the domain), parser round trip, kernel-vs-scalar equality in `test_vector_kernel.py` |
 | new plant unit | mass balance across the unit, steady state against a hand calculation, spec round trip, catalogue entry |
 | new shipped model | `check_conservation` clean, a validation test against the published data |
-| refactor with no behaviour change | no new test, but the existing ones must pass **unchanged**; editing a test in a refactor needs a stated reason |
+| refactor with no behaviour change | no new test, but the existing ones must pass **unchanged**; editing a test in a refactor needs a stated reason. How to show behaviour was preserved: `CLAUDE.md`, *Behaviour-preserving refactors* |
 
 Run what you changed before handing off (`pytest path/to/test_file.py`, then the
 fast gate for anything cross-cutting) and report the actual outcome. If a test
