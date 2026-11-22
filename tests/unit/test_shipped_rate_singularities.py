@@ -32,20 +32,37 @@ _CASES = [
 ]
 
 
-@pytest.mark.parametrize("value", [0.0, -1e-9])
-@pytest.mark.parametrize(("name", "depleted"), _CASES)
-def test_depleted_competition_terms_give_finite_rates(name, depleted, value):
-    net = aquakin.load_model(name)
+#: The depleted value: exactly 0, and a tiny negative value the rate
+#: evaluation clips to 0. Both are evaluated in one compiled, vmapped call.
+_DEPLETED_VALUES = jnp.asarray([0.0, -1e-9])
+
+
+def _evaluate_depleted(net, depleted):
+    """Rates, ``dC/dt`` and ``grad(sum(dC/dt))`` at each depleted value.
+
+    Each array carries a leading axis over ``_DEPLETED_VALUES``.
+    """
     p = net.default_parameters()
     cf = net.default_conditions().fields
     C = net.default_concentrations()
-    for sp in depleted:
-        C = C.at[net.species_index[sp]].set(value)
-    assert np.all(np.isfinite(np.asarray(net.rates(C, p, cf, 0))))
-    assert np.all(np.isfinite(np.asarray(net.dCdt(C, p, cf, 0))))
+    idx = jnp.asarray([net.species_index[sp] for sp in depleted])
+
+    def evaluate(value):
+        c = C.at[idx].set(value)
+        grad = jax.grad(lambda c: jnp.sum(net.dCdt(c, p, cf, 0)))(c)
+        return net.rates(c, p, cf, 0), net.dCdt(c, p, cf, 0), grad
+
+    return tuple(np.asarray(a) for a in jax.jit(jax.vmap(evaluate))(_DEPLETED_VALUES))
+
+
+@pytest.mark.parametrize(("name", "depleted"), _CASES)
+def test_depleted_competition_terms_give_finite_rates(name, depleted):
+    net = aquakin.load_model(name)
+    rates, dcdt, grad = _evaluate_depleted(net, depleted)
+    assert np.all(np.isfinite(rates))
+    assert np.all(np.isfinite(dcdt))
     # The gradient through the guarded ratio is finite too.
-    g = jax.grad(lambda c: jnp.sum(net.dCdt(c, p, cf, 0)))(C)
-    assert np.all(np.isfinite(np.asarray(g)))
+    assert np.all(np.isfinite(grad))
 
 
 def test_safe_div_rewrite_leaves_nonzero_values_unchanged():
