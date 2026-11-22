@@ -46,3 +46,6 @@ trame-client==4.1.4
 trame-common==1.2.9
 trame-server==4.1.2
 trame-vuetify==3.3.0
+
+# --- The editor's browser tests (the `browser` extra; `browser` CI job only) ---
+playwright==1.63.0
