@@ -3,15 +3,17 @@
 Two layers: the forward sizing (:func:`size_activated_sludge`) and the Takacs
 ``solids_mass`` accessor are fast pure-Python / no-solve tests in the PR gate;
 the achieved-metric post-processor (:func:`sludge_metrics` / ``plant.sludge_age``)
-needs real BSM1 plant solves and is marked ``slow``.
+is checked against hand computations on solutions built at known states, with
+real BSM1 / BSM2 solves (``slow``) only where the plant's response is the point.
 """
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
 from aquakin import SludgeMetrics, size_activated_sludge, sludge_metrics
-from aquakin.plant.bsm import build_bsm1
+from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
 from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
 from aquakin.plant.influent import InfluentSeries
 
@@ -273,7 +275,14 @@ def test_pick_influent_branches():
         _pick_influent(SimpleNamespace(influents={"x": a}), "ghost")
 
 
-# ----- Achieved metrics from a solved plant (slow: BSM1 plant solves) -----
+# ----- Achieved metrics from a plant solution ------------------------------
+#
+# SRT, HRT and F:M are functions of the saved states, so most of these checks
+# read a solution built at known states (the BSM1 warm start, which is close to
+# the BSM1 steady state) without integrating, and compare sludge_metrics with
+# the same quantities computed by hand. Only the wastage ordering needs the
+# plant's dynamics (the inventory has to respond to the wastage flow) and runs
+# real solves, marked ``slow``.
 
 
 def _influent(model):
@@ -295,9 +304,14 @@ def _influent(model):
     )
 
 
-def _solve(model, influent, Qw=385.0, use_takacs=False):
+def _bsm1(model, Qw=385.0, use_takacs=False):
     plant = build_bsm1(model=model, wastage_flow=Qw, use_takacs=use_takacs)
-    plant.add_influent("feed", influent, to="inlet_mix.fresh")
+    plant.add_influent("feed", _influent(model), to="inlet_mix.fresh")
+    return plant
+
+
+def _solve(model, Qw=385.0):
+    plant = _bsm1(model, Qw=Qw)
     sol = plant.solve(
         t_span=(0.0, 80.0),
         t_eval=jnp.linspace(70.0, 80.0, 6),
@@ -308,30 +322,87 @@ def _solve(model, influent, Qw=385.0, use_takacs=False):
     return plant, sol
 
 
+_REACTORS = ["tank1", "tank2", "tank3", "tank4", "tank5"]
+
+
+def _warm_solution(plant):
+    """A two-point solution with no solve: the BSM1 warm start at t = 0 and the
+    same state with every reactor's concentrations 20% higher at t = 1, so the
+    window means are not those of a constant."""
+    from aquakin.plant.results import PlantSolution
+
+    y0 = jnp.asarray(bsm1_warm_start(plant))
+    by_unit = plant.states_by_unit(y0)
+    y1 = plant.initial_state(overrides={n: 1.2 * by_unit[n] for n in _REACTORS})
+    return PlantSolution(t=jnp.asarray([0.0, 1.0]), state=jnp.stack([y0, y1]), plant=plant)
+
+
+def _tss_by_hand(C, model):
+    """BSM1 TSS: 0.75 g TSS per g COD of the five particulate COD species."""
+    idx = [model.species_index[s] for s in ("XS", "XI", "XB_H", "XB_A", "XP")]
+    return 0.75 * np.sum(np.asarray(C)[..., idx], axis=-1)
+
+
+def _srt_by_hand(plant, sol, model):
+    """``(SRT, inventory, wasted, effluent)``: the window-mean solids inventory
+    (reactors plus any Takács blanket, g) over the window-mean solids leaving in
+    the clarifier overflow and the wastage (g/d), from the saved states."""
+    t = np.asarray(sol.t)
+
+    def mean(x):
+        return float(np.trapezoid(x, t) / (t[-1] - t[0]))
+
+    inventory = sum(
+        float(plant.units[n].volume) * _tss_by_hand(sol.unit_state(n), model) for n in _REACTORS
+    )
+    clarifier = plant.units["clarifier"]
+    if clarifier.state_size > 0:
+        # Lumped-TSS Takács settler: the first n_layers states are layer TSS.
+        assert clarifier.composition_mode == "lumped_tss"
+        layers = np.asarray(sol.unit_state("clarifier"))[:, : clarifier.n_layers]
+        layer_volume = clarifier.area * clarifier.height / clarifier.n_layers
+        inventory = inventory + layers.sum(axis=1) * layer_volume
+    eff = plant.stream(sol, "clarifier.overflow")
+    waste = plant.stream(sol, "underflow_split.waste")
+    eff_rate = np.asarray(eff.Q) * _tss_by_hand(eff.C, model)
+    waste_rate = np.asarray(waste.Q) * _tss_by_hand(waste.C, model)
+    loss = mean(eff_rate) + mean(waste_rate)
+    return mean(inventory) / loss, mean(inventory), mean(waste_rate), mean(eff_rate)
+
+
 @pytest.fixture(scope="module")
 def asm1():
     return aquakin.load_model("asm1")
 
 
 @pytest.fixture(scope="module")
-def ideal_run(asm1):
-    return _solve(asm1, _influent(asm1), Qw=385.0, use_takacs=False)
+def ideal_warm(asm1):
+    plant = _bsm1(asm1)
+    return plant, _warm_solution(plant)
 
 
-@pytest.mark.slow
-def test_sludge_metrics_sensible(ideal_run, asm1):
-    plant, sol = ideal_run
+def test_sludge_metrics_match_hand_computed_srt(ideal_warm, asm1):
+    """SRT = mean solids inventory / mean solids leaving (overflow + wastage),
+    each term matching a hand computation from the states; HRT = reactor volume
+    / influent flow; and the values lie in the BSM1 range at the warm start."""
+    plant, sol = ideal_warm
     m = sludge_metrics(plant, sol)
     assert isinstance(m, SludgeMetrics)
+    srt, inventory, wasted, effluent = _srt_by_hand(plant, sol, asm1)
+    assert pytest.approx(srt, rel=1e-9) == m.SRT
+    assert m.solids_inventory == pytest.approx(inventory * 1e-3, rel=1e-9)
+    assert m.solids_wasted == pytest.approx(wasted * 1e-3, rel=1e-9)
+    assert m.solids_effluent == pytest.approx(effluent * 1e-3, rel=1e-9)
+    assert m.reactor_units == _REACTORS
+    V = sum(float(plant.units[n].volume) for n in m.reactor_units)
+    # The ideal clarifier holds no solids, so the inventory is the reactors'.
+    assert m.mlss == pytest.approx(inventory / V, rel=1e-9)
+    # HRT = total reactor volume / influent flow (recycles excluded).
+    assert pytest.approx(V / BSM1_Q_AVG, rel=1e-9) == m.HRT
     # Plausible BSM1 ranges.
     assert 2.0 < m.SRT < 30.0
     assert 0.0 < m.FM < 1.0
-    assert m.mlss > 0.0 and m.solids_inventory > 0.0
     assert m.solids_wasted > 0.0 and m.solids_effluent > 0.0
-    assert m.reactor_units == ["tank1", "tank2", "tank3", "tank4", "tank5"]
-    # HRT = total reactor volume / influent flow (recycles excluded).
-    V = sum(float(plant.units[n].volume) for n in m.reactor_units)
-    assert pytest.approx(V / BSM1_Q_AVG, rel=1e-3) == m.HRT
     assert "SRT" in m.summary()
 
 
@@ -344,9 +415,8 @@ def test_sludge_metrics_rejects_unknown_substrate(bad):
         sludge_metrics(None, None, substrate=bad)
 
 
-@pytest.mark.slow
-def test_plant_sludge_age_matches_sludge_metrics(ideal_run):
-    plant, sol = ideal_run
+def test_plant_sludge_age_matches_sludge_metrics(ideal_warm):
+    plant, sol = ideal_warm
     a = plant.sludge_age(sol)
     b = sludge_metrics(plant, sol)
     assert pytest.approx(b.SRT) == a.SRT
@@ -356,24 +426,30 @@ def test_plant_sludge_age_matches_sludge_metrics(ideal_run):
 
 @pytest.mark.slow
 def test_srt_decreases_with_wastage(asm1):
-    """Wasting more sludge gives a younger sludge (smaller SRT) -- the
-    monotonic relation the target-SRT iteration relies on."""
-    inf = _influent(asm1)
-    low = sludge_metrics(*_solve(asm1, inf, Qw=250.0)).SRT
-    high = sludge_metrics(*_solve(asm1, inf, Qw=600.0)).SRT
-    assert low > high
+    """Wasting more sludge gives a younger sludge (smaller SRT) once the plant
+    has responded -- the monotonic relation the target-SRT iteration relies on.
+    Each SRT is also its solution's hand-computed inventory over losses."""
+    srt = {}
+    for Qw in (250.0, 600.0):
+        plant, sol = _solve(asm1, Qw=Qw)
+        srt[Qw] = sludge_metrics(plant, sol).SRT
+        assert srt[Qw] == pytest.approx(_srt_by_hand(plant, sol, asm1)[0], rel=1e-9)
+    assert srt[250.0] > srt[600.0]
 
 
-@pytest.mark.slow
-def test_takacs_clarifier_inventory_raises_srt(ideal_run, asm1):
-    """The Takacs settler holds a real sludge blanket, so counting its solids
-    gives a larger system SRT than the stateless ideal clarifier at the same
-    wastage flow."""
-    _, ideal_sol = ideal_run
-    ideal_plant, _ = ideal_run
-    srt_ideal = sludge_metrics(ideal_plant, ideal_sol).SRT
-    srt_takacs = sludge_metrics(*_solve(asm1, _influent(asm1), Qw=385.0, use_takacs=True)).SRT
-    assert srt_takacs > srt_ideal
+def test_takacs_clarifier_blanket_counts_in_srt(asm1):
+    """The Takács settler holds a sludge blanket and sludge_metrics counts it:
+    the SRT is (reactor solids + blanket, summed by hand over the settler's
+    layers) over the losses, and the blanket makes it materially larger than
+    the reactor-only SRT the same losses give."""
+    plant = _bsm1(asm1, use_takacs=True)
+    sol = _warm_solution(plant)
+    m = sludge_metrics(plant, sol)
+    srt, inventory, wasted, effluent = _srt_by_hand(plant, sol, asm1)
+    assert pytest.approx(srt, rel=1e-9) == m.SRT
+    assert m.solids_inventory == pytest.approx(inventory * 1e-3, rel=1e-9)
+    reactor_only = m.mlss * m.reactor_volume / (wasted + effluent)
+    assert 1.05 * reactor_only < m.SRT
 
 
 @pytest.mark.slow
@@ -406,9 +482,6 @@ def test_sludge_metrics_ignores_a_time_unit_override(asm1):
     days. The influent ramps (Q doubles over two days), so sampling it at the
     hour values would change HRT and F:M. No solve: a two-point solution at the
     warm-start state."""
-    import numpy as np
-
-    from aquakin.plant.bsm import bsm1_warm_start
     from aquakin.plant.plant import PlantSolution
 
     ramp = InfluentSeries(
