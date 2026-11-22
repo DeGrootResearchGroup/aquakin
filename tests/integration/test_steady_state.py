@@ -587,6 +587,87 @@ def test_plant_steady_state_arclength_rung_reaches_closed_form(make_cstr_plant):
     np.testing.assert_allclose(np.asarray(ss.state), _cstr_steady(float(p_target[0])),
                                atol=1e-5)
     assert len(plant._solve_cache.arclength_kernels) == 1
+    # A second target from the same known point reuses the cached kernels.
+    p_second = p_known.at[0].multiply(3.0)
+    ss2 = plant.steady_state(p_second, continuation_from=(p_known, y_known),
+                             continuation_kwargs={"max_continuation_steps": 1}, **kw)
+    assert ss2.method == "arclength"
+    np.testing.assert_allclose(np.asarray(ss2.state), _cstr_steady(float(p_second[0])),
+                               atol=1e-5)
+    assert len(plant._solve_cache.arclength_kernels) == 1
+
+
+def test_plant_steady_state_ladder_falls_through_to_forward(make_cstr_plant):
+    # Both continuation rungs are starved (one natural-parameter step, one
+    # arclength step), so neither reaches the target and the ladder ends on the
+    # forward integration, which does.
+    plant = make_cstr_plant()
+    p_known, p_target, y_known, kw = _cstr_continuation_case(plant)
+    kw["fallback"] = True
+    ss = plant.steady_state(p_target, continuation_from=(p_known, y_known),
+                            continuation_kwargs={"max_continuation_steps": 1},
+                            arclength_kwargs={"max_steps": 1},
+                            fallback_kwargs={"criterion": "scaled_residual", "tol": 1e-10,
+                                             "scale_floor": 1.0, "max_time": 1e4}, **kw)
+    assert ss.method == "ptc->forward"
+    assert bool(ss.converged) and ss.residual <= 1e-10
+    np.testing.assert_allclose(np.asarray(ss.state), _cstr_steady(float(p_target[0])),
+                               rtol=1e-8)
+
+
+def test_run_to_steady_state_with_explicit_atol_reaches_closed_form(make_cstr_plant):
+    plant = make_cstr_plant()
+    fwd = plant.run_to_steady_state(atol=1e-12, criterion="scaled_residual", tol=1e-10,
+                                    max_time=1000.0)
+    assert fwd.method == "forward"
+    assert bool(fwd.converged) and fwd.residual <= 1e-10
+    np.testing.assert_allclose(np.asarray(fwd.state), _cstr_steady(0.1), rtol=1e-8)
+
+
+def test_plant_steady_state_gradient_matches_closed_form(make_cstr_plant):
+    # Under jax.grad the steady state takes the traced solve_steady_state path
+    # and its implicit-function-theorem tangent: dA*/dk = -(Q/V) / (Q/V + k)^2.
+    plant = make_cstr_plant()
+    params = plant.default_parameters()
+    k = float(params[0])
+    g = jax.grad(lambda p: plant.steady_state(p, tol=1e-10).state[0])(params)
+    assert float(g[0]) == pytest.approx(-0.1 / (0.1 + k) ** 2, rel=1e-8)
+
+
+def test_colored_steady_state_on_a_recycle_loop_matches_closed_form():
+    # A mixer -> CSTR -> 50/50 splitter loop (simple A -> B model, V = 100,
+    # fresh feed Q = 10 of A = 1). The recycle only raises the flow through the
+    # tank; the overall balance gives A = Q / (Q + k V) = 0.5, B = 0.5. The
+    # colored PTC needs the cached recycle map, which this loop has.
+    from aquakin.plant import CSTRUnit, MixerUnit, Plant, RatioSplitter
+    from aquakin.plant.influent import InfluentSeries
+
+    net = aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
+
+    def loop():
+        plant = Plant("loop", time_unit="s")
+        plant.add_unit(MixerUnit(name="mix", input_port_names=["fresh", "recycle"], model=net))
+        plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
+                                input_port_names=["inlet"], conditions={"T": 293.15}))
+        plant.add_unit(RatioSplitter(name="split", model=net,
+                                     output_port_ratios={"out_product": 0.5,
+                                                         "out_recycle": 0.5}))
+        plant.add_influent("feed", InfluentSeries(
+            t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
+            C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net), to="mix.fresh")
+        plant.connect("mix", "tank")
+        plant.connect("tank", "split")
+        plant.connect("split.out_recycle", "mix.recycle")
+        return plant
+
+    plant = loop()
+    colored = plant.steady_state(tol=1e-10, colored_jacobian=True)
+    assert plant._recycle._recycle_map_constant is True  # the colored path ran
+    assert bool(colored.converged)
+    np.testing.assert_allclose(np.asarray(colored.state), [0.5, 0.5], rtol=1e-8)
+    dense = loop().steady_state(tol=1e-10)
+    np.testing.assert_allclose(np.asarray(colored.state), np.asarray(dense.state),
+                               rtol=1e-10)
 
 
 def _fold_cstr_plant():
