@@ -112,10 +112,15 @@ that imports both. Keep it that way rather than copying knowledge across:
   `ui-widget/src/FlowsheetCanvas.vue`): replacing Vue Flow's lists rebuilds every
   node (losing its measured size) and re-validates every edge, which drops them.
 - **Wire validation sits on the handles** (`UnitNode.vue`), never on Vue Flow's
-  canvas-wide `is-valid-connection`: on the handles it judges only a wire being
-  drawn, never edges loaded from Python, which stays the authority (the
-  canvas-wide check was once seen to drop loaded edges; with Vue Flow 1.48 it
-  does not, so `tests/browser` can pin that validation exists, not where).
+  canvas-wide validator (the `<VueFlow>` prop, `useVueFlow` options or store):
+  on the handles it judges only a wire being drawn. Vue Flow runs the
+  canvas-wide one on every edge `addEdges` adds, against the edges already
+  there, and the check refuses a used handle, so it would drop a wire Python
+  holds that drawing would refuse (a file with two wires into one input, opened
+  over a drawn flowsheet). Python stays the authority on loaded wires. Pinned
+  in the page (`tests/browser`, that opening) and in the source
+  (`tests/ui/test_widget_source.py`: no validator in the `<VueFlow>`
+  component, one bound on every `<Handle>`).
 - **No echoes:** removals and selection changes the canvas makes while applying
   Python's update are not reported back (only ids Python still has; the
   selection reference is reset after each sync). Python marks its selected unit,

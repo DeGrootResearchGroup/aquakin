@@ -198,3 +198,24 @@ def test_the_canvas_shows_the_unit_python_keeps_selected(page):
     _unit(page, "tank3").click()
     expect(_unit(page, "tank1")).to_have_class(re.compile(r"\bselected\b"))
     expect(_unit(page, "tank3")).not_to_have_class(re.compile(r"\bselected\b"))
+
+
+def test_a_wire_python_holds_is_drawn_though_drawing_it_would_be_refused(page, tmp_path):
+    """Python is the authority on loaded wires, even one the drawing check would
+    refuse: a file with a second wire into a fed input, opened over the drawn
+    BSM1, adds that wire to a canvas whose other wires stay, and it is drawn.
+    (Vue Flow judges every edge it adds with its canvas-wide validator, against
+    the edges already there, so the check placed there instead of on the
+    handles drops this one; the first load, into an empty canvas, cannot tell.)"""
+    spec = tmp_path / "bsm1" / "flowsheet.yaml"
+    text = spec.read_text()
+    fed = "- tank1.out -> tank2.inlet\n"
+    assert fed in text
+    two = spec.with_name("two_wires.yaml")
+    two.write_text(text.replace(fed, fed + "- clarifier.overflow -> tank2.inlet\n"))
+    _record_messages(page)
+    page.get_by_placeholder("path/to/flowsheet.yaml").fill(str(two))
+    page.get_by_role("button", name="Open", exact=True).click()
+    _counts(page, 10, 12)
+    expect(page.locator(EDGE)).to_have_count(12)
+    assert _messages(page) == [f"opened {two}"]
