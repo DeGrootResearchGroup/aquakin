@@ -265,6 +265,37 @@ def test_cancelling_a_run_that_has_ended_changes_nothing(tmp_path):
     gc.collect()
 
 
+def test_a_run_is_cleaned_up_before_it_is_reported_finished(tmp_path):
+    """By the time ``finished`` is set (so ``wait`` returns and ``running`` is
+    false) the process is reaped, both pipes are closed and the log removed:
+    ``finished`` is swapped for an event that records the state when it is set,
+    while the stand-in still waits for its go-ahead, so no ordering is left
+    to chance."""
+    run = StudyRun(
+        tmp_path,
+        lambda e: None,
+        command=_script(
+            """
+            import sys
+            sys.stdin.readline()
+            print('{"event": "done", "state": "fresh"}', flush=True)
+            """
+        ),
+    )
+    seen = []
+
+    class Recording(threading.Event):
+        def set(self):
+            seen.append((_discarded(run._proc), run.log_path.exists()))
+            super().set()
+
+    run.finished = Recording()
+    run._proc.stdin.write("go\n")
+    run._proc.stdin.flush()
+    assert run.wait(30) == {"event": "done", "state": "fresh"}
+    assert seen == [(True, False)]
+
+
 def test_a_run_is_running_until_its_process_ends(tmp_path):
     run = StudyRun(
         tmp_path,

@@ -95,9 +95,10 @@ class StudyRun:
                 }
             )
             self.on_event(self.final)
-        self.finished.set()
+        # The clean-up is complete before anyone waiting on ``finished`` wakes.
         with contextlib.suppress(OSError):
             piped.log_path.unlink()
+        self.finished.set()
 
     def cancel(self) -> None:
         """Ask the run to stop at its next checkpoint; kill it if it has not
