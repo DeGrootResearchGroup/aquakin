@@ -239,15 +239,19 @@ def test_plant_calibrate_multi_stream_shape_mismatch(two_tank_plant):
         )
 
 
-@pytest.mark.slow  # a full BSM1 (multi-unit, recycled, stiff) fit
-def test_plant_calibrate_recovers_bsm1_muH():
-    """The real test: recover a kinetic parameter (heterotroph max growth rate
-    muH) of the full BSM1 plant -- five aerated reactors, a settler, and the
-    internal + RAS recycles -- from its effluent nitrogen, with the reverse
-    gradient flowing through the whole stiff monolithic solve."""
+@pytest.mark.slow  # value and gradient through the full BSM1 solve
+def test_plant_calibrate_bsm1_gradient_matches_fd(monkeypatch):
+    """The objective gradient of a BSM1 fit -- five aerated reactors, a settler
+    and the internal + RAS recycles, from the effluent nitrogen -- matches a
+    central finite difference of the same objective, with the reverse stable
+    adjoint flowing through the whole stiff monolithic solve. The objective is
+    captured from the multistart runner (the fit itself is not run: the
+    single-CSTR fits above check the optimizer end) and evaluated at 0.7 muH.
+    The step is 1e-3 in log muH; steps of 1e-2, 1e-3 and 1e-4 agree with the
+    gradient to 1e-4, 1e-6 and 1e-8, so ``rel=1e-5``."""
+    import aquakin.plant.calibrate as plant_cal
     from aquakin import load_model
     from aquakin.plant.bsm import bsm1_warm_start, build_bsm1, load_bsm1_influent
-    from aquakin.plant.influent import InfluentSeries
 
     asm1 = load_model("asm1")
     plant = build_bsm1(asm1)
@@ -268,24 +272,35 @@ def test_plant_calibrate_recovers_bsm1_muH():
     true_muH = float(base[gidx])
 
     t_obs = jnp.linspace(0.5, 8.0, 6)
-    truth = base.at[gidx].set(true_muH)
-    sol = plant.solve(t_span=(0.0, 8.0), t_eval=t_obs, params=truth, y0=y0)
-    eff = plant.stream(sol, "effluent", truth)
+    sol = plant.solve(t_span=(0.0, 8.0), t_eval=t_obs, params=base, y0=y0)
+    eff = plant.stream(sol, "effluent", base)
     obs = jnp.stack([eff.C_named("SNH"), eff.C_named("SNO")], axis=1)
 
-    result = plant.calibrate(
-        obs,
-        t_obs,
-        ["asm1.muH"],
-        target="effluent",
-        observed_channels=["SNH", "SNO"],
-        params=base.at[gidx].set(true_muH * 0.7),
-        y0=y0,
-        transforms={"asm1.muH": "positive_log"},
-        optimizer=OptimizerConfig(max_iter=25),
-    )
-    assert result.converged
-    assert result.params_named["asm1.muH"] == pytest.approx(true_muH, rel=2e-2)
+    seen = {}
+
+    def capture(cfg, bundle, theta0, opt_bounds, starts=None, **kw):
+        seen["bundle"] = bundle
+        raise _Stop
+
+    monkeypatch.setattr(plant_cal, "_run_multistart", capture)
+    with pytest.raises(_Stop):
+        plant.calibrate(
+            obs,
+            t_obs,
+            ["asm1.muH"],
+            target="effluent",
+            observed_channels=["SNH", "SNO"],
+            params=base.at[gidx].set(true_muH * 0.7),
+            y0=y0,
+            transforms={"asm1.muH": "positive_log"},
+        )
+    value_and_grad = seen["bundle"].value_and_grad
+    x = jnp.asarray([np.log(0.7 * true_muH)])
+    _, g = value_and_grad(x)
+    h = 1e-3
+    fd = (float(value_and_grad(x + h)[0]) - float(value_and_grad(x - h)[0])) / (2 * h)
+    assert fd < 0.0                                   # loss falls toward the true muH
+    assert float(g[0]) == pytest.approx(fd, rel=1e-5)
 
 
 @pytest.mark.slow  # a plant solve inside an optimizer loop
