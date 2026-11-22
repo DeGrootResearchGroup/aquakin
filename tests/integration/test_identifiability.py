@@ -6,6 +6,7 @@ log coordinates the Fisher information has an exact null direction
 ``(log k - log [X]0) / sqrt(2)``.
 """
 
+import dataclasses
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -138,20 +139,13 @@ def test_from_calibration_result(simple_model):
         np.sqrt(np.linalg.inv(rep.matrix)[1, 1]) * joint.ic_named[0]["A"], rel=1e-6
     )
 
-    rate_only = aquakin.calibrate(
-        reactor,
-        jnp.asarray([1.0, 0.0]),
-        obs,
-        T_OBS,
-        ["A_to_B.k"],
-        laplace=LaplaceConfig(method="gauss_newton"),
-        **common,
-    )
+    # The rate-only and laplace=False results differ from the joint one only in
+    # the posterior fields identifiability reads, so they are built from the
+    # joint fit rather than by two more fits.
+    rate_only = dataclasses.replace(joint, joint_hessian=None, joint_names=None, joint_cov=None)
     assert aquakin.identifiability(rate_only).names == ["A_to_B.k"]
 
-    no_laplace = aquakin.calibrate(
-        reactor, jnp.asarray([1.0, 0.0]), obs, T_OBS, ["A_to_B.k"], laplace=False, **common
-    )
+    no_laplace = dataclasses.replace(rate_only, hessian_unconstrained=None, posterior_cov=None)
     with pytest.raises(ValueError, match="laplace=True"):
         aquakin.identifiability(no_laplace)
 
