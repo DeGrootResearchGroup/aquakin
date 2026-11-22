@@ -16,7 +16,7 @@ All the code on this page comes from the script
 [`examples/ozone_demand_design.py`](https://github.com/DeGrootResearchGroup/aquakin/blob/main/examples/ozone_demand_design.py),
 and every output block is what that script prints. Each code block continues
 from the previous one, so the page can be followed as one program. The script
-runs in about a minute.
+takes a few minutes to run.
 
 ## The model
 
@@ -50,7 +50,10 @@ Two quantities can be measured:
 The data on this page are synthetic, generated from the true values above, so
 every result can be checked against the truth.
 
-The script starts with its imports:
+The script starts with its imports. `aquakin` is imported before JAX because
+importing it switches JAX to 64-bit floating point, which the stiff solves
+need; imported after JAX, it still does so but warns that it is overriding
+JAX's default.
 
 ```{literalinclude} ../examples/ozone_demand_design.py
 :language: python
@@ -318,8 +321,9 @@ below the others, so two combinations of the unknowns are flagged. The loadings
 say which, and the standard deviations show that they are different kinds of
 problem:
 
-- **k₁ on its own (structural).** Its eigenvalue is zero to round-off, and
-  its standard deviation is infinite. D is used up within about 20 s, before
+- **k₁ on its own (structural).** Its eigenvalue is zero (the script prints
+  round-off below 10⁻¹² as 0), and its standard deviation is infinite. D is
+  used up within about 20 s, before
   the first sample. The samples show how much ozone D removed, which is [D]₀,
   but not how fast it did so.
 - **log k₂ − log [M]₀ (practical).** The loadings are equal and opposite, so

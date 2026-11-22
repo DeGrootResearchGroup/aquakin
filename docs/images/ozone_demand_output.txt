@@ -1,11 +1,11 @@
 == Step 1 ==
 Eigenvalues relative to the largest:
-   -6.9e-17  identifiable: False
+    0.0e+00  identifiable: False
     7.8e-07  identifiable: False
     8.8e-02  identifiable: True
     1.0e+00  identifiable: True
 Directions flagged as not identifiable (two largest loadings):
-  relative eigenvalue -6.9e-17: fast.k1 +1.00, ic[0].D +0.00
+  relative eigenvalue  0.0e+00: fast.k1 +1.00, ic[0].D +0.00
   relative eigenvalue  7.8e-07: slow.k2 -0.71, ic[0].M +0.70
 Relative standard deviations:
   fast.k1       inf

@@ -2,7 +2,8 @@
 
 This page takes you from installation to your first solved model and shows how
 to build inputs, run a solve, and read the results. It assumes only that you
-know a little Python and NumPy.
+know a little Python and NumPy. The code blocks continue from one another, so
+the page can be run top to bottom as one script.
 
 ## Installation
 
@@ -12,12 +13,15 @@ know a little Python and NumPy.
 pip install aquakin
 ```
 
-Two optional extras unlock result convenience features:
+Optional extras add convenience features:
 
 ```bash
 pip install "aquakin[dataframe]"   # export solutions to pandas DataFrames / CSV
 pip install "aquakin[plot]"        # solution.plot(...) via matplotlib
+pip install "aquakin[ui]"          # the browser flowsheet editor
 ```
+
+The flowsheet editor is described in [Plant-wide simulation](plants.md).
 
 ```{note}
 **`import aquakin` enables JAX 64-bit (x64) mode process-wide.** The stiff
@@ -25,8 +29,11 @@ implicit ODE solves require double precision, so at import time aquakin runs
 `jax.config.update("jax_enable_x64", True)`. This is **global** JAX state: any
 other JAX code in the same process will use float64 afterward. If you are
 co-running JAX code that needs float32, run aquakin in a separate process.
-aquakin emits a one-time warning if it overrides an explicit float32
-preference, so the side effect is never silent.
+
+aquakin warns once if JAX was already imported before it, or if
+`JAX_ENABLE_X64` is set to false, since either may mean another part of the
+program expects float32. Import `aquakin` before `jax` (as the examples here
+do) and the warning does not appear.
 ```
 
 ## Your first solve
@@ -36,18 +43,19 @@ Every simulation follows the same four steps: **load** a model, set the
 example — bromate formation during ozonation:
 
 ```python
-import jax.numpy as jnp
 import aquakin
+import jax.numpy as jnp
 
-# 1. Load a shipped model (see the Model catalog for the full list).
+# 1. Load a shipped model (the Model catalogue lists them all).
 model = aquakin.load_model("ozone_bromate")
 
-# 2. Operating conditions. Start from the model's declared defaults — this
-#    always supplies every field the model needs (here pH, T, and a hydroxyl-
-#    radical scavenging rate) — and change only what differs with .with_(...).
-conditions = model.default_conditions().with_(pH=7.5, T=293.15)   # 20 C
+# 2. Operating conditions. Start from the model's declared defaults — they
+#    always supply every field the model needs (here pH, temperature T in
+#    kelvin, and a hydroxyl-radical scavenging rate) — and change only what
+#    differs with .with_(...). The defaults are pH 7.5 and 20 °C.
+conditions = model.default_conditions().with_(pH=8.0, T=288.15)   # 15 °C
 
-# 3. A batch (0-D) reactor.
+# 3. A batch (0-D, well-mixed) reactor.
 reactor = aquakin.BatchReactor(model, conditions)
 
 # 4. Solve. Start from the model's declared reference concentrations and
@@ -59,21 +67,25 @@ sol = reactor.solve(
     t_eval=jnp.linspace(0.0, 600.0, 121),
 )
 
-print("[BrO3-] at 10 min:", float(sol.C_named("BrO3-")[-1]))
+print(f"[BrO3-] at 10 min: {float(sol.C_named('BrO3-')[-1]):.3g} mol/L")
+# [BrO3-] at 10 min: 5.7e-07 mol/L
 ```
 
 `params` is optional — it defaults to `model.default_parameters()` — so the
-minimal call is `reactor.solve(C0, t_span=(0.0, 600.0))`.
+minimal call is `reactor.solve(C0, t_span=(0.0, 600.0))`. Without `t_eval`
+the solution holds only the final state.
 
 ## Setting the initial state by name
 
 `model.default_concentrations()` returns the model's declared reference state.
 For a real run you usually want to set a few species and leave the rest at their
 defaults. Build the concentration vector **by name** rather than juggling array
-indices:
+indices. The rest of this page uses an activated-sludge model, so it builds a
+new reactor for it:
 
 ```python
 model = aquakin.load_model("asm1")   # Activated Sludge Model No. 1
+reactor = aquakin.BatchReactor(model, model.default_conditions())
 
 # A simple aerobic batch: biomass + substrate + ammonia + oxygen.
 # Unspecified species keep their YAML default; unknown names raise a helpful
@@ -111,11 +123,12 @@ model.time_unit          # "d" for asm1; "s" for ozone_bromate / uv_h2o2
 If you would rather work in another unit, pass `time_unit=` to `solve`: the
 input times are converted to the model's native unit for the integration, and
 `solution.t` comes back in the unit you asked for (with `solution.time_unit`
-reporting it):
+reporting it). Here, 48 hours of the aerobic batch:
 
 ```python
 sol = reactor.solve(C0, t_span=(0.0, 48.0),
                     t_eval=jnp.linspace(0.0, 48.0, 49), time_unit="h")
+sol.time_unit            # "h"
 ```
 
 ## Reading results
@@ -127,14 +140,15 @@ A solution carries the trajectory as `sol.t` (shape `(n_t,)`) and `sol.C`
 sol.C_named("SNH")                 # one species' trajectory, shape (n_t,)
 sol.C_named_many(["SNH", "SNO"])   # several at once -> {name: trajectory}
 sol.final_named(["SNH", "SNO"])    # last-time values -> {name: float}
-sol.final                          # every species' last value
+sol.final                          # every species' last value -> {name: float}
 ```
 
 Species units and descriptions are carried from the model to the solution, so
-labels are automatic:
+results can be labelled without looking anything up:
 
 ```python
-model.units_of("SNH")              # e.g. "g_N/m³"
+sol.units_named("SNH")             # "g_N/m³"
+model.units_of("SNH")              # the same, from the model
 model.description_of("SNH")        # "Ammonia + ammonium nitrogen"
 ```
 
@@ -142,29 +156,43 @@ With the optional extras installed you can export or plot directly:
 
 ```python
 df = sol.to_dataframe()            # time-indexed pandas DataFrame  [dataframe extra]
-sol.to_csv("run.csv")              # units embedded in the header
-ax = sol.plot(["SNH", "SNO"])      # matplotlib Axes, axes auto-labelled  [plot extra]
+sol.to_csv("run.csv")              # units embedded in the header   [dataframe extra]
+ax = sol.plot(["SNH", "SNO"])      # matplotlib Axes with a legend  [plot extra]
 ```
+
+The plot labels the time axis with its unit and gives each species a legend
+entry; plot a single species and the vertical axis carries its unit too.
 
 ## Inspecting a model
 
 Before running an unfamiliar model, inspect what it expects:
 
 ```python
-model.summary()             # human-readable table: species, reactions, params, refs
+print(model.summary())      # species, reactions, parameters and references
 model.species               # ordered species names (the columns of sol.C)
-model.parameters            # ordered, namespaced parameter names
-model.conditions_required   # condition fields the model needs (e.g. "pH", "T")
+model.parameters            # ordered parameter names (the entries of params)
+model.conditions_required   # condition fields the model needs: ["T"] for asm1
 model.references            # literature the model is built from
 ```
 
-Two **opt-in, advisory** checks help validate a model (they never raise; they
-return a list of findings):
+Two **opt-in, advisory** checks help validate a model. Each returns a list of
+findings rather than raising on one:
 
 ```python
-model.check_units()          # dimensional consistency of the rate expressions
+model.check_units()          # dimensional consistency of the rate expressions: []
 model.check_conservation()   # mass / electron balance of the stoichiometry
 ```
+
+`check_units()` checks that every rate expression has consistent dimensions,
+and that a rate is in the concentration-per-time units of a species whose
+stoichiometric coefficient is +1 or −1 (turn that part off with
+`check_units(check_stoichiometry=False)`).
+
+`check_conservation()` needs a per-species `composition:` table and raises
+`ValueError` for a model without one (`ozone_bromate` has none). A finding is
+not always a mistake: for ASM1 it reports a COD and a nitrogen residual on
+anoxic heterotroph growth, because the N₂ gas that denitrification produces is
+not one of the model's species.
 
 ## Where to go next
 
@@ -174,5 +202,7 @@ model.check_conservation()   # mass / electron balance of the stoichiometry
   such as the BSM1 and BSM2 benchmarks.
 - [Sensitivity & calibration](sensitivity_and_calibration.md) — differentiate a
   solve, run sensitivity analysis, and fit parameters to data.
-- [Model catalog](model_catalog.md) — every shipped model.
-- [Model file format](model_format.md) — write your own model in YAML.
+- [Model catalogue](model_catalog.md) — every shipped model.
+- [Model file format](model_format.md) — write your own model in YAML,
+  including the built-in math functions (`exp`, `log`, `sqrt`, `min`, ...) and
+  rate functions of your own registered with `aquakin.register_rate_function`.
