@@ -915,14 +915,14 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
 
 
 @pytest.mark.slow
-def test_steady_state_forward_mode_ad():
+def test_steady_state_forward_mode_ad(bsm1):
     """The steady-state IFT gradient is now a ``custom_jvp``, so the plant steady
     state is differentiable in BOTH directions: forward-mode ``jacfwd`` flows
     through ``plant.steady_state`` (previously rejected by the reverse-only
     ``custom_vjp``), and it agrees with reverse-mode ``jax.grad`` and with finite
     differences. This is the forward-mode capability the many-output sensitivity
     screen needs."""
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     i = plant.parameter_index("asm1.muA")
     si = asm1.species_index
@@ -942,12 +942,12 @@ def test_steady_state_forward_mode_ad():
 
 
 @pytest.mark.slow
-def test_steady_state_sensitivity_helper():
+def test_steady_state_sensitivity_helper(bsm1):
     """``plant.steady_state_sensitivity`` returns the exact IFT output sensitivity
     in either AD direction from a single steady-state solve. Forward and reverse
     give the same result; it matches a ``jax.grad`` through ``steady_state`` and
     finite differences; the elasticity option is finite."""
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     si = asm1.species_index
 
@@ -997,14 +997,14 @@ def test_steady_state_sensitivity_helper():
 
 
 @pytest.mark.slow
-def test_steady_state_dgsm_matches_dgsm():
+def test_steady_state_dgsm_matches_dgsm(bsm1):
     """plant.steady_state_dgsm screens the steady state globally (DGSM) by reusing
     the IFT helper per sample. With the same Sobol seed it draws the same points
     and applies the same Sobol total-index formula as the generic aquakin.dgsm, so
     the bounds are identical -- just computed more cheaply (one dF/dy factorisation
     per sample). The convergence() sample-size study runs from the retained
     per-sample data."""
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     si = asm1.species_index
     screen = ["asm1.muH", "asm1.muA", "asm1.etag", "asm1.bA"]
@@ -1042,13 +1042,13 @@ def test_steady_state_dgsm_matches_dgsm():
     assert float(se[-1, 0, j]) < float(se[0, 0, j])     # std error shrinks with N
 
 
-def test_steady_state_dgsm_normal_input():
+def test_steady_state_dgsm_normal_input(bsm1):
     """The Gaussian-prior input path (``input_dist="normal"``) samples each
     parameter in its calibration-transform space (log-normal for a rate) and
     bounds the Sobol index with the sigma^2 Poincare constant in place of the
     uniform (b-a)^2/pi^2. It runs end-to-end, records the per-parameter Poincare
     constant on the result, and convergence() re-aggregates on it consistently."""
-    plant, asm1, y0 = _bsm1()
+    plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     si = asm1.species_index
     screen = ["asm1.muH", "asm1.muA", "asm1.bA"]

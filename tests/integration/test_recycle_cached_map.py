@@ -65,18 +65,47 @@ def _prime(plant, params=None):
     return y0
 
 
-def test_M_constant_detected(asm1):
+def _once_through_plant(asm1):
+    """A single CSTR fed directly: no recycle edges at all."""
+    plant = Plant("once-through", time_unit="d")
+    plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
+                            conditions={"T": 293.15}))
+    plant.add_influent("feed", InfluentSeries.constant(asm1, SS=120.0, Q=1000.0),
+                       to="tank.inlet")
+    return plant
+
+
+@pytest.fixture(scope="module")
+def primed(asm1):
+    """The fixed-ratio recycle plant (no temperature carried), primed once and
+    shared as ``(plant, y0)``.
+
+    A test that flips a recycle-map flag to force the probe path restores it in
+    a ``finally``, so the next test sees the detected flags again. The flags are
+    part of the compiled-solve cache key, so a probe-path compile never serves a
+    cached-path solve.
+    """
     plant = _recycle_plant(asm1, carry_T=False)
-    _prime(plant)
+    return plant, _prime(plant)
+
+
+@pytest.fixture(scope="module")
+def primed_once_through(asm1):
+    """The no-recycle plant, primed once and shared as ``(plant, y0)``."""
+    plant = _once_through_plant(asm1)
+    return plant, _prime(plant)
+
+
+def test_M_constant_detected(primed):
+    plant, _ = primed
     assert plant._recycle._recycle_map_constant is True      # fixed-pump recycle
     assert plant._recycle._recycle_T_map_constant is True     # no temperature carried
 
 
-def test_cached_rhs_bit_identical_to_probe(asm1):
+def test_cached_rhs_bit_identical_to_probe(primed):
     """The core correctness invariant: at a fixed state, the cached-M RHS equals
     the per-RHS-probed RHS to the bit (the cached M IS the probed M)."""
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+    plant, y0 = primed
     pf = plant.default_parameters()
     t = jnp.asarray(2.0)
     states = plant._split_state(y0)
@@ -88,18 +117,20 @@ def test_cached_rhs_bit_identical_to_probe(asm1):
     assert np.array_equal(cached, probe)             # bit-identical
 
 
-def test_cached_solve_matches_probe(asm1):
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+def test_cached_solve_matches_probe(primed):
+    plant, y0 = primed
     t_eval = jnp.linspace(0.0, 5.0, 11)
     cached = plant.solve(t_span=(0.0, 5.0), t_eval=t_eval, y0=y0,
                          rtol=1e-6, atol=1e-8,
                          integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
     plant._recycle._recycle_map_constant = False              # force the probe path
-    plant._jit_cache.clear()
-    probe = plant.solve(t_span=(0.0, 5.0), t_eval=t_eval, y0=y0,
-                        rtol=1e-6, atol=1e-8,
-                        integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
+    try:
+        plant._jit_cache.clear()
+        probe = plant.solve(t_span=(0.0, 5.0), t_eval=t_eval, y0=y0,
+                            rtol=1e-6, atol=1e-8,
+                            integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
+    finally:
+        plant._recycle._recycle_map_constant = True
     rel = np.max(np.abs(np.asarray(cached.state) - np.asarray(probe.state))
                  / (np.abs(np.asarray(probe.state)) + 1e-6))
     assert rel < 1e-6
@@ -120,15 +151,10 @@ def test_temperature_map_constancy_by_mode(asm1):
     assert np.all(np.isfinite(np.asarray(sol.state)))
 
 
-def test_no_recycle_plant_trivially_constant(asm1):
+def test_no_recycle_plant_trivially_constant(primed_once_through):
     """A plant with no recycle edges: the maps are trivially constant and the
     resolver returns no seeds -- the optimization is a no-op."""
-    plant = Plant("once-through", time_unit="d")
-    plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
-                            conditions={"T": 293.15}))
-    plant.add_influent("feed", InfluentSeries.constant(asm1, SS=120.0, Q=1000.0),
-                       to="tank.inlet")
-    y0 = _prime(plant)
+    plant, y0 = primed_once_through
     assert plant._recycle._recycle_map_constant is True
     assert plant._recycle._recycle_T_map_constant is True
     sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]), y0=y0,
@@ -137,9 +163,8 @@ def test_no_recycle_plant_trivially_constant(asm1):
     assert np.all(np.isfinite(np.asarray(sol.state)))
 
 
-def test_grad_flows_through_cached_path(asm1):
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+def test_grad_flows_through_cached_path(primed):
+    plant, y0 = primed
     base = plant.default_parameters()
 
     def loss(scale):
@@ -154,28 +179,28 @@ def test_grad_flows_through_cached_path(asm1):
     assert jnp.isfinite(g)
 
 
-def test_outputs_at_cached_matches_probe(asm1):
+def test_outputs_at_cached_matches_probe(primed):
     """Single-instant stream reconstruction: the cached-map and probed sweeps
     return bit-identical streams (the cached M IS the probed M)."""
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+    plant, y0 = primed
     pf = plant.default_parameters()
     assert plant._recycle._recycle_map_constant is True
     cached = plant.outputs_at(2.0, y0, pf)
     plant._recycle._recycle_map_constant = False              # force probing
-    probe = plant.outputs_at(2.0, y0, pf)
-    plant._recycle._recycle_map_constant = True
+    try:
+        probe = plant.outputs_at(2.0, y0, pf)
+    finally:
+        plant._recycle._recycle_map_constant = True
     assert set(cached) == set(probe)
     for k in cached:
         assert np.array_equal(np.asarray(cached[k].C), np.asarray(probe[k].C))
         assert np.array_equal(np.asarray(cached[k].Q), np.asarray(probe[k].Q))
 
 
-def test_stream_reconstruction_cached_matches_probe(asm1):
+def test_stream_reconstruction_cached_matches_probe(primed):
     """Whole-trajectory stream reconstruction (_cached_streams) over a solved
     run is bit-identical with the cached map vs per-time probing."""
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+    plant, y0 = primed
     t_eval = jnp.linspace(0.0, 4.0, 9)
     sol = plant.solve(t_span=(0.0, 4.0), t_eval=t_eval, y0=y0,
                       rtol=1e-5, atol=1e-3,
@@ -184,17 +209,18 @@ def test_stream_reconstruction_cached_matches_probe(asm1):
     # force probing: clear the per-solution stream cache + flip the flag
     sol.__dict__.pop("_stream_cache", None)
     plant._recycle._recycle_map_constant = False
-    eff_probe = plant.stream(sol, "split.out")
-    plant._recycle._recycle_map_constant = True
+    try:
+        eff_probe = plant.stream(sol, "split.out")
+    finally:
+        plant._recycle._recycle_map_constant = True
     assert np.array_equal(np.asarray(eff_cached.C), np.asarray(eff_probe.C))
     assert np.array_equal(np.asarray(eff_cached.Q), np.asarray(eff_probe.Q))
 
 
-def test_events_cached_matches_probe(asm1):
+def test_events_cached_matches_probe(primed):
     """The located-event segmented solve reuses the cached map across segments;
     a never-resetting time event reproduces the probe-path trajectory."""
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+    plant, y0 = primed
     assert plant._recycle._recycle_map_constant is True
     ev = [aquakin.Event(at_times=[1.5, 3.0])]    # land steps, no reset
     t_eval = jnp.linspace(0.0, 4.0, 9)
@@ -202,10 +228,12 @@ def test_events_cached_matches_probe(asm1):
                          rtol=1e-6, atol=1e-8,
                          integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
     plant._recycle._recycle_map_constant = False              # force probing
-    probe = plant.solve(t_span=(0.0, 4.0), t_eval=t_eval, y0=y0, events=ev,
-                        rtol=1e-6, atol=1e-8,
-                        integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
-    plant._recycle._recycle_map_constant = True
+    try:
+        probe = plant.solve(t_span=(0.0, 4.0), t_eval=t_eval, y0=y0, events=ev,
+                            rtol=1e-6, atol=1e-8,
+                            integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
+    finally:
+        plant._recycle._recycle_map_constant = True
     rel = np.max(np.abs(np.asarray(cached.state) - np.asarray(probe.state))
                  / (np.abs(np.asarray(probe.state)) + 1e-6))
     assert rel < 1e-9
@@ -222,17 +250,15 @@ def test_events_cached_matches_probe(asm1):
 # its exact constant value -- the cached path being the cleaner one.
 
 
-def test_flow_map_constant_detected(asm1):
-    plant = _recycle_plant(asm1, carry_T=False)
-    _prime(plant)
+def test_flow_map_constant_detected(primed):
+    plant, _ = primed
     assert plant._recycle._flow_map_constant is True          # fixed-ratio recycle -> A const
 
 
-def test_cached_flow_rhs_bit_identical_to_probe(asm1):
+def test_cached_flow_rhs_bit_identical_to_probe(primed):
     """At a fixed state, the cached-A RHS equals the per-RHS-probed RHS to the
     bit (the cached A IS the probed A)."""
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+    plant, y0 = primed
     pf = plant.default_parameters()
     t = jnp.asarray(2.0)
     fmap = plant._recycle._compute_flow_map(t, pf, plant._split_state(y0))
@@ -241,12 +267,11 @@ def test_cached_flow_rhs_bit_identical_to_probe(asm1):
     assert np.array_equal(cached, probe)             # bit-identical
 
 
-def test_cached_flow_jacobian_bit_identical_to_probe(asm1):
+def test_cached_flow_jacobian_bit_identical_to_probe(primed):
     """The implicit solver differentiates the RHS; the cached-A (constant) and
     probe-A (recomputed) stage Jacobians must match -- A is state-invariant, so
     dA/dy = 0 in both."""
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+    plant, y0 = primed
     pf = plant.default_parameters()
     t = jnp.asarray(2.0)
     fmap = plant._recycle._compute_flow_map(t, pf, plant._split_state(y0))
@@ -255,41 +280,36 @@ def test_cached_flow_jacobian_bit_identical_to_probe(asm1):
     assert np.array_equal(np.asarray(Jc), np.asarray(Jp))
 
 
-def test_cached_flow_steady_state_matches_probe(asm1):
+def test_cached_flow_steady_state_matches_probe(primed):
     """Under a constant influent the dynamics converge to a fixed point, where
     the cached-A and probe-A solves are bit-identical (no chaotic FP
     amplification)."""
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+    plant, y0 = primed
     assert plant._recycle._flow_map_constant is True
     t_eval = jnp.linspace(0.0, 30.0, 7)
     cached = plant.solve(t_span=(0.0, 30.0), t_eval=t_eval, y0=y0,
                          rtol=1e-6, atol=1e-8,
                          integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
     plant._recycle._flow_map_constant = False                 # force the flow probe path
-    plant._jit_cache.clear()
-    probe = plant.solve(t_span=(0.0, 30.0), t_eval=t_eval, y0=y0,
-                        rtol=1e-6, atol=1e-8,
-                        integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
-    plant._recycle._flow_map_constant = True
+    try:
+        plant._jit_cache.clear()
+        probe = plant.solve(t_span=(0.0, 30.0), t_eval=t_eval, y0=y0,
+                            rtol=1e-6, atol=1e-8,
+                            integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
+    finally:
+        plant._recycle._flow_map_constant = True
     d = np.max(np.abs(np.asarray(cached.state[-1]) - np.asarray(probe.state[-1])))
     assert d < 1e-9                                  # bit-identical at steady state
     assert np.all(np.isfinite(np.asarray(cached.state)))
 
 
-def test_no_recycle_flow_trivially_constant(asm1):
-    plant = Plant("once-through", time_unit="d")
-    plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
-                            conditions={"T": 293.15}))
-    plant.add_influent("feed", InfluentSeries.constant(asm1, SS=120.0, Q=1000.0),
-                       to="tank.inlet")
-    _prime(plant)
+def test_no_recycle_flow_trivially_constant(primed_once_through):
+    plant, _ = primed_once_through
     assert plant._recycle._flow_map_constant is True           # no recycle edges
 
 
-def test_grad_flows_through_cached_flow_path(asm1):
-    plant = _recycle_plant(asm1, carry_T=False)
-    y0 = _prime(plant)
+def test_grad_flows_through_cached_flow_path(primed):
+    plant, y0 = primed
     base = plant.default_parameters()
 
     def loss(scale):
