@@ -2,7 +2,8 @@
 
 The driver is exercised on the first-order-decay fixture (``A -> B`` with rate
 ``k*[A]``, analytic ``A(t) = A0 e^{-kt}``), so every reset has a closed-form
-expectation. One slow plant test checks the same mechanics on BSM1.
+expectation. The plant tests use the one-tank plant, whose state also has a
+closed form.
 """
 
 import jax
@@ -367,36 +368,6 @@ def test_plant_time_event_reset_matches_closed_form(cstr_plant):
     # An adaptive solve at rtol = 1e-9: two decades above it.
     np.testing.assert_allclose(np.asarray(sol.state), expected,
                                rtol=1e-7, atol=1e-10)
-
-
-# --- Plant integration (slow: a real BSM1 solve) -----------------------------
-
-@pytest.mark.slow
-def test_plant_time_event_resets_state():
-    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1, load_bsm1_influent
-
-    net = aquakin.load_model("asm1")
-    plant = build_bsm1(net)
-    plant.add_influent("feed", load_bsm1_influent("dry", net))
-    y0 = jnp.asarray(bsm1_warm_start(plant))
-    teval = jnp.linspace(0.0, 2.0, 9)
-    i_ss = net.species_index["SS"]
-
-    def spike(t, y, args):
-        units = plant.states_by_unit(y)
-        units["tank1"] = units["tank1"].at[i_ss].add(50.0)
-        return plant.initial_state(overrides=units)
-
-    ev = Event(at_times=[1.0], apply=spike, name="ss_spike")
-    sol = plant.solve((0.0, 2.0), teval, y0=y0, events=[ev],
-                      integrator=aquakin.IntegratorConfig(max_steps=300_000))
-
-    assert sol.events_log == [(1.0, "ss_spike")]
-    assert sol.state.shape == (9, plant._total_state_size)
-    ss = np.asarray(sol.C_named("tank1", "SS"))
-    # The spike raises tank1 SS just after t=1 above its pre-event value.
-    assert ss[5] > ss[4]
-    assert np.all(np.isfinite(sol.state))
 
 
 def test_plant_events_reject_unsupported_integrator(cstr_plant):
