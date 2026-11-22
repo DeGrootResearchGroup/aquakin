@@ -597,6 +597,12 @@ def test_a_flowsheet_without_a_file_asks_where_to_keep_it(tmp_path):
         ed.request_open()  # unsaved edits and no file of their own: only Discard
         assert ed.state.unsaved_open and not ed.state.unsaved_can_save
         ed.answer_unsaved("cancel")
+        # "Save first" is not offered; a "save" answer anyway saves nowhere and opens nothing.
+        ed.request_open()
+        ed.answer_unsaved("save")
+        assert "this flowsheet has no file yet" in ed.state.message
+        assert not ed.state.unsaved_open and ed._unsaved()
+        assert not (tmp_path / "new" / "plant.yaml").exists()
     finally:
         ed.worker.stop()
 

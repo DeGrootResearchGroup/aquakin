@@ -26,6 +26,16 @@ fresh import would never run it), a fresh-interpreter import of every module,
 and the reverse AST scan of `aquakin/`. Tests may import aquakin (to build
 expected values). `tests/ui` runs in the required fast gate (the `ui` CI job).
 
+## Types (pyright, mechanically checked)
+
+`aquakin_ui` must stay at 0 errors under basic-mode pyright (the CI `typecheck
+(pyright)` job; `[tool.pyright]` in `pyproject.toml`). Fix a type where the value
+comes from: narrow a value that can be `None` on that path, pass a known value
+down rather than re-reading an optional attribute, and correct an annotation
+that is wrong. An `assert` narrows only an invariant a reader can check on the
+spot (with the reason beside it); a `None` that a page event or a missing file
+can produce gets handled and tested, not asserted away.
+
 ## Structure
 
 | module | holds | notes |
@@ -38,6 +48,7 @@ expected values). `tests/ui` runs in the required fast gate (the `ui` CI job).
 | `study_form.py` | `fields_for`, `draft_for`, `study_from`, `missing` | **pure**: the study dialog's draft from the worker's `study_form` (numbers kept as text, an even time grid as start / stop / count) and back, empty fields and defaults left out; `missing` names a kind's required fields by label. Lists no setting of its own |
 | `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart`, `xy_chart`, `analysis_view`, `ANALYSIS_VIEWS`, `SIMULATE` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`). `xy_chart` is the core: a line, data points (slot-2 orange, with a fit/data legend when both) and a labelled reference hairline (a profile's threshold). `analysis_view` dispatches through `ANALYSIS_VIEWS` (one `_<kind>_view` per kind but `SIMULATE`, which the editor draws itself) and raises on a kind it lacks |
 | `settings.py` | `Settings`, `DEFAULTS`, `settings_path` | the user's preferences, a JSON file in the configuration folder (`AQUAKIN_UI_CONFIG` overrides; `tests/ui/conftest.py` points it at a temporary file for every test, so tests never touch the user's); unknown keys and wrong types are ignored on read; a failed write keeps the value for the session |
+| `process.py` | `start_piped`, `Piped` | the one way the worker and a study run are started: piped text stdin / stdout, stderr to its own `mkstemp` log, a new session (process group on Windows). Start any further child process through it, not with another `Popen` |
 | `jobs.py` | `StudyRun` | one study run = one `python -m aquakin study run --json` process: JSON progress events on stdout, `cancel` on stdin (killed after `CANCEL_GRACE` if no checkpoint comes); its own temporary log |
 | `app.py` | `Editor` | the page; turns finished canvas edits into document changes; the Studies tab |
 | `widget/` | `Flowsheet` (trame element), `module.py`, `serve/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
