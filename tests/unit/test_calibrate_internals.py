@@ -31,6 +31,7 @@ from aquakin.integrate.calibration.coords import (
     _simplex_fraction_cov,
     _simplex_pools,
 )
+from aquakin.integrate.calibration.driver import _scale_objective
 from aquakin.integrate.calibration.laplace import (
     _at_bound_named,
     _at_bound_sides,
@@ -38,10 +39,13 @@ from aquakin.integrate.calibration.laplace import (
     _laplace_posterior,
 )
 from aquakin.integrate.calibration.loss import (
+    _SCALE_FLOOR,
     _build_loss,
     _build_residual,
+    _data_mean_square,
     _data_term,
     _missing_mask,
+    _objective_scale,
 )
 from aquakin.integrate.calibration.multistart import (
     _is_solve_failure,
@@ -628,6 +632,75 @@ def test_build_residual_rejects_unknown_loss():
     obs = jnp.zeros((3, 1))
     with pytest.raises(ValueError, match="Unknown loss 'bogus'"):
         _build_residual("bogus", obs, None)
+
+
+# ---------- the optimizer's objective scale ----------
+
+
+def test_data_mean_square_pools_observed_entries_of_every_dataset():
+    """The mean of the squared non-NaN entries over all datasets, for mse only."""
+    obs = [np.array([[1.0, np.nan], [3.0, 1.0]]), np.array([[2.0, np.nan]])]
+    assert _data_mean_square("mse", obs) == pytest.approx((1.0 + 9.0 + 1.0 + 4.0) / 4.0, rel=1e-15)
+    assert _data_mean_square("wmse", obs) is None
+    assert _data_mean_square("nll", obs) is None
+
+
+@pytest.mark.parametrize(
+    "mean_square,start_loss,expected",
+    [
+        (None, 2.4e-13, 1.0),  # wmse / nll: not scaled
+        (4.8e-9, 2.4e-13, 2.4e-13),  # mol/L data: scaled to the starting misfit
+        (1.0, 0.3, 0.3),
+        (1.0, 5.0, 1.0),  # a loss of 1 or more is already in SciPy's relative regime
+        (1e-8, 0.0, _SCALE_FLOOR * 1e-8),  # a start on the data: floored, not zero
+        (0.0, 0.0, 1.0),  # every observation zero and an exact start
+        (1.0, float("nan"), 1.0),
+    ],
+)
+def test_objective_scale(mean_square, start_loss, expected):
+    assert _objective_scale(mean_square, start_loss) == pytest.approx(expected, rel=1e-15)
+
+
+def test_resolve_problem_records_the_data_mean_square(base):
+    """mse problems carry the observations' mean square; other losses none."""
+    m, C0, _obs, t_obs, free = base
+    obs = jnp.array([[1.0, 2.0], [3.0, np.nan], [0.0, 1.0]])
+    assert _resolve(m, C0, obs, t_obs, free).data_mean_square == pytest.approx(3.0, rel=1e-15)
+    nll = _resolve(m, C0, obs, t_obs, free, loss="nll", sigma=0.1)
+    assert nll.data_mean_square is None
+
+
+def test_scale_objective_uses_the_starting_loss(base):
+    """The driver sets the optimizer's scale from the objective at the start,
+    and leaves a problem without a data mean square unscaled."""
+    m, C0, obs, t_obs, free = base
+    problem = dataclasses.replace(_resolve(m, C0, obs, t_obs, free), data_mean_square=1e-8)
+    bundle = _ObjectiveBundle(lambda x: (jnp.asarray(3e-12), jnp.zeros(1)), None, None, False)
+    _scale_objective(problem, bundle, jnp.zeros(1))
+    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15)
+    unscaled = _ObjectiveBundle(lambda x: (jnp.asarray(3e-12), jnp.zeros(1)), None, None, False)
+    _scale_objective(dataclasses.replace(problem, data_mean_square=None), unscaled, jnp.zeros(1))
+    assert unscaled.loss_scale == 1.0
+
+
+def test_scale_objective_leaves_a_failed_start_unscaled(base):
+    """A forward solve that fails at the start leaves the objective unscaled
+    (the multistart runner reports that failure); any other error propagates."""
+    m, C0, obs, t_obs, free = base
+    problem = dataclasses.replace(_resolve(m, C0, obs, t_obs, free), data_mean_square=1e-8)
+
+    def failed_solve(x):
+        raise RuntimeError("Callback error: the step budget was exhausted")
+
+    bundle = _ObjectiveBundle(failed_solve, None, None, False)
+    _scale_objective(problem, bundle, jnp.zeros(1))
+    assert bundle.loss_scale == 1.0
+
+    def programming_error(x):
+        raise TypeError("not a solve failure")
+
+    with pytest.raises(TypeError, match="not a solve failure"):
+        _scale_objective(problem, _ObjectiveBundle(programming_error, None, None, False), jnp.zeros(1))
 
 
 # ---------- config normalisers: _resolve_laplace / _free_ic_fields ----------
