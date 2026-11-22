@@ -16,7 +16,8 @@ import yaml
 from trame.app import get_server
 
 from aquakin_ui import forms
-from aquakin_ui.app import CHECK_DELAY, Editor
+from aquakin_ui.app import Editor
+from aquakin_ui.checks import CHECK_DELAY
 from aquakin_ui.icons import SVG
 
 from .conftest import PROJECTS

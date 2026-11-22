@@ -23,7 +23,7 @@ from pathlib import Path
 import yaml
 from trame.app import asynchronous
 
-from aquakin_ui import forms, page, study_page
+from aquakin_ui import checks, forms, page, study_page
 from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
@@ -33,7 +33,6 @@ from aquakin_ui.settings import Settings
 from aquakin_ui.study_form import draft_for, fields_for, missing, study_from
 from aquakin_ui.worker import AquakinWorker, WorkerError
 
-CHECK_DELAY = 0.3  # seconds of quiet before aquakin's checks run
 UNDO_DEPTH = 50  # edits of the flowsheet Undo can take back
 
 
@@ -80,7 +79,7 @@ class Editor:
         self._model_info: dict = {}
         self._unit_checks: dict[str, tuple[str, str | None]] = {}
         self._plant_check: tuple[str | None, dict | None] = (None, None)
-        self._check_task = None
+        self._check_task: asyncio.Task | None = None
         self._pending_rows = None
         self._runs: dict[str, StudyRun] = {}
         self._loop = None
@@ -104,113 +103,6 @@ class Editor:
         self._build()
 
     # -- aquakin ------------------------------------------------------------
-
-    def model_info(self, name: str) -> dict | None:
-        """The worker's description of a model (cached), or ``None``."""
-        path = self.doc.model_files().get(name)
-        key = (name, path)
-        if key not in self._model_info:
-            try:
-                self._model_info[key] = self.worker.request("model", name=name, path=path)
-            except WorkerError:
-                self._model_info[key] = None
-        return self._model_info[key]
-
-    def _unit_check(self, uid: str):
-        """``(key, request)`` for checking unit ``uid``, read from the document now;
-        ``request`` is ``None`` when the latest check of the same input stands."""
-        u = self.doc.units[uid]
-        key = json.dumps([u.kind, u.settings, self.doc.model_files()], sort_keys=True)
-        if self._unit_checks.get(uid, (None,))[0] == key:
-            return key, None
-        request = dict(
-            kind=u.kind,
-            name=uid,
-            settings=json.loads(json.dumps(u.settings)),
-            model_files=self.doc.model_files(),
-            base_dir=str(self.doc.base_dir) if self.doc.base_dir else None,
-        )
-        return key, (request, self.doc.ports(uid))
-
-    def _ask_unit(self, request, ports) -> str | None:
-        """Run one unit check in the worker (safe off the page's thread: it
-        reads only its arguments)."""
-        try:
-            out = self.worker.request("check_unit", **request)
-        except WorkerError as exc:
-            return str(exc)
-        if not out["ok"]:
-            return out["error"]
-        if (out["inputs"], out["outputs"]) != ports:
-            return f"aquakin built ports {out['inputs']} -> {out['outputs']}, not the drawn ones"
-        return None
-
-    def _check_unit(self, uid: str) -> str | None:
-        key, pending = self._unit_check(uid)
-        if pending is not None:
-            self._unit_checks[uid] = (key, self._ask_unit(*pending))
-        return self._unit_checks[uid][1]
-
-    def _plant_request(self):
-        """``(key, spec, base_dir)`` for checking the whole plant, read now."""
-        spec = self.doc.to_spec(layout=False)
-        base = str(self.doc.base_dir) if self.doc.base_dir else None
-        return json.dumps([spec, base], sort_keys=True), spec, base
-
-    def _ask_plant(self, spec, base) -> dict:
-        try:
-            return self.worker.request("check_spec", spec=spec, base_dir=base)
-        except WorkerError as exc:
-            return {"ok": False, "error": str(exc)}
-
-    def _check_plant(self) -> dict | None:
-        key, spec, base = self._plant_request()
-        if self._plant_check[0] != key:
-            self._plant_check = (key, self._ask_plant(spec, base))
-        return self._plant_check[1]
-
-    def unit_errors(self) -> dict[str, str]:
-        """The latest aquakin error of each unit that failed to build."""
-        return {uid: e for uid, (_, e) in self._unit_checks.items() if e and uid in self.doc.units}
-
-    def schedule_checks(self) -> None:
-        """Run aquakin's checks after a short quiet spell, off the page's thread."""
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return  # no page served yet: the checks run once the server is ready
-        if self._check_task is not None:
-            self._check_task.cancel()
-        # Pushed now: trame sends a value only when it differs from the one it
-        # last pushed. Left for the next flush, a `checking` set at start-up
-        # reaches a page only in its first state, the push still holds `False`,
-        # and the `False` that ends the round would never be sent.
-        with self.state:
-            self.state.checking = True
-        self._check_task = asynchronous.create_task(self._run_checks())
-
-    async def _run_checks(self) -> None:
-        await asyncio.sleep(CHECK_DELAY)
-        loop = asyncio.get_running_loop()
-        # The document is read here, on the page's thread; only the worker's
-        # answers are awaited in the executor, so an edit made meanwhile cannot
-        # be half-read. An edit also cancels this task and schedules a new one.
-        for uid in list(self.doc.units):
-            if uid not in self.doc.units:
-                continue
-            key, pending = self._unit_check(uid)
-            if pending is not None:
-                error = await loop.run_in_executor(None, self._ask_unit, *pending)
-                self._unit_checks[uid] = (key, error)
-        if not self.unit_errors():
-            key, spec, base = self._plant_request()
-            if self._plant_check[0] != key:
-                result = await loop.run_in_executor(None, self._ask_plant, spec, base)
-                self._plant_check = (key, result)
-        with self.state:
-            self.state.checking = False
-            self.state.checked = True
-            self.publish(checks=False)
 
     # -- drawing ------------------------------------------------------------
 
@@ -1277,6 +1169,19 @@ class Editor:
     _table = staticmethod(study_page._table)
     _results_dialog = study_page._results_dialog
     _study_dialog = study_page._study_dialog
+
+    # -- aquakin's checks (checks.py) --------------------------------------
+
+    model_info = checks.model_info
+    _unit_check = checks._unit_check
+    _ask_unit = checks._ask_unit
+    _check_unit = checks._check_unit
+    _plant_request = checks._plant_request
+    _ask_plant = checks._ask_plant
+    _check_plant = checks._check_plant
+    unit_errors = checks.unit_errors
+    schedule_checks = checks.schedule_checks
+    _run_checks = checks._run_checks
 
 
 def _digest(path: Path) -> str | None:
