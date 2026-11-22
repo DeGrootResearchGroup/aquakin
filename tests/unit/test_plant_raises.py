@@ -254,6 +254,32 @@ def test_validate_solve_args_forward_fast_rejects_stable_adjoint(simple_net):
         )
 
 
+def test_solve_stable_method_rejects_dtmax(simple_net):
+    """The default ``diff`` (reverse + stable) forms its own cap-free discrete
+    adjoint, so an ``IntegratorConfig(dtmax=...)`` cap alongside it is a usage
+    error rather than a silent switch to the through-solve path."""
+    plant = _single_cstr_plant(simple_net)
+    with pytest.raises(ValueError, match="forms its own discrete adjoint"):
+        plant.solve(
+            t_span=(0.0, 1.0),
+            t_eval=jnp.asarray([0.0, 1.0]),
+            integrator=IntegratorConfig(dtmax=0.5),
+        )
+
+
+def test_solve_forward_fast_rejects_events(simple_net):
+    """``forward_fast`` runs its own integrator, so it cannot take the
+    located-event solve's ``events=``."""
+    plant = _single_cstr_plant(simple_net)
+    with pytest.raises(ValueError, match="forward_fast is not supported with events="):
+        plant.solve(
+            t_span=(0.0, 1.0),
+            t_eval=jnp.asarray([0.0, 1.0]),
+            events=[aquakin.Event(at_times=[0.5], name="noop")],
+            forward_fast=True,
+        )
+
+
 def _stable_adjoint_kwargs(**overrides):
     """The full keyword set ``_solve_stable_adjoint`` requires, with valid
     defaults; the guard under test fires before any of them is used."""

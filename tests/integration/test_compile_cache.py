@@ -153,6 +153,18 @@ def test_plant_reuses_compiled_solve():
     assert np.allclose(np.asarray(s1.state), np.asarray(s2.state))
 
 
+def test_plant_solve_with_traced_t_eval_bypasses_the_cache(make_cstr_plant):
+    """A ``t_eval`` traced by an enclosing ``jax.jit`` cannot be turned into a
+    cache key, so the solve runs uncached -- and gives the eager result."""
+    plant = make_cstr_plant()
+    te = jnp.linspace(0.0, 5.0, 4)
+    eager = plant.solve((0.0, 5.0), t_eval=te, rtol=1e-8, atol=1e-10).state
+    assert len(plant._jit_cache) == 1
+    jitted = jax.jit(lambda t: plant.solve((0.0, 5.0), t_eval=t, rtol=1e-8, atol=1e-10).state)
+    np.testing.assert_allclose(np.asarray(jitted(te)), np.asarray(eager), rtol=1e-12, atol=0)
+    assert len(plant._jit_cache) == 1  # nothing added for the traced call
+
+
 def test_plant_different_signature_compiles_separately():
     net = aquakin.load_model("asm1")
     plant = _one_cstr_plant(net)

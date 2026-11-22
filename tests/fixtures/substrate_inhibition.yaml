@@ -1,0 +1,32 @@
+model:
+  name: substrate_inhibition
+  version: "1.0"
+  description: >
+    One species consumed at a substrate-inhibited rate k*[A]/(1 + [A]^2). In a
+    CSTR fed A = 10 at Q/V = 0.1 the steady states are bistable: the high-[A]
+    branch exists only for k below about 2.604 and ends there in a saddle-node
+    fold. For testing continuation past a fold.
+  references: []
+
+species:
+  - name: A
+    description: "Substrate"
+    units: mol/L
+    default_concentration: 10.0
+
+conditions:
+  - name: T
+    description: "Temperature (K), unused in rate."
+    default: 293.15
+
+reactions:
+  - name: uptake
+    description: "Substrate-inhibited uptake."
+    rate: "k * [A] / (1 + [A] * [A])"
+    parameters:
+      k:
+        value: 2.0
+        units: "mol/L/s"
+        bounds: [1.0e-3, 10.0]
+    stoichiometry:
+      A: -1
