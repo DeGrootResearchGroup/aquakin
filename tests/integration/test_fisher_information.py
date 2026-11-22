@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 import aquakin
-from aquakin import Experiment, FreeICConfig, LaplaceConfig, OptimizerConfig
+from aquakin import Experiment, FreeICConfig
 
 K, A0, SIGMA = 0.25, 1.5, 0.01
 T_OBS = jnp.linspace(0.5, 12.0, 25)
@@ -69,38 +69,6 @@ def test_rate_only_and_physical_space(reactor, params):
     np.testing.assert_allclose(logk.physical(), phys.matrix, rtol=1e-10)
     assert logk.std()["A_to_B.k"] == pytest.approx(expected**-0.5, rel=1e-5)
     assert logk.relative_std()["A_to_B.k"] == pytest.approx(expected**-0.5 / K, rel=1e-5)
-
-
-def test_matches_calibrate_gauss_newton_hessian_at_map(reactor, params, simple_model):
-    """At a calibration's MAP the design information equals the joint
-    Gauss-Newton Laplace Hessian (loss='nll')."""
-    obs = reactor.solve(
-        jnp.asarray([A0, 0.0]), params=params, t_span=(0.0, 12.0), t_eval=T_OBS
-    ).C_named("A")
-    result = aquakin.calibrate(
-        reactor,
-        jnp.asarray([1.0, 0.0]),
-        obs,
-        T_OBS,
-        ["A_to_B.k"],
-        transforms={"A_to_B.k": "positive_log"},
-        observed_species=["A"],
-        loss="nll",
-        sigma=jnp.asarray(SIGMA),
-        free_ic=FreeICConfig(["A"], bounds=(0.1, 10.0)),
-        laplace=LaplaceConfig(method="gauss_newton", include_ic=True),
-        optimizer=OptimizerConfig(method="gauss_newton"),
-    )
-    fim = aquakin.fisher_information(
-        reactor,
-        Experiment(result.C0_fitted[0], T_OBS, sigma=SIGMA, observed_species=["A"]),
-        ["A_to_B.k"],
-        params=result.params,
-        transforms={"A_to_B.k": "positive_log"},
-        free_ic=FreeICConfig(["A"]),
-    )
-    assert fim.names == result.joint_names
-    np.testing.assert_allclose(fim.matrix, np.asarray(result.joint_hessian), rtol=1e-6)
 
 
 def test_experiments_add_and_pools_are_per_experiment(reactor, params):

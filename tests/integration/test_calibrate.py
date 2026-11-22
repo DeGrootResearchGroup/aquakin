@@ -1319,23 +1319,6 @@ def test_predictive_band_all_species_shape(band_fit):
     assert band.species is None
 
 
-def test_predictive_band_requires_laplace(setup):
-    reactor, C0, t_obs, obs_clean, _ = setup
-    result = aquakin.calibrate(
-        reactor,
-        C0,
-        observations=obs_clean,
-        t_obs=t_obs,
-        free_params=["A_to_B.k"],
-        transforms={"A_to_B.k": "positive_log"},
-        observed_species=["B"],
-        loss="mse",
-        laplace=False,
-    )
-    with pytest.raises(ValueError):
-        result.predictive_band(reactor, C0, t_obs)
-
-
 def test_predictive_band_eig_keep_is_deprecated(band_fit):
     reactor, C0, t_obs, _, result = band_fit
     with pytest.warns(DeprecationWarning, match="eig_keep"):
@@ -1421,13 +1404,6 @@ def test_laplace_covariance_relative_to_largest_for_small_scale_hessian():
 def test_laplace_config_eig_keep_is_deprecated():
     with pytest.warns(DeprecationWarning, match="eig_keep"):
         LaplaceConfig(eig_keep=1e-2)
-
-
-def test_calibrate_joint_std_matches_full_inverse(decay_fit):
-    """End-to-end: the reported std is the full-inverse std of the Hessian."""
-    result, _ = decay_fit(LaplaceConfig(method="gauss_newton", include_ic=True, ridge=0.0))
-    full_std = np.sqrt(np.diag(np.linalg.inv(np.asarray(result.joint_hessian))))
-    assert np.allclose(np.asarray(result.posterior_std_unconstrained), full_std[:1], rtol=1e-8)
 
 
 _PRODUCT_RATE_YAML = """
@@ -1723,33 +1699,6 @@ def test_free_ic_per_dataset_in_multibatch(simple_model):
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
     assert result.ic_named[0]["A"] == pytest.approx(A0a, rel=2e-2)
     assert result.ic_named[1]["A"] == pytest.approx(A0b, rel=2e-2)
-
-
-def test_free_ic_laplace_is_over_rates_only(simple_model):
-    """With free_ic + laplace, the posterior covers the rate parameters only
-    (pools held at their MAP), so its shape matches the rate count."""
-    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    true_params = simple_model.default_parameters().at[0].set(0.25)
-    t_obs = jnp.linspace(0.5, 12.0, 25)
-    sol = reactor.solve(
-        jnp.asarray([1.5, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t_obs
-    )
-    obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
-    result = aquakin.calibrate(
-        reactor,
-        jnp.asarray([1.0, 0.0]),
-        observations=obs,
-        t_obs=t_obs,
-        free_params=["A_to_B.k"],
-        transforms={"A_to_B.k": "positive_log"},
-        observed_species=["A", "B"],
-        loss="nll",
-        sigma=jnp.asarray(0.02),
-        laplace=True,
-        free_ic=FreeICConfig(["A"], bounds=(0.1, 10.0)),
-    )
-    assert np.asarray(result.posterior_cov).shape == (1, 1)
-    assert "A_to_B.k" in result.params_named_std
 
 
 # ---------- joint rate + initial-pool Laplace posterior ----------

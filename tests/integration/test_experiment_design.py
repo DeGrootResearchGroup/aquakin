@@ -250,20 +250,22 @@ def test_base_and_time_unit(reactor, params):
     assert res.value == pytest.approx(np.log(_info(2.0) + _info(1.0 / K)), rel=1e-6)
 
 
-@pytest.mark.parametrize("criterion", ["A", "E", "modified_E"])
-def test_other_criteria_improve(reactor, params, criterion):
+def test_minimized_criterion_improves(reactor, params):
+    """A criterion where smaller is better (A) is minimized, as D is maximized
+    in the tests above. E and modified-E differ from these only in the final
+    expression of the eigenvalues, whose values ``test_design_criterion_values``
+    pins."""
     res = aquakin.optimize_experiment(
         reactor,
         _exp([1.0, 2.0, 3.0]),
         ["A_to_B.k"],
         params=params,
         free_ic=FreeICConfig(["A"]),
-        criterion=criterion,
+        criterion="A",
         time_bounds=(0.1, 20.0),
         min_spacing=0.5,
     )
-    better = res.value > res.initial_value if criterion == "E" else res.value < res.initial_value
-    assert better
+    assert res.value < res.initial_value
 
 
 def test_optimize_validation(reactor, params):

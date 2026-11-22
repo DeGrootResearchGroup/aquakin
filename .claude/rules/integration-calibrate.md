@@ -121,8 +121,8 @@ deliberately *not* built on `_CalibrationProblem`: a design has no observations
 and each `Experiment` may carry its own reactor and observed species, which the
 shared-observed-species problem cannot express. It uses the same coordinates
 (rate transforms, log pools, `ic[e].<species>` names) and forward-mode AD
-through `reactor.solve`, and a test pins it to the joint Gauss-Newton Hessian at
-the MAP — keep the two in step if either changes. `identifiability`
+through `reactor.solve`; tests pin it and the joint Gauss-Newton Hessian to
+one closed-form Fisher information — keep the two in step if either changes. `identifiability`
 ([`integrate/identifiability.py`](aquakin/integrate/identifiability.py)) is pure
 NumPy on the matrix (no solves); it reads `joint_hessian` / `joint_names` from a
 `CalibrationResult` when present, else the rate `hessian_unconstrained`, and its
