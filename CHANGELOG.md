@@ -53,6 +53,15 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   solve ran but `plant.stream(sol, "<new unit>.out")` raised a `KeyError`, and
   a closed-loop aerated tank (or feedback dosing unit) added after a solve was
   refused because its controller was never created.
+- `Plant.steady_state` no longer reports a loose forward fallback as converged.
+  When pseudo-transient continuation did not converge, the forward run it fell
+  back on stopped on `run_to_steady_state`'s default norm test and ignored the
+  `tol` and `scale_floor` you passed, so a result with `method="ptc->forward"`
+  could say `converged=True` with a scaled residual orders of magnitude above
+  `tol` (about 2e-3 against `tol=1e-8` on BSM1). The fallback now stops on the
+  same scaled-residual test with your `tol` and `scale_floor` (still
+  overridable through `fallback_kwargs`), and reports `converged` only when the
+  returned residual meets that tolerance.
 - `direct_n2o_emission` works on a plant whose model names dissolved oxygen
   other than `SO`, such as the shipped `asm3_2step_n2o` (`SO2`); it raised
   `KeyError: 'SO'`. It, and the aeration and mixing energy terms of the BSM

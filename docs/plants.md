@@ -176,9 +176,10 @@ print("converged:", root.converged, "by", root.method, "in", root.iterations, "i
 Use `steady_state()` for sweeps and gradients, and `run_to_steady_state()` when
 you also want the path to steady state (`ss.solution`). `root.method` says how
 the state was found: `"ptc"`, or `"ptc->forward"` when PTC did not converge and
-`steady_state()` fell back to integrating forward. After a fallback, check
-`root.residual`: the fallback stops on the forward run's own test, so the
-residual can be larger than the `tol` you asked for.
+`steady_state()` fell back to integrating forward. The fallback stops on the
+same scaled-residual test, with the `tol` and `scale_floor` you passed, and
+reports `converged` only when `root.residual` meets that `tol`; options for
+the forward run go in `fallback_kwargs`.
 
 Both methods report `residual`, the scaled residual
 `max_i |dy_i/dt| / max(|y_i|, scale_floor)` of the state they return. By
