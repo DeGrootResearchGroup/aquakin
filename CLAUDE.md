@@ -306,10 +306,9 @@ it preserved behaviour:
 - Codecov counts moved lines as new: state the pre-existing gaps once in the PR
   rather than writing tests to chase the number.
 
-## Decisions that are the owner's (draft)
+## Decisions that are the owner's
 
-> **Draft for the owner to correct.** Stop and ask, with a recommendation,
-> before:
+Stop and ask, with the options and a recommendation, before:
 - changing branch protection or which CI checks are required;
 - removing or renaming public API, removing a deprecated argument, or changing
   what a public function skips, warns about or raises;
@@ -319,7 +318,10 @@ it preserved behaviour:
 - deleting or overwriting a user's saved files or results;
 - an exception to a convention in this file;
 - adding a runtime dependency;
-- closing an issue as completed or not planned; merging a PR.
+- closing an issue as completed or not planned; merging a PR;
+- choosing between workable options when the choice is costly to undo later:
+  a file format or stored layout users will save data in, a public interface,
+  or a structure other code will be built on.
 
 Everything else you decide, state in the PR, and leave reversible in review.
 
