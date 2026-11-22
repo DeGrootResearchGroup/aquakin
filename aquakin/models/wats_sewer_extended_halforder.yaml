@@ -1,62 +1,28 @@
+# Calibration finding (unconstrained best fit to one nitrate-dosing batch):
+# the half-order form does not fix the sulfate misfit. It slightly improves
+# sulfide and nitrate but worsens sulfate, and the effective areal elemental-
+# sulfur oxidation rate stays about 2.5-3x the independently measured value,
+# so Monod versus half-order is not what drives the inflated rate. A larger
+# data set might still distinguish the two forms.
 model:
   name: wats_sewer_extended_halforder
   version: "0.2"
   description: >
-    STRUCTURAL VARIANT of `wats_sewer_extended` for the model-structure study. The ONLY
-    change from the `wats_sewer_extended` baseline is the kinetic FORM of the two
-    nitrate-driven biofilm sulfur-oxidation reactions
-    (`sulfide_biooxidation_anoxic_biofilm`,
-    `elemental_S_oxidation_anoxic_biofilm`): Monod saturation terms are replaced
-    with WATS-style HALF-ORDER terms in the bulk substrate and in nitrate
-    (mirroring the model's own aerobic biofilm sulfur-oxidation reactions).
-    Rationale: peer review (and WATS theory) hold that sewer-biofilm kinetics
-    are half-order in the bulk-water concentration, not saturating; a Monod form
-    saturates at the high sulfide/sulfur/nitrate concentrations of these batches
-    and so requires an inflated rate constant (~2x the independently measured
-    value) to reproduce the sulfate. This variant tests whether the half-order
-    form recovers the sulfate with literature-consistent rates. Everything else
-    (species, conditions, speciation, all other reactions, parameters) is
-    identical to `wats_sewer_extended`.
+    Structural variant of wats_sewer_extended: the two nitrate-driven
+    biofilm sulfur-oxidation reactions (sulfide_biooxidation_anoxic_biofilm,
+    elemental_S_oxidation_anoxic_biofilm) use WATS half-order terms in the
+    bulk substrate and in nitrate, as the aerobic biofilm sulfur oxidation
+    does, instead of Monod saturation terms. Unlike
+    wats_sewer_extended, it has no iron sulfide precipitation (no S_Fe2 /
+    X_FeS species) and uses the sulfur-process temperature coefficient a_s =
+    1.05 rather than 1.03. Everything else is identical to
+    wats_sewer_extended.
 
-    Result (unconstrained best fit to the calibration batch): the half-order
-    form does NOT fix the sulfate misfit -- it slightly improves sulfide/nitrate
-    but worsens sulfate, and the effective areal elemental-S oxidation rate
-    stays ~2.5-3x the measured value. The required effective rate is set by the
-    data and the pathway, not by the saturation shape, so Monod-vs-half-order is
-    not the lever for the literature-inconsistency. Kept as a documented
-    (negative) result in the structural study; a larger dataset might yet
-    distinguish the forms.
-
-    Extended WATS sewer-process model: anaerobic/anoxic/aerobic carbon
-    turnover, fermentation, methanogenesis, sulfate reduction and a two-step
-    (sulfide -> elemental sulfur -> sulfate) sulfur cycle, with biological
-    nitrate-driven sulfide control. pH is NOT supplied externally: it is
-    solved from the instantaneous acid/base speciation (carbonate, ammonia,
-    acetate, phosphate, sulfide) plus strong ions and a fixed cation charge,
-    via the differentiable charge-balance solver declared in the `speciation`
-    block.
-
-    Reaction structure: heterotrophic growth (bulk+biofilm, aerobic/anoxic),
-    hydrolysis (fast/slow x aerobic/anoxic/anaerobic x bulk/biofilm),
-    endogenous energy maintenance (substrate + biomass paths), fermentation,
-    nitrification + decay, methanogenesis (acetoclastic + hydrogenotrophic),
-    sulfate reduction (VFA/H2 x bulk/biofilm), elemental-S reduction, and
-    sulfide / elemental-S oxidation (pH-dependent aerobic bulk chemical &
-    biological, aerobic & nitrate-driven biofilm). Some pathways are zero at
-    the literature default rate constants but are retained for completeness.
-
-    Deviation from the original published sewer model: anoxic (denitrifying)
-    heterotrophic growth uses the proper lower WATS anoxic yield
-    Y_H,NO3 = 0.30-0.40 (parameter `y_h_anox`, default 0.35) instead of reusing
-    the aerobic yield 0.55. Y_H is a stoichiometric COD/electron-balance
-    coefficient, so it is fixed from the literature, not calibrated.
-
-    Numerical hardening: the `positivity_limiter` block throttles net
-    consumption as a species approaches zero. Half-order (sqrt-type) oxidation
-    kinetics use an AD-safe form `x*(x+eps)^(p-1)` (eps=1e-3) so the
-    implicit-solver Jacobian stays well-conditioned at zero oxygen; this is
-    exact for x >> eps and zero-valued at x=0. Quantitative validation against
-    the published model is still outstanding.
+    The base is the extended WATS sewer-process model:
+    anaerobic/anoxic/aerobic carbon turnover, fermentation, methanogenesis,
+    sulfate reduction and a two-step (sulfide -> elemental sulfur ->
+    sulfate) sulfur cycle with nitrate-driven sulfide control, and pH solved
+    by charge balance.
   references:
     - "Khalil et al. (2025). Optimizing nitrate dosing strategies for sulfide control. Water Environ. Res."
     - "Hvitved-Jacobsen, Vollertsen & Nielsen (2013). Sewer Processes (WATS), 2nd ed. (hydrolysis, growth, saturation constants, temperature coefficients)."
