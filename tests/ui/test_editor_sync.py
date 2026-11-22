@@ -122,6 +122,32 @@ def test_each_check_is_cached_by_the_units_spec(make_editor):
     assert worker.count("check_spec") == 2
 
 
+def test_a_background_round_asks_only_for_what_changed(make_editor):
+    """The background round uses the same caches: a second round with nothing
+    edited sends the worker nothing, and after one unit's edit only that unit
+    and the plant are asked again."""
+    ed, worker = make_editor(BSM1)
+    n_units = len(ed.doc.units)
+
+    async def round_of_checks():
+        ed.schedule_checks()
+        await _until(lambda: not ed.state.checking)
+
+    asyncio.run(round_of_checks())
+    assert worker.count("check_unit") == n_units and worker.count("check_spec") == 1
+    asyncio.run(round_of_checks())
+    assert worker.count("check_unit") == n_units and worker.count("check_spec") == 1
+
+    ed.state.selected = "tank1"
+    ed.refresh_selection()
+    ed.apply_properties(_with(ed.state.sel_rows, "volume", "1200"))
+    asyncio.run(round_of_checks())
+    assert worker.count("check_unit") == n_units + 1 and worker.count("check_spec") == 2
+    asked = [f["name"] for c, f in worker.sent if c == "check_unit"]
+    assert asked[-1] == "tank1"
+    assert ed.state.errors == [] and ed.state.checked
+
+
 def test_a_move_republishes_without_a_check(make_editor):
     ed, worker = make_editor(BSM1)
 
