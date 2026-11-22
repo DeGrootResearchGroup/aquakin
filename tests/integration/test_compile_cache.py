@@ -13,7 +13,6 @@ import pytest
 
 import aquakin
 from aquakin.integrate import _common
-from aquakin.plant import CSTRUnit, InfluentSeries, Plant
 from tests.conftest import FIXTURES
 
 # ----- load_model caching -----------------------------------------------
@@ -42,10 +41,10 @@ def _batch(net):
     return aquakin.BatchReactor(net, cond)
 
 
-def test_fresh_reactors_share_one_compiled_solver():
+def test_fresh_reactors_share_one_compiled_solver(simple_model):
     """Two fresh reactors for the same model + settings + signature reuse a
     single compiled solve (no second compile entry), with identical results."""
-    net = aquakin.load_model("asm1")
+    net = simple_model
     C0, p = net.default_concentrations(), net.default_parameters()
     t_eval = jnp.array([1.0])
 
@@ -56,9 +55,9 @@ def test_fresh_reactors_share_one_compiled_solver():
     assert np.allclose(np.asarray(s1.C), np.asarray(s2.C))
 
 
-def test_different_settings_do_not_collide():
+def test_different_settings_do_not_collide(simple_model):
     """A different tolerance is a different compile (no false cache hit)."""
-    net = aquakin.load_model("asm1")
+    net = simple_model
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0, p = net.default_concentrations(), net.default_parameters()
     s_loose = aquakin.BatchReactor(net, cond, rtol=1e-4).solve(C0, (0.0, 1.0), params=p)
@@ -133,23 +132,9 @@ def test_solver_cache_bypassed_under_tracing():
 
 # ----- Per-instance plant solve cache -------------------------------------
 
-def _one_cstr_plant(net):
-    plant = Plant("cache-test", time_unit="d")
-    plant.add_unit(CSTRUnit(
-        name="r1", model=net, volume=1000.0, input_port_names=["inlet"],
-        conditions={n: net._condition_defaults[n] for n in net.conditions_required},
-    ))
-    C = net.default_concentrations()
-    infl = InfluentSeries(t=jnp.array([0.0, 1.0e4]), Q=jnp.full((2,), 1000.0),
-                          C=jnp.tile(C, (2, 1)), model=net)
-    plant.add_influent("feed", infl, to="r1.inlet")
-    return plant
-
-
-def test_plant_reuses_compiled_solve():
+def test_plant_reuses_compiled_solve(make_cstr_plant):
     """Repeat solves of the same plant + signature reuse one compile and match."""
-    net = aquakin.load_model("asm1")
-    plant = _one_cstr_plant(net)
+    plant = make_cstr_plant()
     p = plant.default_parameters()
     s1 = plant.solve((0.0, 1.0), t_eval=jnp.array([1.0]), params=p)
     assert len(plant._jit_cache) == 1
@@ -170,9 +155,8 @@ def test_plant_solve_with_traced_t_eval_bypasses_the_cache(make_cstr_plant):
     assert len(plant._jit_cache) == 1  # nothing added for the traced call
 
 
-def test_plant_different_signature_compiles_separately():
-    net = aquakin.load_model("asm1")
-    plant = _one_cstr_plant(net)
+def test_plant_different_signature_compiles_separately(make_cstr_plant):
+    plant = make_cstr_plant()
     p = plant.default_parameters()
     plant.solve((0.0, 1.0), t_eval=jnp.array([1.0]), params=p)
     plant.solve((0.0, 2.0), t_eval=jnp.array([1.0, 2.0]), params=p)  # new sig
@@ -180,10 +164,9 @@ def test_plant_different_signature_compiles_separately():
 
 
 @pytest.mark.slow  # heavy: jax.grad through plant solve
-def test_plant_solve_grad_bypasses_cache():
+def test_plant_solve_grad_bypasses_cache(make_cstr_plant):
     """A traced plant solve (jax.grad) bypasses the cache without crashing."""
-    net = aquakin.load_model("asm1")
-    plant = _one_cstr_plant(net)
+    plant = make_cstr_plant()
     p = plant.default_parameters()
 
     def loss(params):
