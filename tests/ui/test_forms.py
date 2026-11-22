@@ -172,6 +172,19 @@ def test_a_bad_value_names_its_row(bsm1):
     assert caught.value.key == "volume"
 
 
+def test_a_bad_value_is_reported_under_its_label(bsm1):
+    """The message names the field as the form shows it, without the required
+    mark ("volume *" is "volume"; aeration's value is "kla", not its row key),
+    then says what is wrong with the text."""
+    for key, label in [("volume", "volume"), ("aeration.value", "kla")]:
+        rows = forms.rows_for(bsm1, "tank3", _info)
+        next(r for r in rows if r["key"] == key)["value"] = "big"
+        with pytest.raises(forms.FieldError, match="is not a number") as caught:
+            forms.read_rows(bsm1, "tank3", rows)
+        assert str(caught.value) == f"{label}: 'big' is not a number"
+        assert caught.value.key == key
+
+
 def test_settling_species_follow_the_units_model():
     asm3 = ["SO2", "SS", "XI", "XS", "XH"]
     settling = {"name": "particulate_species", "default": ["XS", "XB_H"]}
