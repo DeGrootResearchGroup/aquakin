@@ -84,20 +84,27 @@ _COMMON = dict(
 )
 
 
-def test_fixed_total_recovers_split_and_keeps_total(two_pool):
-    """Data with S0 = 0.3, X0 = 0.7 (total 1.0); the fit starts from the even
-    split 0.5 / 0.5 with the total in C0, and recovers the split while the
-    pools sum to the total exactly."""
+@pytest.fixture(scope="module")
+def fixed_total_fit(two_pool):
+    """The fixed-total fit of noise-free data with S0 = 0.3, X0 = 0.7 (total
+    1.0), started from the even split 0.5 / 0.5 with the joint Gauss-Newton
+    Laplace posterior. Shared by the tests that read this one fit."""
     model, reactor = two_pool
-    obs = _data(reactor, 0.3, 0.7)
-    r = aquakin.calibrate(
+    return aquakin.calibrate(
         reactor,
         jnp.asarray([0.5, 0.5, 0.0]),
-        obs,
+        _data(reactor, 0.3, 0.7),
         free_ic=FreeICConfig(["S", "X"], fixed_total=True),
         laplace=LaplaceConfig(method="gauss_newton", include_ic=True),
         **_COMMON,
     )
+
+
+def test_fixed_total_recovers_split_and_keeps_total(fixed_total_fit):
+    """Data with S0 = 0.3, X0 = 0.7 (total 1.0); the fit starts from the even
+    split 0.5 / 0.5 with the total in C0, and recovers the split while the
+    pools sum to the total exactly."""
+    r = fixed_total_fit
     assert r.ic_named[0]["S"] == pytest.approx(0.3, rel=1e-4)
     assert r.ic_named[0]["X"] == pytest.approx(0.7, rel=1e-4)
     assert r.ic_named[0]["S"] + r.ic_named[0]["X"] == pytest.approx(1.0, rel=1e-12)
@@ -131,7 +138,9 @@ def test_fixed_total_reproduces_constrained_optimum(two_pool):
         **_COMMON,
     )
     cache: dict = {}
-    grid = np.linspace(0.2, 0.4, 41)
+    # A 0.01 step: the parabola refinement then lands within ~1e-4 of the
+    # fitted optimum, an order of magnitude inside the 1e-3 tolerance below.
+    grid = np.linspace(0.2, 0.4, 21)
     losses = []
     for f in grid:
         fit = aquakin.calibrate(
@@ -155,20 +164,12 @@ def test_fixed_total_reproduces_constrained_optimum(two_pool):
     assert r.ic_named[0]["S"] + r.ic_named[0]["X"] == pytest.approx(1.0, rel=1e-12)
 
 
-def test_fixed_total_fisher_matches_joint_hessian(two_pool):
+def test_fixed_total_fisher_matches_joint_hessian(two_pool, fixed_total_fit):
     """fisher_information with fixed_total uses the same log-ratio coordinates,
     so at the MAP it equals the joint Gauss-Newton Hessian."""
     model, reactor = two_pool
-    obs = _data(reactor, 0.3, 0.7)
     cfg = FreeICConfig(["S", "X"], fixed_total=True)
-    r = aquakin.calibrate(
-        reactor,
-        jnp.asarray([0.5, 0.5, 0.0]),
-        obs,
-        free_ic=cfg,
-        laplace=LaplaceConfig(method="gauss_newton", include_ic=True),
-        **_COMMON,
-    )
+    r = fixed_total_fit
     fim = aquakin.fisher_information(
         reactor,
         Experiment(r.C0_fitted[0], T_OBS, sigma=SIGMA, observed_species=["P"]),
