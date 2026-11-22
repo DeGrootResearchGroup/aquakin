@@ -740,6 +740,7 @@ def arclength_continuation_solve(
     nonneg=True,
     s_tol=1.0e-4,
     fold_margin=2.0e-2,
+    max_correction=0.5,
     record_branch=False,
 ):
     """Reach a far operating point by scaled pseudo-arclength continuation.
@@ -756,6 +757,16 @@ def arclength_continuation_solve(
     physical operating-regime criterion: ``"converged"`` (the operating point
     exists, returned) vs ``"past_fold"`` (it does not -- the sample is outside the
     viable regime). (Allgower & Georg; Keller pseudo-arclength.)
+
+    A converged corrector step is accepted only if it lands within
+    ``max_correction * dsigma`` of its predictor (distance in the scaled
+    ``(z, s)`` space). Near a fold the step's hyperplane can also cut another
+    branch, and a corrector that converges there would carry the trace onto it
+    without the tangent ever reversing, so the fold would go undetected and
+    another branch's state would be reported as the operating point. Such a step
+    is rejected and retried with a shorter step, like a corrector failure. A
+    correction on the traced branch is second order in the step, a small
+    fraction of it.
 
     Returns
     -------
@@ -834,7 +845,11 @@ def arclength_continuation_solve(
         sc = s + dsig * ts
         if nonneg:
             zc = jnp.maximum(zc, 0.0)
+        z_start, s_start = zc, sc
         zc, sc, rF, A, conv = _correct(zc, sc, z, s, tz, ts, dsig)
+        if conv:
+            correction = jnp.sqrt(jnp.sum((zc - z_start) ** 2) + (sc - s_start) ** 2)
+            conv = float(correction) <= max_correction * dsig
         if not conv:
             dsig *= ds_shrink
             if dsig < dsigma_min:

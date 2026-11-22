@@ -55,7 +55,6 @@ RECORDED_LINES = {
     # The modules the Engineering Standards name as not to grow.
     "aquakin/plant/plant.py": 2888,
     "aquakin_ui/app.py": 570,
-    "aquakin/integrate/_common.py": 1429,
     "aquakin/core/model.py": 1670,
 }
 

@@ -7,8 +7,20 @@ import pytest
 import aquakin
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def reactor(simple_model):
+    """One reactor shared by the module, so its per-cell-count compiled step is
+    built once. Tests that inspect ``_jit_cache`` or need the step's first
+    (compiling) call use :func:`fresh_reactor`."""
+    return aquakin.CFDReactor(simple_model)
+
+
+@pytest.fixture
+def fresh_reactor(simple_model):
+    """A reactor with an empty ``_jit_cache``, for the tests that count its
+    entries and for the solver-failure test: a failure inside an already
+    compiled step currently surfaces as a ``ValueError`` rather than the
+    ``RuntimeError`` of the first call, so that test keeps its own reactor."""
     return aquakin.CFDReactor(simple_model)
 
 
@@ -93,29 +105,29 @@ def test_step_rejects_zero_cells(reactor):
         reactor.step(C, conds, dt=1.0)
 
 
-def test_step_jit_cache_hit(reactor, simple_state):
+def test_step_jit_cache_hit(fresh_reactor, simple_state):
     C, conds = simple_state
-    assert reactor._jit_cache == {}
-    reactor.step(C, conds, dt=1.0)
-    assert len(reactor._jit_cache) == 1
+    assert fresh_reactor._jit_cache == {}
+    fresh_reactor.step(C, conds, dt=1.0)
+    assert len(fresh_reactor._jit_cache) == 1
     # Same n_cells — cache should be reused, not regrown.
     for _ in range(3):
-        reactor.step(C, conds, dt=2.0)
-    assert len(reactor._jit_cache) == 1
+        fresh_reactor.step(C, conds, dt=2.0)
+    assert len(fresh_reactor._jit_cache) == 1
 
 
-def test_step_jit_cache_keyed_on_n_cells(reactor, simple_model):
+def test_step_jit_cache_keyed_on_n_cells(fresh_reactor, simple_model):
     """Different cell counts get separate cache entries."""
     C2 = np.zeros((2, simple_model.n_species))
     C2[:, simple_model.species_index["A"]] = 1.0
     C5 = np.zeros((5, simple_model.n_species))
     C5[:, simple_model.species_index["A"]] = 1.0
-    reactor.step(C2, {"T": np.full(2, 293.15)}, dt=1.0)
-    reactor.step(C5, {"T": np.full(5, 293.15)}, dt=1.0)
-    assert set(reactor._jit_cache.keys()) == {2, 5}
+    fresh_reactor.step(C2, {"T": np.full(2, 293.15)}, dt=1.0)
+    fresh_reactor.step(C5, {"T": np.full(5, 293.15)}, dt=1.0)
+    assert set(fresh_reactor._jit_cache.keys()) == {2, 5}
 
 
-def test_step_raises_on_pathological_inputs(reactor, simple_state):
+def test_step_raises_on_pathological_inputs(fresh_reactor, simple_state):
     """The seam re-raises whatever exception the stiff solver produces.
 
     Diffrax's adaptive controller hits ``max_steps`` (or similar) when the
@@ -128,7 +140,7 @@ def test_step_raises_on_pathological_inputs(reactor, simple_state):
     with pytest.raises(
         RuntimeError, match=r"maximum number of solver steps|non-finite concentrations"
     ):
-        reactor.step(C, conds, dt=1.0, params=np.asarray([np.nan]))
+        fresh_reactor.step(C, conds, dt=1.0, params=np.asarray([np.nan]))
 
 
 def test_invalid_on_nan_rejected(simple_model):

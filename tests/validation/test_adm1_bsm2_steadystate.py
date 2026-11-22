@@ -74,8 +74,10 @@ REFERENCE_SS = {
 _GAS = ("S_gas_h2", "S_gas_ch4", "S_gas_co2")
 
 
-def _digester_cstr_solution():
-    """Integrate the adm1 model as the BSM2 CSTR to steady state."""
+@pytest.fixture(scope="module")
+def digester_cstr_solution():
+    """Integrate the adm1 model as the BSM2 CSTR to steady state (shared by the
+    tests that read the converged state)."""
     net = aquakin.load_model("adm1")
     si = net.species_index
     p = net.default_parameters()
@@ -109,7 +111,7 @@ def _digester_cstr_solution():
 
 
 @pytest.mark.validation
-def test_adm1_reproduces_bsm2_digester_steady_state():
+def test_adm1_reproduces_bsm2_digester_steady_state(digester_cstr_solution):
     """The CSTR settles onto the published BSM2 steady state to within ~1.5% on
     every state (methane much tighter).
 
@@ -119,7 +121,7 @@ def test_adm1_reproduces_bsm2_digester_steady_state():
     constants match ``adm1init_bsm2.m`` (including the carbonate Ka1 van't Hoff
     enthalpy). With the exact published feed, the residual ~1% is the difference
     between this model's charge-balance pH solver and the reference DAE."""
-    net, C = _digester_cstr_solution()
+    net, C = digester_cstr_solution
     si = net.species_index
 
     # Every reported state within 2%.
@@ -139,9 +141,9 @@ def test_adm1_reproduces_bsm2_digester_steady_state():
 
 
 @pytest.mark.validation
-def test_adm1_steady_state_is_stationary():
+def test_adm1_steady_state_is_stationary(digester_cstr_solution):
     """At the converged state the CSTR RHS is ~0 (a genuine fixed point)."""
-    net, C = _digester_cstr_solution()
+    net, C = digester_cstr_solution
     si = net.species_index
     p = net.default_parameters()
     cond_fields = net.default_conditions().fields
