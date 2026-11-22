@@ -51,9 +51,9 @@ def test_transform_jacobian_matches_jax_grad():
 
 
 def test_unknown_transform_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"Unknown transform 'exp'"):
         to_unconstrained(jnp.asarray(1.0), "exp")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"Unknown transform 'exp'"):
         from_unconstrained(jnp.asarray(1.0), "exp")
 
 
@@ -250,13 +250,17 @@ def test_recovers_known_parameter_nll_with_noise(setup):
     assert 0.0 < std < 1.0
 
 
-def test_laplace_returns_positive_definite_cov(band_fit):
-    *_, result = band_fit
+def test_laplace_cov_matches_closed_form_fisher(band_fit):
+    """At the zero-residual fit of B(t) = 1 - exp(-k t), the default (FD)
+    Laplace covariance of log k is the inverse of the closed-form Fisher
+    information sum((k t exp(-k t) / sigma)^2)."""
+    _, _, t_obs, _, result = band_fit
+    k, t = 0.25, np.asarray(t_obs)
+    fisher = np.sum((k * t * np.exp(-k * t) / 0.02) ** 2)
     cov = np.asarray(result.posterior_cov)
     assert cov.shape == (1, 1)
-    assert np.all(np.isfinite(cov))
-    eigvals = np.linalg.eigvalsh(cov)
-    assert np.all(eigvals > 0)
+    # rtol 1e-3: the FD Hessian's truncation, as in the joint FD test below.
+    assert cov[0, 0] == pytest.approx(1.0 / fisher, rel=1e-3)
 
 
 @pytest.mark.slow  # heavy: calibrate + FD Laplace
@@ -322,7 +326,7 @@ def test_laplace_dtmax_reconstructs_tighter_reactor(simple_model):
 
 def test_unknown_laplace_method_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"laplace_method must be 'fd' or 'gauss_newton'"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -369,11 +373,11 @@ def test_priorspec_mean_std_direct():
 
 
 def test_priorspec_rejects_both_and_neither():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"exactly one of \{mean and std\} or \{range\}"):
         PriorSpec(mean=1.0, std=1.0, range=(0.0, 2.0))
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"exactly one of \{mean and std\} or \{range\}"):
         PriorSpec()
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"prior std must be > 0"):
         PriorSpec(mean=1.0, std=-1.0)  # std must be > 0
 
 
@@ -1180,7 +1184,7 @@ def test_jitter_schedule_reproducible(setup):
 
 def test_multistart_invalid_n_starts_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"n_starts must be >= 1"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -1622,7 +1626,7 @@ def test_gauss_newton_with_free_ic_and_multistart(simple_model):
 
 def test_unknown_optimizer_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"optimizer.method must be one of"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -1869,7 +1873,7 @@ def test_joint_fields_absent_by_default_and_without_free_ic(decay_fit):
 
 def test_free_ic_unknown_species_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match=r"Unknown free_ic species 'NotASpecies'"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -1885,7 +1889,7 @@ def test_free_ic_unknown_species_rejected(setup):
 
 def test_free_ic_bad_bounds_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"ic_bounds must satisfy 0 < lo < hi"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -1933,7 +1937,7 @@ def test_multibatch_length_mismatch_rejected(simple_model):
     C0a = jnp.asarray([1.0, 0.0])
     t = jnp.asarray([0.0, 1.0])
     obs = jnp.asarray([0.0, 0.5])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"must be lists of equal length"):
         aquakin.calibrate(
             reactor,
             [C0a, C0a],
@@ -1948,7 +1952,7 @@ def test_multibatch_length_mismatch_rejected(simple_model):
 
 def test_rejects_empty_free_params(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"free_params must be non-empty"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -1961,7 +1965,7 @@ def test_rejects_empty_free_params(setup):
 
 def test_rejects_unknown_loss(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"loss must be one of"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -1975,7 +1979,7 @@ def test_rejects_unknown_loss(setup):
 
 def test_rejects_wmse_without_sigma(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"loss='wmse' requires a sigma"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -1991,7 +1995,7 @@ def test_positive_log_initial_negative_rejected(simple_model):
     """If initial value is <= 0 the transform is invalid."""
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     init_bad = simple_model.default_parameters().at[0].set(-1.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"transform 'positive_log' but initial value -1.0 <= 0"):
         aquakin.calibrate(
             reactor,
             jnp.asarray([1.0, 0.0]),
@@ -2007,7 +2011,7 @@ def test_positive_log_initial_negative_rejected(simple_model):
 def test_logit_initial_out_of_range_rejected(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     init_bad = simple_model.default_parameters().at[0].set(1.5)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"transform 'logit' but initial value 1.5 is not in \(0, 1\)"):
         aquakin.calibrate(
             reactor,
             jnp.asarray([1.0, 0.0]),

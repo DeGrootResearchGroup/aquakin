@@ -291,10 +291,11 @@ def test_optimize_validation(reactor, params):
         opt(reactor, _exp([1.0]), k, initial_bounds={(3, "A"): (1.0, 2.0)})
     with pytest.raises(ValueError, match="lo < hi"):
         opt(reactor, _exp([1.0]), k, initial_bounds={"A": (2.0, 1.0)})
-    # One sample cannot separate k from A0: singular for every criterion.
-    with pytest.raises(ValueError, match="singular"):
+    # One sample cannot separate k from A0: singular for every criterion. D (-inf)
+    # and E (0) reach the two different sides of the starting-design check.
+    with pytest.raises(ValueError, match="singular for criterion 'D'"):
         opt(reactor, _exp([1.0]), k, params=params, free_ic=FreeICConfig(["A"]))
-    with pytest.raises(ValueError, match="singular"):
+    with pytest.raises(ValueError, match="singular for criterion 'E'"):
         opt(reactor, _exp([1.0]), k, params=params, free_ic=FreeICConfig(["A"]), criterion="E")
     with pytest.raises(ValueError, match="Unknown criterion"):
         opt(reactor, _exp([1.0]), k, criterion="Z")
