@@ -446,7 +446,7 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
         if hasattr(plant.units[n], "aeration") or hasattr(plant.units[n], "_liquid_mask")
     ]
     aerated = [n for n in reactive if hasattr(plant.units[n], "aeration")]
-    need_signals = any(plant.units[n]._controlled_kla for n in aerated)
+    need_signals = any(plant.units[n].required_signals for n in aerated)
     rqs = [q for q in comps if q in ("COD", "N")]
     vols = {n: _reaction_volume(plant, n, params) for n in reactive}
     content = {
@@ -484,16 +484,14 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
                 R[q] += float(jnp.dot(react, content[name][q]))
             if name in aerated and unit.aeration is not None:
                 sp_idx = unit.model.species_index
-                kla = unit._kla_vec
-                for sp, (sig_name, gain) in unit._controlled_kla.items():
-                    kla = kla.at[sp_idx[sp]].set(sig[sig_name] * gain)
-                transfer = kla * (unit._sat_vec - C)  # per species, per volume
+                kla = unit.kla_vector(sig)
+                transfer = kla * (unit.saturation_vector - C)  # per species, per volume
                 # Aeration O2 source (the aerated oxygen species only).
                 o2 += float(transfer[sp_idx[unit.aeration.species]] * float(unit.volume))
                 # Co-stripped gases (N2O, NO, ...) leaving to the air: their
                 # component content is a gas loss (transfer is negative).
-                if unit._av.stripped:
-                    g = jnp.asarray([sp_idx[sp] for sp in unit._av.stripped])
+                if unit.stripped_gases:
+                    g = jnp.asarray([sp_idx[sp] for sp in unit.stripped_gases])
                     for q in rqs:
                         S[q] += float(jnp.dot(transfer[g], content[name][q][g]))
         o2_rows.append(o2)
