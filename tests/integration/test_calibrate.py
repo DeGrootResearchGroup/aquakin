@@ -90,6 +90,107 @@ def test_recovers_known_parameter_mse(setup):
     assert result.posterior_cov is None
 
 
+@pytest.fixture(scope="module")
+def ozone_mol_per_litre():
+    """Noise-free ozone and bromate observations in mol/L (values of 1e-8 to
+    1e-4), and a start a factor of two off each of the two fitted rates."""
+    model = aquakin.load_model("ozone_bromate")
+    reactor = aquakin.BatchReactor(model, model.default_conditions())
+    C0 = model.default_concentrations()
+    params = model.default_parameters()
+    observed = ["O3", "BrO3-"]
+    t_obs = jnp.linspace(30.0, 600.0, 12)
+    sol = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_obs, params=params)
+    observations = jnp.stack([sol.C_named(s) for s in observed], axis=1)
+    free = ["O3_Br_direct.k1", "O3_decay_OH.k_dec"]
+    truth = {n: float(params[model.param_index[n]]) for n in free}
+    k1, k_dec = free
+    start = model.parameter_values({k1: 0.5 * truth[k1], k_dec: 2.0 * truth[k_dec]})
+    return reactor, C0, observations, t_obs, free, observed, truth, start
+
+
+@pytest.mark.parametrize("method", ["lbfgsb", "gauss_newton"])
+def test_mse_fit_on_mol_per_litre_data_recovers_the_truth(ozone_mol_per_litre, method):
+    """On data of order 1e-6 the mse loss and its gradient lie below SciPy's
+    absolute stopping tolerances at any start; the fit used to return the start
+    unchanged with converged=True. It must reach the true rates of the
+    noise-free data. The tolerance is the optimizer's: its stopping tests are
+    1e-6 relative to the starting misfit, far looser than the solver's rtol."""
+    reactor, C0, obs, t_obs, free, observed, truth, start = ozone_mol_per_litre
+    result = aquakin.calibrate(
+        reactor,
+        C0,
+        obs,
+        t_obs,
+        free,
+        observed_species=observed,
+        initial_params=start,
+        optimizer=OptimizerConfig(method=method),
+        laplace=False,
+    )
+    assert result.converged
+    for name, value in truth.items():
+        assert result.params_named[name] == pytest.approx(value, rel=1e-3)
+
+
+def test_mse_start_grid_on_mol_per_litre_data_recovers_the_truth(ozone_mol_per_litre):
+    """A starts= grid on mol/L data used to return each start unchanged (so the
+    best start, not the optimum, was kept); every start must now be fitted."""
+    reactor, C0, obs, t_obs, free, observed, truth, start = ozone_mol_per_litre
+    k1, k_dec = free
+    result = aquakin.calibrate(
+        reactor,
+        C0,
+        obs,
+        t_obs,
+        free,
+        observed_species=observed,
+        initial_params=start,
+        optimizer=OptimizerConfig(starts=[{k1: 0.4 * truth[k1]}, {k1: 1.25 * truth[k1]}]),
+        laplace=False,
+    )
+    for name, value in truth.items():
+        assert result.params_named[name] == pytest.approx(value, rel=1e-3)
+
+
+@pytest.mark.parametrize("method", ["lbfgsb", "gauss_newton"])
+def test_mse_fit_and_posterior_do_not_depend_on_the_data_unit(setup, method):
+    """First-order decay is linear in the concentrations, so fitting (C0, y) and
+    (1e-6 C0, 1e-6 y) is the same problem in another unit: the fitted rate must
+    agree, and the mse Laplace std (unit noise on the data's own scale) must
+    scale by 1e6 (no ridge, which would swamp the 1e-12-sized Hessian). The
+    rate and std of the y fit are pinned to their values before the
+    optimizer's objective was scaled (the posterior is formed from the
+    unscaled loss). 1e-5 is a decade above the solver's rtol, which bounds
+    how far the two units' solves (and L-BFGS-B's stopping point) differ."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    noisy = obs_clean + 0.01 * jnp.sin(7.0 * t_obs)
+
+    def fit(scale):
+        return aquakin.calibrate(
+            reactor,
+            scale * C0,
+            observations=scale * noisy,
+            t_obs=t_obs,
+            free_params=["A_to_B.k"],
+            transforms={"A_to_B.k": "positive_log"},
+            observed_species=["B"],
+            loss="mse",
+            optimizer=OptimizerConfig(method=method),
+            laplace=LaplaceConfig(method="gauss_newton", ridge=0.0),
+        )
+
+    unit, micro = fit(1.0), fit(1e-6)
+    assert unit.params_named["A_to_B.k"] == pytest.approx(0.2501232728, rel=1e-5)
+    assert unit.params_named_std["A_to_B.k"] == pytest.approx(0.59440094, rel=1e-5)
+    assert micro.converged
+    assert micro.params_named["A_to_B.k"] == pytest.approx(unit.params_named["A_to_B.k"], rel=1e-5)
+    assert micro.params_named_std["A_to_B.k"] == pytest.approx(
+        1e6 * unit.params_named_std["A_to_B.k"], rel=1e-5
+    )
+    assert micro.loss == pytest.approx(1e-12 * unit.loss, rel=1e-5)
+
+
 def test_ad_mode_forward_matches_reverse(setup):
     """ad_mode='forward' builds the forward-capable adjoint internally (no
     diffrax in user code) and reaches the same optimum as reverse mode."""

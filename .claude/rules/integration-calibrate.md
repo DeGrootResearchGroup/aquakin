@@ -40,6 +40,23 @@ Split out of `.claude/rules/integration.md`.
   `plant.md`); the names are unchanged, so the plant tests' stubs on
   `aquakin.plant.calibrate` still apply.
 
+### The optimizer's objective scale
+
+- SciPy's stopping tests are absolute once the objective is below 1, so an
+  `"mse"` fit on mol/L data (loss ~1e-13) used to stop at its start.
+  **The optimizer sees the objective divided by `_ObjectiveBundle.loss_scale`**,
+  set by the driver's `_scale_objective` from the loss at the (first) start via
+  `_objective_scale` (`min(1, start loss)`, floored at `_SCALE_FLOOR` times
+  `_CalibrationProblem.data_mean_square`; `"mse"` only, `data_mean_square` is
+  `None` for the other losses). Both resolvers set `data_mean_square` with
+  `_data_mean_square`.
+- **Only the optimizer sees the scaled objective.** The reported `loss`
+  (multiplied back in `_fit_result`), the Laplace Hessian and the profile use
+  the unscaled loss: do not fold the scale into `_data_term`,
+  `_residual_parts` or the compiled programs (it is applied outside them, so
+  it is not in `struct_key`). Every start of a multistart shares one scale so
+  their losses compare.
+
 ### `calibrate()` internal structure
 
 `calibrate`'s tuning knobs are grouped into three public config dataclasses

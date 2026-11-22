@@ -42,6 +42,16 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `aquakin.calibrate` and `Plant.calibrate` with the default `loss="mse"` now
+  fit data in small units. On concentrations in mol/L (values near 1e-6) the
+  loss and its gradient were below the optimizer's absolute stopping
+  tolerance at any start, so the fit returned its starting parameters with
+  `converged=True`, and a `starts=` grid returned each start unchanged. The
+  optimizer now sees the loss divided by its value at the start (when that is
+  below 1), so `OptimizerConfig(tol=)` acts relative to the starting misfit and
+  the same data give the same fit in any unit. The minimum, the reported
+  `loss` and the Laplace posterior are unchanged; a fit on well-scaled data
+  may stop at a slightly different point within the tolerance.
 - `aquakin-ui` no longer leaves aquakin worker processes behind. A worker that
   stopped reading was replaced but kept running (with JAX loaded) until the
   editor closed, and a worker that timed out stayed a zombie; both are now
