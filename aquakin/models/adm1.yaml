@@ -27,15 +27,15 @@ model:
     The free-ammonia and dissolved-CO2 fractions therefore track the state
     automatically.
 
-    STATUS -- complete ADM1 in the BSM2 form: liquid phase + gas headspace +
+    Complete ADM1 in the BSM2 form: liquid phase + gas headspace +
     state-derived pH with explicit strong-ion (S_cat / S_an) states. Parameter
     values and initial concentrations are the BSM2 digester defaults (35 C).
-    VALIDATED against the published BSM2 open-loop steady-state digester
+    Validated against the published BSM2 open-loop steady-state digester
     composition: run as the benchmark CSTR (3400 m3 liquid, 300 m3 headspace,
     fed at ~178 m3/d, HRT ~19 d) the model reproduces the reference steady
     state to ~1-3% on the substrates, biomass and biogas, and its
-    charge-balance pH (~7.27) matches the reference electroneutrality relation
-    (see tests/validation/test_adm1_bsm2_steadystate.py). The gas outflow uses
+    charge-balance pH (~7.27) matches the reference electroneutrality
+    relation. The gas outflow uses
     the overpressure form ``k_P*max(0, P_gas - P_atm)`` -- the lower ``max(0, .)``
     clip holds the valve shut rather than drawing gas back in if the headspace
     ever goes (transiently) sub-atmospheric. At the digester operating point
