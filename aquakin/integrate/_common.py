@@ -26,6 +26,52 @@ if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.conditions import SpatialConditions
 
 
+__all__ = [
+    "NEWTON_TOL_FACTOR",
+    "_CANONICAL_SOLVERS",
+    "_SOLVER_CACHE",
+    "_TIME_UNIT_SECONDS",
+    "ConditionedReactor",
+    "DifferentiationConfig",
+    "ExportableSolutionMixin",
+    "GradientCheckMixin",
+    "IntegratorConfig",
+    "PlottableSolutionMixin",
+    "Reactor",
+    "_HasNamedSpecies",
+    "_assemble_settings_key",
+    "_coerce_atol",
+    "_interp_fields_to_scalar",
+    "_run_diffeqsolve",
+    "atol_cache_key",
+    "build_dataframe",
+    "build_implicit_solver",
+    "build_step_controller",
+    "cached_jitted_solver",
+    "check_finite_gradient",
+    "concrete_settings_key",
+    "default_atol",
+    "forward_adjoint",
+    "friendly_solve_errors",
+    "init_solver_settings",
+    "is_forward_mode_ad_error",
+    "make_chemistry_rhs",
+    "native_time_factor",
+    "reactor_settings_key",
+    "require_increasing_t_span",
+    "require_matplotlib",
+    "require_pandas",
+    "resolve_layered_atol",
+    "resolve_state_atol",
+    "settings_cache_key",
+    "solve_chemistry",
+    "to_native_time",
+    "validate_C0_params",
+    "validate_t_eval",
+    "with_adjoint",
+]
+
+
 # --- Public solver / autodiff configuration objects --------------------------
 
 
