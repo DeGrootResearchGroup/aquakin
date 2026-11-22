@@ -15,14 +15,8 @@ from aquakin import BatchReactor, Event, SpatialConditions, solve_with_events
 
 
 @pytest.fixture(scope="module")
-def decay():
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    return net
-
-
-@pytest.fixture(scope="module")
-def reactor(decay):
-    return BatchReactor(decay, SpatialConditions.uniform(T=293.15))
+def reactor(simple_model):
+    return BatchReactor(simple_model, SpatialConditions.uniform(T=293.15))
 
 
 def _A0(net):
@@ -139,12 +133,12 @@ def test_grad_through_time_event_is_finite_and_correct():
 
 # --- BatchReactor integration ------------------------------------------------
 
-def test_batch_reactor_time_event(reactor, decay):
+def test_batch_reactor_time_event(reactor, simple_model):
     teval = jnp.linspace(0.0, 2.0, 5)   # [0, 0.5, 1, 1.5, 2]
     # Halve A at t=1.0.
     ev = Event(at_times=[1.0], apply=lambda t, y, a: y.at[0].multiply(0.5),
                name="half")
-    sol = reactor.solve(_A0(decay), (0.0, 2.0), teval, events=[ev])
+    sol = reactor.solve(_A0(simple_model), (0.0, 2.0), teval, events=[ev])
     k = 0.1
     A = np.asarray(sol.C[:, 0])
     # Pre-reset analytic at the boundary, post-reset (halved) after.
@@ -153,14 +147,14 @@ def test_batch_reactor_time_event(reactor, decay):
     assert sol.events_log == [(1.0, "half")]
 
 
-def test_batch_reactor_plain_solve_unaffected(reactor, decay):
+def test_batch_reactor_plain_solve_unaffected(reactor, simple_model):
     """A solve without events still returns the plain (events_log=None) result."""
-    sol = reactor.solve(_A0(decay), (0.0, 1.0), jnp.linspace(0.0, 1.0, 3))
+    sol = reactor.solve(_A0(simple_model), (0.0, 1.0), jnp.linspace(0.0, 1.0, 3))
     assert sol.events_log is None
     assert float(sol.C[-1, 0]) == pytest.approx(np.exp(-0.1), abs=1e-4)
 
 
-def test_event_path_matches_plain_solve_identity_reset(reactor, decay):
+def test_event_path_matches_plain_solve_identity_reset(reactor, simple_model):
     """A no-op (identity) reset must reproduce the plain solve point-for-point.
 
     The drift guard: the event path builds its RHS via the shared
@@ -177,33 +171,33 @@ def test_event_path_matches_plain_solve_identity_reset(reactor, decay):
     single-segment test pins the kernel tightly.
     """
     teval = jnp.linspace(0.0, 2.0, 9)
-    plain = reactor.solve(_A0(decay), (0.0, 2.0), teval)
+    plain = reactor.solve(_A0(simple_model), (0.0, 2.0), teval)
     ev = Event(at_times=[0.7, 1.4], apply=lambda t, y, a: y, name="noop")
-    evented = reactor.solve(_A0(decay), (0.0, 2.0), teval, events=[ev])
+    evented = reactor.solve(_A0(simple_model), (0.0, 2.0), teval, events=[ev])
     np.testing.assert_allclose(np.asarray(evented.C), np.asarray(plain.C),
                                rtol=1e-4, atol=1e-7)
 
 
-def test_event_path_matches_plain_solve_never_firing_state_event(reactor, decay):
+def test_event_path_matches_plain_solve_never_firing_state_event(reactor, simple_model):
     """A state event that never crosses (so a single segment runs under a
     terminating diffrax.Event) must also match the plain solve -- pinning the
     ``has_root`` branch of the driver to the plain kernel."""
     teval = jnp.linspace(0.0, 2.0, 9)
-    plain = reactor.solve(_A0(decay), (0.0, 2.0), teval)
+    plain = reactor.solve(_A0(simple_model), (0.0, 2.0), teval)
     # A decays from 1 toward 0; this threshold at -1 is never reached.
     ev = Event(cond_fn=lambda t, y, a: y[0] + 1.0, direction=-1, name="never")
-    evented = reactor.solve(_A0(decay), (0.0, 2.0), teval, events=[ev])
+    evented = reactor.solve(_A0(simple_model), (0.0, 2.0), teval, events=[ev])
     assert evented.events_log == []
     np.testing.assert_allclose(np.asarray(evented.C), np.asarray(plain.C),
                                rtol=1e-6, atol=1e-9)
 
 
-def test_batch_reactor_grad_through_event(reactor, decay):
+def test_batch_reactor_grad_through_event(reactor, simple_model):
     teval = jnp.array([2.0])
 
     def loss(scale):
         ev = Event(at_times=[1.0], apply=lambda t, y, a: y * scale)
-        sol = reactor.solve(_A0(decay), (0.0, 2.0), teval, events=[ev])
+        sol = reactor.solve(_A0(simple_model), (0.0, 2.0), teval, events=[ev])
         return sol.C[-1, 0]
 
     g = float(jax.grad(loss)(0.5))
@@ -212,11 +206,11 @@ def test_batch_reactor_grad_through_event(reactor, decay):
     assert g == pytest.approx(np.exp(-0.2), abs=1e-4)
 
 
-def test_batch_time_unit_converts_event_times(reactor, decay):
+def test_batch_time_unit_converts_event_times(reactor, simple_model):
     """``at_times`` is in the solve's ``time_unit``, and so is the event log."""
     # Model native unit is seconds (k = 0.1 1/s). Reset A to 1 at t = 1 min.
     ev = Event(at_times=[1.0], apply=lambda t, y, a: y.at[0].set(1.0), name="dose")
-    sol = reactor.solve(_A0(decay), (0.0, 2.0), jnp.array([0.5, 1.0, 1.5, 2.0]),
+    sol = reactor.solve(_A0(simple_model), (0.0, 2.0), jnp.array([0.5, 1.0, 1.5, 2.0]),
                         time_unit="min", events=[ev])
     A = np.asarray(sol.C[:, 0])
     np.testing.assert_allclose(A, [np.exp(-3.0), np.exp(-6.0), np.exp(-3.0),
@@ -228,22 +222,22 @@ def test_batch_time_unit_converts_event_times(reactor, decay):
     assert ev.at_times == [1.0]
 
 
-def test_batch_time_unit_state_event_sees_requested_time(reactor, decay):
+def test_batch_time_unit_state_event_sees_requested_time(reactor, simple_model):
     """``cond_fn`` receives ``t`` in the solve's ``time_unit``."""
     # Fires at t = 0.5 min (30 s), long before A crosses anything.
     ev = Event(cond_fn=lambda t, y, a: t - 0.5, direction=1, terminal=True)
-    sol = reactor.solve(_A0(decay), (0.0, 2.0), time_unit="min", events=[ev])
+    sol = reactor.solve(_A0(simple_model), (0.0, 2.0), time_unit="min", events=[ev])
     assert float(sol.t[-1]) == pytest.approx(0.5, abs=1e-6)
     assert sol.events_log[0][0] == pytest.approx(0.5, abs=1e-6)
     assert float(sol.C[-1, 0]) == pytest.approx(np.exp(-3.0), rel=1e-4)
 
 
-def test_grad_through_time_event_with_time_unit(reactor, decay):
+def test_grad_through_time_event_with_time_unit(reactor, simple_model):
     """AD through a time event stays finite and correct with ``time_unit``."""
 
     def loss(scale):
         ev = Event(at_times=[0.5], apply=lambda t, y, a: y.at[0].add(scale))
-        sol = reactor.solve(_A0(decay), (0.0, 1.0), jnp.array([1.0]),
+        sol = reactor.solve(_A0(simple_model), (0.0, 1.0), jnp.array([1.0]),
                             time_unit="min", events=[ev])
         return sol.C[-1, 0]
 
@@ -254,10 +248,10 @@ def test_grad_through_time_event_with_time_unit(reactor, decay):
     assert g == pytest.approx(np.exp(-3.0), rel=1e-3)
 
 
-def test_terminal_event_without_t_eval_reports_stop_time(reactor, decay):
+def test_terminal_event_without_t_eval_reports_stop_time(reactor, simple_model):
     """With ``t_eval=None`` a terminal event reports where the solve stopped."""
     ev = Event(cond_fn=lambda t, y, a: y[0] - 0.5, terminal=True, name="half")
-    sol = reactor.solve(_A0(decay), (0.0, 100.0), events=[ev])
+    sol = reactor.solve(_A0(simple_model), (0.0, 100.0), events=[ev])
     t_half = np.log(2.0) / 0.1
     assert float(sol.t[-1]) == pytest.approx(t_half, abs=1e-5)
     assert float(sol.C[-1, 0]) == pytest.approx(0.5, abs=1e-6)
@@ -318,25 +312,10 @@ def test_unnamed_event_not_mutated():
     assert ev.name is None
 
 
-def _single_cstr_plant(net):
-    """A one-CSTR plant on the decay model (native time unit: seconds)."""
-    from aquakin.plant import CSTRUnit, Plant
-    from aquakin.plant.influent import InfluentSeries
-
-    plant = Plant("single_cstr", time_unit="s")
-    plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
-                            input_port_names=["inlet"], conditions={"T": 293.15}))
-    influent = InfluentSeries(t=jnp.asarray([0.0, 1000.0]),
-                              Q=jnp.asarray([10.0, 10.0]),
-                              C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net)
-    plant.add_influent("feed", influent, to="tank.inlet")
-    return plant
-
-
-def test_plant_time_unit_converts_event_times(decay):
+def test_plant_time_unit_converts_event_times(cstr_plant):
     """``Plant.solve(time_unit=..., events=...)`` reads ``at_times`` in the
     requested unit and reports the event log in it."""
-    plant = _single_cstr_plant(decay)
+    plant = cstr_plant
 
     def ev(at):
         return Event(at_times=[at], apply=lambda t, y, a: y.at[0].set(5.0),
@@ -403,14 +382,14 @@ def test_plant_events_reject_unsupported_integrator():
                     integrator=aquakin.IntegratorConfig(solver=diffrax.Kvaerno5()))
 
 
-def test_state_event_step_budget_raises_friendly(decay):
+def test_state_event_step_budget_raises_friendly(simple_model):
     """A state-event (eager) solve that exhausts the integrator step budget must
     re-raise the friendly remedy message, not the raw equinox MaxStepsReached
     chatter -- the segmented eager solve is now wrapped like the plain solves."""
     fields = SpatialConditions.uniform(T=293.15).fields
-    rhs = lambda t, y, p: decay.dCdt(y, p, fields, 0)
-    C0 = _A0(decay)
-    params = decay.default_parameters()
+    rhs = lambda t, y, p: simple_model.dCdt(y, p, fields, 0)
+    C0 = _A0(simple_model)
+    params = simple_model.default_parameters()
     # Fires only when A has all but vanished, so the solver keeps stepping over a
     # long span; a tiny max_steps exhausts the budget first.
     ev = Event(cond_fn=lambda t, y, args: y[0] - 1e-12)
