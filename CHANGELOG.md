@@ -52,6 +52,13 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   `sol.final_named(["HOCl"])`, instead of looking up each character and raising
   `KeyError: Unknown species 'H'`. This holds on every solution, on a plant
   stream (`StreamSeries`) and on `PlantSolution` (`final_named(unit, "SNH")`).
+- `direct_n2o_emission` works on a plant whose model names dissolved oxygen
+  other than `SO`, such as the shipped `asm3_2step_n2o` (`SO2`); it raised
+  `KeyError: 'SO'`. It, and the aeration and mixing energy terms of the BSM
+  evaluations, now read each tank's oxygen kLa from the species its `Aeration`
+  names. Aerated units (CSTR, IFAS/MBBR, MBR) gain the
+  public readers `oxygen_kla()`, `kla_vector()`, `saturation_vector` and
+  `stripped_gases`.
 - The shipped sewer (`wats_sewer*`) and `adm1` model descriptions shown by
   `model.summary()` now describe the model and how a variant differs from its
   base, instead of its development history; the models themselves are unchanged.

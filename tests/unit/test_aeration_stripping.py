@@ -13,6 +13,7 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
@@ -264,3 +265,83 @@ def test_mass_balance_without_any_composition_raises(tmp_path):
     sol = _solve(plant, t_end=0.1, n=3)
     with pytest.raises(KeyError):
         plant.mass_balance(sol, components=("COD",), effluent_ports=["tank.out"])
+
+
+# --- a model whose oxygen is not "SO" -----------------------------------------
+#
+# ``asm3_2step_n2o`` names dissolved oxygen ``SO2``. The post-solve kLa
+# reconstruction behind ``direct_n2o_emission`` (and the aeration energy) must
+# read the oxygen species each tank's ``Aeration`` names, for the aerated tank
+# and for the unaerated one in front of it.
+
+
+@pytest.fixture(scope="module")
+def n2o_model():
+    return aquakin.load_model("asm3_2step_n2o")
+
+
+def _so2_tank(model, aeration, name="tank", volume=V):
+    return CSTRUnit(
+        name=name,
+        model=model,
+        volume=volume,
+        input_port_names=["in"],
+        conditions={"T": 293.15, "pH": 7.0},
+        aeration=aeration,
+    )
+
+
+def _so2_plant(model, aeration):
+    """An unaerated tank ``anox`` (V/2) feeding the aerated ``tank`` (V)."""
+    plant = Plant("so2", time_unit="d")
+    plant.add_unit(_so2_tank(model, None, name="anox", volume=V / 2))
+    plant.add_unit(_so2_tank(model, aeration))
+    plant.connect("anox.out", "tank.in")
+    C_in = model.default_concentrations().at[model.species_index["SN2O"]].set(SN2O_IN)
+    influent = InfluentSeries(
+        t=jnp.asarray([0.0, 100.0]),
+        Q=jnp.full((2,), Q),
+        C=jnp.tile(C_in, (2, 1)),
+        model=model,
+    )
+    plant.add_influent("feed", influent, to="anox.in")
+    return plant
+
+
+def test_oxygen_kla_reads_the_aerations_oxygen_species(n2o_model):
+    tank = _so2_tank(n2o_model, Aeration(kla=KLA, species="SO2", stripped={"SN2O": RATIO}))
+    assert float(tank.oxygen_kla()) == KLA
+    assert tank.stripped_gases == {"SN2O": RATIO}
+    assert float(_so2_tank(n2o_model, None).oxygen_kla()) == 0.0
+    controlled = _so2_tank(n2o_model, Aeration(do_setpoint=2.0, species="SO2", gain=0.5))
+    assert float(controlled.oxygen_kla({"_aer_tank_kla": 100.0})) == 50.0
+    with pytest.raises(ValueError, match="closed-loop aeration control"):
+        controlled.oxygen_kla()
+
+
+def test_direct_n2o_emission_open_loop_so2_matches_hand_flux(n2o_model):
+    aer = Aeration(kla=KLA, species="SO2", stripped={"SN2O": RATIO})
+    plant = _so2_plant(n2o_model, aer)
+    sol = _solve(plant, t_end=1.0, n=11)
+    # By hand: only the aerated tank strips, at RATIO * KLA * SN2O * V (g N/d),
+    # time-averaged over the window by the trapezoid rule, in kg N/d.
+    t = np.asarray(sol.t)
+    flux = RATIO * KLA * np.asarray(sol.C_named("tank", "SN2O")) * V * 1e-3
+    expected = np.trapezoid(flux, t) / (t[-1] - t[0])
+    assert expected > 0.1
+    assert direct_n2o_emission(plant, sol) == pytest.approx(expected, rel=1e-12)
+
+
+def test_direct_n2o_emission_closed_loop_so2_equals_stripped_n(n2o_model):
+    aer = Aeration(do_setpoint=2.0, species="SO2", stripped={"SN2O": RATIO})
+    plant = _so2_plant(n2o_model, aer)
+    sol = _solve(plant, t_end=1.0, n=11)
+    # The emission is the N2O the solve stripped: the stripped-N gas term of the
+    # nitrogen balance. The balance closes to the trapezoid accuracy of 11 saved
+    # times over the start-up transient.
+    mb = plant.mass_balance(sol, components=("N",), effluent_ports=["tank.out"])
+    assert mb["N"].relative_imbalance == pytest.approx(0.0, abs=1e-3)
+    stripped_g = mb.gas_detail["stripped_N"]
+    assert stripped_g > 100.0
+    emission = direct_n2o_emission(plant, sol)  # kg N/d over a one-day window
+    assert emission * 1e3 == pytest.approx(stripped_g, rel=1e-9)
