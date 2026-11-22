@@ -132,7 +132,7 @@ def test_batch_solve_documented_call_forms_execute(simple_model):
     assert jnp.all(jnp.isfinite(s1.C)) and jnp.all(jnp.isfinite(s2.C))
     # passing params positionally must be rejected (it is keyword-only) -- this is
     # precisely the call shape the post-merge incident used.
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="takes from 3 to 4 positional arguments"):
         r.solve(C0, p, (0.0, 1.0), t_eval)
 
 
@@ -151,7 +151,7 @@ def test_batch_solve_sensitivity_executes(simple_model):
     assert jnp.all(jnp.isfinite(S))
     # params is keyword-only: passing it positionally now lands in the t_span
     # slot and must be rejected (the same guard as solve).
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="missing 1 required keyword-only argument: 'params'"):
         r.solve_sensitivity(C0, p, (0.0, 1.0), sens_params=[0])
 
 

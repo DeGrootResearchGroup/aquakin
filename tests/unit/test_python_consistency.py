@@ -19,6 +19,7 @@ rate AST and evaluating that.
 """
 
 import math
+import re
 
 import pytest
 
@@ -126,21 +127,29 @@ AGREES_WITH_PYTHON = [
     ("mod(7,-3)", "7 % -3"),
 ]
 
-#: Text Python accepts that aquakin refuses, and the reason it refuses it.
+#: Text Python accepts that aquakin refuses, the reason it refuses it, and the
+#: fragment of the error that names the refusal.
 REFUSED_ON_PURPOSE = [
-    ("t<1", "a comparison cannot be traced, so there are none"),
-    ("t==1", "a comparison cannot be traced, so there are none"),
-    ("1 if t else 2", "no conditional; a value that switches uses step or clip"),
-    ("not t", "no boolean operators"),
-    ("7%3", "spelled mod(7, 3); '%' is not an operator here"),
-    ("7//2", "no floor division"),
+    ("t<1", "a comparison cannot be traced, so there are none",
+     "Unexpected character '<' at position 1"),
+    ("t==1", "a comparison cannot be traced, so there are none",
+     "Unexpected character '=' at position 1"),
+    ("1 if t else 2", "no conditional; a value that switches uses step or clip",
+     "expected an operator, got 'if' at position 2"),
+    ("not t", "no boolean operators",
+     "'not' at position 0 is not a value an expression of time can read"),
+    ("7%3", "spelled mod(7, 3); '%' is not an operator here",
+     "Unexpected character '%' at position 1"),
+    ("7//2", "no floor division", "got '/' at position 2"),
     (
         "2^3",
         "'^' is XOR in Python and a power to most readers -- refused "
         "rather than quietly read as either",
+        "Unexpected character '^' at position 1",
     ),
-    ("0x10", "no hexadecimal literals"),
-    ("1__0", "an underscore may only sit between digits, as in Python"),
+    ("0x10", "no hexadecimal literals", "expected an operator, got 'x10' at position 1"),
+    ("1__0", "an underscore may only sit between digits, as in Python",
+     "'1__0' at position 0 is not a number"),
 ]
 
 
@@ -159,9 +168,9 @@ def test_reads_as_python_does(expr, python):
     assert got == pytest.approx(expected, rel=1e-12, abs=0.0, nan_ok=True), expr
 
 
-@pytest.mark.parametrize("expr,why", REFUSED_ON_PURPOSE)
-def test_what_is_refused_on_purpose(expr, why):
-    with pytest.raises(TimeExpressionError):
+@pytest.mark.parametrize("expr,why,message", REFUSED_ON_PURPOSE)
+def test_what_is_refused_on_purpose(expr, why, message):
+    with pytest.raises(TimeExpressionError, match=re.escape(message)):
         compile_time_expression(expr)
 
 
@@ -215,14 +224,19 @@ def test_the_rate_language_agrees_with_the_time_language(expr):
 def test_a_measure_refuses_what_it_cannot_be():
     """A measure is affine on purpose -- the ranking's linear map depends on it
     -- so it refuses arithmetic the other two languages allow."""
-    for text in ("B = [A]**2", "B = [A]*[C]", "B = 2/[A]", "B = [A] + 1"):
-        with pytest.raises(MeasureSyntaxError):
+    for text, message in (
+        ("B = [A]**2", "so it has no powers (at position 7)"),
+        ("B = [A]*[C]", "cannot multiply two measured quantities (at position 7)"),
+        ("B = 2/[A]", "can only divide by a number (at position 5)"),
+        ("B = [A] + 1", "adds the constant 1"),
+    ):
+        with pytest.raises(MeasureSyntaxError, match=re.escape(message)):
             parse_measure(text)
 
 
 def test_a_double_comma_is_still_an_error():
     """A trailing comma is allowed, as in Python; two in a row are not."""
-    with pytest.raises(TimeExpressionError):
+    with pytest.raises(TimeExpressionError, match="got ',' at position 6"):
         compile_time_expression("max(1,,2)")
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match="Unexpected token ',' at position 6"):
         parse_rate_expression("max(1,,2)")

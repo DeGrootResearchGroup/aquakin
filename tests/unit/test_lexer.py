@@ -73,7 +73,7 @@ def test_each_language_raises_its_own_error():
     with pytest.raises(Mine, match=re.escape("'1.2.3' at position 0 is not a number")):
         tokenize("1.2.3", error=Mine)
     # The default keeps it a plain ValueError.
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Unexpected character '@' at position 0"):
         tokenize("@")
 
 

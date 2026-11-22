@@ -26,7 +26,7 @@ def test_load_simple_from_file(simple_model):
 
 
 def test_unknown_builtin_raises():
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundError, match="Built-in model 'does_not_exist' not found"):
         aquakin.load_model("does_not_exist")
 
 
@@ -47,7 +47,7 @@ def test_undeclared_species_in_stoichiometry_rejected(tmp_path):
               X: +1
         """,
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="stoichiometry references undeclared species 'X'"):
         aquakin.load_model_from_file(p)
 
 
@@ -67,7 +67,7 @@ def test_undeclared_condition_rejected(tmp_path):
               A: -1
         """,
     )
-    with pytest.raises((KeyError, ValueError)):
+    with pytest.raises(KeyError, match="references undeclared condition 'pH'"):
         aquakin.load_model_from_file(p)
 
 
@@ -89,7 +89,7 @@ def test_bounds_validation(tmp_path):
               A: -1
         """,
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"parameter value 10\.0 is outside bounds"):
         aquakin.load_model_from_file(p)
 
 
@@ -110,7 +110,7 @@ def test_duplicate_species_rejected(tmp_path):
               A: -1
         """,
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Duplicate species names"):
         aquakin.load_model_from_file(p)
 
 
@@ -163,7 +163,7 @@ def test_unreferenced_expression_valid_refs_loads(tmp_path):
 
 
 def test_missing_file():
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundError, match="Model file not found"):
         aquakin.load_model_from_file("/no/such/file.yaml")
 
 
@@ -191,7 +191,7 @@ def test_non_validation_error_propagates(tmp_path, monkeypatch):
               A: -1
         """,
     )
-    with pytest.raises(RecursionError):
+    with pytest.raises(RecursionError, match="maximum recursion depth"):
         aquakin.load_model_from_file(p)
 
 

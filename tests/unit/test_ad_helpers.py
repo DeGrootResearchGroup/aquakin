@@ -40,7 +40,7 @@ def test_check_finite_gradient_passes_and_raises():
     check_finite_gradient(jnp.array([1.0, 2.0]), what="grad", remedy="do X")
     with pytest.raises(RuntimeError, match=r"non-finite.*do X"):
         check_finite_gradient(jnp.array([1.0, jnp.nan]), what="grad", remedy="do X")
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match=r"non-finite.*do X"):
         check_finite_gradient(jnp.array([jnp.inf]), what="grad", remedy="do X")
 
 
