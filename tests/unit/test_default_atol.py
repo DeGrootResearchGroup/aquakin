@@ -97,6 +97,28 @@ def test_layered_atol_per_species_array_is_tiled():
     assert jnp.allclose(got, jnp.tile(per_species, (2, 1)))
 
 
+def test_layered_atol_full_state_array_is_accepted_verbatim():
+    """A ``(n_compartments, n_species)`` array is returned as given."""
+    net = aquakin.load_model("asm1")
+    n = net.n_species
+    full = jnp.arange(1.0, 3 * n + 1.0).reshape(3, n)
+    got = resolve_layered_atol(net, full, 3)
+    assert got.shape == (3, n)
+    assert jnp.array_equal(got, full)
+
+
+def test_layered_atol_flat_full_state_array_is_reshaped():
+    """A flat ``(n_compartments * n_species,)`` array is reshaped row by row,
+    compartment-major, to the reactor's ``(n_compartments, n_species)`` state."""
+    net = aquakin.load_model("asm1")
+    n = net.n_species
+    flat = jnp.arange(1.0, 3 * n + 1.0)
+    got = resolve_layered_atol(net, flat, 3)
+    assert got.shape == (3, n)
+    assert jnp.array_equal(got[1], flat[n : 2 * n])
+    assert jnp.array_equal(got, flat.reshape(3, n))
+
+
 def test_layered_atol_rejects_wrong_shape():
     net = aquakin.load_model("asm1")
     with pytest.raises(ValueError, match="atol must be a scalar"):
