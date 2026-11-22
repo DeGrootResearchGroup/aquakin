@@ -347,7 +347,11 @@ instead.) Commit or push only when the user asks. The convention is:
 
 Run ruff before committing or pushing (Post-Change Checklist item 1). The
 committed pre-push hook (`.githooks/pre-push`) runs the same gate; enable it
-once per clone with `git config core.hooksPath .githooks`.
+once per clone with `git config core.hooksPath .githooks`. A Claude Code cloud
+session does both for you: the SessionStart hook in `.claude/settings.json`
+(`scripts/session_start.py`) installs `.[test,lint,typecheck]` pinned by
+`constraints.txt`, enables the pre-push hook, and puts the pinned `ruff` and
+`pyright` first on `PATH`.
 
 **Every push to a PR branch starts a full CI run, so push finished work, once.**
 Before pushing, run locally everything CI would tell you: ruff, pyright (for
