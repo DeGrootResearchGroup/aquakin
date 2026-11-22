@@ -421,16 +421,6 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Changed
 
-- The module `aquakin.integrate.calibrate` now exports only the calibration
-  API: `calibrate`, `OptimizerConfig`, `LaplaceConfig`, `FreeICConfig`,
-  `CalibrationResult` and `PredictiveBand`. It no longer passes through helpers
-  that belong elsewhere. Import `check_finite_gradient`, `forward_adjoint` and
-  `DifferentiationConfig` from `aquakin.integrate` instead. The transform
-  functions (`to_unconstrained`, `from_unconstrained`,
-  `dphysical_dunconstrained`), `native_time_factor` and the observation helpers
-  (`observe`, `observation_size`, `observation_takes_time`) were never public
-  API and are no longer reachable through this module.
-
 - Errors from the `aquakin serve` worker, from `aquakin.plant.catalog.check_unit`
   and from `aquakin.plant.spec.check_spec` now carry the message and the
   exception's class apart, `{"error": "volume must be positive", "type":

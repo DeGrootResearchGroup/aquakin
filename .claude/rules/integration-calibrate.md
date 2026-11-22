@@ -22,8 +22,9 @@ Split out of `.claude/rules/integration.md`.
 ### Module layout
 
 - `integrate/calibrate.py` holds only `calibrate()`, and its `__all__` lists
-  only the public names (`calibrate`, the three configs, `CalibrationResult`,
-  `PredictiveBand`). **It is not a re-export facade:** import a private helper
+  only non-underscore names (`calibrate`, the configs and results, and the
+  helpers it has always exported). **It is not a re-export facade for private
+  names:** import a private helper
   from the `integrate/calibration/` module that defines it (or, from
   `aquakin.plant`, from `integrate/seam.py`), never through `calibrate.py`, so
   no private name is kept alive there for an importer. **New calibration code
