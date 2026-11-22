@@ -629,12 +629,10 @@ def test_dgsm_forward_through_reactor_matches_reverse(simple_model):
     )
 
 
-def test_dgsm_forward_through_default_adjoint_errors():
+def test_dgsm_forward_through_default_adjoint_errors(simple_model):
     """Forward mode through the default RecursiveCheckpointAdjoint raises a
     helpful error pointing to aquakin.forward_adjoint()."""
-    net = aquakin.load_model_from_file(
-        str(__import__("pathlib").Path(__file__).parents[1] / "fixtures" / "simple_model.yaml")
-    )
+    net = simple_model
     conds = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.BatchReactor(net, conds)  # default reverse-only adjoint
     C0 = jnp.asarray([1.0, 0.0])
@@ -675,12 +673,10 @@ def test_dgsm_batched_matches_unbatched_vector():
         )
 
 
-def test_dgsm_unbatched_forward_default_adjoint_errors():
+def test_dgsm_unbatched_forward_default_adjoint_errors(simple_model):
     """The per-sample fallback also raises the forward-adjoint guidance when a
     forward-mode screen hits the default reactor adjoint."""
-    net = aquakin.load_model_from_file(
-        str(__import__("pathlib").Path(__file__).parents[1] / "fixtures" / "simple_model.yaml")
-    )
+    net = simple_model
     conds = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.BatchReactor(net, conds)  # default reverse-only adjoint
     C0 = jnp.asarray([1.0, 0.0])

@@ -16,7 +16,6 @@ from aquakin.integrate._transforms import (
     to_unconstrained,
 )
 from aquakin.schema.model_spec import PriorSpec
-from tests.conftest import FIXTURES
 
 # ---------- transform roundtrips ----------
 
@@ -59,13 +58,6 @@ def test_unknown_transform_rejected():
 
 
 # ---------- end-to-end calibration ----------
-
-
-@pytest.fixture(scope="module")
-def simple_model():
-    """The simple A -> B model, loaded once for this module so the
-    module-scoped data and fits below can share it. Nothing here mutates it."""
-    return aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
 
 
 @pytest.fixture(scope="module")
