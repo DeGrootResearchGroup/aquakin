@@ -245,11 +245,14 @@ fires only after `state.ready()`. An `Editor` test cannot see what trame drops
 `tests/browser/` serves the editor (`python -m aquakin_ui --no-browser --port 0`)
 and drives it in Chromium with Playwright; it holds the canvas's rules (the diff,
 handle validation, no echoes, one removal, Delete not Backspace, the form sent on
-Apply). Skipped without Playwright (`pip install playwright`, then
-`python -m playwright install chromium`). Run it (`pytest tests/browser`) when a
-change touches the canvas or the form; a widget change needs the bundle rebuilt
-first. A test that depends on the start-up checks having finished waits for them
-(`_checks_done`): their late republish can otherwise hide a missing update. Read
+Apply). It runs in the `browser` CI job (path-filtered, not required, not in
+`fast gate`); locally it needs the `browser` extra and a Chromium
+(`python -m playwright install chromium`) and is skipped without Playwright. Run
+it (`pytest tests/browser`) when a change touches the canvas or the form; a
+widget change needs the bundle rebuilt first, and a page that loads more than
+BSM1 adds its files to the job's path filter. A test that depends on the
+start-up checks having finished waits for them (`_checks_done`): their late
+republish can otherwise hide a missing update. Read
 Python's document from the header chip ("10 units · 11 connections") and
 messages through a recorder (the snackbar closes after four seconds), never by
 a negative check with no sync point after it.
