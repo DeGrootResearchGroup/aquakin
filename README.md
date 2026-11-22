@@ -142,7 +142,7 @@ From there you can:
 - run **dynamic** simulations with the benchmark dry / rain / storm influents,
   a measured CSV, or an influent written as a formula of time;
 - jump straight to a **differentiable steady state** (`plant.steady_state()`),
-  about 10× faster than integrating to it;
+  several times faster than integrating to it;
 - score **EQI / OCI**, a **carbon footprint** (N₂O, energy, fugitive methane) and
   an **operating cost**, and compare scenarios in one KPI table;
 - build **BSM2** (`build_bsm2`) with primary clarification, thickening, ADM1
