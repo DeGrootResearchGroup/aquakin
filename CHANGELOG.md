@@ -42,6 +42,11 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Fixed
 
+- `final_named` and `C_named_many` take a single species name as a bare
+  string: `sol.final_named("HOCl")` returns `{"HOCl": ...}`, the same as
+  `sol.final_named(["HOCl"])`, instead of looking up each character and raising
+  `KeyError: Unknown species 'H'`. This holds on every solution, on a plant
+  stream (`StreamSeries`) and on `PlantSolution` (`final_named(unit, "SNH")`).
 - `Plant.steady_state`'s pseudo-arclength fallback (and
   `arclength_continuation_solve`) no longer reports a steady state on a
   different branch as the operating point past a fold. Near a saddle-node the

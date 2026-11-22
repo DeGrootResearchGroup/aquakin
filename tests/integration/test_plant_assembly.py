@@ -1321,6 +1321,37 @@ def test_plant_final_named_and_C_named_many():
         sol.final_named("settler")
 
 
+def test_plant_by_name_accessors_take_a_bare_name():
+    """On a PlantSolution and a StreamSeries a bare string is one species name,
+    not an iterable of characters: ``final_named(unit, "SNH")`` /
+    ``C_named_many(unit, "SNH")`` (and the stream's ``final_named("SNH")`` /
+    ``C_named_many("SNH")``) return the same one-key dict as the one-element
+    list, valued as ``C_named``."""
+    from aquakin.plant.bsm import bsm2_warm_start
+    from aquakin.plant.plant import PlantSolution
+    from aquakin.plant.streams import StreamSeries
+
+    plant, asm1, _adm1 = _bsm2_no_solve()
+    plant._build_state_layout()
+    y0 = bsm2_warm_start(plant)
+    sol = PlantSolution(t=jnp.asarray([0.0]), state=y0[None, :], plant=plant)
+
+    snh = float(sol.C_named("tank5", "SNH")[-1])
+    assert sol.final_named("tank5", "SNH") == {"SNH": snh}
+    assert sol.final_named("tank5", "SNH") == sol.final_named("tank5", ["SNH"])
+    many = sol.C_named_many("tank5", "SNH")
+    assert list(many) == ["SNH"]
+    assert jnp.array_equal(many["SNH"], sol.C_named("tank5", "SNH"))
+
+    n = asm1.n_species
+    C = jnp.arange(2.0 * n).reshape(2, n)
+    eff = StreamSeries(t=jnp.asarray([0.0, 1.0]), Q=jnp.full((2,), 5.0), C=C, model=asm1)
+    j = asm1.species_index["SNH"]
+    assert eff.final_named("SNH") == {"SNH": float(C[-1, j])}
+    assert list(eff.C_named_many("SNH")) == ["SNH"]
+    assert jnp.array_equal(eff.C_named_many("SNH")["SNH"], C[:, j])
+
+
 # --- semantic stream shortcuts: plant.stream(sol, "effluent") etc. (#148) -----
 
 
