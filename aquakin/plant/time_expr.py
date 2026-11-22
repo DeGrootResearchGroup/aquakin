@@ -45,7 +45,7 @@ from functools import reduce
 
 import jax.numpy as jnp
 
-from aquakin.core.kernels import _safe_log, _safe_pow, _safe_sqrt
+from aquakin.core.kernels import safe_log, safe_pow, safe_sqrt
 from aquakin.core.lexer import Token
 from aquakin.core.precedence import PrecedenceParser, accepts, spell_arity
 
@@ -72,13 +72,13 @@ def _step(x):
 
 
 def _safe_log10(x):
-    """``log10(x)``, guarded exactly as :func:`~aquakin.core.kernels._safe_log`.
+    """``log10(x)``, guarded exactly as :func:`~aquakin.core.kernels.safe_log`.
 
     Written as the natural logarithm over ``ln(10)`` rather than ``jnp.log10``
     so there is one guarded logarithm rather than two, and the value off the
     domain stays ``-inf``.
     """
-    return _safe_log(x) / math.log(10.0)
+    return safe_log(x) / math.log(10.0)
 
 
 #: The functions an expression may call, by name and arity.
@@ -87,9 +87,9 @@ FUNCTIONS: dict[str, tuple[Callable, tuple[int, ...]]] = {
     "cos": (jnp.cos, (1,)),
     "tan": (jnp.tan, (1,)),
     "exp": (jnp.exp, (1,)),
-    "log": (_safe_log, (1,)),
+    "log": (safe_log, (1,)),
     "log10": (_safe_log10, (1,)),
-    "sqrt": (_safe_sqrt, (1,)),
+    "sqrt": (safe_sqrt, (1,)),
     "abs": (jnp.abs, (1,)),
     "floor": (jnp.floor, (1,)),
     "min": (jnp.minimum, (2,)),
@@ -138,7 +138,7 @@ class _Parser(PrecedenceParser):
         return lambda t, a=operand: -a(t)
 
     def power(self, base, exponent, token):
-        return lambda t, a=base, b=exponent: _safe_pow(a(t), b(t))
+        return lambda t, a=base, b=exponent: safe_pow(a(t), b(t))
 
     # --- its leaves -------------------------------------------------------
 
