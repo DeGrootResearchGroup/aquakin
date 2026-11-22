@@ -511,9 +511,7 @@ def _steady_fallback_ladder(
             )
         if not fallback:
             return None
-        fb = self._steady_forward_design(rhs, (params, design), y0, **(fallback_kwargs or {}))
-        fb.method = "ptc->forward"
-        return fb
+        return _forward_fallback(self, rhs, params, y0, design, tol, scale_floor, fallback_kwargs)
     alt = self._steady_continuation_fallback(
         rhs,
         params,
@@ -545,10 +543,35 @@ def _steady_fallback_ladder(
         if arc is not None:
             return arc
     if fallback:
-        fb = self.run_to_steady_state(params, y0=y0, **(fallback_kwargs or {}))
-        fb.method = "ptc->forward"
-        return fb
+        return _forward_fallback(self, rhs, params, y0, design, tol, scale_floor, fallback_kwargs)
     return None
+
+
+def _forward_fallback(self, rhs, params, y0, design, tol, scale_floor, fallback_kwargs):
+    """The forward-integration rung of :func:`_steady_fallback_ladder`.
+
+    Integrates to steady state -- :meth:`run_to_steady_state` on the recorded
+    influent, or :meth:`_steady_forward_design` on the design ``rhs`` when
+    ``design`` overrides are given -- holding the run to the caller's
+    :meth:`steady_state` test: ``criterion="scaled_residual"`` with its
+    ``tol`` and ``scale_floor``, unless ``fallback_kwargs`` overrides them.
+    Without this the forward run stops on its own default norm test, whose
+    scaled residual can sit orders of magnitude above ``tol``.
+
+    ``converged`` is reported only when the returned scaled residual is at most
+    the effective ``tol``, so a run stopped by an overriding ``criterion="norm"``
+    above that tolerance is not reported as converged. The result carries
+    ``method="ptc->forward"``.
+    """
+    kwargs = {"criterion": "scaled_residual", "tol": tol, "scale_floor": scale_floor}
+    kwargs.update(fallback_kwargs or {})
+    if design is None:
+        fb = self.run_to_steady_state(params, y0=y0, **kwargs)
+    else:
+        fb = self._steady_forward_design(rhs, (params, design), y0, **kwargs)
+    fb.converged = bool(fb.converged and fb.residual <= kwargs["tol"])
+    fb.method = "ptc->forward"
+    return fb
 
 
 def _steady_forward_design(
@@ -747,7 +770,10 @@ def steady_state(
     fallback : bool
         If PTC does not converge within ``max_iter`` (eager use only), fall
         back to :meth:`run_to_steady_state` and return that result (with
-        ``method="ptc->forward"``). With ``design`` overrides the forward
+        ``method="ptc->forward"``). The forward run stops on the same test as
+        PTC (``criterion="scaled_residual"`` with this call's ``tol`` and
+        ``scale_floor``), and its result is ``converged`` only if its scaled
+        ``residual`` is at most that ``tol``. With ``design`` overrides the forward
         fallback integrates the design right-hand side (influent frozen at
         ``influent_time`` with the overrides applied) instead, and the
         ``continuation_from`` / arclength rungs are skipped: they deform the
@@ -755,7 +781,10 @@ def steady_state(
         ``UserWarning`` names the skipped rung(s) when ``continuation_from`` was
         given and the direct solve did not converge.
     fallback_kwargs : dict, optional
-        Extra keyword arguments for the forward fallback.
+        Extra keyword arguments for the forward fallback (those of
+        :meth:`run_to_steady_state`). A ``criterion``, ``tol`` or
+        ``scale_floor`` given here replaces the default taken from this call;
+        ``converged`` is then judged against the ``tol`` given here.
     continuation_from : tuple, optional
         A known steady state ``(params_known, y_known)``. If PTC does not
         converge (eager use only), deform from it to ``params`` by
