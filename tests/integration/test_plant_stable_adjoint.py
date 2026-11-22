@@ -430,7 +430,7 @@ def _solve_kwargs():
     # check gradient *correctness* (vs FD / jax_adjoint), which the dense backward
     # does; forcing dense keeps them off the (much slower to COMPILE) colored
     # backward and skips the auto build-time measurement. Coloring itself is
-    # covered by the fast BSM1 tests (test_stable_adjoint_colored_jacobian_*).
+    # covered by the slow BSM1 tests (test_stable_adjoint_colored_jacobian_*).
     return dict(rtol=1e-5, atol=1e-3,
                 integrator=aquakin.IntegratorConfig(
                     max_steps=2_000, colored_jacobian=False))

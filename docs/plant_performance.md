@@ -826,8 +826,9 @@ is what production simulators use to snap to steady state on any topology.
   cleared by `set_temperature` / `set_temperature_model` (they change the RHS /
   state size). **This does NOT speed up the *first* (one-shot) call — that compile
   is irreducible here — only repeated calls.** Regression: `test_steady_state.py::
-  test_bsm1_steady_state_solve_is_cached` (one entry, reused across params,
-  bit-identical re-call, gradient path bypasses it and stays finite).
+  test_steady_state_solve_is_cached` (single-CSTR: one entry, reused across
+  params, bit-identical re-call, gradient path bypasses it and matches the
+  closed form).
 - **`steady_state(..., colored_jacobian=True)` — sparse (colored-AD) PTC
   Jacobian.** PTC forms the full plant `dF/dy` every Newton step (~tens of times
   for BSM2), the *same* block-sparse object the integrator's implicit-stage
