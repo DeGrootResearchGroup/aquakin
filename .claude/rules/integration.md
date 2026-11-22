@@ -207,18 +207,13 @@ compiled solve to avoid it:
   cannot false-hit.) `Plant.solve_sensitivity` is cached the same way (keyed
   by its static structure, everything else a runtime argument — see its bullet
   above). The event path (`run_to_steady_state`) is not cached
-  (run-once). The `gradient="stable_adjoint"` path **is** cached for repeat
-  *forward* solves (a parameter sweep), keyed the same way but tagged
-  `"stable_adjoint"` so it never collides with the forward path, with `t_eval`
-  baked into the closure (the discrete adjoint marks it non-differentiable, so it
-  cannot be a traced runtime argument) and its values folded into the key. The
-  cache is used **only when the inputs are concrete**: under a trace — a gradient
-  through the solve, or an enclosing `jax.jit` — the adjoint's `custom_vjp` is
-  traced directly into the outer computation rather than routed through an inner
-  `jax.jit`, which does not compose with an outer reverse-mode pass. That direct
-  path is the one a `gradient="stable_adjoint"` calibration gradient takes, so a
-  jitted calibration loss amortizes the (large) plant compile across optimizer
-  iterations through the *outer* jit. Jitting that loss is possible because
+  (run-once). The `stable_adjoint` path is **not** cached: `solve` routes to it
+  only under reverse-mode differentiation (traced `params` / `y0`), and there the
+  adjoint's `custom_vjp` is traced directly into the outer computation — routing
+  it through an inner `jax.jit` does not compose with an outer reverse-mode pass.
+  A jitted calibration loss amortizes the (large) plant compile across optimizer
+  iterations through the *outer* jit. Do not add a concrete-input cache to that
+  path: no public call reaches it with concrete inputs. Jitting that loss is possible because
   `_coerce_atol` returns the 0-d `atol` array unchanged under tracing instead of
   forcing it to a Python `float` (a `float()` on a tracer raises a
   concretization error).

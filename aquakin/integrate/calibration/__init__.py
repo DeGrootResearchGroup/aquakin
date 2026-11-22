@@ -16,6 +16,6 @@
 - ``driver``: the fit run shared by ``calibrate`` and ``Plant.calibrate``.
 
 Nothing here is public API: the public names are reached through
-``aquakin.integrate`` (or ``aquakin``), and ``aquakin.integrate.calibrate``
-re-exports every name it has always exported.
+``aquakin.integrate`` (or ``aquakin``). Private helpers are imported from the
+module that defines them; ``aquakin.integrate.calibrate`` does not re-export them.
 """

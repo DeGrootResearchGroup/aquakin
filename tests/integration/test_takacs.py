@@ -10,7 +10,7 @@ from aquakin.plant.influent import InfluentSeries
 from aquakin.plant.takacs import TakacsClarifier
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def asm1():
     return aquakin.load_model("asm1")
 

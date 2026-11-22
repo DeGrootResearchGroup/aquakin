@@ -6,16 +6,25 @@ durations, so when they outnumber the shards pytest-split's duration-based
 chunking pairs them and leaves the trailing shards empty -- and an empty shard
 exits 5 ("no tests ran"), failing the run on main. Adding a heavy test therefore
 means adding a shard; this pins that in the fast gate.
+
+The heavy tests are counted from the source rather than by a ``pytest
+--collect-only`` subprocess, which imports the whole suite. A static count is
+exact only for the form every heavy test takes today -- a plain test function
+with ``@pytest.mark.heavy`` stacked on it -- so any other way of applying the
+mark (a parametrized heavy test, a class or module ``pytestmark``, a mark added
+from a hook or by name) fails here instead of being miscounted.
 """
 
+import ast
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+
+#: Any spelling of the heavy / xheavy mark, decorator or not.
+_MARK_TEXT = re.compile(r"""mark\s*\.\s*x?heavy\b|["']x?heavy["']""")
 
 
 def _heavy_job():
@@ -23,13 +32,53 @@ def _heavy_job():
     return workflow["jobs"]["heavy"]
 
 
+def _mark_name(decorator):
+    """``heavy`` for ``@pytest.mark.heavy`` (or ``@mark.heavy``), else None."""
+    node = decorator.func if isinstance(decorator, ast.Call) else decorator
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute):
+        if node.value.attr == "mark":
+            return node.attr
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        if node.value.id == "mark":
+            return node.attr
+    return None
+
+
 def _heavy_test_count():
-    out = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
-         "-m", "heavy and not xheavy", "tests"],
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    ).stdout
-    return sum(1 for line in out.splitlines() if "::" in line)
+    """Count the ``heavy and not xheavy`` tests the suite would collect.
+
+    Raises
+    ------
+    AssertionError
+        If the heavy mark is applied in any form this count cannot size.
+    """
+    count = 0
+    sources = [p for p in (ROOT / "tests").rglob("*.py") if p.resolve() != Path(__file__)]
+    for path in sources + [ROOT / "conftest.py"]:
+        text = path.read_text()
+        mentions = sum(1 for _ in _MARK_TEXT.finditer(text))
+        if not mentions:
+            continue
+        understood = 0
+        for node in ast.walk(ast.parse(text)):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            marks = [_mark_name(d) for d in node.decorator_list]
+            heavy_marks = [m for m in marks if m in ("heavy", "xheavy")]
+            if not heavy_marks:
+                continue
+            understood += len(heavy_marks)
+            assert node.name.startswith("test_") and "parametrize" not in marks, (
+                f"{path.relative_to(ROOT)}::{node.name} carries the heavy mark in a "
+                "form the static count cannot size; extend _heavy_test_count"
+            )
+            if "heavy" in marks and "xheavy" not in marks:
+                count += 1
+        assert understood == mentions, (
+            f"{path.relative_to(ROOT)} applies the heavy mark other than as a "
+            "decorator on a test function; extend _heavy_test_count"
+        )
+    return count
 
 
 def test_heavy_job_has_a_shard_for_every_heavy_test():

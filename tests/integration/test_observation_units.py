@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 import aquakin
-from aquakin.integrate.calibrate import _convert_observations, _observation_unit_factors
+from aquakin.integrate.calibration.loss import _convert_observations, _observation_unit_factors
 from aquakin.plant import CSTRUnit, Plant
 from aquakin.plant.influent import InfluentSeries
 

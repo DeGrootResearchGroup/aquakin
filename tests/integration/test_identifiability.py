@@ -30,15 +30,17 @@ def catalysed_fim():
     )
 
 
-@pytest.fixture
-def decay_fim(simple_model):
-    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+@pytest.fixture(scope="module")
+def decay_fim():
+    """Fisher information of first-order decay; built once, read-only."""
+    model = aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
+    reactor = aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1, T=293.15))
     design = Experiment(jnp.asarray([1.5, 0.0]), T_OBS, sigma=0.01, observed_species=["A"])
     return aquakin.fisher_information(
         reactor,
         design,
         ["A_to_B.k"],
-        params=simple_model.default_parameters().at[0].set(0.25),
+        params=model.default_parameters().at[0].set(0.25),
         transforms=LOG,
         free_ic=FreeICConfig(["A"]),
     )
