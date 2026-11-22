@@ -7,7 +7,8 @@ per-step Jacobian is still colored forward-mode AD -- the *same* exact matrix th
 differentiable path uses -- so the trajectory matches a valid adaptive solution
 to the same tolerance; only end-to-end differentiability is given up. These tests
 pin the integrator math (analytic decay + order), the exact ``t_eval`` output,
-the agreement with the diffrax solve on BSM1/BSM2, and the guards.
+the agreement with the diffrax solve on BSM2, and the guards (on the
+one-tank plant).
 """
 
 import diffrax
@@ -133,33 +134,15 @@ def test_stalled_solve_raises():
 
 
 # --------------------------------------------------------------------------
-# Plant guards (fast: reject before any solve).
+# Plant guards and knobs, on the one-tank plant: they do not depend on the
+# plant's size.
 # --------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def bsm1():
-    """One BSM1 plant and its warm start, shared by the module. The tests only
-    solve it (filling its per-instance compiled-solve caches, keyed by the
-    solve settings) and never add units, influents or events to it, so sharing
-    saves a build and a compile per test without coupling their results."""
-    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
-    from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
-    from aquakin.plant.influent import InfluentSeries
-
-    asm1 = aquakin.load_model("asm1")
-    p = build_bsm1(model=asm1)
-    C0 = asm1.concentrations({
-        "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
-        "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0})
-    inf = InfluentSeries(t=jnp.array([0.0, 100.0]),
-                         Q=jnp.full((2,), BSM1_Q_AVG),
-                         C=jnp.tile(C0, (2, 1)), model=asm1)
-    p.add_influent("feed", inf, to="inlet_mix.fresh")
-    return p, bsm1_warm_start(p)
+_Y0 = jnp.array([0.2, 0.0])
 
 
-def test_forward_fast_rejects_events_and_grad(bsm1):
-    plant, y0 = bsm1
+def test_forward_fast_rejects_events_and_grad(cstr_plant):
+    plant, y0 = cstr_plant, _Y0
     params = plant.default_parameters()
     te = jnp.array([1.0])
     with pytest.raises(ValueError, match="forward_fast"):
@@ -192,8 +175,8 @@ def test_forward_fast_rejects_events_and_grad(bsm1):
     ({"colored_jacobian": False}, None),
     ({"dtmax": 0.1}, aquakin.DifferentiationConfig(method="through_solve")),
 ])
-def test_forward_fast_rejects_unhonored_integrator_knobs(bsm1, override, diff):
-    plant, y0 = bsm1
+def test_forward_fast_rejects_unhonored_integrator_knobs(cstr_plant, override, diff):
+    plant, y0 = cstr_plant, _Y0
     params = plant.default_parameters()
     te = jnp.array([1.0])
     kw = {} if diff is None else {"diff": diff}
@@ -208,8 +191,8 @@ def test_forward_fast_rejects_unhonored_integrator_knobs(bsm1, override, diff):
 # one integrator field forward_fast threads through; the other knob a forward_fast
 # user routinely sets.) This is the "honors, not silently drops" half of the
 # (mode x knob) contract.
-def test_forward_fast_accepts_honored_knobs(bsm1):
-    plant, y0 = bsm1
+def test_forward_fast_accepts_honored_knobs(cstr_plant):
+    plant, y0 = cstr_plant, _Y0
     params = plant.default_parameters()
     te = jnp.array([0.0, 1.0])
     sol = plant.solve(t_span=(0.0, 1.0), t_eval=te, params=params, y0=y0,
@@ -219,9 +202,9 @@ def test_forward_fast_accepts_honored_knobs(bsm1):
     assert np.all(np.isfinite(np.asarray(sol.state)))
 
 
-def test_forward_fast_honours_max_steps(bsm1):
+def test_forward_fast_honours_max_steps(cstr_plant):
     """The plant's ``max_steps`` reaches the forward_fast integrator."""
-    plant, y0 = bsm1
+    plant, y0 = cstr_plant, _Y0
     params = plant.default_parameters()
     with pytest.raises(RuntimeError, match="step budget"):
         plant.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), params=params,
