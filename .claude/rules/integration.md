@@ -57,7 +57,9 @@ docstring that tells a user how to switch AD direction or adjoint uses the
 constants in `integrate/_config.py` (`FORWARD_DIFF`, `FORWARD_THROUGH_SOLVE_DIFF`,
 `STABLE_REVERSE_DIFF`, `FORWARD_REACTOR_REMEDY`); do not write the spelling out
 again, and do not name removed keywords (`ad_mode=`, `gradient=`, a reactor
-`adjoint=`), which once survived the API change in every remedy. A non-finite
+`adjoint=`), which once survived the API change in every remedy.
+`tests/unit/test_user_hints.py` fails on a message or public docstring that names
+a keyword the API does not take. A non-finite
 reverse gradient a user takes by hand through `reactor.solve` is guarded by
 `reactor.check_gradient_finite(g)` (`GradientCheckMixin`) or the free
 `aquakin.check_finite_gradient`. `Plant.solve` with the default `diff`
