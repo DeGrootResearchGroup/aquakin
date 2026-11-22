@@ -343,9 +343,7 @@ def bsm1():
     """The BSM1 plant built once and shared across the steady-state tests that
     only READ it -- ``steady_state`` / ``run_to_steady_state`` / ``jax.grad`` do
     not mutate the plant, so its per-instance compiled-solve cache amortises the
-    PTC compile across these tests instead of rebuilding + recompiling per test.
-    (The cache-assertion test below builds its own fresh plant: it asserts an
-    empty cache.)"""
+    PTC compile across these tests instead of rebuilding + recompiling per test."""
     return _bsm1()
 
 
@@ -434,32 +432,6 @@ def test_bsm1_steady_state_differentiable_wrt_recycle_flow(bsm1):
     assert abs(float(g[ras]) - fd) <= 1e-2 * abs(fd) + 1e-6
     # more RAS recycle retains more biomass -> lower effluent ammonia
     assert float(g[ras]) < 0.0
-
-
-@pytest.mark.slow
-def test_bsm1_steady_state_solve_is_cached():
-    # The eager PTC while_loop recompiles on every call; a persisted jitted solver
-    # makes a repeated concrete steady_state reuse the compile. Pin the behaviour
-    # (not the wall time): one cache entry, reused across params, bit-identical
-    # re-call, and the gradient path bypasses the cache (and stays finite).
-    plant, _asm1, y0 = _bsm1()
-    params = plant.default_parameters()
-    assert not plant._steady_jit_cache                 # empty before first solve
-    r1 = plant.steady_state(params, y0=y0)
-    assert bool(r1.converged)
-    assert len(plant._steady_jit_cache) == 1           # compiled + cached once
-    # A swept-params call reuses the SAME compiled solver (rhs reads params as an
-    # argument), so no new entry is added.
-    r2 = plant.steady_state(params.at[0].multiply(1.001), y0=y0)
-    assert bool(r2.converged) and len(plant._steady_jit_cache) == 1
-    # Same-params re-call is bit-identical (the cached compiled solve).
-    r3 = plant.steady_state(params, y0=y0)
-    assert float(jnp.max(jnp.abs(r1.state - r3.state))) == 0.0
-    # Under a gradient the call is traced, so it takes the IFT path, NOT the
-    # concrete cache -- no concrete entry is added and the gradient is finite.
-    g = jax.grad(lambda p: plant.steady_state(p, y0=y0).state.sum())(params)
-    assert bool(jnp.all(jnp.isfinite(g)))
-    assert len(plant._steady_jit_cache) == 1
 
 
 def _design_cstr(make_cstr_plant):
@@ -671,6 +643,36 @@ def test_plant_steady_state_gradient_matches_closed_form(make_cstr_plant):
     k = float(params[0])
     g = jax.grad(lambda p: plant.steady_state(p, tol=1e-10).state[0])(params)
     assert float(g[0]) == pytest.approx(-0.1 / (0.1 + k) ** 2, rel=1e-8)
+
+
+def test_steady_state_solve_is_cached(make_cstr_plant):
+    # The eager PTC while_loop recompiles on every call; a persisted jitted solver
+    # makes a repeated concrete steady_state reuse the compile. Pin the behaviour
+    # (not the wall time): one cache entry, reused across params, bit-identical
+    # re-call, and the gradient path bypasses the cache. Nothing here depends on
+    # the plant's size, so it runs on the single CSTR, whose IFT gradient has the
+    # closed form dA*/dk = -(Q/V) / (Q/V + k)^2.
+    plant = make_cstr_plant()
+    params = plant.default_parameters()
+    assert not plant._steady_jit_cache                 # empty before first solve
+    r1 = plant.steady_state(params, tol=1e-10)
+    assert bool(r1.converged)
+    np.testing.assert_allclose(np.asarray(r1.state), _cstr_steady(float(params[0])),
+                               rtol=1e-8)
+    assert len(plant._steady_jit_cache) == 1           # compiled + cached once
+    # A swept-params call reuses the SAME compiled solver (rhs reads params as an
+    # argument), so no new entry is added.
+    r2 = plant.steady_state(params.at[0].multiply(1.001), tol=1e-10)
+    assert bool(r2.converged) and len(plant._steady_jit_cache) == 1
+    # Same-params re-call is bit-identical (the cached compiled solve).
+    r3 = plant.steady_state(params, tol=1e-10)
+    assert float(jnp.max(jnp.abs(r1.state - r3.state))) == 0.0
+    # Under a gradient the call is traced, so it takes the IFT path, NOT the
+    # concrete cache -- no concrete entry is added.
+    g = jax.grad(lambda p: plant.steady_state(p, tol=1e-10).state[0])(params)
+    k = float(params[0])
+    assert float(g[0]) == pytest.approx(-0.1 / (0.1 + k) ** 2, rel=1e-8)
+    assert len(plant._steady_jit_cache) == 1
 
 
 def test_colored_steady_state_on_a_recycle_loop_matches_closed_form():
