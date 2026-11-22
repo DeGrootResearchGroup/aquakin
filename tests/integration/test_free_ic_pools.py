@@ -14,7 +14,7 @@ import pytest
 
 import aquakin
 from aquakin import Experiment, FreeICConfig, LaplaceConfig, OptimizerConfig
-from aquakin.integrate.calibrate import _free_ic_fields
+from aquakin.integrate.calibration.coords import _free_ic_fields
 
 _TWO_POOL_YAML = """
 model:
@@ -368,7 +368,7 @@ def test_fixed_total_three_pools(two_pool):
     )
     assert sum(r.ic_named[0].values()) == pytest.approx(1.5, rel=1e-12)
     assert sum(r.ic_fractions[0].values()) == pytest.approx(1.0, rel=1e-12)
-    from aquakin.integrate.calibrate import _simplex_fraction_cov
+    from aquakin.integrate.calibration.coords import _simplex_fraction_cov
 
     z = [
         np.log(r.ic_named[0]["X"] / r.ic_named[0]["S"]),
