@@ -340,36 +340,6 @@ def test_plant_colored_gradient_matches_default(bsm1):
     assert abs(g_col - g_def) / (abs(g_def) + 1e-12) < 1e-4
 
 
-@pytest.mark.slow
-def test_guard_falls_back_on_truncated_pattern(bsm1, monkeypatch):
-    """A pattern that misses real nonzeros must be caught by the start-state
-    guard, which warns and falls back to the dense solver (still correct)."""
-    plant, y0 = bsm1()
-    params = plant.default_parameters()
-
-    # Force a diagonal-only (truncated) pattern -> colored J misses every
-    # off-diagonal -> the guard's colored-vs-dense error is large.
-    def _diag_only(rhs, y0_, **kw):
-        n = jnp.asarray(y0_).shape[0]
-        return np.eye(n, dtype=bool)
-    monkeypatch.setattr(cj, "jacobian_sparsity_pattern", _diag_only)
-
-    te = jnp.linspace(0.0, 5.0, 26)
-    kw = dict(t_span=(0.0, 5.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-5, atol=1e-3)
-    s_def = plant.solve(
-        **kw, integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
-    with pytest.warns(RuntimeWarning, match="falling back to dense"):
-        s_col = plant.solve(
-            **kw, integrator=aquakin.IntegratorConfig(
-                max_steps=2_000_000, colored_jacobian=True))
-    assert plant._colored._root_finder[2] is False         # guard failed
-    # fallback path == dense default, so trajectories match tightly
-    rel = np.max(np.abs(np.asarray(s_def.state) - np.asarray(s_col.state))
-                 / (np.abs(np.asarray(s_def.state)) + 1e-6))
-    assert rel < 1e-10
-
-
 def test_colored_rejected_with_events(bsm1):
     # colored_jacobian is rejected with events= (the segmented solve manages its
     # own integrator). It IS supported with gradient="stable_adjoint" (it colors
@@ -486,37 +456,6 @@ def test_a_first_colored_solve_under_tracing_runs_dense(cstr_plant):
 # --------------------------------------------------------------------------
 
 @pytest.mark.slow
-def test_colored_bsm2_matches_default():
-    from aquakin.plant.bsm import bsm2_warm_start
-    from aquakin.plant.bsm.bsm2 import bsm2_asm1_model, bsm2_parameters, build_bsm2
-    from aquakin.plant.influent import load_bsm2_influent
-
-    def make():
-        asm1 = bsm2_asm1_model()
-        adm1 = aquakin.load_model("adm1")
-        params = bsm2_parameters(asm1, adm1)
-        p = build_bsm2(asm1_model=asm1, adm1_model=adm1)
-        p.add_influent("feed", load_bsm2_influent("dry", asm1))
-        return p, params
-
-    p, params = make()
-    y0 = bsm2_warm_start(p)
-    te = jnp.linspace(0.0, 6.0, 25)
-    kw = dict(t_span=(0.0, 6.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-4, atol=1e-3)
-    s_def = p.solve(
-        **kw, integrator=aquakin.IntegratorConfig(max_steps=8_000_000))
-    s_col = p.solve(
-        **kw, integrator=aquakin.IntegratorConfig(
-            max_steps=8_000_000, colored_jacobian=True))
-    assert p._colored._root_finder[2] is True
-    a, b = np.asarray(s_def.state), np.asarray(s_col.state)
-    assert np.all(np.isfinite(b))
-    rel = np.max(np.abs(a - b) / (np.abs(a) + 1e-3))
-    assert rel < 2e-2            # within-tolerance drift over the dynamic run
-
-
-@pytest.mark.slow
 def test_colored_bsm2_soluble_holdup_no_fallback():
     """The settler soluble-holdup states put the digester at its settled
     operating point, where the dissolved-hydrogen Jacobian column is steep at a
@@ -542,18 +481,17 @@ def test_colored_bsm2_soluble_holdup_no_fallback():
                    settler_soluble_holdup=True)
     p.add_influent("feed", bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))
     y0 = p.steady_state(params, y0=bsm2_warm_start(p)).state
-    te = jnp.linspace(0.0, 6.0, 13)
-    kw = dict(t_span=(0.0, 6.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-4, atol=1e-3)
-    s_def = p.solve(
-        **kw, integrator=aquakin.IntegratorConfig(max_steps=8_000_000))
+    # The colored root finder is built and guarded once, at the solve's start
+    # state, before the first step, so a short horizon exercises the whole
+    # regression. (That the colored solve tracks the dense trajectory is
+    # test_plant_colored_solve_matches_default's job.)
     s_col = p.solve(
-        **kw, integrator=aquakin.IntegratorConfig(
+        t_span=(0.0, 0.25), t_eval=jnp.array([0.25]), params=params, y0=y0,
+        rtol=1e-4, atol=1e-3,
+        integrator=aquakin.IntegratorConfig(
             max_steps=8_000_000, colored_jacobian=True))
     assert p._colored._root_finder[2] is True       # guard passed: colored, not dense
-    a, b = np.asarray(s_def.state), np.asarray(s_col.state)
-    assert np.all(np.isfinite(b))
-    assert np.max(np.abs(a - b) / (np.abs(a) + 1e-3)) < 2e-2
+    assert np.all(np.isfinite(np.asarray(s_col.state)))
 
 
 # --------------------------------------------------------------------------

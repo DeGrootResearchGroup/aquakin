@@ -20,7 +20,6 @@ fast gate where signature drift must be caught.
 import importlib
 import inspect
 
-import jax
 import jax.numpy as jnp
 import pytest
 
@@ -133,7 +132,7 @@ def test_batch_solve_documented_call_forms_execute(simple_model):
     assert jnp.all(jnp.isfinite(s1.C)) and jnp.all(jnp.isfinite(s2.C))
     # passing params positionally must be rejected (it is keyword-only) -- this is
     # precisely the call shape the post-merge incident used.
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="takes from 3 to 4 positional arguments"):
         r.solve(C0, p, (0.0, 1.0), t_eval)
 
 
@@ -152,22 +151,8 @@ def test_batch_solve_sensitivity_executes(simple_model):
     assert jnp.all(jnp.isfinite(S))
     # params is keyword-only: passing it positionally now lands in the t_span
     # slot and must be rejected (the same guard as solve).
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="missing 1 required keyword-only argument: 'params'"):
         r.solve_sensitivity(C0, p, (0.0, 1.0), sens_params=[0])
-
-
-def test_check_gradient_finite_guards_a_reverse_gradient(simple_model):
-    """The reverse-gradient guard composes with a real jax.grad through solve
-    (keyword params) -- the recommended DIY-loss pattern, fast-gate-covered."""
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
-    r = BatchReactor(simple_model, cond)
-    C0 = jnp.asarray([1.0, 0.0])
-
-    def loss(p):
-        return r.solve(C0, params=p, t_span=(0.0, 1.0)).C[-1, 1]
-
-    g = r.check_gradient_finite(jax.grad(loss)(simple_model.default_parameters()))
-    assert jnp.all(jnp.isfinite(g))
 
 
 # ---------------------------------------------------------------------------

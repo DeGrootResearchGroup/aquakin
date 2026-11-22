@@ -110,8 +110,8 @@ aquakin/
 │   │   ├── calibrate.py             # calibrate(): transforms, priors, Laplace posterior,
 │   │   │                            #   multistart, free initial conditions, Gauss-Newton
 │   │   │                            #   optimizer, posterior-predictive bands. Holds only
-│   │   │                            #   the entry point; re-exports every name it ever
-│   │   │                            #   exported from calibration/ (pinned by a test)
+│   │   │                            #   the entry point and its public names; private
+│   │   │                            #   helpers are imported from calibration/ directly
 │   │   ├── calibration/             # calibrate()'s implementation, one concern each:
 │   │   │   ├── config.py            #   OptimizerConfig / LaplaceConfig / FreeICConfig
 │   │   │   ├── observation.py       #   observe(), observation_fn handling (+ fisher.py)

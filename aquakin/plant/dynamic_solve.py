@@ -563,9 +563,8 @@ def _solve_stable_adjoint(
 
     A robust adaptive ESDIRK forward paired with the per-step transposed-solve
     discrete adjoint over the saved trajectory, which stays finite at any step
-    size. The compiled solve is cached per instance and reused across repeat
-    forward solves; under a trace it runs uncached so the ``custom_vjp``
-    composes with the enclosing reverse-mode pass.
+    size. ``solve`` routes here only under reverse-mode differentiation, so
+    it runs uncached: the ``custom_vjp`` composes with the enclosing pass.
     """
     if adjoint is not None or dtmax is not None:
         raise ValueError(
@@ -624,90 +623,36 @@ def _solve_stable_adjoint(
     fwd_root_finder = None
     # Cap-free reverse-mode gradient through the stiff plant solve: the
     # forward is a robust adaptive ESDIRK solve and the reverse is the
-    # per-step transposed-solve discrete adjoint over the saved
-    # trajectory, which stays finite at any step size. The compiled solve
-    # is cached per instance and reused across repeat *forward* solves
-    # (the parameter-sweep case), keyed like the forward path but tagged
-    # so it never collides with it. ``t_eval`` is baked into the compiled
-    # closure (the adjoint marks it non-differentiable, so it cannot be a
-    # traced runtime argument), so the key carries its values. The cache
-    # is used only when the inputs are concrete: under a trace (a gradient
-    # through the solve, or an enclosing jit) the adjoint's ``custom_vjp``
-    # is traced directly into the outer computation -- routing it through
-    # an inner ``jax.jit`` does not compose with an outer reverse-mode
-    # pass -- which is the path the calibration gradient takes anyway.
-    # The discrete-adjoint backward scan walks a saved trajectory whose
-    # length is adjoint_max_steps (DifferentiationConfig.adjoint_max_steps);
-    # the forward solve must also fit in that buffer, so this single budget
-    # serves both roles here.
+    # per-step transposed-solve discrete adjoint over the saved trajectory,
+    # which stays finite at any step size. ``solve`` routes here only under
+    # reverse-mode differentiation (params or y0 traced), so the adjoint's
+    # ``custom_vjp`` is traced directly into the outer computation -- routing
+    # it through an inner ``jax.jit`` would not compose with the outer
+    # reverse-mode pass -- and an enclosing ``jax.jit`` amortizes the compile.
+    # The recycle probe is still hoisted via the cached-map primal RHS, and
+    # the colored backward Jacobian builder is used when requested. The
+    # discrete-adjoint backward scan walks a saved trajectory whose length is
+    # adjoint_max_steps (DifferentiationConfig.adjoint_max_steps); the
+    # forward solve must also fit in that buffer, so this single budget serves
+    # both roles here.
     adj_steps = adjoint_max_steps
-    settings = concrete_settings_key(rtol, atol, None, None, adj_steps)
-    teval_key, teval_concrete = _concrete_teval_key(t_eval)
-    under_trace = isinstance(params, jax.core.Tracer) or isinstance(y0, jax.core.Tracer)
-    # The forward ESDIRK solver (e.g. the cheaper Kvaerno3) and factormax
-    # change the compiled solve, so they key the cache -- the solver by
-    # class, exactly as the forward jax_adjoint path does. The ESDIRK
-    # ``order`` (3 vs 5) also changes the compiled solve, so it is keyed.
-    # ``adjoint_low_memory`` selects the recompute backward (no saved
-    # dense-stage buffer), a different compiled solve, so it is keyed too.
-    solver_key = type(solver).__name__ if solver is not None else None
-    cache_key = (
-        None
-        if (settings is None or not teval_concrete or under_trace)
-        else (
-            "stable_adjoint",
+    with friendly_solve_errors(adj_steps, what="plant solve"):
+        ys = self._esdirk_stable_adjoint(
+            y0,
+            params,
             t0,
             t1,
-            teval_key,
-            settings,
-            use_colored,
-            solver_key,
-            factormax,
-            order,
-            adjoint_low_memory,
+            t_eval,
+            rtol=rtol,
+            atol=atol,
+            max_steps=adj_steps,
+            jacobian_builder=jac_builder,
+            forward_root_finder=fwd_root_finder,
+            solver=solver,
+            factormax=factormax,
+            order=order,
+            low_memory=adjoint_low_memory,
         )
-    )
-    with friendly_solve_errors(adj_steps, what="plant solve"):
-        if cache_key is not None:
-            jitted = self._jit_cache.get(cache_key)
-            if jitted is None:
-                jitted = self._build_jitted_stable_adjoint_solve(
-                    t0,
-                    t1,
-                    t_eval,
-                    rtol=rtol,
-                    atol=atol,
-                    max_steps=adj_steps,
-                    forward_root_finder=fwd_root_finder,
-                    solver=solver,
-                    factormax=factormax,
-                    order=order,
-                    low_memory=adjoint_low_memory,
-                )
-                self._jit_cache[cache_key] = jitted
-            ys = jitted(y0, params)
-        else:
-            # Under-trace (the calibration-gradient path): not cached, but
-            # still hoists the recycle probe via the cached-map primal RHS
-            # (the same exact split as the jitted closure) and uses the
-            # colored backward Jacobian builder + colored forward root
-            # finder when requested.
-            ys = self._esdirk_stable_adjoint(
-                y0,
-                params,
-                t0,
-                t1,
-                t_eval,
-                rtol=rtol,
-                atol=atol,
-                max_steps=adj_steps,
-                jacobian_builder=jac_builder,
-                forward_root_finder=fwd_root_finder,
-                solver=solver,
-                factormax=factormax,
-                order=order,
-                low_memory=adjoint_low_memory,
-            )
     if t_eval is None:
         ts = jnp.asarray([t1])
         ys = ys[None, :]
@@ -1064,55 +1009,6 @@ def _build_jitted_forward_fast(self, root_finder, t0, t1, *, rtol, atol, max_ste
             control=StepControl(max_steps=max_steps),
         )
         return t_eval, ys
-
-    return _solve
-
-
-def _build_jitted_stable_adjoint_solve(
-    self,
-    t0,
-    t1,
-    t_eval,
-    *,
-    rtol,
-    atol,
-    max_steps,
-    forward_root_finder=None,
-    solver=None,
-    factormax=None,
-    order=5,
-    low_memory=False,
-):
-    """Build the jit-compiled cap-free stable-adjoint solve for one signature.
-
-    Mirrors :meth:`_build_jitted_solve` but wraps
-    :func:`~aquakin.esdirk_adjoint_solve` (the hand-written discrete adjoint),
-    returning the saved states. ``time_dependent`` carries integration time in
-    the state so the explicit time dependence of the plant RHS (a time-varying
-    influent) is captured exactly; ``max_steps`` bounds the saved-trajectory
-    buffer the backward scan walks. ``y0``/``params`` are runtime arguments,
-    so one compile serves any parameter or initial-state vector of the cached
-    shapes; ``t_eval`` is closed over because the discrete adjoint marks it
-    non-differentiable (a traced ``t_eval`` cannot enter that slot).
-    """
-
-    @jax.jit
-    def _solve(y0, params):
-        return self._esdirk_stable_adjoint(
-            y0,
-            params,
-            t0,
-            t1,
-            t_eval,
-            rtol=rtol,
-            atol=atol,
-            max_steps=max_steps,
-            forward_root_finder=forward_root_finder,
-            solver=solver,
-            factormax=factormax,
-            order=order,
-            low_memory=low_memory,
-        )
 
     return _solve
 

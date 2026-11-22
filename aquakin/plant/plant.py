@@ -2775,7 +2775,6 @@ class Plant:
     _solve_with_events = _dynamic._solve_with_events
     _build_jitted_solve = _dynamic._build_jitted_solve
     _build_jitted_forward_fast = _dynamic._build_jitted_forward_fast
-    _build_jitted_stable_adjoint_solve = _dynamic._build_jitted_stable_adjoint_solve
     _esdirk_stable_adjoint = _dynamic._esdirk_stable_adjoint
 
     # ----- steady state ----------------------------------------------------
