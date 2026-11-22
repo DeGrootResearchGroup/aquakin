@@ -18,7 +18,9 @@ nor concentrating it in a few files makes the whole suite fast.
   purely static gate (no JAX import, no compile), so it finishes in seconds and
   is the cheapest signal in the matrix. It installs only the `lint` extra (`pip install -e ".[lint]"`, which pins
   `ruff>=0.15,<0.16` so a new ruff release cannot redden the gate without a
-  deliberate bump). The rule set and the per-file ignores live in `[tool.ruff]` in
+  deliberate bump). The same gate runs locally from the committed pre-push hook
+  (`.githooks/pre-push`); a Claude Code cloud session enables it, and installs the
+  pinned extras, through the SessionStart hook (`scripts/session_start.py`). The rule set and the per-file ignores live in `[tool.ruff]` in
   `pyproject.toml`: the `E,F,W,I,B,RUF,NPY,PIE,ICN,FA,UP` families plus `C420`
   and `SIM300` at `line-length = 100` (the width the package is written to), with
   several rules `ignore`d against dedicated audit issues so each can be tackled — and

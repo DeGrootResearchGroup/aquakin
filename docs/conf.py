@@ -39,8 +39,8 @@ extensions = [
 
 # Every published page is reachable from a toctree; the dev-internal logs
 # (CI internals, the perf log, the reproduction log, the solver spec, the
-# annotated file tree) are repo references, not user docs, so they are kept
-# out of the built site.
+# annotated file tree, the project reference) are repo references, not user
+# docs, so they are kept out of the built site.
 exclude_patterns = [
     "_build",
     "Thumbs.db",
@@ -50,6 +50,7 @@ exclude_patterns = [
     "plant_performance.md",
     "khalil_reproduction_log.md",
     "spec_forward_sensitivity_solver.md",
+    "project_reference.md",
 ]
 
 # -- MyST (Markdown) ----------------------------------------------------------
