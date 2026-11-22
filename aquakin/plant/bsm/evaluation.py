@@ -275,22 +275,19 @@ def _as_reactors(plant) -> list:
 
 
 def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
-    """Reconstruct each reactor's kLa at every saved time, ``(n_t, n_tanks)``.
+    """Reconstruct each reactor's oxygen kLa at every saved time, ``(n_t, n_tanks)``.
 
-    An anoxic tank has ``kLa = 0``; an aerated tank under DO control reads its
-    kLa from the control signal (via :meth:`Plant.signals_at`), otherwise its
-    fixed ``kLa``.
+    Each tank's kLa is its :meth:`~aquakin.plant.cstr.AerationUnit.oxygen_kla`,
+    read on the oxygen species its own ``Aeration`` names (so a model calling
+    oxygen ``SO2`` works as well as ASM1's ``SO``): 0 for an anoxic tank, the
+    control signal under DO control (via :meth:`Plant.signals_at`), otherwise
+    the fixed ``kLa``.
     """
     n_t = solution.t.shape[0]
-    need_signals = any(plant.units[n]._controlled_kla for n in tanks)
-    if not need_signals:
+    units = [plant.units[n] for n in tanks]
+    if not any(unit.required_signals for unit in units):
         # Every tank's kLa is fixed: one constant row, tiled over time.
-        row = jnp.asarray(
-            [
-                float(plant.units[n]._kla_vec[plant.units[n].model.species_index["SO"]])
-                for n in tanks
-            ]
-        )
+        row = jnp.asarray([float(unit.oxygen_kla()) for unit in units])
         return jnp.broadcast_to(row, (n_t, len(tanks)))
 
     # Closed-loop DO control: the manipulated kLa comes from the control signal,
@@ -298,16 +295,7 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
     # of a per-step Python call to signals_at.
     def _row(t_i, state_row):
         sig = plant.signals_at(t_i, state_row, params)
-        vals = []
-        for n in tanks:
-            unit = plant.units[n]
-            controlled = unit._controlled_kla.get("SO")
-            if controlled is not None:
-                signal_name, gain = controlled
-                vals.append(sig[signal_name] * gain)
-            else:
-                vals.append(jnp.asarray(float(unit._kla_vec[unit.model.species_index["SO"]])))
-        return jnp.stack(vals)
+        return jnp.stack([jnp.asarray(unit.oxygen_kla(sig), dtype=float) for unit in units])
 
     return jax.vmap(_row)(jnp.asarray(solution.t_native), jnp.asarray(solution.state))
 
@@ -970,10 +958,10 @@ def direct_n2o_emission(
     ratios, sats = [], []
     for n in n2o_reactors:
         unit = plant.units[n]
-        in_solve = unit._av.stripped.get(n2o_species)
+        in_solve = unit.stripped_gases.get(n2o_species)
         ratios.append(in_solve if kla_ratio is None and in_solve is not None else kla_ratio)
         sats.append(
-            float(unit._sat_vec[unit.model.species_index[n2o_species]])
+            float(unit.saturation_vector[unit.model.species_index[n2o_species]])
             if in_solve is not None
             else 0.0
         )
