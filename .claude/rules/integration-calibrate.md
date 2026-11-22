@@ -194,8 +194,9 @@ The plant builds its columns from each observable's stream model.
 `observe(ys, p, species_idx, fn, t=)` helper in `calibration/observation.py`, used by both
 `_predict` and `_FisherSetup.jacobian`; a three-argument `fn(t, C, p)`
 (`observation_takes_time`, by signature) gets the sample times in `t_obs`'s
-unit (native times divided by `_CalibrationProblem.obs_time_factor` /
-`_FisherSetup.time_factor`). `NaN` observations are masked in `_build_loss` /
+unit exactly as given (`_CalibrationProblem.obs_times`; `_FisherSetup.tobs`,
+converted to native time by `_FisherSetup.time_factor` only at the solve), never
+native times divided back. `NaN` observations are masked in `_build_loss` /
 `_build_residual` (`_build_masked_*`, only when a `NaN` is present, so the
 unmasked path is unchanged); `Experiment(mask=)` sets the unmeasured entries'
 sigma to `inf` in `_FisherSetup` and is part of the design `_structure_key`; it is a defaulted field on

@@ -425,17 +425,18 @@ calibration, sensitivity and identifiability.
 A rate function is a node class: a frozen dataclass whose fields are its
 arguments, carrying the call spelling (`FUNCTION_NAME`), a kernel key (`KIND`)
 and the arithmetic itself (`op`), written with `jax.numpy` so it differentiates.
-It subclasses `_OperatorNode` from `aquakin.core.nodes`, which is the one
-internal name a model author imports: there is no public alias for it yet.
+It subclasses `aquakin.RateFunction`, the base every rate function shares,
+built-in or your own; its arguments are annotated `ASTNode` (from
+`aquakin.core.nodes`), the type of a parsed sub-expression.
 
 ```python
 from dataclasses import dataclass
 import aquakin
-import jax.numpy as jnp
-from aquakin.core.nodes import ASTNode, _OperatorNode
+from aquakin.core.kernels import safe_pow
+from aquakin.core.nodes import ASTNode
 
 @dataclass(frozen=True)
-class HillNode(_OperatorNode):
+class HillNode(aquakin.RateFunction):
     X: ASTNode
     K: ASTNode
     n: ASTNode
@@ -446,7 +447,8 @@ class HillNode(_OperatorNode):
     @staticmethod
     def op(o):               # ONE tuple: the fields in order
         x, k, n = o
-        return x**n / (k**n + x**n)
+        xn = safe_pow(x, n)  # x**n, with a finite derivative at x = 0
+        return xn / (safe_pow(k, n) + xn)
 
 aquakin.register_rate_function(HillNode)
 ```
@@ -474,11 +476,18 @@ Three things to know:
   would change what every existing model file using that name means. Defining a
   node class is never on its own enough to add a function — only
   `register_rate_function` is.
-- **Your `op` gets no guards.** The built-in functions keep their gradients
-  finite at a depleted species; plain `jax.numpy` arithmetic does not. In the
-  example, `x**n` with a fractional `n` has an infinite derivative at `x = 0`,
-  and a negative `x` gives `NaN`. Write the arithmetic so it stays finite over
-  the states your model reaches.
+- **Your `op` gets none of the built-in guards.** The built-in functions keep
+  their gradients finite at a depleted species; plain `jax.numpy` arithmetic
+  does not. A fractional power at zero has an infinite derivative — written as
+  `x**n`, the example's Hill term with `n < 1` would have one at `x = 0`, which
+  is where a depleted species sits, and it would poison the whole parameter
+  gradient. Use the guarded helpers in `aquakin.core.kernels`: `safe_pow(x, e)`
+  for `x**e`, `safe_sqrt(x)` and `safe_log(x)`. Each keeps the value exact and
+  the derivative finite at zero (`safe_log`'s value there is still `-inf`, so
+  keep its argument positive). None of them gives a negative base with a
+  fractional exponent a real value: that is `NaN`, as it should be. Write the
+  rest of the arithmetic so it stays finite over the states your model
+  reaches.
 
 Optionally, declare how the result's dimension follows from the arguments', so
 `check_units` can check expressions using it. Without this the dimension is

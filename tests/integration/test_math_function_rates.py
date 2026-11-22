@@ -50,7 +50,7 @@ def test_model_with_math_functions_solves(model, reactor):
     assert C[-1] > C[0]            # product accumulates
     # The half-order species depletes to zero and the adaptive solver
     # undershoots it by ~5e-9 -- within its tolerance, and benign only because
-    # ``_safe_sqrt`` returns 0 rather than NaN for a slightly negative
+    # ``safe_sqrt`` returns 0 rather than NaN for a slightly negative
     # argument. Without that guard the solve would fail here, not drift.
     assert jnp.all(sol.C >= -1e-7)
 
