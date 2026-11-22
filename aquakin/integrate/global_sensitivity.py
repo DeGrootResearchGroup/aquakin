@@ -312,7 +312,8 @@ def dgsm(
         ``jax.vmap`` dispatch and finiteness is filtered once on the stacked
         result -- one device->host transfer instead of one per point. Set
         ``False`` to evaluate point-by-point (lower peak memory for a large
-        screen). Both give identical results.
+        screen). Both give identical results, and both run ``fn`` under
+        :func:`jax.jit`, so it must be traceable.
 
     Returns
     -------
