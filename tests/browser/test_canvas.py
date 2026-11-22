@@ -166,3 +166,19 @@ def test_an_unreadable_edit_keeps_its_unit_and_names_the_field(page, bad):
     expect(page.get_by_label("identifier")).to_have_value("tank1")
     expect(page.get_by_label("volume *")).to_have_value(bad)
     expect(_unit(page, "tank1").locator(".ak-summary")).to_have_text("volume 1000")
+
+
+def _checks_done(page):
+    """Wait until aquakin's background checks have finished (after which no
+    republish of the flowsheet is pending)."""
+    page.get_by_role("tab", name=re.compile(r"^Checks")).click()
+    expect(page.get_by_text("None: aquakin built every unit and the plant.")).to_be_visible(
+        timeout=60_000
+    )
+
+
+def test_the_first_checks_are_reported_when_they_finish(page):
+    """The checks the editor starts with run while the page connects; when
+    they finish, the page stops saying "checking" and says there are none."""
+    _checks_done(page)
+    expect(page.get_by_text("aquakin is checking the flowsheet")).to_have_count(0)

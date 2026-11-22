@@ -250,7 +250,12 @@ class Editor:
             return  # no page served yet: the checks run once the server is ready
         if self._check_task is not None:
             self._check_task.cancel()
-        self.state.checking = True
+        # Pushed now: trame sends a value only when it differs from the one it
+        # last pushed. Left for the next flush, a `checking` set at start-up
+        # reaches a page only in its first state, the push still holds `False`,
+        # and the `False` that ends the round would never be sent.
+        with self.state:
+            self.state.checking = True
         self._check_task = asynchronous.create_task(self._run_checks())
 
     async def _run_checks(self) -> None:
