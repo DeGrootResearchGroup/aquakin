@@ -143,12 +143,13 @@ def test_sensitivity_doutput_dconditions_matches_finite_diff():
 
     # Central difference with a relative step of 1e-3: its truncation error is
     # about 1e-6 relative here and the solve's rtol is 1e-6, so rel=1e-4 leaves
-    # two decades of margin.
+    # two decades of margin. abs=0: the gradient is about 2e-12, below
+    # pytest.approx's default absolute tolerance of 1e-12.
     h = 1e-3 * scav
     fd = (bromate(scav + h) - bromate(scav - h)) / (2.0 * h)
     g_scav = float(result.doutput_dconditions["OH_scavenging"][0])
     assert g_scav < 0.0  # more OH scavenging, less bromate
-    assert g_scav == pytest.approx(fd, rel=1e-4)
+    assert g_scav == pytest.approx(fd, rel=1e-4, abs=0.0)
     for name, g in result.doutput_dconditions.items():
         assert jnp.all(jnp.isfinite(g)), f"non-finite grad for {name}"
 
