@@ -483,30 +483,21 @@ def test_bsm1_steady_state_keeps_ptc_result_when_ladder_declines(bsm1):
     assert not bool(ss.converged)
 
 
-def _design_cstr():
-    """A single CSTR (A -> B, k = 0.1, V/Q = 10) fed 1 g/m3 of A, plus a design
-    override that raises the feed to 5 g/m3 (steady state A = B = 2.5)."""
-    from aquakin.plant import CSTRUnit, Plant
-    from aquakin.plant.influent import InfluentSeries
-
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    inf = InfluentSeries(t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
-                         C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net)
-    plant = Plant("one", time_unit="s")
-    plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
-                            input_port_names=["inlet"], conditions={"T": 293.15}))
-    plant.add_influent("feed", inf, to="tank.inlet")
+def _design_cstr(make_cstr_plant):
+    """The conftest single CSTR (A -> B, k = 0.1, V/Q = 10, fed 1 g/m3 of A),
+    plus a design override that raises the feed to 5 g/m3 (steady state
+    A = B = 2.5)."""
     design = {"influent": {"feed": {"Q": jnp.asarray(10.0), "C": jnp.asarray([5.0, 0.0])}}}
-    return plant, design
+    return make_cstr_plant(), design
 
 
 @pytest.mark.parametrize("extra", [{}, {"atol": 1e-10}], ids=["default_atol", "atol"])
-def test_steady_state_forward_fallback_honours_design(extra):
+def test_steady_state_forward_fallback_honours_design(extra, make_cstr_plant):
     # A starved PTC falls back to forward integration; that fallback must
     # integrate the design-override feed, not the recorded influent (which
     # would give A = B = 0.5 and still report converged). An explicit solver
     # ``atol`` reaches the design rung too.
-    plant, design = _design_cstr()
+    plant, design = _design_cstr(make_cstr_plant)
     ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, arclength=False,
                             fallback_kwargs={"ss_rtol": 1e-8, "ss_atol": 1e-8, **extra})
     assert ss.method == "ptc->forward"
@@ -515,11 +506,11 @@ def test_steady_state_forward_fallback_honours_design(extra):
 
 
 @pytest.mark.parametrize("criterion", ["norm", "scaled_residual"])
-def test_steady_state_design_forward_fallback_takes_criterion(criterion):
+def test_steady_state_design_forward_fallback_takes_criterion(criterion, make_cstr_plant):
     # The design-override forward rung takes run_to_steady_state's criterion /
     # tol / scale_floor and returns the scaled residual (issue #628). With the
     # design feed equal to the recorded one it matches the plain fallback.
-    plant, _ = _design_cstr()
+    plant, _ = _design_cstr(make_cstr_plant)
     same = {"influent": {"feed": {"Q": jnp.asarray(10.0), "C": jnp.asarray([1.0, 0.0])}}}
     kw = {"criterion": criterion, "tol": 1e-9, "scale_floor": 1e-6,
           "ss_rtol": 1e-10, "ss_atol": 1e-10}
@@ -537,8 +528,8 @@ def test_steady_state_design_forward_fallback_takes_criterion(criterion):
     assert ss_d.residual == pytest.approx(ss_p.residual, rel=1e-3, abs=1e-9)
 
 
-def test_steady_state_design_forward_fallback_rejects_bad_criterion():
-    plant, design = _design_cstr()
+def test_steady_state_design_forward_fallback_rejects_bad_criterion(make_cstr_plant):
+    plant, design = _design_cstr(make_cstr_plant)
     with pytest.raises(ValueError, match="criterion"):
         plant.steady_state(design=design, max_iter=1, tol=1e-12, arclength=False,
                            fallback_kwargs={"criterion": "bogus"})
@@ -548,11 +539,11 @@ def test_steady_state_design_forward_fallback_rejects_bad_criterion():
     (True, "continuation_from and arclength"),
     (False, "continuation_from fallback"),
 ], ids=["arclength", "no_arclength"])
-def test_steady_state_design_skips_parameter_continuation(arclength, named):
+def test_steady_state_design_skips_parameter_continuation(arclength, named, make_cstr_plant):
     # The continuation rungs deform in params alone; with a design override
     # they are skipped (rather than crashing on the (params, design) pytree),
     # and the explicit request is reported rather than dropped silently.
-    plant, design = _design_cstr()
+    plant, design = _design_cstr(make_cstr_plant)
     p = plant.default_parameters()
     with pytest.warns(UserWarning, match=named):
         ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False,
@@ -562,11 +553,11 @@ def test_steady_state_design_skips_parameter_continuation(arclength, named):
     assert not bool(ss.converged)
 
 
-def test_steady_state_design_no_skip_warning_without_continuation():
+def test_steady_state_design_no_skip_warning_without_continuation(make_cstr_plant):
     # A caller who did not ask for continuation is not warned, even with the
     # default arclength=True (that rung needs continuation_from anyway).
     import warnings
-    plant, design = _design_cstr()
+    plant, design = _design_cstr(make_cstr_plant)
     with warnings.catch_warnings():
         warnings.filterwarnings("error", message=r"steady_state\(design=")
         ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False)
