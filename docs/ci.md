@@ -129,7 +129,26 @@ nor concentrating it in a few files makes the whole suite fast.
   uncovered and why (a defensive branch no input can reach, or code only
   `slow` tests exercise on a PR without `full-ci`). It is never a reason to add
   `# pragma: no cover`, or a test that only executes lines without checking
-  what they do. Two consequences contributors will hit:
+  what they do.
+
+  **Measure it locally before pushing.** A push that exists only to turn the
+  patch status green costs a whole CI run, so find the gaps first:
+
+  ```bash
+  pytest tests/unit tests/integration tests/ui -m "not validation and not slow" \
+      --cov=aquakin --cov=aquakin_ui --cov-branch --cov-report=xml
+  python scripts/patch_coverage.py          # --base origin/main --fail-under 100
+  ```
+
+  `scripts/patch_coverage.py` compares `coverage.xml` with the branch's diff
+  against `origin/main` (uncommitted edits included) and lists each changed
+  line that no test ran, or that ran with a branch not taken, exiting non-zero
+  below the target. Running only the tests that exercise the change is quicker
+  and usually enough; the whole fast tier is the exact equivalent of what
+  uploads on an ordinary PR. Pass the package names to `--cov`, never a dotted
+  module path.
+
+  Two consequences contributors will hit:
   - **The fast-tier-only upload matters.** On a normal PR only the fast tier
     uploads; the slow, validation and heavy flags are carried forward from
     `main` and say nothing about lines the PR wrote. New code that only a
