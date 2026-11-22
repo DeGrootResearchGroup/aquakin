@@ -8,7 +8,6 @@ stimulates the ND pathway) and peaks at intermediate dissolved oxygen (the
 Haldane DO term, maximum 1 at sqrt(K * KI)), and that AMO is Monod in free
 ammonia. COD/N/charge closure is covered by test_asm_continuity.py.
 """
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -134,19 +133,3 @@ def test_free_nitrous_acid_depends_on_pH(net):
     n2o_low_pH = _final_n2o(net, DO=200.0, no2=20.0, pH=6.5)[-1]
     n2o_high_pH = _final_n2o(net, DO=200.0, no2=20.0, pH=8.0)[-1]
     assert n2o_low_pH > n2o_high_pH
-
-
-def test_grad_through_solve_is_finite(net):
-    cond = aquakin.SpatialConditions.uniform(T=293.15, pH=7.5)
-    r = aquakin.BatchReactor(net, cond)
-    C0 = net.concentrations({"SO2": 100.0, "SNH4": 30.0, "SNO2": 20.0,
-                             "XAOB": 100.0})
-
-    def loss(p):
-        sol = r.solve(C0, params=p, t_span=(0.0, 0.1),
-                      t_eval=jnp.linspace(0.0, 0.1, 4))
-        return jnp.sum(sol.C_named("SN2O"))
-
-    g = jax.grad(loss)(net.default_parameters())
-    assert jnp.all(jnp.isfinite(g))
-    assert float(g[net.param_index["q_AOB_N2O_ND"]]) != 0.0

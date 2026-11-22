@@ -55,21 +55,6 @@ def test_dCdt_finite_at_default_state(name):
     assert jnp.all(jnp.isfinite(dC))
 
 
-@pytest.mark.parametrize("name", _ASM_MODELS)
-@pytest.mark.slow  # heavy: stiff solve x every ASM/ADM model
-def test_short_integration_finite(name):
-    """Each model integrates 0.05 d without producing non-finite values."""
-    net = aquakin.load_model(name)
-    reactor = aquakin.BatchReactor(net, net.default_conditions())
-    sol = reactor.solve(
-        net.default_concentrations(),
-        params=net.default_parameters(),
-        t_span=(0.0, 0.05),
-        t_eval=jnp.linspace(0.0, 0.05, 6),
-    )
-    assert jnp.all(jnp.isfinite(sol.C))
-
-
 def _central_fd(loss, params, i, rel_step=1e-4):
     """Central difference of ``loss`` w.r.t. ``params[i]``, step relative to it."""
     h = rel_step * float(params[i])
@@ -80,9 +65,9 @@ def _central_fd(loss, params, i, rel_step=1e-4):
 @pytest.mark.slow  # jax.grad through a stiff solve x every ASM/ADM model
 @pytest.mark.parametrize("name", _ASM_MODELS)
 def test_ad_grad_through_solve(name):
-    """``jax.grad`` through the solve matches a central finite difference
-    (step 1e-4 relative) in its most influential parameter (largest
-    ``|g_i p_i|``)."""
+    """Each model integrates 0.05 d to finite values, and ``jax.grad`` through
+    the solve matches a central finite difference (step 1e-4 relative) in its
+    most influential parameter (largest ``|g_i p_i|``)."""
     net = aquakin.load_model(name)
     reactor = aquakin.BatchReactor(net, net.default_conditions())
     C0 = net.default_concentrations()
@@ -96,6 +81,8 @@ def test_ad_grad_through_solve(name):
         return jnp.sum(sol.C_named(target))
 
     p = net.default_parameters()
+    sol = reactor.solve(C0, params=p, t_span=(0.0, 0.05), t_eval=t_eval)
+    assert jnp.all(jnp.isfinite(sol.C))
     g = jax.grad(loss)(p)
     assert jnp.all(jnp.isfinite(g))
     i = int(jnp.argmax(jnp.abs(g * p)))
@@ -103,8 +90,8 @@ def test_ad_grad_through_solve(name):
 
 
 def test_asm3_short_integration_and_ad_grad_finite():
-    """Fast-gate representative of the two ``slow`` ASM-family checks above
-    (``test_short_integration_finite`` / ``test_ad_grad_through_solve``): asm3
+    """Fast-gate representative of the ``slow`` ASM-family check above
+    (``test_ad_grad_through_solve``): asm3
     is the smallest shipped ASM/ADM model, so a single short stiff solve and a
     ``jax.grad`` through it run cheaply. This keeps a core differentiability path
     -- integrate a stiff biological model and back-propagate -- in the PR gate,

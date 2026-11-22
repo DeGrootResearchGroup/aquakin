@@ -6,8 +6,10 @@ complete sulfur cycle, including the dormant aerobic chemical/biological sulfide
 oxidation) with the paper's additions and modifications -- compiles with the
 expected shape, that it uses a fixed operating pH, that its O2-gated aerobic
 backbone and aerobic sulfur-oxidation pathway are dormant under the air-sealed
-anaerobic batch, that its chemistry RHS is finite and differentiable end-to-end,
-and that its structural variants compile and remain AD-differentiable --
+anaerobic batch, that its chemistry RHS is finite and differentiable end-to-end
+(its parameter derivative is checked against a finite difference in
+test_wats_sewer.py), and that its structural variants compile and remain
+AD-differentiable --
 including the half-order variants, whose square-root kinetics require a tighter
 integrator-step cap for the reverse-mode adjoint to stay finite.
 """
@@ -142,17 +144,6 @@ def test_rates_finite(net, cond):
     r = net.rates(net.default_concentrations(), net.default_parameters(), cond.fields, 0)
     assert r.shape == (27,)
     assert bool(jnp.all(jnp.isfinite(r)))
-
-
-def test_rhs_jacobian_wrt_params_is_finite(net, cond):
-    C0 = net.default_concentrations()
-
-    def rhs(p):
-        return net.dCdt(C0, p, cond.fields, 0, stoich=net.compute_stoich(p))
-
-    J = jax.jacobian(rhs)(net.default_parameters())
-    assert J.shape == (18, len(net.parameters))
-    assert np.all(np.isfinite(np.asarray(J)))
 
 
 def test_batch_integrates_and_stays_nonnegative(net, cond):
