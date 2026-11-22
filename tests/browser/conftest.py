@@ -1,9 +1,10 @@
 """The editor served on a free port and driven in Chromium with Playwright.
 
-These tests are not in the required gate (it runs ``tests/unit``,
-``tests/integration`` and ``tests/ui``); run them with ``pytest tests/browser``.
-They need the ``playwright`` Python package and its Chromium; without the
-package they are skipped.
+These tests run in the ``browser`` CI job, not in the required gate (which runs
+``tests/unit``, ``tests/integration`` and ``tests/ui``); run them with
+``pytest tests/browser``. They need the ``browser`` extra (Playwright) and its
+Chromium (``python -m playwright install chromium``); without Playwright they
+are skipped.
 """
 
 import os

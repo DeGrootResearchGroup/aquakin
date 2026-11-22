@@ -79,6 +79,11 @@ ui = ["trame>=3.6", "trame-vuetify>=2.7", "trame-client>=3.6"]
 # exactly, like ruff's cap, because a pyright release can add errors. It needs the
 # `ui` extra installed too, so trame's types resolve.
 typecheck = ["pyright==1.1.414"]
+# `browser` drives the editor in Chromium for `tests/browser` (Playwright). Not
+# part of `test`: it needs a browser download (`python -m playwright install
+# chromium`), which only the `browser` CI job and a developer running those
+# tests want.
+browser = ["playwright>=1.63"]
 # `docs` pins the Sphinx documentation toolchain (Read the Docs build + the CI
 # docs job). Floors are the known-good minimums; kept in one place so the RTD
 # build and CI resolve the same set. `myst-parser` lets the docs stay Markdown;

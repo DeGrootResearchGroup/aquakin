@@ -449,6 +449,67 @@ jobs:
           python -m build --wheel
           python scripts/check_ui_package.py dist/*.whl
 
+  # ---- The editor driven in Chromium: tests/browser (Playwright) --------------
+  # The canvas's sync rules (Python's updates applied as a diff, wire validation
+  # on the handles, no echoed removals, one removal for a unit and its wires,
+  # Delete but not Backspace, the form sent on Apply) can only be observed in
+  # the page, so the `ui` job cannot pin them. This serves the editor and drives
+  # it with Playwright. Path-filtered on the editor, the widget, the worker
+  # commands the editor sends and the project the tests open, and NOT a required
+  # check: on any other change its steps are skipped and it passes. Not part of
+  # `fast gate` either: a browser download and a served page are more moving
+  # parts than the merge gate should depend on.
+  browser:
+    name: browser tests (editor in Chromium)
+    if: >-
+      github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+      && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            browser:
+              - 'aquakin_ui/**'
+              - 'ui-widget/**'
+              - 'tests/browser/**'
+              - 'aquakin/__main__.py'
+              - 'aquakin/plant/catalog.py'
+              - 'aquakin/plant/spec.py'
+              - 'examples/projects/bsm1/**'
+              - 'pyproject.toml'
+              - 'constraints.txt'
+              - '.github/workflows/ci.yml'
+
+      - name: Set up Python
+        if: steps.changes.outputs.browser == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package, test dependencies and Chromium
+        if: steps.changes.outputs.browser == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test,browser]" -c constraints.txt
+          python -m playwright install --with-deps chromium
+          # tests/browser skips itself without Playwright; fail here instead.
+          python -c "from playwright.sync_api import sync_playwright"
+
+      - name: Run browser tests
+        if: steps.changes.outputs.browser == 'true'
+        # One process: each test serves its own editor and drives one page.
+        run: pytest tests/browser -q -rs --durations=10 --timeout=600 --timeout-method=thread
+
   # ---- Fast-tier coverage: ONE Codecov upload after every fast shard -----------
   # Each fast shard keeps its coverage.xml as an artifact and this job uploads
   # them all to Codecov in a single call, once the unit, integration and ui

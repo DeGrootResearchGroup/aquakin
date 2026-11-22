@@ -245,9 +245,12 @@ runs inside `asyncio.run`, and a `state.change` handler fires only after
 `tests/browser/` serves the editor (`python -m aquakin_ui --no-browser --port 0`)
 and drives it in Chromium with Playwright; it holds the canvas's rules (the diff,
 handle validation, no echoes, one removal, Delete not Backspace, the form sent on
-Apply). It is not in the required gate and is skipped without the `playwright`
-package. Run it (`pytest tests/browser`) and add to it when a change touches
-the canvas or the form; a widget change needs the bundle rebuilt first. Read
+Apply). It runs in the `browser` CI job (path-filtered, not required, not in
+`fast gate`); locally it needs the `browser` extra and a Chromium
+(`python -m playwright install chromium`) and is skipped without Playwright. Run
+it (`pytest tests/browser`) and add to it when a change touches the canvas or the
+form; a widget change needs the bundle rebuilt first. A page that loads more
+than BSM1 must add its files to the job's path filter. Read
 Python's document from the header chip ("10 units · 11 connections") and
 messages through a recorder (the snackbar closes after four seconds), never by
 a negative check with no sync point after it.
