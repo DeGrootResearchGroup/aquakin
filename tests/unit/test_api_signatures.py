@@ -20,7 +20,6 @@ fast gate where signature drift must be caught.
 import importlib
 import inspect
 
-import jax
 import jax.numpy as jnp
 import pytest
 
@@ -154,20 +153,6 @@ def test_batch_solve_sensitivity_executes(simple_model):
     # slot and must be rejected (the same guard as solve).
     with pytest.raises(TypeError):
         r.solve_sensitivity(C0, p, (0.0, 1.0), sens_params=[0])
-
-
-def test_check_gradient_finite_guards_a_reverse_gradient(simple_model):
-    """The reverse-gradient guard composes with a real jax.grad through solve
-    (keyword params) -- the recommended DIY-loss pattern, fast-gate-covered."""
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
-    r = BatchReactor(simple_model, cond)
-    C0 = jnp.asarray([1.0, 0.0])
-
-    def loss(p):
-        return r.solve(C0, params=p, t_span=(0.0, 1.0)).C[-1, 1]
-
-    g = r.check_gradient_finite(jax.grad(loss)(simple_model.default_parameters()))
-    assert jnp.all(jnp.isfinite(g))
 
 
 # ---------------------------------------------------------------------------

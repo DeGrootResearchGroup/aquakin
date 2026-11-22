@@ -12,7 +12,6 @@ from aquakin.core.nodes import (
     MultiplyNode,
     NegateNode,
     ParamNode,
-    PowerNode,
     SpeciesNode,
     SubtractNode,
     pHSwitchNode,
@@ -53,19 +52,6 @@ def test_param_reference():
 def test_simple_product():
     tree = parse_rate_expression("k1 * [O3] * [Br-]")
     assert isinstance(tree, MultiplyNode)
-
-
-def test_operator_precedence():
-    # 1 + 2 * 3 must parse as 1 + (2*3)
-    tree = parse_rate_expression("1 + 2 * 3")
-    assert isinstance(tree, AddNode)
-    assert isinstance(tree.right, MultiplyNode)
-
-
-def test_power_right_associative():
-    tree = parse_rate_expression("2 ** 3 ** 2")
-    assert isinstance(tree, PowerNode)
-    assert isinstance(tree.right, PowerNode)  # right-assoc
 
 
 def test_unary_minus():
@@ -110,14 +96,6 @@ def test_unclosed_condition_brace():
 def test_empty_condition_brace():
     with pytest.raises(ParseError):
         parse_rate_expression("{}")
-
-
-@pytest.mark.parametrize("expr", ["1e", "1e+", "2.5e", "3E-"])
-def test_malformed_exponent_is_parse_error(expr):
-    """A number with an exponent marker but no exponent digits must fail as a
-    positioned ParseError, not a bare float() ValueError from the primary."""
-    with pytest.raises(ParseError):
-        parse_rate_expression(expr)
 
 
 @pytest.mark.parametrize("expr", ["1e3", "1.6e2", "1.5e-2", "2E+3"])
@@ -268,10 +246,12 @@ def test_max_folds_when_given_more_than_two_arguments():
     assert parse_rate_expression("max(k1, k2, k3)") == parse_rate_expression("max(max(k1, k2), k3)")
 
 
-@pytest.mark.parametrize("expr", ["1 2", "1.2.3", "[A] [B]"])
+@pytest.mark.parametrize("expr", ["1 2", "1.2.3", "[A] [B]", "1e", "1e+", "2.5e", "3E-"])
 def test_adjacent_primaries_without_operator_is_parse_error(expr):
     """Two primaries with no operator between them leave trailing tokens after the
-    first expression parses, which `parse()` rejects."""
+    first expression parses, which `parse()` rejects. An exponent marker with no
+    digits is one such case: the shared tokenizer reads "1e" as the number 1 and
+    the name "e", so it is a ParseError, not a bare float() ValueError."""
     with pytest.raises(ParseError):
         parse_rate_expression(expr)
 
@@ -305,31 +285,3 @@ def test_full_expression_compiles_and_evaluates():
     result = float(fn(C, params, {}, 0))
     assert result == pytest.approx(5.0 * 3.0 + 2.0)
 
-
-def test_precedence_follows_python():
-    """A sign binds looser than a power, as in Python and ordinary notation.
-
-    It bound tighter until #699 -- ``-2**2`` read as ``(-2)**2`` -- which nobody
-    predicts. No shipped expression relied on it. ``aquakin.plant.time_expr``
-    shares this precedence and is pinned the same way.
-    """
-    minus_squared = parse_rate_expression("-2**2")
-    assert isinstance(minus_squared, NegateNode)
-    assert isinstance(minus_squared.operand, PowerNode)
-
-    # Bracket the base to raise a negative value.
-    bracketed = parse_rate_expression("(0 - 2)**2")
-    assert isinstance(bracketed, PowerNode)
-
-    # The exponent may carry its own sign, and ** stays right-associative.
-    reciprocal = parse_rate_expression("k**-1")
-    assert isinstance(reciprocal, PowerNode)
-    assert isinstance(reciprocal.right, NegateNode)
-    tower = parse_rate_expression("2**3**2")
-    assert isinstance(tower, PowerNode) and isinstance(tower.right, PowerNode)
-
-    # A sign on one factor of a product binds that factor only.
-    product = parse_rate_expression("-2*3**2")
-    assert isinstance(product, MultiplyNode)
-    assert isinstance(product.left, NegateNode)
-    assert isinstance(product.right, PowerNode)

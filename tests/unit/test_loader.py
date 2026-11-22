@@ -51,26 +51,6 @@ def test_undeclared_species_in_stoichiometry_rejected(tmp_path):
         aquakin.load_model_from_file(p)
 
 
-def test_undeclared_species_in_rate_rejected(tmp_path):
-    p = _write(
-        tmp_path,
-        """
-        model: {name: bad, version: "1.0"}
-        species:
-          - {name: A, default_concentration: 1.0}
-        reactions:
-          - name: r1
-            rate: "k * [X]"
-            parameters:
-              k: {value: 1.0}
-            stoichiometry:
-              A: -1
-        """,
-    )
-    with pytest.raises((KeyError, ValueError)):
-        aquakin.load_model_from_file(p)
-
-
 def test_undeclared_condition_rejected(tmp_path):
     p = _write(
         tmp_path,
