@@ -457,9 +457,10 @@ def test_steady_state_forward_fallback_honours_design(extra):
     # A starved PTC falls back to forward integration; that fallback must
     # integrate the design-override feed, not the recorded influent (which
     # would give A = B = 0.5 and still report converged). An explicit solver
-    # ``atol`` reaches the design rung too.
+    # ``atol`` reaches the design rung too. The fallback is held to ``tol``, so
+    # it sits above the ~1e-12 round-off floor of the scaled residual.
     plant, design = _design_cstr()
-    ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, arclength=False,
+    ss = plant.steady_state(design=design, max_iter=1, tol=1e-10, arclength=False,
                             fallback_kwargs={"ss_rtol": 1e-8, "ss_atol": 1e-8, **extra})
     assert ss.method == "ptc->forward"
     assert bool(ss.converged)
@@ -487,6 +488,38 @@ def test_steady_state_design_forward_fallback_takes_criterion(criterion):
     np.testing.assert_allclose(np.asarray(ss_d.state), np.asarray(ss_p.state), rtol=1e-6)
     np.testing.assert_allclose(np.asarray(ss_d.state), [0.5, 0.5], rtol=1e-6)
     assert ss_d.residual == pytest.approx(ss_p.residual, rel=1e-3, abs=1e-9)
+
+
+@pytest.mark.parametrize("use_design", [False, True], ids=["plain", "design"])
+def test_steady_state_forward_fallback_holds_caller_tol(use_design):
+    # A starved PTC falls back to a forward run, which must stop on the scaled
+    # residual at the caller's ``tol`` / ``scale_floor`` (issue #741). On the
+    # default norm test the run stops at a residual near ss_rtol=1e-3, orders
+    # above ``tol``, and was still reported converged. The steady state is
+    # A = B = 0.5 for the recorded feed (2.5 for the design feed).
+    plant, design = _design_cstr()
+    tol = 1e-10
+    ss = plant.steady_state(design=design if use_design else None, max_iter=1, tol=tol,
+                            scale_floor=1e-6, arclength=False)
+    assert ss.method == "ptc->forward"
+    assert bool(ss.converged)
+    assert ss.residual <= tol
+    expected = 2.5 if use_design else 0.5
+    np.testing.assert_allclose(np.asarray(ss.state), [expected, expected], rtol=1e-8)
+
+
+@pytest.mark.parametrize("use_design", [False, True], ids=["plain", "design"])
+def test_steady_state_forward_fallback_not_converged_above_tol(use_design):
+    # An explicit ``criterion="norm"`` in fallback_kwargs is honoured, but the
+    # result is reported converged only if its scaled residual meets ``tol``:
+    # the norm test stops near ss_rtol=1e-3, far above 1e-10 (issue #741).
+    plant, design = _design_cstr()
+    tol = 1e-10
+    ss = plant.steady_state(design=design if use_design else None, max_iter=1, tol=tol,
+                            arclength=False, fallback_kwargs={"criterion": "norm"})
+    assert ss.method == "ptc->forward"
+    assert ss.residual > tol
+    assert not bool(ss.converged)
 
 
 def test_steady_state_design_forward_fallback_rejects_bad_criterion():
