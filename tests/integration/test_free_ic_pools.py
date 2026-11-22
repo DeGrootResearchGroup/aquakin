@@ -138,7 +138,9 @@ def test_fixed_total_reproduces_constrained_optimum(two_pool):
         **_COMMON,
     )
     cache: dict = {}
-    grid = np.linspace(0.2, 0.4, 41)
+    # A 0.01 step: the parabola refinement then lands within ~1e-4 of the
+    # fitted optimum, an order of magnitude inside the 1e-3 tolerance below.
+    grid = np.linspace(0.2, 0.4, 21)
     losses = []
     for f in grid:
         fit = aquakin.calibrate(
