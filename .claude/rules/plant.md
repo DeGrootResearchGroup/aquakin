@@ -176,34 +176,24 @@ Key types:
     `units.PlantTimeUnitAware` hook and replaces each `influents[name]` with
     `_influents_added[name].in_time_unit(tu)`. Kinetic units (CSTR, MBR, SBR,
     IFAS, ADM1 digester) inherit the `units.ModelTimeScaling` mixin:
-    `_rate_factor = model_rate_factor(model, tu)` (`conversion_factor("1/<model
-    tu>", "1/<tu>")`) multiplies everything the *model* computes per its own
-    time unit (`_scale_rates`: the reaction term; IFAS's whole biofilm
-    reaction + diffusion term; the digester's dCdt incl. gas transfer/outflow),
-    and `balance._reaction_term` applies the same factor. A factor of exactly
-    1 returns the term untouched, so a plant on its models' clock is
-    bit-identical. UV (`_seconds_per_time`), the primary clarifier
-    (`_minutes_per_time`) and Takács (`_v0`/`_vmax`, only while the BSM default
-    `settling_params`) convert their built-in day constants in
-    `set_time_unit`; with `tu=None` they keep days. **A missing `time_unit` is
+    `_rate_factor = model_rate_factor(model, tu)` multiplies everything the
+    *model* computes per its own time unit (`_scale_rates`), and
+    `balance._reaction_term` applies the same factor; a factor of exactly 1
+    returns the term untouched (bit-identical). UV, the primary clarifier and
+    Takács convert their built-in day constants in `set_time_unit` (with
+    `tu=None` they keep days). **A missing `time_unit` is
     deprecated**: the plant infers the models' shared unit with a one-time
     `FutureWarning`, and `time_unit_errors` raises `UnitsError` at solve only
     when the models disagree. The builders (`build_bsm1/2`, `build_a2o`) pass
     `"d"`. A new unit with a built-in time constant implements
     `set_time_unit`, not `assumed_units`.
   - **Operating temperature.** `plant.set_temperature(celsius)` sets the static
-    `T` condition of every temperature-bearing reactor in one call (°C → K),
-    leaving a heated fixed-`T` unit like the digester untouched; clears the
-    compiled-solve cache and returns `self`. See the seasonal-temperature notes
-    below.
-  - **Everything `solve` calls must trace.** `monte_carlo`, `compare_scenarios`
-    and `dgsm` run the user's function under `jax.jit` even with
-    `batched=False`, so `plant.solve` (including `initial_state()` and a
-    `TemperatureModel`'s `initial_state` / `state_rhs`) runs under a trace. Do
-    not call `float()` / `np.asarray` / a Python `if` on a value built with
-    `jnp` ops there: under `jit` even `jnp.asarray(293.15).reshape(-1)` is a
-    tracer. Return arrays; keep Python scalars only for static layout data read
-    from unit attributes.
+    `T` of every temperature-bearing reactor (°C → K; the heated digester is
+    left alone), clears the compiled-solve cache and returns `self`.
+  - **Everything `solve` calls must trace**: `monte_carlo`, `compare_scenarios`
+    and `dgsm` jit the user's function. No `float()`, `np.asarray` or Python `if`
+    on a `jnp`-built value in the solve path (`initial_state`, a
+    `TemperatureModel`'s methods); Python scalars only for static layout data.
   - **Warm-starting.** `plant.initial_state(overrides={"tank1": vec, ...})`
     builds the flat initial-state vector with selected units' states replaced
     by name (each vector must match the unit's `state_size`) — the supported
