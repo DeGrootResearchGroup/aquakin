@@ -50,11 +50,13 @@ coverage.xml
 Thumbs.db
 
 # Project-local settings (worktrees, local settings) -- but track the
-# path-scoped guidance rules, which must ship with the repo to load, and the
-# Claude-facing investigation notes they point to.
+# path-scoped guidance rules, which must ship with the repo to load, the
+# Claude-facing investigation notes they point to, and the shared settings that
+# declare the cloud-session SessionStart hook (`settings.local.json` stays ignored).
 .claude/*
 !.claude/rules/
 !.claude/notes/
+!.claude/settings.json
 reference/
 figures/
 
