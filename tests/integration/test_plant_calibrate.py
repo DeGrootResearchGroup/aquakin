@@ -16,6 +16,7 @@ import aquakin
 from aquakin import FreeICConfig, OptimizerConfig
 from aquakin.plant import CSTRUnit, Plant
 from aquakin.plant.influent import InfluentSeries
+from tests.conftest import FIXTURES
 
 
 def _single_cstr_plant(net):
@@ -68,16 +69,17 @@ def _two_cstr_plant(net):
     return plant
 
 
-@pytest.fixture
-def decay_plant():
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    return net, _single_cstr_plant(net)
+@pytest.fixture(scope="module")
+def decay_plant(simple_model):
+    """The single-CSTR plant on the session decay model, shared by the module: no
+    test mutates it, so its compiled solves are reused across the fits."""
+    return simple_model, _single_cstr_plant(simple_model)
 
 
 @pytest.fixture
-def two_tank_plant():
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    return net, _two_cstr_plant(net)
+def two_tank_plant(simple_model):
+    """A fresh two-tank plant per test (one test adds a unit to it)."""
+    return simple_model, _two_cstr_plant(simple_model)
 
 
 PARAM = "simple_decay.A_to_B.k"
@@ -783,12 +785,14 @@ def _fit_args(plant, **kw):
     return out
 
 
-def test_plant_param_namespace_reads_model_bounds(decay_plant, monkeypatch):
+def test_plant_param_namespace_reads_model_bounds(monkeypatch):
     """The model-declared bounds of each plant parameter are exposed by name;
-    a parameter its model leaves unbounded has no entry."""
+    a parameter its model leaves unbounded has no entry. The test removes a bound
+    from its model, so it loads its own copy rather than the shared one."""
     from aquakin.plant.calibrate import _PlantParamNamespace
 
-    net, plant = decay_plant
+    net = aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
+    plant = _single_cstr_plant(net)
     ns = _PlantParamNamespace(plant)
     assert ns.parameter_bounds[PARAM] == tuple(net.parameter_bounds["A_to_B.k"])
     monkeypatch.delitem(net.parameter_bounds, "A_to_B.k")
