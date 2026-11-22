@@ -64,7 +64,7 @@ def test_the_scan_sees_a_command_the_worker_lacks(tmp_path):
 
 
 def test_the_interface_colours_every_state_a_study_can_be_in():
-    from aquakin_ui import app
+    from aquakin_ui import study_page as app
 
     assert set(app.STATE_COLOURS) == {*study_module.STATES, UNREADABLE}
     assert app.UNREADABLE == UNREADABLE
@@ -74,7 +74,7 @@ def test_the_state_table_goes_into_a_template_without_double_quotes():
     """The chip colour is a template expression inside a double-quoted HTML
     attribute: a double quote there ends the attribute and the page renders
     blank (found in the browser)."""
-    from aquakin_ui.app import STATE_COLOURS, _js
+    from aquakin_ui.study_page import STATE_COLOURS, _js
 
     text = _js(STATE_COLOURS)
     assert '"' not in text and text.startswith("{'fresh': 'success'")
