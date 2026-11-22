@@ -160,34 +160,49 @@ def _reverse_nan_observation(C, params):
     return C[1] + jnp.where(k > 1e9, jnp.sqrt(k - 1e9), 0.0)
 
 
+_REVERSE_NAN_FIT = dict(
+    free_params=["A_to_B.k"],
+    transforms={"A_to_B.k": "positive_log"},
+    observation_fn=_reverse_nan_observation,
+    laplace=False,
+)
+
+
 @pytest.mark.parametrize("optimizer", [OptimizerConfig(), OptimizerConfig(method="gauss_newton")])
 def test_non_finite_gradient_error_names_the_real_api(setup, optimizer):
-    """A non-finite start gradient raises with a remedy written in the arguments
-    ``calibrate`` takes (``diff=aquakin.DifferentiationConfig(...)``), not the
-    removed ``ad_mode=`` / ``gradient=`` keywords. Following the forward-mode
-    remedy then fits the true rate."""
-    reactor, C0, t_obs, obs_clean, true_k = setup
-    common = dict(
-        observations=obs_clean[:, None],
-        t_obs=t_obs,
-        free_params=["A_to_B.k"],
-        transforms={"A_to_B.k": "positive_log"},
-        observation_fn=_reverse_nan_observation,
-        laplace=False,
-    )
+    """A non-finite start gradient raises, for both optimisers, with a remedy
+    written in the arguments ``calibrate`` takes
+    (``diff=aquakin.DifferentiationConfig(...)``), not the removed ``ad_mode=`` /
+    ``gradient=`` keywords."""
+    reactor, C0, t_obs, obs_clean, _true_k = setup
     with pytest.raises(RuntimeError, match="calibration gradient is non-finite") as exc:
-        aquakin.calibrate(reactor, C0, optimizer=optimizer, **common)
+        aquakin.calibrate(
+            reactor,
+            C0,
+            observations=obs_clean[:, None],
+            t_obs=t_obs,
+            optimizer=optimizer,
+            **_REVERSE_NAN_FIT,
+        )
     msg = str(exc.value)
     assert 'diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")' in msg
     assert 'diff=aquakin.DifferentiationConfig(method="stable")' in msg
     assert "ad_mode" not in msg and "gradient=" not in msg
 
+
+def test_non_finite_gradient_forward_remedy_fits(setup):
+    """Following the forward-mode remedy the non-finite-gradient error names
+    (Gauss-Newton with ``mode="forward", method="through_solve"``) fits the true
+    rate on the same reverse-only-NaN observation."""
+    reactor, C0, t_obs, obs_clean, true_k = setup
     fwd = aquakin.calibrate(
         reactor,
         C0,
+        observations=obs_clean[:, None],
+        t_obs=t_obs,
         optimizer=OptimizerConfig(method="gauss_newton"),
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
-        **common,
+        **_REVERSE_NAN_FIT,
     )
     assert fwd.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
 
