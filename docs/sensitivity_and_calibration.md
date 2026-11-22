@@ -216,12 +216,19 @@ expensive.
 ### Plant sensitivity
 
 A plant has its own sensitivity methods, all taking parameters by name
-(`"asm1.muA"`, see `plant.parameter_names()`) through `wrt=`. Here `plant` is
-a BSM1 plant with its influent wired, as in
-[Plant-wide simulation](plants.md#the-benchmark-plants):
+(`"asm1.muA"`, see `plant.parameter_names()`) through `wrt=`. The example
+uses the BSM1 plant of
+[Plant-wide simulation](plants.md#the-benchmark-plants), with its constant
+average-load influent:
 
 ```python
+from aquakin.plant.bsm import build_bsm1
+
 asm1 = aquakin.load_model("asm1")
+plant = build_bsm1(asm1)
+plant.add_influent("feed", asm1.influent(
+    {"SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
+     "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0}, Q=18446.0))
 si = asm1.species_index
 
 def effluent_n(y):                   # flat plant state -> outputs
