@@ -19,7 +19,7 @@ import jax.numpy as jnp
 import pytest
 
 from aquakin.core.context import CompileContext
-from aquakin.core.nodes import ASTNode, MonodNode, _OperatorNode
+from aquakin.core.nodes import ASTNode, MonodNode, RateFunction
 from aquakin.core.parser import ParseError, parse_rate_expression
 from aquakin.core.registry import (
     register_rate_function,
@@ -44,7 +44,7 @@ def _hill_cls():
     """A Hill saturation term: a plausible thing to want and not a built-in."""
 
     @dataclass(frozen=True)
-    class HillNode(_OperatorNode):
+    class HillNode(RateFunction):
         X: ASTNode
         K: ASTNode
         n: ASTNode
@@ -155,7 +155,7 @@ def test_a_function_without_a_dimension_hook_is_skipped_not_guessed():
     from aquakin.utils.units import check_rate_units, parse_units
 
     @dataclass(frozen=True)
-    class OpaqueNode(_OperatorNode):
+    class OpaqueNode(RateFunction):
         X: ASTNode
 
         KIND = "test_opaque"
@@ -199,7 +199,7 @@ def test_defining_a_node_cannot_shadow_a_builtin():
 
 def test_registering_over_a_builtin_name_is_refused():
     @dataclass(frozen=True)
-    class Clash(_OperatorNode):
+    class Clash(RateFunction):
         X: ASTNode
         K: ASTNode
 
@@ -216,7 +216,7 @@ def test_registering_over_a_builtin_name_is_refused():
 
 def test_registering_over_a_builtin_kind_is_refused():
     @dataclass(frozen=True)
-    class KindClash(_OperatorNode):
+    class KindClash(RateFunction):
         X: ASTNode
 
         KIND = "monod"  # the kernel keys on this
@@ -258,13 +258,13 @@ def test_unknown_function_error_names_the_remedy():
 
 
 def test_rejects_a_non_node_class():
-    with pytest.raises(TypeError, match="_OperatorNode"):
+    with pytest.raises(TypeError, match="RateFunction"):
         register_rate_function(dict)
 
 
 def test_rejects_an_unfrozen_dataclass():
     @dataclass  # not frozen
-    class Thawed(_OperatorNode):
+    class Thawed(RateFunction):
         X: ASTNode
 
         KIND = "test_thawed"
@@ -283,7 +283,7 @@ def test_rejects_a_missing_name_or_kind(missing):
     attrs = {"KIND": "test_m", "FUNCTION_NAME": "m", "op": staticmethod(lambda o: o[0])}
     del attrs[missing]
     cls = dataclass(frozen=True)(
-        type("Partial", (_OperatorNode,), {"__annotations__": {"X": ASTNode}, **attrs})
+        type("Partial", (RateFunction,), {"__annotations__": {"X": ASTNode}, **attrs})
     )
     with pytest.raises(TypeError, match=missing):
         register_rate_function(cls)
@@ -291,7 +291,7 @@ def test_rejects_a_missing_name_or_kind(missing):
 
 def test_rejects_a_zero_argument_function():
     @dataclass(frozen=True)
-    class Nullary(_OperatorNode):
+    class Nullary(RateFunction):
         KIND = "test_nullary"
         FUNCTION_NAME = "nullary"
 
@@ -309,7 +309,7 @@ def test_rejects_a_field_with_a_default():
     used and ``mixed([X])`` is an arity error rather than scale=2.0."""
 
     @dataclass(frozen=True)
-    class Mixed(_OperatorNode):
+    class Mixed(RateFunction):
         X: ASTNode
         scale: ASTNode = None
 
@@ -329,7 +329,7 @@ def test_rejects_an_op_with_the_wrong_operand_contract():
     authoring slip and is caught at registration, not at solve time."""
 
     @dataclass(frozen=True)
-    class BadOp(_OperatorNode):
+    class BadOp(RateFunction):
         X: ASTNode
         K: ASTNode
 
@@ -354,12 +354,12 @@ def test_re_registering_the_same_class_is_idempotent():
 def test_rejects_something_that_is_not_a_class():
     """An *instance* slipped in where the class was meant -- the easy slip when
     a decorator is written with parentheses it does not take."""
-    with pytest.raises(TypeError, match="_OperatorNode"):
+    with pytest.raises(TypeError, match="RateFunction"):
         register_rate_function(object())
 
 
 def test_rejects_a_plain_class_that_is_not_a_dataclass():
-    class NotADataclass(_OperatorNode):
+    class NotADataclass(RateFunction):
         KIND = "test_plain"
         FUNCTION_NAME = "plain"
 
@@ -372,11 +372,11 @@ def test_rejects_a_plain_class_that_is_not_a_dataclass():
 
 
 def test_rejects_a_node_with_no_op():
-    """``_OperatorNode`` only *annotates* ``op``, so forgetting it leaves no
+    """``RateFunction`` only *annotates* ``op``, so forgetting it leaves no
     attribute at all rather than an inherited stub."""
 
     @dataclass(frozen=True)
-    class NoOp(_OperatorNode):
+    class NoOp(RateFunction):
         X: ASTNode
 
         KIND = "test_noop"
@@ -392,7 +392,7 @@ def test_rejects_a_node_whose_children_do_not_cover_its_fields():
     ``children()`` -- which is why the guard is not dead code."""
 
     @dataclass(frozen=True)
-    class HalfBlind(_OperatorNode):
+    class HalfBlind(RateFunction):
         X: ASTNode
         K: ASTNode
 
@@ -408,3 +408,96 @@ def test_rejects_a_node_whose_children_do_not_cover_its_fields():
 
     with pytest.raises(ValueError, match="AST child"):
         register_rate_function(HalfBlind)
+
+
+# --- the public base ---------------------------------------------------
+
+
+def test_a_rate_function_on_the_public_base_registers_parses_and_differentiates():
+    """The documented way in uses only public names: subclass
+    ``aquakin.RateFunction`` and pass it to ``aquakin.register_rate_function``.
+    The gradient is checked against the closed form, not just for finiteness."""
+    import aquakin
+
+    @aquakin.register_rate_function
+    @dataclass(frozen=True)
+    class Hill2(aquakin.RateFunction):
+        X: ASTNode
+        K: ASTNode
+
+        KIND = "test_public_hill2"
+        FUNCTION_NAME = "hill2"
+
+        @staticmethod
+        def op(o):
+            x, k = o
+            return x**2 / (k**2 + x**2)
+
+    fn = parse_rate_expression("hill2([A], K)").compile(_ctx())
+    a, k = 2.0, 1.5
+    assert _eval(parse_rate_expression("hill2([A], K)"), a, k) == pytest.approx(
+        a**2 / (k**2 + a**2)
+    )
+    grad = jax.grad(lambda x: fn(jnp.asarray([x]), jnp.asarray([k]), {}, 0))(a)
+    # d/dx x^2 / (k^2 + x^2) = 2 x k^2 / (k^2 + x^2)^2
+    assert float(grad) == pytest.approx(2 * a * k**2 / (k**2 + a**2) ** 2, rel=1e-12)
+
+
+def test_the_public_base_is_the_one_every_operator_node_derives_from():
+    """One class, not an alias: the built-ins and a user's function share it."""
+    import aquakin
+    from aquakin.core import nodes
+
+    assert "RateFunction" in aquakin.__all__
+    assert aquakin.RateFunction is nodes.RateFunction
+    assert issubclass(MonodNode, aquakin.RateFunction)
+    assert not hasattr(nodes, "_OperatorNode")
+
+
+def test_rejects_a_node_that_does_not_derive_from_the_public_base():
+    """A leaf-style ``ASTNode`` subclass has the dataclass shape but no ``op``
+    machinery, so it is refused by type, and the message names the base."""
+
+    @dataclass(frozen=True)
+    class Bare(ASTNode):
+        X: ASTNode
+
+        KIND = "test_bare"
+        FUNCTION_NAME = "bare"
+
+        def compile(self, ctx):
+            return self.X.compile(ctx)
+
+        @staticmethod
+        def op(o):
+            return o[0]
+
+    with pytest.raises(TypeError, match=r"aquakin\.RateFunction"):
+        register_rate_function(Bare)
+
+
+def test_the_guarded_kernels_named_for_custom_ops_keep_the_gradient_finite():
+    """A custom ``op`` gets no guards, so the docs point at the public guarded
+    kernels. Written with ``safe_pow``, a half-order term has a finite (zero)
+    derivative at a depleted species where plain ``**`` gives ``inf``."""
+    import aquakin
+    from aquakin.core.kernels import safe_log, safe_pow, safe_sqrt
+
+    @aquakin.register_rate_function
+    @dataclass(frozen=True)
+    class HalfOrder(aquakin.RateFunction):
+        X: ASTNode
+
+        KIND = "test_half_order"
+        FUNCTION_NAME = "half_order"
+
+        @staticmethod
+        def op(o):
+            return safe_pow(o[0], 0.5)
+
+    fn = parse_rate_expression("half_order([A])").compile(_ctx())
+    grad = jax.grad(lambda x: fn(jnp.asarray([x]), jnp.asarray([1.0]), {}, 0))(0.0)
+    assert float(grad) == 0.0
+    assert float(jax.grad(lambda x: x**0.5)(0.0)) == float("inf")  # the unguarded spelling
+    assert float(jax.grad(safe_sqrt)(0.0)) == 0.0
+    assert jnp.isfinite(jax.grad(safe_log)(0.0))
