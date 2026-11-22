@@ -196,7 +196,8 @@ def monte_carlo(
         Sampler seed; fixing it makes the result reproducible.
     batched : bool
         Evaluate the whole sample through one :func:`jax.vmap` (default) or one
-        call per point (lower peak memory).
+        call per point (lower peak memory). Either way ``fn`` runs under
+        :func:`jax.jit`, so it must be traceable.
 
     Returns
     -------
