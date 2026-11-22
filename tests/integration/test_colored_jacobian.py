@@ -21,14 +21,12 @@ import pytest
 import aquakin
 from aquakin.integrate import colored_jacobian as cj
 from aquakin.integrate.colored_jacobian import (
-    ColoredVeryChord,
     build_colored_root_finder,
     colored_jacobian_max_error,
     greedy_color,
     jacobian_sparsity_pattern,
 )
 from aquakin.plant.colored import ColoredJacobianManager
-
 
 # --------------------------------------------------------------------------
 # Synthetic sparse RHS (fast, no plant) -- the coloring/reconstruction math.
@@ -227,7 +225,7 @@ def test_colored_jacobian_guard_passes_and_warns():
 def bsm1():
     """A constant-influent BSM1 plant + warm start (built fresh per call via the
     factory so each test gets an independent instance/cache)."""
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
     from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
     from aquakin.plant.influent import InfluentSeries
 
@@ -490,12 +488,12 @@ def test_a_first_colored_solve_under_tracing_runs_dense(cstr_plant):
 @pytest.mark.slow
 def test_colored_bsm2_matches_default():
     from aquakin.plant.bsm import bsm2_warm_start
-    from aquakin.plant.bsm.bsm2 import (
-        build_bsm2, bsm2_asm1_model, bsm2_parameters)
+    from aquakin.plant.bsm.bsm2 import bsm2_asm1_model, bsm2_parameters, build_bsm2
     from aquakin.plant.influent import load_bsm2_influent
 
     def make():
-        asm1 = bsm2_asm1_model(); adm1 = aquakin.load_model("adm1")
+        asm1 = bsm2_asm1_model()
+        adm1 = aquakin.load_model("adm1")
         params = bsm2_parameters(asm1, adm1)
         p = build_bsm2(asm1_model=asm1, adm1_model=adm1)
         p.add_influent("feed", load_bsm2_influent("dry", asm1))
@@ -528,10 +526,15 @@ def test_colored_bsm2_soluble_holdup_no_fallback():
     from aquakin import HeatBalanceTemperature
     from aquakin.plant.bsm import bsm2_warm_start
     from aquakin.plant.bsm.bsm2 import (
-        build_bsm2, bsm2_asm1_model, bsm2_constant_influent, bsm2_parameters,
-        BSM2_CONSTANT_INFLUENT_T)
+        BSM2_CONSTANT_INFLUENT_T,
+        bsm2_asm1_model,
+        bsm2_constant_influent,
+        bsm2_parameters,
+        build_bsm2,
+    )
 
-    asm1 = bsm2_asm1_model(); adm1 = aquakin.load_model("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
     p = build_bsm2(asm1_model=asm1, adm1_model=adm1,
                    do_temperature_correction=True,
@@ -595,10 +598,15 @@ def test_colored_ptc_matches_dense_bsm2():
     two-model plant."""
     from aquakin.plant.bsm import bsm2_warm_start
     from aquakin.plant.bsm.bsm2 import (
-        BSM2_CONSTANT_INFLUENT_T, build_bsm2, bsm2_asm1_model,
-        bsm2_constant_influent, bsm2_parameters)
+        BSM2_CONSTANT_INFLUENT_T,
+        bsm2_asm1_model,
+        bsm2_constant_influent,
+        bsm2_parameters,
+        build_bsm2,
+    )
 
-    asm1 = bsm2_asm1_model(); adm1 = aquakin.load_model("adm1")
+    asm1 = bsm2_asm1_model()
+    adm1 = aquakin.load_model("adm1")
     params = bsm2_parameters(asm1, adm1)
     p = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     p.add_influent("feed", bsm2_constant_influent(asm1, T=BSM2_CONSTANT_INFLUENT_T))

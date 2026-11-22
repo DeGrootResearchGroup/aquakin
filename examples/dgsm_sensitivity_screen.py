@@ -50,7 +50,7 @@ def main() -> None:
         return sol.C_named("BrO3-")[-1]
 
     print("DGSM screen of final bromate yield vs four rate constants")
-    print(f"(scrambled-Sobol QMC, ranges = default x[1/3, 3])\n")
+    print("(scrambled-Sobol QMC, ranges = default x[1/3, 3])\n")
 
     for ad_mode in ("reverse", "forward"):
         res = aquakin.dgsm(bromate_yield, ranges, input_names=screened,

@@ -5,10 +5,10 @@ import pytest
 
 import aquakin
 from aquakin.plant.bsm import (
-    build_bsm1,
-    build_bsm2,
     bsm2_asm1_model,
     bsm2_constant_influent,
+    build_bsm1,
+    build_bsm2,
 )
 from aquakin.plant.cstr import CSTRUnit
 from aquakin.plant.influent import InfluentSeries

@@ -10,6 +10,7 @@ from aquakin_ui.settings import Settings
 from aquakin_ui.worker import AquakinWorker, WorkerError
 
 from .conftest import PROJECTS
+from .conftest import study_project as _study_project
 
 
 @pytest.fixture(scope="module")
@@ -99,27 +100,6 @@ def test_save_writes_through_aquakin_and_open_reads_it_back(tmp_path):
         assert len(ed.doc.units) == n_units
     finally:
         ed.worker.stop()
-
-
-def _study_project(tmp_path):
-    """A one-tank project with one simulate study, written with aquakin."""
-    import aquakin
-    from aquakin.plant import CSTRUnit, InfluentSeries, Plant
-
-    m = aquakin.load_model("asm1")
-    p = Plant("tank")
-    p.add_unit(CSTRUnit("tank", m, 1000.0, ["in"], conditions={"T": 293.15}))
-    p.add_influent("feed", InfluentSeries.constant(m, Q=2000.0, SS=60.0, SNH=30.0), to="tank.in")
-    project = tmp_path / "project"
-    p.to_spec(project / "flowsheet.yaml")
-    study = project / "studies" / "short"
-    study.mkdir(parents=True)
-    (study / "study.yaml").write_text(
-        "study:\n  kind: simulate\n  description: half a day\n"
-        "  time: {t_span: [0, 0.5], t_eval: {start: 0, stop: 0.5, num: 3}}\n"
-        "  streams: [tank]\n"
-    )
-    return project
 
 
 def test_studies_are_listed_run_frozen_and_copied(tmp_path):

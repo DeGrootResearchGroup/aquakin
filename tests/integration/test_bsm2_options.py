@@ -5,7 +5,8 @@ right units and the plant must record the canonical influent/effluent endpoints
 so callers never hard-code a moving port.
 """
 
-import jax.numpy as jnp
+import dataclasses
+
 import pytest
 
 import aquakin
@@ -14,10 +15,10 @@ from aquakin.plant.bsm import (
     HydraulicDelay,
     InfluentBypass,
     RejectStorage,
-    build_bsm1,
-    build_bsm2,
     bsm2_asm1_model,
     bsm2_constant_influent,
+    build_bsm1,
+    build_bsm2,
 )
 
 
@@ -110,5 +111,5 @@ def test_carbon_default_on_and_disablable(nets):
 
 def test_option_objects_are_frozen():
     """The option objects are immutable (safe as shared defaults)."""
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError, match="cannot assign to field 'threshold'"):
         InfluentBypass().threshold = 1.0

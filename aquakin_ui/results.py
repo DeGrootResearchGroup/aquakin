@@ -263,8 +263,9 @@ def xy_chart(
         drawn = line[::stride] if line[-1] in line[::stride] else [*line[::stride], line[-1]]
         path = " ".join(f"{sx(a):.1f},{sy(b):.1f}" for a, b in drawn)
         parts.append(f'<polyline class="ak-chart-line" points="{path}"/>')
+    unit_x = f" {x_unit}" if x_unit else ""
     for a, b in dots[:MAX_POINTS]:
-        tip = escape(f"data {x_name} = {fmt(a)} {x_unit}: {fmt(b)} {y_unit}".replace("  ", " "))
+        tip = escape(f"data {x_name} = {fmt(a)}{unit_x}: {fmt(b)} {y_unit}".rstrip())
         parts.append(
             f'<circle class="ak-chart-dot" cx="{sx(a):.1f}" cy="{sy(b):.1f}" r="4">'
             f"<title>{tip}</title></circle>"
@@ -273,7 +274,6 @@ def xy_chart(
     hover = line[:: max(1, math.ceil(len(line) / MAX_HOVER))] if line else []
     edges = [left] + [(sx(a[0]) + sx(b[0])) / 2 for a, b in zip(hover, hover[1:])] + [left + plot_w]
     for (a, b), x_from, x_to in zip(hover, edges, edges[1:]):
-        unit_x = f" {x_unit}" if x_unit else ""
         tip = escape(f"{x_name} = {fmt(a)}{unit_x}: {fmt(b)} {y_unit}".rstrip())
         parts.append(
             f'<g class="ak-chart-hit"><title>{tip}</title>'

@@ -1,10 +1,9 @@
 """AD-mode helpers that hide the diffrax adjoint plumbing."""
 
 import diffrax
+import jax
 import jax.numpy as jnp
 import pytest
-
-import jax
 
 import aquakin
 from aquakin.integrate._common import (
@@ -38,7 +37,7 @@ def test_with_adjoint_swaps_adjoint_without_mutating_original(simple_model):
 
 def test_check_finite_gradient_passes_and_raises():
     check_finite_gradient(jnp.array([1.0, 2.0]), what="grad", remedy="do X")
-    with pytest.raises(RuntimeError, match="non-finite.*do X"):
+    with pytest.raises(RuntimeError, match=r"non-finite.*do X"):
         check_finite_gradient(jnp.array([1.0, jnp.nan]), what="grad", remedy="do X")
     with pytest.raises(RuntimeError):
         check_finite_gradient(jnp.array([jnp.inf]), what="grad", remedy="do X")
@@ -113,9 +112,9 @@ def test_diff_config_validated_accepts_and_rejects():
     # a valid config returns itself (chainable)
     cfg = DC(mode="reverse", method="stable")
     assert cfg.validated() is cfg
-    with pytest.raises(ValueError, match="diff.mode must be"):
+    with pytest.raises(ValueError, match=r"diff\.mode must be"):
         DC(mode="sideways").validated()
-    with pytest.raises(ValueError, match="diff.method must be"):
+    with pytest.raises(ValueError, match=r"diff\.method must be"):
         DC(method="not_a_method").validated()
 
 

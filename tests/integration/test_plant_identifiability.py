@@ -280,9 +280,9 @@ def test_fisher_input_validation(plant):
     with pytest.raises(ValueError, match="run 0: t_obs must be a non-empty 1-D array"):
         plant_fisher_information(plant, obs, jnp.ones((2, 2)), [K1], sigma=SIGMA)
     zero = plant.default_parameters().at[plant.parameter_index(K1)].set(0.0)
-    with pytest.raises(ValueError, match="'chain.r1.k1' has transform 'positive_log'"):
+    with pytest.raises(ValueError, match=r"'chain\.r1\.k1' has transform 'positive_log'"):
         plant_fisher_information(plant, obs, T_OBS, [K1], sigma=SIGMA, params=zero)
-    with pytest.raises(ValueError, match="'chain.r1.k1' has transform 'logit'"):
+    with pytest.raises(ValueError, match=r"'chain\.r1\.k1' has transform 'logit'"):
         plant_fisher_information(
             plant, obs, T_OBS, [K1], sigma=SIGMA, params=zero, transforms={K1: "logit"}
         )

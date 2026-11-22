@@ -12,15 +12,16 @@ real stiff-ODE solves with AD (~irreducible seconds each) and the cost is spread
 across hundreds of tests — neither a JAX compile-cache (verified: cold ≈ warm)
 nor concentrating it in a few files makes the whole suite fast.
 
-- The **`lint`** job (`ruff check aquakin` + `ruff format --check aquakin`, 3.12)
-  runs on **every PR and every push** — a purely static gate (no JAX import, no
-  compile), so it finishes in seconds and is the cheapest signal in the matrix. It
-  installs only the `lint` extra (`pip install -e ".[lint]"`, which pins
+- The **`lint`** job (3.12) runs
+  `ruff check aquakin aquakin_ui tests scripts examples` and
+  `ruff format --check aquakin aquakin_ui` on **every PR and every push** — a
+  purely static gate (no JAX import, no compile), so it finishes in seconds and
+  is the cheapest signal in the matrix. It installs only the `lint` extra (`pip install -e ".[lint]"`, which pins
   `ruff>=0.15,<0.16` so a new ruff release cannot redden the gate without a
   deliberate bump). The rule set and the per-file ignores live in `[tool.ruff]` in
-  `pyproject.toml`: `select = E,F,W,I,B,RUF` at `line-length = 100` (the width the
-  package is written to), with `UP` (pyupgrade) deliberately deferred and several
-  families `ignore`d against dedicated audit issues so each can be tackled — and
+  `pyproject.toml`: the `E,F,W,I,B,RUF,NPY,PIE,ICN,FA,UP` families plus `C420`
+  and `SIM300` at `line-length = 100` (the width the package is written to), with
+  several rules `ignore`d against dedicated audit issues so each can be tackled — and
   its ignore removed — in its own PR. **`ruff format` owns line width**, so `E501`
   is ignored (the formatter reflows all code to the line length and leaves only
   un-splittable lines — long string literals, refs in comments — over it, where
@@ -28,7 +29,10 @@ nor concentrating it in a few files makes the whole suite fast.
   and module-import-position (`E402`) because the re-export packages carry
   deliberate, load-bearing import order (`plant/__init__.py` imports `a2o` /
   `bsm.evaluation` last to avoid an import cycle; `aquakin/__init__.py` enables
-  x64 before any submodule import that builds JAX state). It skips the bare
+  x64 before any submodule import that builds JAX state). `tests/`, `scripts/`
+  and `examples/` are linted but not yet formatted: formatting them is a one-time
+  bulk diff, to land as its own commit listed in a `.git-blame-ignore-revs` file.
+  It skips the bare
   `labeled` event and the
   schedule / dispatch refresh, exactly like the fast gate.
 - The **`typecheck`** job (job name **`typecheck (pyright)`**, 3.12) runs
@@ -107,6 +111,30 @@ nor concentrating it in a few files makes the whole suite fast.
   `after_n_builds` in `codecov.yml` did not help, because the carried-forward
   slow/validation/heavy sessions count toward it.
 
+  The Codecov **project** status is informational. The **patch** status
+  (`codecov/patch`) has a **100%** target: every line a PR adds or changes is
+  expected to be covered (`threshold: 0%`, so anything short reads red).
+  Partially covered branches count against it, so an untaken
+  `if x is not None:` fallback in new code is a miss. A red patch status asks
+  for one of two things: add the test, or state in the PR which lines are
+  uncovered and why (a defensive branch no input can reach, or code only
+  `slow` tests exercise on a PR without `full-ci`). It is never a reason to add
+  `# pragma: no cover`, or a test that only executes lines without checking
+  what they do. Two consequences contributors will hit:
+  - **The fast-tier-only upload matters.** On a normal PR only the fast tier
+    uploads; the slow, validation and heavy flags are carried forward from
+    `main` and say nothing about lines the PR wrote. New code that only a
+    `slow` / `validation` / `heavy` test reaches therefore reads as uncovered,
+    and the patch status goes red. Either cover it from a fast test, or apply
+    the **`full-ci`** label so those tiers run and upload on the PR.
+  - **Moved code counts as changed.** Codecov has no notion of a move, so a
+    behaviour-preserving refactor that relocates code carries that code's
+    existing fast-tier gaps into its patch number. Run it with `full-ci`; if it
+    is still short, the gap predates the PR: say so in the PR.
+
+  The patch status is a target, not one of the required checks (see *Branch
+  protection* below): red is a prompt for the author and reviewer, not a block.
+
   The fast-tier durations are recorded by **`refresh-fast-durations`**, which
   runs with the weekly slow/validation refresh (`refresh-durations`, Mondays,
   or a manual `workflow_dispatch`). It uses the same
@@ -125,6 +153,16 @@ nor concentrating it in a few files makes the whole suite fast.
   that survives shard-count changes, so **branch protection requires
   `fast gate`**, not the per-shard `unit tests (...)` / `integration tests (...)`
   jobs.
+- The **`widget`** job (**`widget bundle and package`**) checks the editor's
+  canvas: it rebuilds `aquakin_ui/widget/serve/` from `ui-widget/src` with the
+  locked npm dependencies (`npm ci && npm run build`) and fails if the result
+  differs from the committed bundle, then builds the wheel and runs
+  `scripts/check_ui_package.py` (the bundle and every icon in the wheel, byte
+  for byte). It is path-filtered (`ui-widget/`, `aquakin_ui/widget/`,
+  `aquakin_ui/icons/`, `pyproject.toml`, the script, this workflow): on any other
+  change its steps are skipped and it passes. It is **not** part of `fast gate`
+  and not a required check. The release build runs the same package check on
+  the wheel it publishes. The Playwright tests in `tests/browser/` run in no job.
 - The **`slow`** job (`pytest -m "slow and not validation and not heavy"`,
   3.11/3.12) and **`validation`** job (`pytest -m "validation and not heavy"`,
   3.12) run **only on push to `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
@@ -281,9 +319,8 @@ names/count change when the shard count is tuned) and **not** `slow`/`validation
 the same gate with a stable name. (When the fast gate was sharded, the old
 required checks `fast tests (py3.11)` / `(py3.12)` ceased to exist; branch
 protection must be repointed to `fast gate` or merges block forever waiting on
-checks that never report.) The **`lint (ruff)`** job has a stable name and can be
-added as a second required check once the lint debt tracked in the audit issues is
-burned down enough to keep it reliably green.
+checks that never report.) The **`lint (ruff)`** job is also a required check,
+under that stable name.
 
 A green fast gate is the merge gate. The package requires Python 3.11 or later
 (`requires-python >= 3.11`), because the dependency floors (jax/jaxlib 0.10,

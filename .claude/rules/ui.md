@@ -2,6 +2,7 @@
 paths:
   - "aquakin_ui/**"
   - "tests/ui/**"
+  - "tests/browser/**"
   - "ui-widget/**"
 ---
 
@@ -221,11 +222,32 @@ that imports both. Keep it that way rather than copying knowledge across:
 `aquakin_ui/widget/serve/` (`AK_DEV=1` keeps Vue Flow's development warnings,
 which the production build strips; read them when edges vanish). Vue is not
 bundled: trame-client provides it (3.5), hence the `trame-client` floor in the
-`ui` extra. Commit the rebuilt bundle with any widget change.
+`ui` extra. Commit the rebuilt bundle with any widget change: the build is
+reproducible byte for byte from `package-lock.json`, and the `widget` CI job
+(path-filtered, not required) fails when the committed bundle is not a fresh
+`npm ci && npm run build`. It also builds the wheel and runs
+`scripts/check_ui_package.py`, which fails unless the wheel carries the bundle
+and every `icons/*.svg` byte for byte (the release build runs it too). A new
+file the editor needs at run time goes in `REQUIRED` there.
 
 ## Testing
 
 `tests/ui/`: independence, the document and forms (pure), the worker client
-against a real worker, and an `Editor` built and driven without a browser. Drive
-the real page with Playwright when a change touches the canvas or the form; every
-sync rule above was found that way, not by the unit tests.
+against a real worker or a stand-in process (`command=`), and an `Editor` built
+and driven without a browser. An `Editor` test that needs to count requests or
+make a command fail passes `worker=tests/ui/inprocess.InProcessWorker()`
+(aquakin's own `serve`, answered in the test process, with `sent` and `refuse`);
+one that needs the page's loop (background checks, `_off_page`, run events)
+runs inside `asyncio.run`, and a `state.change` handler fires only after
+`state.ready()`. Each sync rule Python owns has an `Editor` test
+(`test_editor_sync.py`, `test_editor_runs.py`, `test_editor.py`).
+
+`tests/browser/` serves the editor (`python -m aquakin_ui --no-browser --port 0`)
+and drives it in Chromium with Playwright; it holds the canvas's rules (the diff,
+handle validation, no echoes, one removal, Delete not Backspace, the form sent on
+Apply). It is not in the required gate and is skipped without the `playwright`
+package. Run it (`pytest tests/browser`) and add to it when a change touches
+the canvas or the form; a widget change needs the bundle rebuilt first. Read
+Python's document from the header chip ("10 units · 11 connections") and
+messages through a recorder (the snackbar closes after four seconds), never by
+a negative check with no sync point after it.

@@ -51,7 +51,7 @@ Claude-facing files** at the end.
 | `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
 | `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog, the schema rules, and the `_make_*` generators |
 | `.claude/rules/study.md` | `aquakin/study/**` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
-| `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `ui-widget/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules |
+| `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `tests/browser/**`, `ui-widget/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules |
 
 **On-demand docs (read when needed):**
 
@@ -227,6 +227,7 @@ pytest tests/unit tests/integration tests/ui -m "not validation and not slow"   
 pytest -m slow                             # the multi-minute stiff/plant solves
 pytest -m validation                       # validation suite (published data)
 pytest                                     # everything
+pytest tests/browser                       # the editor in Chromium (no CI job; needs playwright)
 ```
 
 A test under `tests/validation/` must carry `@pytest.mark.validation`, or no CI
@@ -458,22 +459,24 @@ After **every code change**, before considering the task complete, review and
 act on the following:
 
 1. **Lint & format** — Run ruff locally before committing and pushing any code
-   change. The CI `lint (ruff)` job runs `ruff check aquakin aquakin_ui` **and**
+   change. The CI `lint (ruff)` job runs
+   `ruff check aquakin aquakin_ui tests scripts examples` **and**
    `ruff format --check aquakin aquakin_ui` on every PR and is a **required merge
    gate**, so an
    unformatted file (or a lint error) fails CI — a common way a refactor that
    only shortens lines trips the format gate. Run both, from the repo root:
-   - `ruff check aquakin aquakin_ui` — must report no errors.
+   - `ruff check aquakin aquakin_ui tests scripts examples` — must report no
+     errors. In a test, an unused import or variable often means an assertion
+     that was never written: look at it before deleting it.
    - `ruff format aquakin aquakin_ui` — auto-applies formatting in place (CI runs
      it with `--check`, which only verifies; running it without `--check` fixes
      the files). Re-run `ruff format --check aquakin aquakin_ui` to confirm it is
-     clean.
+     clean. `tests/`, `scripts/` and `examples/` are linted but not yet
+     formatted: do not run `ruff format` over them as part of an unrelated change.
 
    Ruff is pinned via the `lint` extra (`pip install -e ".[lint]"`); see the
    `[tool.ruff]` config in `pyproject.toml` for the rule set and per-file
    ignores. Not needed for docs/config-only changes that touch no `.py` files.
-   CI lints only the two packages; keep `tests/`, `scripts/` and `examples/`
-   free of unused imports and variables by hand.
 
    **Type check** (a change under `aquakin_ui/`): run `pyright` from the repo
    root (`pip install -e ".[ui,typecheck]"`). The CI `typecheck (pyright)` job
@@ -490,6 +493,13 @@ act on the following:
    - Bug fix → regression test, **seen to fail on the unfixed code**
    - Run the tests you touched, and the fast gate for a cross-cutting change;
      report what ran and what did not.
+   - New and changed lines are expected to be covered: Codecov's patch status
+     targets 100% (a signal, not a required check). When it is red, add the
+     test, or state in the PR which lines are uncovered and why (a defensive
+     branch no input can reach; code only `slow` tests exercise, on a PR
+     without `full-ci`, since only the fast tier uploads on a normal PR). Never
+     add `# pragma: no cover`, or a test that only executes lines, to make it
+     green. Details in `docs/ci.md`.
 
 3. **Duplication and leftovers** — Re-read the diff as a reviewer:
    - Did you copy a block that should be one shared function?

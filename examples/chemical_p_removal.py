@@ -15,7 +15,7 @@ Run:
 import jax.numpy as jnp
 
 import aquakin
-from aquakin.plant import build_a2o, a2o_influent, a2o_warm_start, FerricDose
+from aquakin.plant import FerricDose, a2o_influent, a2o_warm_start, build_a2o
 
 PERMIT_TP = 1.0  # g P / m³ effluent target
 

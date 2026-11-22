@@ -15,13 +15,13 @@ point unchanged.
 import jax.numpy as jnp
 
 import aquakin
-from aquakin.plant.bsm import bsm2_warm_start
 from aquakin.plant.bsm import (
-    build_bsm2,
     HydraulicDelay,
     bsm2_asm1_model,
     bsm2_constant_influent,
     bsm2_parameters,
+    bsm2_warm_start,
+    build_bsm2,
 )
 from aquakin.plant.bsm.bsm2 import BSM2_Q_REF
 from aquakin.plant.influent import InfluentSeries

@@ -7,7 +7,6 @@ pick the adjoint that matches the AD direction (reverse -> the cap-free stable
 adjoint; forward -> a forward-capable adjoint), which is the easy thing to get
 wrong by hand. The solves are stiff plant integrations, so these are slow.
 """
-import diffrax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -33,7 +32,7 @@ _MAX_STEPS = 8_000
 
 
 def _bsm1():
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
     asm1 = aquakin.load_model("asm1")
     infl = asm1.influent({"SS": 60., "SNH": 25., "XS": 200., "XB_H": 50.,
                           "SI": 30., "XI": 25., "SND": 6., "XND": 10.,

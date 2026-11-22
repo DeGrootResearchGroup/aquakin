@@ -113,8 +113,11 @@ def test_multispecies_groups_grow_and_stratify():
     film = {"X_BH": 1000.0, "X_SRB": 300.0, "X_MA": 200.0, "X_SOB": 300.0,
             "X_S1": 50.0, "X_S2": 300.0}
     bulk = np.array(net.default_concentrations(), dtype=float)
-    bulk[si["S_NO"]] = 25.0; bulk[si["sumS"]] = 9.0; bulk[si["S_SO4"]] = 4.0
-    bulk[si["S_VFA"]] = 25.0; bulk[si["X_BH"]] = 10.0
+    bulk[si["S_NO"]] = 25.0
+    bulk[si["sumS"]] = 9.0
+    bulk[si["S_SO4"]] = 4.0
+    bulk[si["S_VFA"]] = 25.0
+    bulk[si["X_BH"]] = 10.0
     y0 = np.tile(bulk, (n_layers + 1, 1))
     for s, v in film.items():
         y0[1:, si[s]] = v

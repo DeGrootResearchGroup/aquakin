@@ -11,14 +11,12 @@ breaks when it is relabelled. :meth:`Flowsheet.to_spec` writes exactly what
 from __future__ import annotations
 
 import copy
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from aquakin_ui.catalog import Catalog
 
 SPEC_FORMAT = 2
-_ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 
 
 @dataclass
@@ -376,8 +374,3 @@ class Flowsheet:
                 "x": (r % per_band) * 240,
                 "y": band_y[r // per_band] + row * 170,
             }
-
-
-def valid_id(uid: str) -> bool:
-    """Whether ``uid`` can be a unit identifier (letters, digits, ``_``, ``-``)."""
-    return bool(_ID.match(uid))

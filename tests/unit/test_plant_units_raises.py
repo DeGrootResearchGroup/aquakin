@@ -258,7 +258,7 @@ def test_primary_clarifier_negative_t_m(decay_model):
 def test_primary_clarifier_filter_needs_initial_flow(decay_model):
     from aquakin.plant.primary_clarifier import PrimaryClarifier
 
-    with pytest.raises(ValueError, match="initial_flow .* must be given"):
+    with pytest.raises(ValueError, match=r"initial_flow .* must be given"):
         PrimaryClarifier(name="prim", model=decay_model, volume=900.0, t_m=0.125)
 
 

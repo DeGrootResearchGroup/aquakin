@@ -75,7 +75,6 @@ def test_particulates_concentrate_in_underflow(asm1):
     streams = clar.compute_outputs(
         jnp.asarray(2.0), state, {"inlet": inf}, plant.default_parameters()
     )
-    X_BH_in = float(inf.C[asm1.species_index["X_BH"] if "X_BH" in asm1.species_index else asm1.species_index["XB_H"]])
     XBH_idx = asm1.species_index["XB_H"]
     overflow_XBH = float(streams["overflow"].C[XBH_idx])
     underflow_XBH = float(streams["underflow"].C[XBH_idx])
@@ -193,13 +192,13 @@ def test_no_inflow_no_dynamics(asm1):
 def test_shared_asm1_constants_are_single_source(asm1):
     """Clarifier/Takács settling sets and the metrics TSS set come from the one
     shared constants module, so they cannot drift apart."""
+    from aquakin.plant import metrics
+    from aquakin.plant import takacs as takacs_mod
     from aquakin.plant._constants import (
         ASM1_SETTLING_SPECIES,
         ASM1_TSS_FACTOR,
         ASM1_TSS_SPECIES,
     )
-    from aquakin.plant import metrics
-    from aquakin.plant import takacs as takacs_mod
     from aquakin.plant.clarifier import IdealClarifier
 
     ideal = IdealClarifier(name="c", model=asm1, overflow_Q=1.0)
@@ -208,8 +207,8 @@ def test_shared_asm1_constants_are_single_source(asm1):
     assert tuple(ideal.particulate_species) == ASM1_SETTLING_SPECIES
     assert tuple(tak.particulate_species) == ASM1_SETTLING_SPECIES
     # Takács TSS factors: the TSS species at the shared factor, XND at zero.
-    assert takacs_mod._DEFAULT_TSS_FACTORS == {
-        **{s: ASM1_TSS_FACTOR for s in ASM1_TSS_SPECIES}, "XND": 0.0}
+    assert {
+        **dict.fromkeys(ASM1_TSS_SPECIES, ASM1_TSS_FACTOR), "XND": 0.0} == takacs_mod._DEFAULT_TSS_FACTORS
     # Metrics reuses the same TSS set / factor object.
     assert metrics._TSS_SPECIES is ASM1_TSS_SPECIES
     assert metrics._TSS_FACTOR == ASM1_TSS_FACTOR
@@ -438,6 +437,7 @@ def test_lumped_tss_solids_mass(asm1):
 def test_lumped_tss_grad_through_rhs(asm1):
     """jax.grad flows through the lumped-mode rhs without NaNs (AD-clean)."""
     import jax
+
     from aquakin.plant.streams import Stream
 
     lm = TakacsClarifier(name="lm", model=asm1, area=1500.0, height=4.0,
@@ -581,6 +581,7 @@ def test_soluble_holdup_damps_vs_passthrough(asm1):
 def test_soluble_holdup_grad_through_rhs(asm1):
     """jax.grad flows through the soluble-holdup rhs without NaNs."""
     import jax
+
     from aquakin.plant.streams import Stream
 
     held = TakacsClarifier(name="h", model=asm1, area=1500.0, height=4.0,
@@ -729,7 +730,7 @@ def test_bsm1_takacs_solve_is_jittable_and_differentiable(asm1):
     import jax
 
     from aquakin.integrate._common import default_atol
-    from aquakin.plant.bsm import build_bsm1, bsm1_warm_start, load_bsm1_influent
+    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1, load_bsm1_influent
 
     plant = build_bsm1(model=asm1, use_takacs=True)
     plant.add_influent("feed", load_bsm1_influent("dry", asm1))
