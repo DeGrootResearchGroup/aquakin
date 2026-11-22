@@ -25,6 +25,16 @@ fresh import would never run it), a fresh-interpreter import of every module,
 and the reverse AST scan of `aquakin/`. Tests may import aquakin (to build
 expected values). `tests/ui` runs in the required fast gate (the `ui` CI job).
 
+## Types (pyright, mechanically checked)
+
+`aquakin_ui` must stay at 0 errors under basic-mode pyright (the CI `typecheck
+(pyright)` job; `[tool.pyright]` in `pyproject.toml`). Fix a type where the value
+comes from: narrow a value that can be `None` on that path, pass a known value
+down rather than re-reading an optional attribute, and correct an annotation
+that is wrong. An `assert` narrows only an invariant a reader can check on the
+spot (with the reason beside it); a `None` that a page event or a missing file
+can produce gets handled and tested, not asserted away.
+
 ## Structure
 
 | module | holds | notes |

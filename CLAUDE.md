@@ -475,6 +475,13 @@ act on the following:
    CI lints only the two packages; keep `tests/`, `scripts/` and `examples/`
    free of unused imports and variables by hand.
 
+   **Type check** (a change under `aquakin_ui/`): run `pyright` from the repo
+   root (`pip install -e ".[ui,typecheck]"`). The CI `typecheck (pyright)` job
+   runs it in basic mode over `aquakin_ui` (`[tool.pyright]` in
+   `pyproject.toml`) and it must report 0 errors. Fix a type error where the
+   value comes from: narrow a value that can be `None` on that path, or correct
+   a wrong annotation. A `# type: ignore` needs a reason on the line.
+
 2. **Tests** — Every behaviour change comes with a test that would fail without
    it (`.claude/rules/tests.md` has the full table and the quality bar):
    - New node type → unit test in `test_nodes.py`

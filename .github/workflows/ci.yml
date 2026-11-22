@@ -97,6 +97,33 @@ jobs:
       - name: Run ruff format --check
         run: ruff format --check aquakin aquakin_ui
 
+  # ---- Type gate: pyright on the editor (fast, always-on) ----------------------
+  # Basic-mode pyright over `aquakin_ui/` (configuration in `[tool.pyright]` in
+  # `pyproject.toml`). Needs the `ui` extra so trame's types resolve, and the
+  # `typecheck` extra for the pinned pyright. Static: imports nothing at run time.
+  typecheck:
+    name: typecheck (pyright)
+    if: >-
+      github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+      && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the editor's dependencies and pyright
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ui,typecheck]" -c constraints.txt
+
+      - name: Run pyright
+        run: pyright
+
   # ---- Docs gate: strict Sphinx build + doctest (always-on) -------------------
   # Builds the docs with `-W` so a broken doc fails the PR: a page missing from
   # the nav, a broken internal cross-reference, an autodoc import failure, or a

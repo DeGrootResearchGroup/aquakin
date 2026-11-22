@@ -31,6 +31,14 @@ nor concentrating it in a few files makes the whole suite fast.
   x64 before any submodule import that builds JAX state). It skips the bare
   `labeled` event and the
   schedule / dispatch refresh, exactly like the fast gate.
+- The **`typecheck`** job (job name **`typecheck (pyright)`**, 3.12) runs
+  `pyright` in basic mode over `aquakin_ui/` on **every PR and every push**, with
+  the configuration in `[tool.pyright]` in `pyproject.toml`. It installs the
+  `ui` extra (so trame's types resolve) and the `typecheck` extra, which pins
+  pyright exactly, since a pyright release can add errors: bump it on purpose.
+  `aquakin` itself is not type-checked. Like the lint job it skips the bare
+  `labeled` event and the schedule / dispatch refresh. It is not a required
+  check until the owner adds it to branch protection.
 - The **`docs`** job (job name **`docs (sphinx)`**, 3.12) runs on **every PR and
   every push**: it installs the `docs` extra (`pip install -e ".[docs]"`, so
   autodoc can import the package) and builds the Sphinx site with
