@@ -3,7 +3,7 @@ jit-cached value-and-gradient, residual and Jacobian, and the start-gradient che
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import jax
@@ -165,7 +165,12 @@ def _residual_parts(
 class _ObjectiveBundle:
     """The compiled callables the optimiser drives: the scalar
     value-and-gradient (L-BFGS-B) and the residual / Jacobian (Gauss-Newton).
-    ``res_j`` / ``jac_j`` are ``None`` for the L-BFGS-B optimiser."""
+    ``res_j`` / ``jac_j`` are ``None`` for the L-BFGS-B optimiser.
+
+    All of them are of the objective divided by :attr:`loss_scale` (1 until
+    the driver sets it from the starting loss, see :func:`_objective_scale`),
+    so SciPy's absolute tolerances act relative to the starting misfit;
+    multiply a value by ``loss_scale`` to get the loss itself."""
 
     value_and_grad: object
     res_j: object
@@ -176,6 +181,13 @@ class _ObjectiveBundle:
     # level the Gauss-Newton residual / Jacobian are scaled by.
     sigma_hat_of: object = None
     set_sigma_hat: object = None
+    # One-element holder of the scale, shared with the callables above.
+    scale_box: list = field(default_factory=lambda: [1.0])
+
+    @property
+    def loss_scale(self) -> float:
+        """The factor the optimiser's objective is divided by."""
+        return self.scale_box[0]
 
 
 def _build_objective(
@@ -219,9 +231,13 @@ def _build_objective(
         ("obj_vg",) + struct_key, lambda: jax.jit(jax.value_and_grad(objective))
     )
     data = problem.data
+    # The optimiser's scale of the objective (see _ObjectiveBundle): applied
+    # outside the compiled programs, so it is not part of their cache key.
+    scale_box = [1.0]
 
     def obj_value_and_grad(theta):
-        return _obj_vg_jit(theta, *data)
+        value, grad = _obj_vg_jit(theta, *data)
+        return value / scale_box[0], grad / scale_box[0]
 
     res_j = None
     jac_j = None
@@ -272,16 +288,16 @@ def _build_objective(
         _jac_core = _cached_jit(("gn_jac", use_forward) + struct_key, lambda: jax.jit(_jac))
 
         def _res_call(theta):
-            return _res_core(theta, *data, sigma_box[0])
+            return _res_core(theta, *data, sigma_box[0]) / jnp.sqrt(scale_box[0])
 
         def _jac_call(theta):
-            return _jac_core(theta, *data, sigma_box[0])
+            return _jac_core(theta, *data, sigma_box[0]) / jnp.sqrt(scale_box[0])
 
         res_j = _res_call
         jac_j = _jac_call
 
     return _ObjectiveBundle(
-        obj_value_and_grad, res_j, jac_j, use_forward, sigma_hat_of, set_sigma_hat
+        obj_value_and_grad, res_j, jac_j, use_forward, sigma_hat_of, set_sigma_hat, scale_box
     )
 
 

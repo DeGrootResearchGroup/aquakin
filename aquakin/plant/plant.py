@@ -58,7 +58,7 @@ from aquakin.plant.results import (
 
 # Re-exported, as ``aquakin.plant.plant.<name>`` is an import path for them.
 from aquakin.plant.results import SteadyStateResult as SteadyStateResult
-from aquakin.plant.solve_cache import SolveCache
+from aquakin.plant.solve_cache import SolveCache, structure_changed
 from aquakin.plant.steady_solve import NORM_RESIDUAL_WARN_FACTOR as NORM_RESIDUAL_WARN_FACTOR
 from aquakin.plant.streams import Stream, StreamSeries, make_scalars
 from aquakin.plant.temperature import (
@@ -340,9 +340,11 @@ class Plant:
         # steady builder caches and the structural coupling pattern (see
         # aquakin.plant.colored).
         self._colored = ColoredJacobianManager(self)
-        # One-time guard for materialising the DO controllers a CSTRUnit's
-        # closed-loop Aeration spec requires (see _materialize_aeration).
+        # Guards for materialising the PI controllers a CSTRUnit's closed-loop
+        # Aeration spec or a feedback DosingUnit requires (see
+        # _materialize_aeration / _materialize_dosing); reset by a structure change.
         self._aeration_materialized: bool = False
+        self._dosing_materialized: bool = False
         # Units the plant derived itself (the PI controllers a closed-loop
         # Aeration or a feedback DosingUnit requires). They follow from other
         # units' settings, so a flowsheet spec leaves them out.
@@ -350,10 +352,10 @@ class Plant:
         # Compiled-solve / kernel memoization -- the jitted forward solves, the
         # PTC steady solves, and the continuation / arclength kernels -- owning
         # one invalidate() so a condition/topology mutator cannot clear one cache
-        # and forget another (see aquakin.plant.solve_cache). Assumes the plant is
-        # not structurally mutated after the first solve (units/connections
-        # fixed), as the reactors assume too. The ``_jit_cache`` /
-        # ``_steady_jit_cache`` properties below are thin views onto it.
+        # and forget another (see aquakin.plant.solve_cache). A structure change
+        # drops it with the other structure-derived state (_structure_changed).
+        # The ``_jit_cache`` / ``_steady_jit_cache`` properties below are thin
+        # views onto it.
         self._solve_cache = SolveCache()
 
     @property
@@ -387,6 +389,9 @@ class Plant:
         # before the first solve (helpers that just enumerate units read it);
         # _finalize_topology() reorders it into a valid topological order.
         self._unit_order.append(unit.name)
+        self._structure_changed()
+
+    _structure_changed = structure_changed
 
     def _check_unit_name(self, unit) -> None:
         """Refuse a unit name or port name the plant's addressing cannot read.
@@ -485,6 +490,7 @@ class Plant:
                     initial_value=None,
                 )
             )
+        self._structure_changed()
 
     def set_temperature(self, celsius: float, *, units: Iterable[str] | None = None) -> Plant:
         """Set the operating temperature of the reactors, in **degrees Celsius**.
@@ -633,6 +639,7 @@ class Plant:
                 initial_value=initial_value,
             )
         )
+        self._structure_changed()
 
     def check(self, *, raise_on_error: bool = False) -> PlantCheck:
         """Validate the plant before solving: wiring and declared units.
@@ -942,9 +949,10 @@ class Plant:
         or, when none is given, each gets its own (per-tank control). For each
         group one :class:`~aquakin.plant.control.PIController` is added -- sensing
         the group's ``sensor`` unit, publishing the signal the tanks consume --
-        and the sensor is connected to it. Runs once (idempotent) at topology
-        setup, before the state layout is assigned, so the controllers get state
-        slices and the signal-bus validation sees them.
+        and the sensor is connected to it. Runs at topology setup, before the
+        state layout is assigned, so the controllers get state slices and the
+        signal-bus validation sees them; once per structure, and a controller it
+        derived before a structure change is kept rather than added again.
 
         Tanks sharing a controller must agree on its setpoint, sensor and tuning;
         only the per-tank ``gain`` may differ.
@@ -1011,6 +1019,8 @@ class Plant:
             # referenceable); a per-tank controller gets a derived name that
             # cannot collide with the tank it controls.
             ctrl_name = a0.controller if a0.controller is not None else f"{first_name}_aeration"
+            if ctrl_name in self._derived_units:
+                continue
             self.add_unit(
                 PIController(
                     name=ctrl_name,
@@ -1044,13 +1054,14 @@ class Plant:
         ``controller`` id (shared controller) or giving each its own. For each
         group one :class:`~aquakin.plant.control.PIController` is added, sensing
         the group's ``sensor`` reactor and publishing the dose-flow signal the
-        units consume, and the sensor is connected to it. Idempotent; runs at
-        topology setup before the state layout is assigned.
+        units consume, and the sensor is connected to it. Runs at topology setup
+        before the state layout is assigned, once per structure; a controller it
+        derived before a structure change is kept rather than added again.
 
         Units sharing a controller must agree on its setpoint, sensor, measured
         species and PI tuning; only the per-unit ``gain`` may differ.
         """
-        if getattr(self, "_dosing_materialized", False):
+        if self._dosing_materialized:
             return
         self._dosing_materialized = True
 
@@ -1106,6 +1117,8 @@ class Plant:
                     f"its state (e.g. a CSTRUnit), not a mixer/splitter/clarifier. "
                     f"Set sensor= to such a reactor."
                 )
+            if cid in self._derived_units:
+                continue
             self.add_unit(
                 PIController(
                     name=cid,
