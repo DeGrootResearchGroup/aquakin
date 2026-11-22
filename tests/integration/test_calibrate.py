@@ -878,10 +878,11 @@ reactions:
 """
 
 
-@pytest.fixture
-def bounded_setup(tmp_path):
-    """Data generated with k = 0.25, fitted by a model that declares k <= 0.2."""
-    path = tmp_path / "bounded_decay.yaml"
+@pytest.fixture(scope="module")
+def bounded_setup(tmp_path_factory):
+    """Data generated with k = 0.25, fitted by a model that declares k <= 0.2.
+    Module-scoped: the tests only unpack ``common`` into new dicts."""
+    path = tmp_path_factory.mktemp("bounded") / "bounded_decay.yaml"
     path.write_text(_BOUNDED_DECAY_YAML)
     model = aquakin.load_model_from_file(path)
     reactor = aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1))
