@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
-from aquakin.core.nodes import ASTNode, _OperatorNode
+from aquakin.core.nodes import ASTNode
 from aquakin.core.registry import register_rate_function, unregister_rate_function
 from aquakin.schema.loader import clear_model_cache
 from aquakin.utils.units import DIMENSIONLESS
@@ -24,7 +24,7 @@ FIXTURE = Path(__file__).parent.parent / "fixtures" / "registered_function_model
 
 
 @dataclass(frozen=True)
-class HillNode(_OperatorNode):
+class HillNode(aquakin.RateFunction):
     """Cooperative binding: ``X^n / (K^n + X^n)``."""
 
     X: ASTNode

@@ -18,6 +18,10 @@ too.
 What each returns off its domain is a modelling decision, not a mechanical
 one, and the two differ deliberately: see each function.
 
+These are public: a rate function a user registers (a subclass of
+:class:`aquakin.RateFunction`) gets none of the built-in guards, and uses these
+in its ``op`` wherever its arithmetic can reach a singular derivative.
+
 ``_safe_ratio`` deliberately stays in ``core/nodes.py``. It guards the Monod
 family and ``safe_div``, which exist only in the rate language, so it is not
 shared and moving it would churn those nodes for no second consumer.
@@ -28,10 +32,10 @@ from __future__ import annotations
 import jax.numpy as jnp
 from jax import lax
 
-__all__ = ["_safe_log", "_safe_pow", "_safe_sqrt"]
+__all__ = ["safe_log", "safe_pow", "safe_sqrt"]
 
 
-def _safe_log(x):
+def safe_log(x):
     """``log(x)`` whose *gradient* stays finite at and below zero.
 
     ``d/dx log(x) = 1/x`` is infinite at ``x == 0`` and the value is NaN below
@@ -55,7 +59,7 @@ def _safe_log(x):
     return jnp.where(positive, jnp.log(safe), -jnp.inf)
 
 
-def _safe_sqrt(x):
+def safe_sqrt(x):
     """``sqrt(x)`` whose gradient stays finite at zero.
 
     ``d/dx sqrt(x) = 1/(2 sqrt(x))`` is infinite at ``x == 0``. That is not a
@@ -65,7 +69,7 @@ def _safe_sqrt(x):
     exact (``sqrt(0) == 0``) while the derivative at and below zero is 0 rather
     than ``inf``; a transiently negative argument returns 0 rather than NaN.
 
-    :func:`_safe_pow` guards the same singularity reached through the ``**``
+    :func:`safe_pow` guards the same singularity reached through the ``**``
     operator, so ``sqrt([X])`` and ``[X] ** 0.5`` agree. (The ``powc`` kernel in
     ``core/vector_kernel.py`` does *not* help here: it keeps a constant exponent
     static so the generic ``pow`` JVP's ``base**exp * log(base)`` term is pruned,
@@ -83,12 +87,12 @@ def _safe_sqrt(x):
     return jnp.where(positive, jnp.sqrt(safe), 0.0)
 
 
-def _safe_pow(base, exp):
+def safe_pow(base, exp):
     """``base ** exp`` whose gradient stays finite where the exponent makes it
     infinite.
 
     ``d/dx x**e = e * x**(e - 1)`` is infinite at ``x == 0`` whenever ``e < 1``
-    -- so ``[X] ** 0.5`` carries exactly the singularity :func:`_safe_sqrt`
+    -- so ``[X] ** 0.5`` carries exactly the singularity :func:`safe_sqrt`
     exists for, and the two spellings of half-order kinetics have to agree.
 
     **Every value is unchanged.** The guard fires only where the base is exactly
@@ -96,7 +100,7 @@ def _safe_pow(base, exp):
     which is what the unguarded expression already evaluated to: ``0`` for a
     positive exponent, ``1`` for a zero one, ``inf`` for a negative one. What
     changes is the derivative at that point, from infinite to 0 -- the same
-    compromise :func:`_safe_sqrt` makes. ``x ** 1`` therefore keeps its
+    compromise :func:`safe_sqrt` makes. ``x ** 1`` therefore keeps its
     derivative of 1 and ``x ** 2`` is untouched: neither is singular, so neither
     is guarded.
 
