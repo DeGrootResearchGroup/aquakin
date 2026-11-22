@@ -421,6 +421,7 @@ codebase something; the examples are real.
   `plant/calibrate.py` and `plant/spec.py` already use, bound onto `Plant` as
   methods), not as more methods on the class. New calibration code goes in its
   concern's module under `integrate/calibration/`, not `integrate/calibrate.py`.
+  Their line ceilings are checked by `tests/unit/test_size_limits.py`.
 - A function past about 100 lines of body, or with more than about eight
   parameters, gets split or takes a config dataclass before it gets longer.
 - A behaviour-preserving refactor is its own commit (ideally its own PR) and
@@ -579,7 +580,8 @@ earns its place only if it changes what gets written.
   gets its own file with those paths (the `plant-*.md`, `core-*.md` and
   `integration-*.md` files), so editing one unit does not load the recycle
   solver's rules. Keep a rule file under about 250 lines; past that, split it
-  or move narrative out.
+  or move narrative out. `tests/unit/test_size_limits.py` checks this budget (and
+  each rule's `paths:` and Index row), recording the files already over it.
 - **Change a rule in the same commit as the code it describes**, and delete the
   rule text for anything removed. A rule that names a function that no longer
   exists is worse than no rule.
