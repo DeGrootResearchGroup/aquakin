@@ -6,704 +6,210 @@
 [![PyPI](https://img.shields.io/pypi/v/aquakin.svg)](https://pypi.org/project/aquakin/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23784521.svg)](https://doi.org/10.5281/zenodo.23784521)
 
-`aquakin` is a Python library for modelling reactive scalar transport in
-aqueous environmental systems. Reaction models are declared at runtime in
-YAML and compiled to JAX-native, automatic-differentiable rate functions
-integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
+**Differentiable reaction kinetics for water and wastewater treatment.**
 
-Shipped models span chemistry (ozonation/bromate after Acero & von Gunten,
-2001; UV/H₂O₂) and biology (the ASM activated-sludge family, including a
-two-step nitrification/denitrification variant with explicit nitrite, a
-two-pathway AOB nitrous-oxide (N₂O) model, an anammox / deammonification
-variant, and a comammox complete-nitrifier variant; ADM1 anaerobic
-digestion in its BSM2 form, with gas headspace; the WATS sewer-process models
-`wats_sewer_extended` and the paper-faithful `wats_sewer_khalil_paper`, the
-latter with structural variants for model-structure studies) as well as
-chemistry coupled to acid-base speciation (a charge-balance state-derived pH,
-and SI-driven mineral precipitation/dissolution — struvite + calcite, and
-iron/aluminium chemical-phosphorus removal — after Kazadi Mbamba et al. 2015 and
-Flores-Alsina et al. 2016. A very insoluble mineral's stiff kinetics defeat every
-sensitivity method, so two opt-in differentiable variants are provided: an
-**algebraic equilibrium** mode that solves `IAP = Ksp` directly
-(`model.precipitation_equilibrium(...)`) and a **bounded-driver** kinetic form
-for differentiable dynamics). The model
-YAML files live under `aquakin/models/`; see `CLAUDE.md` for the full list.
-Future models include UV/TiO₂ and chlorine decay.
+`aquakin` simulates the chemistry and biology of aqueous systems — from a
+single ozonation batch test to a whole wastewater treatment plant. You write a
+reaction model in a short YAML file (or pick one of the shipped models), and
+aquakin compiles it to fast [JAX](https://github.com/jax-ml/jax) code solved by
+the stiff integrators of [Diffrax](https://github.com/patrick-kidger/diffrax).
+Because every solve is differentiable, the same model can be fitted to data,
+screened for sensitivity, and used to design the next experiment.
 
-## Features
+## Highlights
 
-- Reaction models declared in YAML — no recompilation required.
-- Full automatic differentiation through `solve()` via JAX.
-- JAX-native stiff ODE integration via Diffrax (`Kvaerno5` by default).
-- Safe rate expression evaluation via a custom AST (no `eval()`).
-- Decoupled transport / reaction operator splitting at all scales (0D, 1D, 3D).
-- Reactors for batch (0D), plug flow (1D), Lagrangian particle tracks, and a
-  layered biofilm (`BiofilmReactor`: 1-D diffusion-reaction over biofilm depth,
-  for penetration-controlled processes).
-- Plant-wide flowsheets (`aquakin.plant`): the IWA benchmark plants BSM1 and
-  BSM2 — reactors, clarifiers, mixers/splitters and an ADM1 digester integrated
-  under one monolithic solve, with run-to-steady-state, a fast differentiable
-  algebraic steady-state solver (`plant.steady_state`, pseudo-transient
-  continuation — ~10× faster than integrating to settle), dynamic influents,
-  EQI/OCI performance metrics, and GHG (N₂O / CO₂e) + monetised-cost reporting
-  with standardized scenario-comparison KPI tables. Includes an `IFASUnit` / 
-  `MBBRUnit` (a CSTR bulk coupled to a depth-resolved attached biofilm) for 
-  modelling MBBR/IFAS intensification retrofits.
-- Located events / discontinuities (`Event` + `solve(events=...)`): time events
-  and state root-crossings with exact state resets / mode switches (on/off pumps,
-  SBR phases, dosing on/off, level limits) — time-scheduled events keep
-  `jax.grad` finite.
-- Full automatic differentiation everywhere, including cap-free forward
-  sensitivity and reverse-mode gradients through stiff plant solves (see
-  [Advanced: differentiation & sensitivity](#advanced-differentiation--sensitivity)).
-- Calibration and identifiability: MAP fits with a Laplace posterior
-  (`calibrate`), profile likelihood (`profile_likelihood`), and the Fisher
-  information of a planned experiment design (`fisher_information`) with an
-  identifiability report (`identifiability`) for checking what an experiment
-  can estimate before running it, and optimal experiment design
-  (`rank_experiments`, `optimize_experiment`). Plants have their own versions
-  (`plant_fisher_information`, `plant_profile_likelihood`, and
-  `plant_rank_sensor_sets` for choosing sensors, in `aquakin.plant`).
+- **Models as data.** Species, reactions, rate laws and parameters live in a
+  readable YAML file with its literature references — no code to write and
+  nothing to recompile. Rate expressions are parsed safely (no `eval`) and
+  checked for unit consistency and mass / COD / nitrogen conservation.
+- **A library of standard models.** Ozonation / bromate and UV/H₂O₂ chemistry;
+  ASM1, ASM2d and ASM3 with two-step nitrification, N₂O, anammox and comammox
+  variants; ADM1 anaerobic digestion; WATS sewer processes; and pH speciation
+  with mineral precipitation (struvite, calcite, chemical phosphorus removal).
+- **Reactors and whole plants.** Batch, plug-flow, biofilm and particle-track
+  reactors, and plant-wide flowsheets: the IWA benchmarks BSM1 and BSM2 build
+  in one line, with clarifiers, IFAS/MBBR, digestion, disinfection, events
+  (pumps, dosing, SBR phases), steady-state solvers and EQI / OCI, carbon
+  footprint and cost reporting.
+- **Gradients through everything.** `jax.grad` works through a stiff solve —
+  including a full BSM2 plant — with exact forward sensitivities and a stable
+  adjoint, so derivatives stay finite where naive autodiff breaks down.
+- **Calibration and experiment design.** Fit parameters with uncertainty,
+  check identifiability before running an experiment, choose sampling times
+  and sensors, and propagate uncertainty to design decisions.
+- **Projects, studies and a browser editor.** Save a flowsheet as a file, keep
+  analyses as reproducible *studies* that know when they are out of date, and
+  draw plants in the `aquakin-ui` flowsheet editor.
 
 ## Installation
 
 Requires Python 3.11 or later.
 
 ```bash
-pip install -e ".[test]"
+pip install aquakin
 ```
 
-> **⚠️ `import aquakin` enables JAX 64-bit (x64) mode process-wide.** The stiff
-> implicit ODE solves need double precision, so at import aquakin runs
-> `jax.config.update("jax_enable_x64", True)` — which is **global JAX state**.
-> Any other JAX code in the same process will use float64 afterward (more memory,
-> different numerics). This is required, not optional. If you are co-running JAX
-> code that needs float32, run aquakin in a separate process. aquakin emits a
-> one-time warning if it overrides an explicit float32 preference (JAX already
-> imported, or `JAX_ENABLE_X64` set off), so the side effect is never silent.
+Optional extras: `aquakin[plot]` (`solution.plot(...)` via matplotlib),
+`aquakin[dataframe]` (export to pandas / CSV) and `aquakin[ui]` (the flowsheet
+editor).
+
+> **Note.** `import aquakin` turns on JAX 64-bit mode for the whole process,
+> because stiff solves need double precision. Other JAX code in the same process
+> will then use float64; run it in a separate process if it needs float32.
 
 ## Quickstart
 
+### 1. Write a model
+
+A model is a YAML file. Here is first-order chlorine decay:
+
+```yaml
+# decay.yaml
+model:
+  name: chlorine_decay
+  version: "1.0"
+  description: "First-order chlorine decay"
+
+species:
+  - {name: HOCl, units: mg/L, default_concentration: 2.0}
+
+conditions:
+  - {name: T, default: 293.15}
+
+reactions:
+  - name: decay
+    rate: "k * [HOCl]"
+    parameters:
+      k: {value: 0.05, units: h-1}
+    stoichiometry: {HOCl: -1}
+```
+
+### 2. Solve it, differentiate it, fit it
+
 ```python
-import jax.numpy as jnp
 import aquakin
+import jax
+import jax.numpy as jnp
 
-model = aquakin.load_model("asm1")   # Activated Sludge Model No. 1 (IAWQ)
+model = aquakin.load_model_from_file("decay.yaml")   # or aquakin.load_model("asm1")
+reactor = aquakin.BatchReactor(model, model.default_conditions())
+C0 = model.default_concentrations()
 
-# 0-D (a single well-mixed tank): start from the model's declared condition
-# defaults (ASM1 runs at a temperature T) and change only what differs.
-conditions = model.default_conditions()                   # YAML defaults (T = 20 C)
-# conditions = model.default_conditions().with_(T=283.15)   # ...or run it at 10 C
-# (OperatingConditions(T=293.15) is the scalar 0-D shorthand; use SpatialConditions
-#  for a spatially varying PFR/CFD case.)
+# Solve over a day (the model's time unit, hours, comes from its rate constant).
+sol = reactor.solve(C0, t_span=(0.0, 24.0), t_eval=jnp.linspace(0.0, 24.0, 25))
+sol.final_named(["HOCl"])              # {'HOCl': 0.602}
 
-reactor = aquakin.BatchReactor(model, conditions)
+# Differentiate the result with respect to the parameters.
+def final_chlorine(params):
+    return reactor.solve(C0, t_span=(0.0, 24.0), params=params).C_named("HOCl")[-1]
 
-# Build the initial state by name -- no .at[species_index[...]].set() chains.
-# A simple aerobic batch: activated-sludge biomass + substrate + ammonia.
-# (A dict, since some ASM species names aren't valid kwargs; rest = YAML defaults.)
-C0 = model.concentrations({
-    "SS": 60.0, "SNH": 25.0, "XB_H": 500.0, "XB_A": 80.0, "SO": 2.0})
+jax.grad(final_chlorine)(model.default_parameters())   # d[HOCl]/dk = -14.46
 
-# For a FEED composition use base="zero" (or model.influent): unlisted species
-# are absent, not silently left at their YAML reference value.
-feed = model.concentrations({"SS": 60.0, "SNH": 25.0}, base="zero")
-influent = model.influent({"SS": 60.0, "SNH": 25.0}, Q=18446.0)   # InfluentSeries
-# Data in other units are converted to the model's when declared:
-influent = model.influent({"SS": 0.06}, Q=768.6, units={"Q": "m3/h", "SS": "kgCOD/m3"})
-
-# Or characterize an influent from lab measurements (total COD, TKN, ammonia,
-# alkalinity, ...): the SUMO-style fractionation splits them into the ASM1 states.
-influent = aquakin.characterize_influent(model, flow=24000.0, total_cod=420.0,
-                                         tkn=34.4, ammonia=24.0, alkalinity=330.0)
-# A lab/SCADA CSV with arbitrary headers maps + fractionates per row, no renaming:
-#   aquakin.read_influent_csv("plant_log.csv", model,
-#       column_map={"t": "day", "Q": "flow_m3d", "total_cod": "COD",
-#                   "tkn": "TKN", "ammonia": "NH4-N", "alkalinity": "Alk"})
-
-# There is NO global time unit: t_span / t_eval are in whatever unit the
-# model's rate constants use, and it differs by model -- ozone/UV are in
-# SECONDS (M-1 s-1), the biological models (ASM/ADM/WATS) in DAYS (1/d). Check
-# it before choosing a span:
-model.time_unit                    # "d" for asm1 (the ozone/UV models are in "s")
-
-# ...or pass time_unit= to work in a unit of your choice: the input times are
-# converted to the model's native unit for the solve and solution.t comes back
-# in the unit you asked for (solution.time_unit reports it). Works the same on
-# BatchReactor / BiofilmReactor / Plant.solve. e.g. an ASM run in hours:
-#   sol = reactor.solve(C0, t_span=(0.0, 48.0), t_eval=..., time_unit="h")
-
-# params is optional and defaults to model.default_parameters().
-t_eval = jnp.linspace(0.0, 1.0, 121)        # one day, in days (asm1's native unit)
-solution = reactor.solve(C0, t_span=(0.0, 1.0), t_eval=t_eval)
-
-print("[SNH] at t=1 d:", float(solution.C_named("SNH")[-1]))   # final effluent ammonia
-
-# Reporting last-point values without the per-species [-1] slice:
-solution.final_named(["SS", "SNH", "SNO"])  # {name: float} at the final time (None = all)
-solution.final                          # == final_named(): every species' last value
-solution.C_named_many(["SNH", "SNO"])   # several full trajectories -> {name: array}
-
-# Species units and descriptions are carried from the YAML to results, so you
-# never have to re-derive units by string-matching names.
-model.units_of("SNH")              # e.g. "g_N/m³"
-model.description_of("SNH")
-solution.units_named("SNH")          # same, for axis/column labels
-model.summary()                    # tabulates every species with its units
-
-# Dimensional ("unit") consistency check of the rate expressions. Currency-aware:
-# g_COD/m3 and g_N/m3 are different dimensions, so it catches a dropped
-# concentration factor, a wrong rate-constant exponent, or a Monod term mixing
-# two currencies -- bugs a plain SI dimension check misses. Opt-in and advisory
-# (never raises; unknown/unparseable units are skipped).
-for w in model.check_units():      # -> list of (reaction, location, detail)
-    print(w)
-
-# The plant-level counterpart: every model on one time unit, and unit
-# operations fed the units their built-in constants assume. A plant whose models
-# disagree on the time unit refuses to solve (UnitsError).
-print(plant.check_units().summary())
-
-# Conservation (mass / electron balance) check. The companion to check_units:
-# each species declares its content of the conserved quantities in the YAML
-# (`composition: {COD: 1.0}` for an organic, `{COD: -1.0}` for oxygen, `{COD:
-# -2.86, N: 1.0}` for nitrate-N, ...), and check_conservation dots that table
-# against the stoichiometry -- so a wrong electron-acceptor demand breaks COD and
-# a wrong product split breaks an elemental (S/N/P/Fe) balance. Opt-in and
-# advisory (never raises). The ASM/ADM families fall back to a shipped table.
-model.composition()                # -> {species: {quantity: content}}
-for r, q, residual in model.check_conservation(quantities=["COD"]):
-    print(r, q, residual)            # reactions whose COD content does not balance
-# (For ASM1 this lists only `anoxic_growth_heterotrophs`: denitrification's
-# electrons leave as N2 gas, which ASM1 does not track -- a known, intentional
-# exception. The WATS sewer models declare composition in their YAML and close
-# COD/S/N/Fe exactly.)
-
-# Better than checking after the fact: write a conservation-determined coefficient
-# as `auto` and let it be SOLVED from the declared balances at load -- so it can
-# never be typed wrong. With composition declared on each species:
-#   reactions:
-#     - name: growth
-#       conserved_for: [COD]                 # or a model-level `conserved_for:`
-#       rate: "mu * [SS] * [XBH]"
-#       stoichiometry: {SS: "-1/Y_H", XBH: 1.0, SO: auto}   # O2 demand solved from COD
-# When a neighbour is a parameter expression (here -1/Y_H), the solved `auto`
-# coefficient is itself yield-dependent and stays differentiable -- calibrating
-# Y_H flows through it and the reaction conserves at *every* parameter value.
-
-# Export results to a table instead of float()-casting one species at a time.
-# Requires the optional `pandas` extra: pip install aquakin[dataframe]
-df = solution.to_dataframe()         # time-indexed, one column per species
-df.attrs["units"]                    # {species: unit} (units kept off the labels)
-solution.to_csv("run.csv")           # units embedded in the CSV header
-
-# Plot a species (or several) without matplotlib boilerplate -- the x-axis is
-# labelled with the model's time unit, the y-axis with the species' units.
-# Returns a matplotlib Axes. Requires the optional `plot` extra: aquakin[plot]
-ax = solution.plot("SNH")            # one line; y-axis "SNH [g_N/m³]"
-solution.plot(["SNH", "SNO"])        # several, legended; pass ax= to overlay
+# Fit the rate constant to measurements, with its uncertainty.
+t_obs = jnp.array([0.0, 4.0, 8.0, 12.0, 24.0])
+measured = jnp.array([[2.00], [1.62], [1.36], [1.08], [0.61]])   # HOCl, mg/L
+fit = aquakin.calibrate(reactor, C0, measured, t_obs, ["decay.k"],
+                        loss="nll", sigma=0.02)
+fit.params_named, fit.params_named_std  # k = 0.0501 ± 0.0009 h⁻¹
 ```
 
-Discontinuous operations -- on/off pumps, SBR phases, dosing, level limits --
-are handled with **located events** (`solve(events=...)`, on reactors and the
-plant). A time event fires at a known time (AD-safe), a state event when a
-`cond_fn` crosses zero; each can reset the state or terminate the solve:
-
-```python
-# An anoxic (denitrification) batch: dose external carbon partway through to
-# drive denitrification, and stop once the nitrate has been removed.
-i_ss = model.species_index["SS"]
-i_sno = model.species_index["SNO"]
-anoxic = model.concentrations(
-    {"SS": 70.0, "SNO": 12.0, "SNH": 20.0, "XB_H": 150.0, "SO": 0.0})
-events = [
-    aquakin.Event(at_times=[0.1],                           # dose carbon at t = 0.1 d
-                  apply=lambda t, C, p: C.at[i_ss].add(60.0)),
-    aquakin.Event(cond_fn=lambda t, C, p: C[i_sno] - 0.5,   # stop when nitrate is gone
-                  direction=-1, terminal=True, name="denitrified"),
-]
-sol = reactor.solve(anoxic, t_span=(0.0, 0.5),
-                    t_eval=jnp.linspace(0.0, 0.5, 101), events=events)
-sol.events_log                       # [(0.1, 'event0'), (~0.13, 'denitrified')] -- the audit trail
-```
+Solutions carry species names and units through to results:
+`sol.C_named("HOCl")`, `sol.to_dataframe()`, `sol.plot("HOCl")`.
 
 ## Plant-wide simulation
 
-Beyond a single reactor, `aquakin.plant` assembles full treatment-plant
-flowsheets. The IWA benchmark plants ship ready to build: load BSM1, drive it to
-steady state, and read the effluent — no autodiff or solver tuning required.
+`aquakin.plant` connects reactors, clarifiers, digesters and other unit
+operations into a flowsheet and integrates the whole plant in one solve. The IWA
+benchmark plants are ready to build:
 
 ```python
-import jax.numpy as jnp
 import aquakin
-from aquakin.plant.bsm import build_bsm1, load_bsm1_influent, evaluate_bsm1
+from aquakin.plant.bsm import build_bsm1
 
 model = aquakin.load_model("asm1")
 plant = build_bsm1(model)            # 5 reactors + secondary clarifier + recycles
-
-# A constant average-load influent. add_influent wires it to the plant's
-# canonical front -- no "unit.port" string to hard-code.
 plant.add_influent("feed", model.influent(
     {"SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
      "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0}, Q=18446.0))
 
-# Integrate until the plant settles (a self-terminating steady-state event --
-# no horizon to guess). Sensible solver defaults; nothing to tune.
-ss = plant.run_to_steady_state()
-print("converged:", ss.converged, "after", round(ss.time), "days")
-
-# ...or snap straight to steady state algebraically (pseudo-transient
-# continuation: ~10x faster, robust on stiff topologies, and differentiable --
-# jax.grad of a loss on ss.state flows to the plant parameters for design sweeps).
-ss = plant.steady_state()
-print("converged:", ss.converged, "in", int(ss.iterations), "iterations")
-
-# Reconstruct the clarified effluent and read its quality.
-eff = plant.stream(ss.solution, plant.effluent_endpoint)
-print("effluent SNH:", round(float(eff.C_named("SNH")[-1]), 2), "g N / m³")   # ~0.5
+ss = plant.run_to_steady_state()     # integrate until the plant settles
+eff = plant.stream(ss.solution, "effluent")
+eff.final_named(["SNH", "SNO"])      # {'SNH': 0.46, 'SNO': 11.6} g N/m³
 ```
 
-For a dynamic run, drive a fresh plant with a diurnal dry-weather influent,
-warm-started from the steady state, and score the headline performance indices:
+From there you can:
 
-```python
-dyn = build_bsm1(model)
-dyn.add_influent("feed", load_bsm1_influent("dry", model))   # a 14-day diurnal load
-sol = dyn.solve(t_span=(0.0, 14.0), t_eval=jnp.linspace(0.0, 14.0, 15), y0=ss.state)
+- run **dynamic** simulations with the benchmark dry / rain / storm influents,
+  a measured CSV, or an influent written as a formula of time;
+- jump straight to a **differentiable steady state** (`plant.steady_state()`),
+  about 10× faster than integrating to it;
+- score **EQI / OCI**, a **carbon footprint** (N₂O, energy, fugitive methane) and
+  an **operating cost**, and compare scenarios in one KPI table;
+- build **BSM2** (`build_bsm2`) with primary clarification, thickening, ADM1
+  digestion and dewatering, or your own flowsheet from the unit catalogue —
+  including IFAS/MBBR biofilm, UV and chlorine disinfection, and aeration
+  systems sized from blower and diffuser physics;
+- **calibrate** plant parameters against measured streams and **rank sensor
+  sets** by what they can identify, with gradients through the whole plant.
 
-ev = evaluate_bsm1(dyn, sol)           # Effluent Quality / Operational Cost indices
-print(f"EQI = {ev.eqi:.0f} kg/d   OCI = {ev.oci:.0f}")
+## Projects, studies and the flowsheet editor
+
+A plant can be saved as a YAML flowsheet and rebuilt from it
+(`plant.to_spec("plant.yaml")`, `aquakin.Plant.from_spec("plant.yaml")`). A
+**study** stores one analysis of that flowsheet — a simulation, a calibration,
+a profile likelihood, a sensor ranking — beside its results, and knows when they
+are out of date:
+
+```bash
+aquakin study run studies/effluent      # writes the results
+aquakin study check studies/effluent    # fresh, or stale and why
 ```
 
-`build_bsm2(...)` assembles the full BSM2 sludge train (primary clarifier,
-thickener, ADM1 digester with the ASM1↔ADM1 interfaces, dewatering, reject
-recycle) the same way; see `examples/` and `CLAUDE.md` for the BSM2 steady state,
-dynamic/seasonal runs, DO control, and the SRT/HRT/F:M design helpers. One
-deliberate departure from the benchmark: the secondary clarifier settles solids
-between layers with the Godunov flux of the settling conservation law rather than
-the benchmark's Takács minimum-flux rule. The BSM2 steady state is the same and the
-dynamic effluent means differ by under 0.1%, while dynamic solves are several times
-cheaper; `settler_interface_flux="takacs"` reproduces the benchmark settler.
-
-Reactor temperature is a selectable `TemperatureModel`: the default
-`AlgebraicTemperature` takes each reactor's temperature to be its instantaneous
-flow-weighted inlet temperature, while `HeatBalanceTemperature` gives every
-finite-volume unit a dynamic temperature *state* governed by the first-order heat
-balance `V dT/dt = Q_in (T_in − T)` (the heated digester stays fixed), so the
-reactor temperature lags and damps the influent. Select it with
-`plant.set_temperature_model(aquakin.HeatBalanceTemperature())` or
-`build_bsm2(temperature_model=aquakin.HeatBalanceTemperature())`.
-
-Aeration energy can be scored from **blower/diffuser physics** instead of the
-benchmark formula (`S_sat·V·kLa / 1800`, the updated BSM1 / BSM2 definition). An `AerationSystem` (diffuser submergence, SOTE, fouling,
-blower efficiency) turns the `kLa` a solve produced into the required air flow
-(via the standard oxygen transfer rate `kLa·C_s·V` and the diffuser SOTE) and the
-adiabatic blower power against the submergence head — keeping the `kLa` kinetic
-interface unchanged. Pass it to size a tank
-(`aquakin.design_summary(kla, volume, system)`) or to the evaluators, where it
-replaces the aeration-energy term and reports the air flow:
-
-```python
-syst = aquakin.AerationSystem(depth=5.0, sote=0.20)      # 5 m diffusers, 20 % SOTE
-ev   = evaluate_bsm2(plant, sol, params, aeration_system=syst)
-print(ev.aeration_energy, "kWh/d   air:", ev.air_flow, "m3/d")   # mechanistic AE
-```
-
-**Disinfection** unit ops reduce a pathogen indicator at the end of the train:
-a `UVUnit` (dose = intensity × exposure × UVT-factor → log-linear inactivation)
-and a `ChlorineContactUnit` (a chlorine residual that decays first-order; the CT
-credit `residual × T10` → log-removal, with `T10` from a baffling factor or a
-residence-time distribution). Both pass the process stream through and reduce the
-indicator-organism density carried on the stream (the `"org"` entry of a stream's
-`scalars` side-channel map, the disinfection analogue of the temperature scalar),
-so the reconstructed effluent reports it:
-
-```python
-p.add_unit(aquakin.ChlorineContactUnit("cl", net, volume=500.0, dose=5.0,
-                                       ct_per_log=8.0, decay_rate=2.0,
-                                       inlet_density=1e6))   # CFU/100 mL in
-sol = p.solve(t_span=(0.0, 2.0), t_eval=t)
-print(p.stream(sol, "cl.out").org[-1])                      # effluent indicator
-```
-
-### GHG, cost and scenario reporting
-
-On top of the EQI / OCI evaluation, `aquakin` reports a **carbon footprint**
-(CO₂e/d) and a monetised **operating cost** (currency/d), and tabulates
-scenarios side by side:
-
-```python
-ev  = evaluate_bsm2(plant, sol, params)          # EQI / OCI + physical flows
-n2o = aquakin.direct_n2o_emission(plant, sol)    # stripped N₂O (0 unless the AS
-                                                 # model resolves an SN2O state)
-
-fp = aquakin.carbon_footprint(                   # kg CO₂e/d, with breakdown
-    ev.total_energy(), grid_factor=0.4, n2o_emission=n2o,
-    methane_production=ev.methane_production, ch4_fugitive_fraction=0.015)
-
-oc = aquakin.operating_cost(                     # currency/d OPEX (+ optional CAPEX)
-    energy_kwh_per_d=ev.total_energy(), carbon_kg_cod_per_d=ev.carbon_mass,
-    sludge_kg_tss_per_d=ev.sludge_production,
-    methane_kg_per_d=ev.methane_production,
-    factors=aquakin.CostFactors(energy_price=0.12), co2e_per_d=fp.total_co2e)
-
-print(fp)            # labeled CO₂e breakdown
-print(oc)            # labeled cost breakdown
-print(aquakin.kpi_comparison({"baseline": ev, "low-DO": ev_b}).table())
-```
-
-`carbon_footprint` weights direct N₂O (GWP ~273), grid-energy CO₂e and fugitive
-biogas methane (GWP ~27), crediting recovered biogas energy; `operating_cost`
-prices energy / carbon / sludge / biogas (and an optional CAPEX + carbon charge);
-`kpi_comparison` puts any report objects (`BSM2Evaluation`, `CarbonFootprint`,
-`OperatingCost`) into one standardized KPI table. The scenario-orchestration
-primitives `monte_carlo`, `compare_scenarios` and `optimize_design` propagate
-input uncertainty and size designs to a permit at minimum cost. See
-`examples/bsm2_ghg_cost_report.py`.
-
-### Saving a plant as a file (`to_spec` / `from_spec`)
-
-A plant can be written as a file and rebuilt from it:
-
-```python
-plant.to_spec("bsm1.yaml")                  # or spec = plant.to_spec()
-same = aquakin.Plant.from_spec("bsm1.yaml")  # same units, wiring and streams
-```
-
-The file lists every unit by its stable name (with an optional display `label`)
-and all of its settings, defaults included, together with the aquakin version
-that wrote it; the connections as `unit.port -> unit.port`; constant influents,
-named streams and endpoints; and the models the units use, each shipped or a
-model YAML file beside the spec, with a fingerprint that warns when the model
-has changed since. `examples/projects/bsm2/` is BSM2 as such a project: its
-15 °C ASM1 is a short model file that `extends:` the shipped ASM1. A
-time-varying influent is kept as a table file beside the spec. A misspelled
-setting or a value of the wrong type is an error naming where it is, and
-anything a spec cannot express yet raises a `SpecError` that names it.
-`aquakin.plant.spec.spec_fingerprint(spec)` hashes what the spec simulates, to
-tell when a saved result no longer matches it.
-
-### The flowsheet editor (`aquakin-ui`)
+To draw and edit flowsheets in your browser:
 
 ```bash
 pip install "aquakin[ui]"
 aquakin-ui examples/projects/bsm2/flowsheet.yaml
 ```
 
-opens a flowsheet editor in your browser, served on this machine only: drag
-units from a palette, wire their ports, edit each unit in a form generated from
-its own documentation, and see aquakin's errors for each unit and for the whole
-plant as you edit. **Open** and **Save** read and write the spec files above.
-The editor never imports aquakin itself; it asks an `aquakin serve` worker.
+The editor lets you drag units from a palette, wire their ports, edit each unit
+in a form built from its documentation, see errors as you edit, and set up and
+run studies with their results plotted.
 
-### The unit catalogue and the `aquakin` command
+## Documentation
 
-`aquakin.plant.catalog` describes every plant unit type as plain data: its
-settings (types, defaults and help text, read from the unit's own constructor
-and docstring), how its ports follow from those settings, and which settings
-are mutually exclusive. It is meant for front ends such as a flowsheet editor.
-`check_unit(kind, name, settings)` builds the real unit and returns its ports,
-or the constructor's error message.
+The full documentation is at **[aquakin.readthedocs.io](https://aquakin.readthedocs.io/en/latest/)**:
 
-The same information is available from the command line, for a front end
-running in another process:
+| Guide | |
+|---|---|
+| [Getting started](https://aquakin.readthedocs.io/en/latest/getting_started.html) | installation, a first solve, building inputs, reading results |
+| [Reactors](https://aquakin.readthedocs.io/en/latest/reactors.html) | batch, plug-flow, biofilm and particle-track reactors; events |
+| [Plant-wide simulation](https://aquakin.readthedocs.io/en/latest/plants.html) | BSM1 / BSM2, custom flowsheets, reporting, projects, studies, the editor |
+| [Sensitivity & calibration](https://aquakin.readthedocs.io/en/latest/sensitivity_and_calibration.html) | gradients, sensitivity analysis, fitting, identifiability, experiment design, solver options |
+| [Worked example: designing an experiment](https://aquakin.readthedocs.io/en/latest/worked_example_design.html) | an ozone-demand study from first design to calibrated model |
+| [Model format](https://aquakin.readthedocs.io/en/latest/model_format.html) and [Adding models](https://aquakin.readthedocs.io/en/latest/adding_models.html) | writing your own models |
+| [Model catalog](https://aquakin.readthedocs.io/en/latest/model_catalog.html) | every shipped model, its provenance and how to load it |
+| [Public API](https://aquakin.readthedocs.io/en/latest/public_api.html) | the API grouped by task |
 
-```bash
-aquakin catalog          # the catalogue as JSON
-aquakin serve            # answer JSON-line requests on stdin/stdout
-```
+Runnable scripts are in [`examples/`](https://github.com/DeGrootResearchGroup/aquakin/tree/main/examples), and the
+[changelog](https://github.com/DeGrootResearchGroup/aquakin/blob/main/CHANGELOG.md) lists what is new in each release.
 
-`aquakin serve` reads one request per line (`{"id": 1, "command": "catalog"}`)
-and answers each with one line; the commands are `ping`, `catalog`, `models`,
-`model`, `check_unit` and `check_spec`.
-
-## Advanced: differentiation & sensitivity
-
-Every solve — reactor or whole plant — is differentiable. The machinery below is
-for parameter estimation and sensitivity analysis; a plain forward simulation
-(above) never needs it.
-
-> **Heads-up — silent non-finite reverse gradients.** A reverse-mode gradient
-> (`jax.grad` / `jax.jacrev`) taken *directly* through a stiff model's `solve`
-> (ASM / ADM / WATS) returns silent `NaN`/`Inf` when the reactor's `dtmax` is
-> uncapped — no exception, so the garbage gradient flows into your optimizer and
-> the fit never converges. `aquakin.calibrate` and `aquakin.sensitivity` guard
-> this for you; if you roll your own loss + optimizer, either cap `dtmax` (via
-> `integrator=aquakin.IntegratorConfig(dtmax=...)`), use forward mode (`jax.jacfwd`
-> through a reactor built with
-> `diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")`),
-> or wrap your gradient in `reactor.check_gradient_finite(jax.grad(loss)(p))`
-> (equivalently the free `aquakin.check_finite_gradient`) to get an actionable
-> error instead of silent `NaN`.
-
-### Forward sensitivity (cap-free stiff gradients)
-
-Differentiating *through* a stiff reaction-model solve with ordinary AD goes
-non-finite above an integrator-step threshold, and the usual workaround — a
-global `dtmax` cap — forces tiny steps over the whole solve. `solve_sensitivity`
-avoids both: it integrates the sensitivity `S = dC/dθ` *alongside* the state and
-lets the adaptive step controller bound the sensitivity error too, so the step
-tightens only where the sensitivity is stiff and the result is exact with no cap.
-
-```python
-import jax.numpy as jnp
-import aquakin
-
-model = aquakin.load_model("uv_h2o2")
-conditions = model.default_conditions(1)
-reactor = aquakin.BatchReactor(model, conditions)
-
-C0 = model.default_concentrations()
-params = model.default_parameters()
-t_eval = jnp.linspace(0.0, 5.0, 6)
-
-sol, S = reactor.solve_sensitivity(
-    C0, t_span=(0.0, 5.0), t_eval=t_eval, params=params,
-    sens_params=["H2O2_photolysis.k_photo", "OH_target.k_OH_target"],
-)
-# sol : the usual solution; S : dC/dθ, shape (n_t, n_species, n_sens_params)
-
-# A richer wrapper with by-name accessors:
-res = aquakin.forward_sensitivity(
-    reactor, C0, params=params, t_span=(0.0, 5.0), t_eval=t_eval,
-    sens_params=["H2O2_photolysis.k_photo"],
-)
-res.dC_dparam("target", "H2O2_photolysis.k_photo")   # (n_t,)
-```
-
-`solve_sensitivity` is available on `BatchReactor`, `PlugFlowReactor` and
-`BiofilmReactor`. For more than one parameter it defaults to a CVODES-style
-*simultaneous corrector* (`shared_factor=True`): the augmented Jacobian is
-block-lower-triangular with one shared diagonal block, so that block is
-factorised once per step and reused across the sensitivity columns instead of
-factorising the full augmented system. This is several times faster than the
-dense augmented solve on large stiff systems (e.g. the layered biofilm) and
-gives bit-identical results.
-
-The **plant** has it too: `Plant.solve_sensitivity(params, wrt, t_span=, t_eval=,
-y0=)` integrates the same `[y; S]` system with the cached recycle map, so a
-forward-mode sensitivity of a stiff dynamic plant stays **finite over long
-horizons** where `jacfwd` through `plant.solve` goes non-finite. By default it
-uses a CVODES-style *staggered corrector* (`corrector="staggered"`) on a lean
-forward-only Kvaerno3 loop: each step converges the state first, then solves the
-sensitivity stages (linear in `S`) with the same factorization. No second
-derivatives are formed, so each parameter adds only Jacobian-vector products to
-a step, and its step controller also caps step growth by the Newton contraction
-rate. On a BSM2 window with 16 parameters it runs several times faster than the
-previous solve. `corrector="simultaneous"` keeps the differentiable diffrax
-augmented solve. By default the step controller bounds the error of `S` as well
-as the state's; `sens_error_control=False` chooses the steps on the state alone
-(the CVODES `errconS = false` option) — about half the time on a 16-parameter
-BSM2 day, with the error of `S` no longer controlled — for a screening run or an
-otherwise very long one. The compiled solve is cached on the plant, so repeated calls
-(a DGSM screen, a parameter sweep) compile once. It is exact for kinetic
-parameters and backs the forward mode of `plant.dynamic_sensitivity`.
-
-### Cap-free reverse-mode gradients (stable adjoint)
-
-`solve_sensitivity` scales with the parameter count, so for a scalar-loss
-gradient over many parameters — the calibration case — reverse mode is wanted,
-and that is the mode the `dtmax` cap exists for. The cap-free alternative there is
-a hand-written discrete adjoint: the forward is an ordinary robust adaptive ESDIRK
-(Kvaerno5) solve and the reverse is a per-step transposed solve over the saved
-trajectory, finite at any step size with no cap. **`Plant.solve` uses it
-automatically:** the differentiation default is
-`diff=DifferentiationConfig(mode="reverse", method="stable")`, which keeps a plain
-forward solve on the fast cached path but routes a solve under `jax.grad` to the
-cap-free stable adjoint — so a stiff plant gradient is finite by default with
-nothing to tune:
-
-```python
-sol = plant.solve(t_span=(0.0, T), t_eval=t_eval, params=params, y0=y0)
-g = jax.grad(loss)(params)   # finite through the stiff, coupled BSM2 plant — no dtmax
-```
-
-This is what lets a reverse-mode gradient flow through the whole monolithic BSM2
-solve — across the ASM↔ADM interface and the recycle loops — where differentiating
-*through* the stiff solve is non-finite. It is exact through a transient solve:
-`plant.solve` carries the integration time in the state, so the explicit time
-dependence of a time-varying influent is captured exactly in the gradient.
-
-### Calibrating a plant (`plant.calibrate`)
-
-The cap-free gradient above powers a MAP calibration of plant parameters against
-a measured output stream — the plant analogue of `aquakin.calibrate` (a reactor
-fit). It reuses the same machinery (parameter transforms, priors, multistart, an
-optional Laplace posterior) behind a forward-model seam, so only the forward
-solve differs. Fit by-name plant parameters (`"<model>.<param>"`, see
-`plant.parameter_names()`) so a target stream's channels match observations:
-
-```python
-result = plant.calibrate(
-    observations,               # (n_t, n_channels) measured effluent data
-    t_obs,                      # observation times
-    ["asm1.muH", "asm1.bH"],    # plant parameters to fit
-    target="effluent",          # a registered stream (or "unit.port")
-    observed_channels=["SNH", "SNO"],
-    y0=bsm2_warm_start(plant),  # warm start (recommended for a stiff plant)
-)
-result.params_named            # {"asm1.muH": ..., "asm1.bH": ...}
-```
-
-The reverse gradient runs through `plant.solve`'s stable adjoint, so it is finite
-for a stiff plant with no `dtmax` to tune. Fit against **several streams at once**
-by passing `observables=` instead of a single `target`:
-
-```python
-from aquakin.plant import PlantObservable
-
-result = plant.calibrate(
-    observations, t_obs, ["asm1.muH", "adm1.k_m_ac"],
-    observables=[
-        PlantObservable("effluent", ["SNH", "SNO"]),   # water-line N
-        PlantObservable("wastage", ["XS"]),            # sludge line
-    ],
-)
-```
-
-The observation columns run in observable order (channels within a stream first).
-
-Fit **assembled-state initial conditions** alongside the parameters with
-`free_ic` — each entry names a `(unit, species)` slot of the plant's initial
-state `y0` (a concentration unit: a CSTR or the digester), fit in log space:
-
-```python
-from aquakin import FreeICConfig
-
-result = plant.calibrate(
-    observations, t_obs, ["asm1.muH"],
-    target="effluent", observed_channels=["SNH"],
-    free_ic=FreeICConfig(["reactor1.S_S", "reactor1.X_BH"]),   # fit these initial pools too
-    y0=bsm1_warm_start(plant),
-)
-result.ic_named[0]     # {"reactor1.S_S": ..., "reactor1.X_BH": ...}
-result.C0_fitted[0]    # the fitted full initial state
-```
-
-Run a **joint multi-batch fit** — several plant runs from different initial
-states sharing the parameters — by passing list-valued `observations` / `t_obs` /
-`y0` (one entry per batch); the batches' data terms are summed:
-
-```python
-result = plant.calibrate(
-    [obs_run1, obs_run2],          # per-batch effluent data
-    [t_obs1, t_obs2],
-    ["asm1.muH"],
-    target="effluent", observed_channels=["SNH"],
-    y0=[y0_run1, y0_run2],         # each batch its own initial state
-)
-```
-
-This fits kinetic parameters (optionally with initial conditions, or across
-several batches) against one or more streams. `free_ic` and multi-batch are not
-yet combinable in one call.
-
-### Choosing the integrator (`integrator=IntegratorConfig(...)`)
-
-The integrator / step machinery is configured with one value object,
-`aquakin.IntegratorConfig`, passed as `integrator=`:
-
-```python
-IntegratorConfig(order=3, factormax=3.0, colored_jacobian="auto",
-                 dtmax=None, max_steps=100_000, solver=None)
-```
-
-`order` selects the ESDIRK method (`3` → `Kvaerno3`, the fast default; `5` →
-`Kvaerno5`), `factormax` caps the PID step-growth, `dtmax` caps the step (set it
-only for a reverse gradient *through* the solve), `max_steps` is the step budget,
-`solver` is an explicit override, and `colored_jacobian` selects sparse
-colored-AD Jacobian materialisation. `rtol` / `atol` stay separate arguments of
-`plant.solve` (the accuracy contract, not the machinery).
-
-A long dynamic plant run — the multi-hundred-day dynamic BSM2 simulation — is
-**stiffness-bound**: the step count barely depends on the tolerance, and the
-per-step cost is dominated by the implicit Jacobian factorisation of the whole
-167-state plant. Every implicit solve uses a **decoupled root finder** (the
-per-stage Newton tolerance loosened 10× from the step tolerance, ~15–20% cheaper
-per step at preserved accuracy) automatically. The default
-`IntegratorConfig(order=3, factormax=3.0)` is the fast stack — `Kvaerno3` (4
-stages, less linear algebra per step) with a capped step growth — which together
-run **~40% faster** than a plain `Kvaerno5`/no-cap solve:
-
-```python
-sol = plant.solve((0.0, 609.0), t_eval=t_eval, params=params, y0=y0)  # fast default
-
-# the older robust higher-order stack:
-sol = plant.solve((0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
-                  integrator=aquakin.IntegratorConfig(order=5, factormax=None))
-```
-
-`colored_jacobian` (default `"auto"`) forms the per-step implicit Jacobian by
-**sparse column compression** instead of densely:
-
-```python
-sol = plant.solve((0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
-                  integrator=aquakin.IntegratorConfig(colored_jacobian=True))
-
-The plant Jacobian is sparse (dense per-unit kinetic blocks + sparse inter-unit
-coupling), so it is built in a handful of colored Jacobian-vector products (~45
-for BSM2) rather than one per state (167) — a dominant per-step linear-algebra
-cost. The reconstructed matrix equals the dense Jacobian, so the trajectory and
-gradient are unchanged to integration tolerance; only the cost of forming it
-drops, and it stacks with `order`/`factormax`. It applies to **both** the
-forward solve (where `J` is built once per step) and the reverse stable discrete
-adjoint (where `J` is rebuilt many times per step, so it dominates). It is built
-and guarded against the dense Jacobian once per plant, falling back to the dense
-solver if the guard fails.
-
-The three settings:
-
-- **`"auto"`** (default) governs the reverse stable-adjoint **backward** only: on
-  a concrete solve it *measures* whether the colored `df/dy` build is actually
-  cheaper than dense (it can be slower on a small plant) and enables it only when
-  it pays — so a large plant (BSM2) gets the reverse-gradient speedup while a
-  small one (BSM1) stays dense. The measured decision is reported by
-  `plant.colored_jacobian_decision()`. `"auto"` leaves the forward solve dense.
-- **`True`** forces coloring on both the forward solve and the reverse backward
-  (skipping the measurement). Most worthwhile on a large stiff plant (BSM2); on
-  the small BSM1 the materialisation is not the bottleneck.
-- **`False`** disables it entirely.
-
-### A non-AD fast lane (`forward_fast=True`)
-
-If a solve never needs gradients (`jax.grad` / `calibrate` / `sensitivity` of the
-result), `forward_fast=True` runs a lean integrator that skips the diffrax
-adjoint / optimistix / lineax machinery entirely — a plain `lax.while_loop`
-adaptive ESDIRK with an Anderson-accelerated simplified Newton and the colored
-Jacobian:
-
-```python
-sol = plant.solve(t_span=(0.0, 609.0), t_eval=t_eval, params=params, y0=y0,
-                  forward_fast=True)   # ~3x compile, ~1.3-1.9x run (dynamic BSM2)
-```
-
-That machinery exists to make the *whole solve* differentiable, and tracing it
-dominates compile time — so dropping it gives **~3× faster compile** (a big deal
-for the multi-minute full-BSM2 compile, which file-caching can't help because the
-cost is Python-level tracing) **and ~1.3–1.9× faster run** on the dynamic BSM2
-(the run gain narrows over a long run with dense `t_eval`, the compile win is the
-robust benefit), at the same accuracy. The
-per-step Jacobian is *still* colored forward-mode AD (the exact same matrix), so
-the trajectory matches a valid adaptive solution to the same `rtol`; only
-end-to-end differentiability is given up. It is opt-in and forward-only: it needs
-concrete `params`/`y0` and raises a clear error under `jax.grad`/`jax.jit` or with
-`events=`, and falls back to the diffrax path if the colored-Jacobian guard fails.
-
-For reactor-level fits, the adjoint plumbing is hidden too: `aquakin.calibrate`
-and `aquakin.sensitivity` take `diff=DifferentiationConfig(mode=...)` and build
-the right adjoint internally (no `diffrax` import), and
-`DifferentiationConfig(check_finite=True)` (the
-default) raises a friendly error with the remedy instead of returning silent
-`NaN` gradients on a stiff model.
-
-## Testing
+## Development
 
 ```bash
-pytest -m "not validation"   # unit + integration (fast)
-pytest -m validation          # scientific validation against published data
-pytest                        # everything
+git clone https://github.com/DeGrootResearchGroup/aquakin.git
+cd aquakin
+pip install -e ".[test]"
+pytest -m "not validation and not slow"   # fast unit + integration tests
+pytest -m validation                      # validation against published data
 ```
+
+## Citing
+
+If you use aquakin in your work, please cite it using the metadata in
+[`CITATION.cff`](https://github.com/DeGrootResearchGroup/aquakin/blob/main/CITATION.cff) (DOI
+[10.5281/zenodo.23784521](https://doi.org/10.5281/zenodo.23784521)).
 
 ## License
 
-MIT.
+MIT — see [LICENSE](https://github.com/DeGrootResearchGroup/aquakin/blob/main/LICENSE).
