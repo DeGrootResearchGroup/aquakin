@@ -227,7 +227,7 @@ pytest tests/unit tests/integration tests/ui -m "not validation and not slow"   
 pytest -m slow                             # the multi-minute stiff/plant solves
 pytest -m validation                       # validation suite (published data)
 pytest                                     # everything
-pytest tests/browser                       # the editor in Chromium (no CI job; needs playwright)
+pytest tests/browser                       # the editor in Chromium (`browser` extra; non-required CI job)
 ```
 
 A test under `tests/validation/` must carry `@pytest.mark.validation`, or no CI
