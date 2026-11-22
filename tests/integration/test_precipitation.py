@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 import aquakin
+from tests.finite_difference import central_fd
 
 
 @pytest.fixture
@@ -88,12 +89,6 @@ def test_struvite_favoured_at_higher_pH(net):
     assert float(hi.C_named("X_struvite")[-1]) > float(lo.C_named("X_struvite")[-1])
 
 
-def _central_fd(loss, x, i, rel_step=1e-4):
-    """Central difference of ``loss`` w.r.t. ``x[i]``, step relative to it."""
-    h = rel_step * float(x[i])
-    return (float(loss(x.at[i].add(h))) - float(loss(x.at[i].add(-h)))) / (2.0 * h)
-
-
 def test_grad_through_solve_matches_fd(net):
     cond = aquakin.SpatialConditions.uniform(T=308.15, pH=7.8)
     r = aquakin.BatchReactor(net, cond)
@@ -109,7 +104,7 @@ def test_grad_through_solve_matches_fd(net):
     assert jnp.all(jnp.isfinite(g))
     i = net.param_index["struvite_precipitation.k"]
     assert float(g[i]) != 0.0
-    assert float(g[i]) == pytest.approx(_central_fd(loss, p, i), rel=1e-4)
+    assert float(g[i]) == pytest.approx(central_fd(loss, p, i), rel=1e-4)
 
 
 # --- speciation -> precipitation composition ---------------------------------
@@ -378,7 +373,7 @@ def test_hydroxide_fraction_grad_matches_fd():
     assert jnp.all(jnp.isfinite(g))
     i = net.param_index["k_MOH2"]
     assert float(g[i]) != 0.0
-    assert float(g[i]) == pytest.approx(_central_fd(loss, p, i), rel=1e-4)
+    assert float(g[i]) == pytest.approx(central_fd(loss, p, i), rel=1e-4)
 
 
 def test_schema_hydroxide_ion_may_omit_species():
@@ -600,7 +595,7 @@ def test_shared_ionic_strength_solves_and_differentiates():
     g = jax.grad(loss)(C0)
     i = net.species_index["S_cat"]
     assert float(g[i]) != 0.0
-    assert float(g[i]) == pytest.approx(_central_fd(loss, C0, i), rel=1e-4)
+    assert float(g[i]) == pytest.approx(central_fd(loss, C0, i), rel=1e-4)
 
 
 def test_power_order_below_one_rejected_at_load():

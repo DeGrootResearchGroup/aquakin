@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
+from tests.finite_difference import central_fd
 
 # The SUMO-ported ASM/ADM models under test. Names only -- the shape contract
 # (species/reaction/parameter counts) lives in _EXPECTED_SHAPES below and is
@@ -55,13 +56,6 @@ def test_dCdt_finite_at_default_state(name):
     assert jnp.all(jnp.isfinite(dC))
 
 
-def _central_fd(loss, params, i, rel_step=1e-4):
-    """Central difference of ``loss`` w.r.t. ``params[i]``, step relative to it."""
-    h = rel_step * float(params[i])
-    up, down = params.at[i].add(h), params.at[i].add(-h)
-    return (float(loss(up)) - float(loss(down))) / (2.0 * h)
-
-
 @pytest.mark.slow  # jax.grad through a stiff solve x every ASM/ADM model
 @pytest.mark.parametrize("name", _ASM_MODELS)
 def test_ad_grad_through_solve(name):
@@ -86,7 +80,7 @@ def test_ad_grad_through_solve(name):
     g = jax.grad(loss)(p)
     assert jnp.all(jnp.isfinite(g))
     i = int(jnp.argmax(jnp.abs(g * p)))
-    assert float(g[i]) == pytest.approx(_central_fd(loss, p, i), rel=1e-4)
+    assert float(g[i]) == pytest.approx(central_fd(loss, p, i), rel=1e-4)
 
 
 def test_asm3_short_integration_and_ad_grad_finite():
@@ -118,7 +112,7 @@ def test_asm3_short_integration_and_ad_grad_finite():
     assert jnp.all(jnp.isfinite(g))
     ya = net.param_index["YA"]
     assert float(g[ya]) != 0.0
-    assert float(g[ya]) == pytest.approx(_central_fd(loss, p, ya), rel=1e-4)
+    assert float(g[ya]) == pytest.approx(central_fd(loss, p, ya), rel=1e-4)
 
 
 # The two-step-nitrification ASM3 variants: (model, conditions, initial state,
@@ -166,7 +160,7 @@ def test_two_step_variant_grad_matches_fd(name, conditions, state, t_end, output
     assert jnp.all(jnp.isfinite(g))
     i = net.param_index[param]
     assert float(g[i]) != 0.0
-    assert float(g[i]) == pytest.approx(_central_fd(loss, p, i), rel=1e-4)
+    assert float(g[i]) == pytest.approx(central_fd(loss, p, i), rel=1e-4)
 
 
 @pytest.mark.parametrize("name", _ASM_MODELS)
