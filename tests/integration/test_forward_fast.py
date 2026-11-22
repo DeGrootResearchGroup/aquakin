@@ -234,25 +234,6 @@ def test_forward_fast_honours_max_steps(bsm1):
 # --------------------------------------------------------------------------
 
 @pytest.mark.slow
-def test_forward_fast_matches_diffrax_bsm1(bsm1):
-    plant, y0 = bsm1
-    params = plant.default_parameters()
-    te = jnp.linspace(0.0, 8.0, 17)
-    kw = dict(t_span=(0.0, 8.0), t_eval=te, params=params, y0=y0,
-              rtol=1e-5, atol=1e-3,
-              integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
-    ff = plant.solve(**kw, forward_fast=True)
-    ref = plant.solve(**kw)
-    a = np.asarray(ff.state)
-    b = np.asarray(ref.state)
-    assert ff.state.shape == ref.state.shape
-    assert np.all(np.isfinite(a))
-    assert np.allclose(a[0], b[0])                              # t0 exact
-    rel = np.max(np.abs(a - b) / (np.abs(b) + 1e-3))
-    assert rel < 1e-2          # two valid adaptive solutions to the same rtol
-
-
-@pytest.mark.slow
 def test_forward_fast_matches_diffrax_bsm2():
     from aquakin.plant.bsm import bsm2_warm_start
     from aquakin.plant.bsm.bsm2 import InfluentBypass, bsm2_asm1_model, bsm2_parameters, build_bsm2
