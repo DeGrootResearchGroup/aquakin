@@ -5,8 +5,8 @@ tank's balance, with ``kLa_O2`` the fixed open-loop kLa or, under DO control, th
 controller signal times the tank's gain. Covers the spec, the per-species vectors
 and transfer term in both modes, the temperature correction, and, on a one-tank
 plant with a small toy model, the steady state, the mass balance of the stripped
-gas, the agreement of ``direct_n2o_emission`` with the in-solve flux, and a
-finite gradient through the solve.
+gas, the agreement of ``direct_n2o_emission`` with the in-solve flux, and the
+gradient through the solve against its closed form.
 """
 
 from pathlib import Path
@@ -221,8 +221,12 @@ def test_stripped_gas_mass_balance_and_emission(toy, closed_loop):
         )
 
 
-def test_gradient_through_stripping_solve_is_finite(toy):
-    plant = _plant(toy, Aeration(do_setpoint=2.0, stripped={"SN2O": RATIO}))
+def test_gradient_through_stripping_solve_matches_closed_form(toy):
+    """Open loop, the dissolved N2O settles (rate ``Q/V + k_n + ratio kLa``, so
+    within 2 d it is steady to machine precision) at
+    ``C = Q C_in / (Q + V (k_n + ratio kLa))``, whence
+    ``dC/dk_n = -Q C_in V / (Q + V (k_n + ratio kLa))**2``."""
+    plant = _plant(toy, Aeration(kla=KLA, stripped={"SN2O": RATIO}))
     p0 = plant.default_parameters()
     idx = plant.parameter_index("stripped_gas_toy.n2o_reduction.k_n")
 
@@ -231,8 +235,9 @@ def test_gradient_through_stripping_solve_is_finite(toy):
         return sol.C_named("tank", "SN2O")[-1]
 
     g = jax.grad(final_n2o)(p0)
-    assert bool(jnp.all(jnp.isfinite(g)))
-    assert float(g[idx]) < 0.0  # faster reduction, less dissolved N2O
+    k_n = float(p0[idx])
+    expected = -Q * SN2O_IN * V / (Q + V * (k_n + RATIO * KLA)) ** 2
+    assert float(g[idx]) == pytest.approx(expected, rel=1e-6)
 
 
 _NO_COMPOSITION = """

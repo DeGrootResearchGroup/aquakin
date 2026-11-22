@@ -129,9 +129,14 @@ def test_equals_autodiff_through_same_solve(simple_model):
     assert jnp.allclose(g_stable, g_autodiff, rtol=1e-7, atol=1e-10)
 
 
-def test_gradient_wrt_y0_finite(simple_model):
+def test_gradient_wrt_y0_matches_closed_form(simple_model):
+    # L = A(T)^2 + B(T)^2 with A = A0 e^{-kT}, B = B0 + A0 (1 - e^{-kT}), so at
+    # (A0, B0) = (1, 0): dL/dA0 = 2 A0 (e^{-2kT} + (1 - e^{-kT})^2) and
+    # dL/dB0 = 2 B(T) = 2 A0 (1 - e^{-kT}).
     rhs = _decay_rhs(simple_model)
     p = simple_model.default_parameters()
+    k = float(p[0])
+    T = 5.0
 
     def loss(C0):
         return jnp.sum(
@@ -139,9 +144,10 @@ def test_gradient_wrt_y0_finite(simple_model):
         )
 
     g = jax.grad(loss)(jnp.array([1.0, 0.0]))
-    assert jnp.all(jnp.isfinite(g))
-    # more initial A -> more of both species' squared final value
-    assert float(g[0]) > 0.0
+    decayed = math.exp(-k * T)
+    exact = [2.0 * (decayed**2 + (1.0 - decayed) ** 2), 2.0 * (1.0 - decayed)]
+    # First-order implicit Euler at the default tolerances: ~3e-4 relative.
+    assert [float(x) for x in g] == pytest.approx(exact, rel=1e-3)
 
 
 @pytest.mark.validation
@@ -230,9 +236,12 @@ def test_gradient_with_t0_in_t_eval(simple_model, solve):
                   for ti in [0.0, 5.0, 15.0])
     assert jnp.isfinite(gp) and jnp.all(jnp.isfinite(gy))
     assert abs(float(gp) - exact_k) / abs(exact_k) < 1e-4
-    # The t0 term contributes 2*A(0)=2 to dL/dA0 on its own (plus the later
-    # observations through the trajectory), so the A0 gradient is finite & nonzero.
-    assert float(gy[0]) > 0.0
+    # dL/dA0 = sum_i 2 A0 e^{-2 k t_i}: the t0 term contributes 2 A(0) = 2 on its
+    # own, the later observations the rest through the trajectory. B never
+    # feeds A, so dL/dB0 is exactly zero.
+    exact_y0 = sum(2 * math.exp(-2 * k * ti) for ti in [0.0, 5.0, 15.0])
+    assert float(gy[0]) == pytest.approx(exact_y0, rel=1e-4)
+    assert float(gy[1]) == 0.0
 
 
 @pytest.mark.parametrize("solve", [implicit_euler_adjoint_solve, esdirk_adjoint_solve])

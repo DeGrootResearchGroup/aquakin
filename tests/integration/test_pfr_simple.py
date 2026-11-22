@@ -45,8 +45,12 @@ def test_pfr_inlet_matches_C0(simple_model):
     assert float(sol.C[0, 1]) == 0.25
 
 
-def test_pfr_grad_through_solve_finite(simple_model):
-    """CLAUDE.md requires an AD-grad test for every integration test suite."""
+def test_pfr_grad_through_solve_matches_closed_form(simple_model):
+    """``jax.grad`` through the PFR solve gives the closed-form gradient.
+
+    With ``B(x) = 1 - exp(-k tau)``, ``tau = x / v``, the loss
+    ``sum_x B(x)**2`` has ``dL/dk = sum_x 2 B(x) tau exp(-k tau)``.
+    """
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.PlugFlowReactor(
         simple_model, conditions, n_points=11, length=5.0, velocity=0.5
@@ -57,10 +61,14 @@ def test_pfr_grad_through_solve_finite(simple_model):
         sol = reactor.solve(C0, params=params)
         return jnp.sum(sol.C_named("B") ** 2)
 
-    g = jax.grad(loss)(simple_model.default_parameters())
-    assert jnp.all(jnp.isfinite(g))
-    # d/dk should be positive (faster decay -> more B everywhere downstream).
-    assert float(g[0]) > 0.0
+    params = simple_model.default_parameters()
+    g = jax.grad(loss)(params)
+    tau = reactor.solve(C0, params=params).x / 0.5
+    decay = jnp.exp(-float(params[0]) * tau)
+    expected = float(jnp.sum(2.0 * (1.0 - decay) * tau * decay))
+    # The forward solve matches the closed form to rtol 1e-4 (see above); the
+    # gradient through the same adaptive solve is held a decade looser.
+    assert float(g[0]) == pytest.approx(expected, rel=1e-3)
 
 
 def test_pfr_rejects_invalid_geometry(simple_model):
@@ -91,7 +99,10 @@ def test_pfr_conditions_override_shape_mismatch_rejected(simple_model):
 def test_pfr_direct_adjoint_enables_forward_mode(simple_model):
     """With adjoint=DirectAdjoint the PFR solve is forward-mode differentiable
     (jacfwd), which the default RecursiveCheckpointAdjoint (a reverse-only
-    custom_vjp) rejects. Closes the adjoint-asymmetry gap with BatchReactor."""
+    custom_vjp) rejects. Closes the adjoint-asymmetry gap with BatchReactor.
+
+    The output is the summed product ``sum_x B(x)``, whose closed-form derivative
+    is ``sum_x tau exp(-k tau)`` with ``tau = x / v``."""
 
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     reactor = aquakin.PlugFlowReactor(
@@ -101,7 +112,10 @@ def test_pfr_direct_adjoint_enables_forward_mode(simple_model):
     C0 = jnp.asarray([1.0, 0.0])
 
     def out(p):
-        return jnp.sum(reactor.solve(C0, params=p).C)
+        return jnp.sum(reactor.solve(C0, params=p).C_named("B"))
 
-    J = jax.jacfwd(out)(simple_model.default_parameters())
-    assert jnp.all(jnp.isfinite(J))
+    params = simple_model.default_parameters()
+    J = jax.jacfwd(out)(params)
+    tau = reactor.solve(C0, params=params).x / 1.0
+    expected = float(jnp.sum(tau * jnp.exp(-float(params[0]) * tau)))
+    assert float(J[0]) == pytest.approx(expected, rel=1e-3)
