@@ -39,7 +39,7 @@ Claude-facing files** at the end.
 | `.claude/rules/core-speciation.md` | `core/ph_solver.py`, `core/speciation.py` | charge-balance pH solver, derived conditions, the `speciation:` block |
 | `.claude/rules/core-precipitation.md` | `core/precipitation*.py` | mineral precipitation: rate law, the `precipitation:` block, the algebraic equilibrium mode |
 | `.claude/rules/integration.md` | `aquakin/integrate/**` | solver choice, operator splitting, located events, compiled-solve caching |
-| `.claude/rules/integration-calibrate.md` | the calibration / Fisher / profile / experiment-design modules, `plant/calibrate.py`, `plant/identifiability.py` | `calibrate()`'s internal structure and the helpers `Plant.calibrate` shares |
+| `.claude/rules/integration-calibrate.md` | `calibrate.py`, the `integrate/calibration/` subpackage, `integrate/seam.py`, the Fisher / profile / experiment-design modules, `plant/calibrate.py`, `plant/identifiability.py` | `calibrate()`'s internal structure and the helpers `Plant.calibrate` shares |
 | `.claude/rules/integration-differentiation.md` | `integrate/_common.py`, the adjoint / forward-sensitivity modules, `plant/sensitivity.py`, `plant/colored.py` | differentiating stiff models (`dtmax`, adjoints, discrete adjoint, forward sensitivities) |
 | `.claude/rules/schema.md` | `aquakin/schema/**`, model `*.yaml` (shipped, fixtures, examples) | YAML model format + Pydantic schema rules (stoichiometry expressions, `extends:`, `auto`, `composition:`, `speciation:`, `precipitation:`) |
 | `.claude/rules/plant.md` | `aquakin/plant/**` | plant-wide simulation: the `Unit` contract, wiring, the plant clock, introspection, shipped units, shared helpers and constants |
@@ -363,7 +363,8 @@ codebase something; the examples are real.
   `plant/_builder_support.py`, `plant/units.py` (the `Unit` contract and
   capability Protocols), `core/lexer.py` and `core/precedence.py` (the one
   tokenizer and precedence table for every expression language),
-  `core/kernels.py` (guarded numerics) and `tests/conftest.py`.
+  `core/kernels.py` (guarded numerics), `integrate/seam.py` (the calibration
+  internals the plant layer reuses) and `tests/conftest.py`.
 - **A second caller means a shared function, in the same change.** Do not copy
   a block and adapt it. If the two callers live in different packages, put the
   shared piece in the lower one (`core` < `schema` < `integrate` < `plant` <
@@ -411,11 +412,12 @@ codebase something; the examples are real.
 
 ### Keep modules and functions small enough to read
 
-- Do not grow the large modules (`plant/plant.py`, `integrate/calibrate.py`,
-  `aquakin_ui/app.py`, `integrate/_common.py`, `core/model.py`). New behaviour
-  goes in its own module as free functions taking the object (the pattern
-  `plant/sensitivity.py`, `plant/calibrate.py` and `plant/spec.py` already use,
-  bound onto `Plant` as methods), not as more methods on the class.
+- Do not grow the large modules (`plant/plant.py`, `aquakin_ui/app.py`,
+  `integrate/_common.py`, `core/model.py`). New behaviour goes in its own
+  module as free functions taking the object (the pattern `plant/sensitivity.py`,
+  `plant/calibrate.py` and `plant/spec.py` already use, bound onto `Plant` as
+  methods), not as more methods on the class. New calibration code goes in its
+  concern's module under `integrate/calibration/`, not `integrate/calibrate.py`.
 - A function past about 100 lines of body, or with more than about eight
   parameters, gets split or takes a config dataclass before it gets longer.
 - A behaviour-preserving refactor is its own commit (ideally its own PR) and

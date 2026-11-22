@@ -32,8 +32,8 @@ import numpy as np
 from scipy.optimize import minimize
 
 from aquakin.integrate._common import Reactor, native_time_factor
+from aquakin.integrate._linalg import _NULL_RTOL
 from aquakin.integrate.fisher import Experiment, FisherInformation, _FisherSetup
-from aquakin.integrate.identifiability import _NULL_RTOL
 
 CRITERIA = ("D", "A", "E", "modified_E")
 _LARGER_IS_BETTER = {"D": True, "A": False, "E": True, "modified_E": False}

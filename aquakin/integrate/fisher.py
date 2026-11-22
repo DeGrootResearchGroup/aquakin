@@ -41,13 +41,9 @@ from aquakin.integrate._transforms import (
     from_unconstrained,
     to_unconstrained,
 )
-from aquakin.integrate.calibrate import (
-    FreeICConfig,
-    _ic_coordinate_names,
-    _simplex_pools,
-    observation_size,
-    observe,
-)
+from aquakin.integrate.calibration.config import FreeICConfig
+from aquakin.integrate.calibration.coords import _ic_coordinate_names, _simplex_pools
+from aquakin.integrate.calibration.observation import observation_size, observe
 
 
 @dataclass(frozen=True)
