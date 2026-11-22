@@ -200,7 +200,10 @@ def test_dtmax_enables_finite_gradient_through_stiff_solve(net, cond):
 
 def test_halforder_variant_is_ad_differentiable_with_tighter_cap():
     """The square-root kinetics of the half-order variant need a tighter
-    integrator-step cap for the reverse-mode adjoint to stay finite."""
+    integrator-step cap for the reverse-mode adjoint to stay finite; with it,
+    the gradient in the most influential parameter (``k_12_no``) matches a
+    central finite difference of the same capped solve (step 1e-3 relative;
+    the difference itself is good to ~1e-3 here)."""
     v = aquakin.load_model_from_file(
         os.path.join(_NDIR, "wats_sewer_khalil_paper_halforder.yaml"))
     cond = aquakin.SpatialConditions.uniform(A_V=56.7, X_BF=10.0, pH=7.5)
@@ -215,3 +218,7 @@ def test_halforder_variant_is_ad_differentiable_with_tighter_cap():
 
     g = jax.grad(final_so4)(p)
     assert np.all(np.isfinite(np.asarray(g)))
+    i = v.param_index["k_12_no"]
+    d = float(p[i]) * 1.0e-3
+    fd = (float(final_so4(p.at[i].add(d))) - float(final_so4(p.at[i].add(-d)))) / (2.0 * d)
+    assert float(g[i]) == pytest.approx(fd, rel=5e-3)

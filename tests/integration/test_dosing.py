@@ -148,16 +148,24 @@ def test_feedback_dose_solves_and_publishes_signal(feedback_plant):
 
 
 def test_grad_flows_through_feedback_dosing(feedback_plant):
+    """The gradient through the saturating feedback-dosing solve matches a
+    central finite difference (step 1e-3 in a common scale on every
+    parameter). At the default solver tolerance the two agree to ~1e-3, so the
+    check is held at 5e-3. The solve uses the same span and save grid as
+    test_feedback_dose_solves_and_publishes_signal, so the difference's forward
+    solves reuse that test's compiled solve."""
     p = feedback_plant
     base = p.default_parameters()
 
     def loss(scale):
-        sol = p.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]),
+        sol = p.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]),
                       params=base * scale)
         return jnp.sum(sol.state ** 2)
 
-    g = jax.grad(loss)(1.0)
-    assert jnp.isfinite(g)
+    g = float(jax.grad(loss)(1.0))
+    h = 1e-3
+    fd = (float(loss(1.0 + h)) - float(loss(1.0 - h))) / (2.0 * h)
+    assert g == pytest.approx(fd, rel=5e-3)
 
 
 def test_shared_dosing_controller_disagreement_raises(asm1):

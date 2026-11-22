@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
@@ -55,6 +56,22 @@ def _adm_n(adm1, y):
     return S_IN + n_aa + n_in + n_xc
 
 
+def _assert_grad_matches_fd(f, C):
+    """``jax.grad(f)`` at ``C`` matches a central finite difference of ``f``.
+
+    The check is along one random direction scaled by ``C`` itself, so species
+    at zero stay at zero (the interfaces clip at zero, where a difference would
+    straddle the kink). The step ``1e-4`` (relative, since the direction is
+    scaled by ``C``) leaves truncation and round-off near 1e-12 on these smooth
+    algebraic maps.
+    """
+    v = C * jnp.asarray(np.random.default_rng(0).uniform(0.5, 1.5, C.shape))
+    g = jax.grad(f)(C)
+    h = 1e-4
+    fd = (float(f(C + h * v)) - float(f(C - h * v))) / (2.0 * h)
+    assert float(g @ v) == pytest.approx(fd, rel=1e-8)
+
+
 def test_cod_conserved_anaerobic_feed(nets):
     """For an anaerobic feed (SO = SNO = 0) all COD is conserved across the
     interface (no electron-acceptor demand)."""
@@ -105,8 +122,7 @@ def test_grad_through_interface(nets):
     trans = ASM1toADM1(source_model=asm1, target_model=adm1)
     C = _asm_vec(asm1, SS=40.0, XS=360.0, XB_H=200.0, SNH=35.0, SND=5.0, XND=16.0,
                  SALK=7.0)
-    g = jax.grad(lambda c: jnp.sum(trans.translate(c)))(C)
-    assert jnp.all(jnp.isfinite(g))
+    _assert_grad_matches_fd(lambda c: jnp.sum(trans.translate(c)), C)
 
 
 def test_excess_acceptor_demand_over_conserves_cod_by_default(nets):
@@ -204,8 +220,7 @@ def test_adm2asm_outputs_finite_and_grad(nets):
     # No nitrate/oxygen/biomass produced by the digester effluent.
     for sp in ("SO", "SNO", "XB_H", "XB_A"):
         assert float(y[asm1.species_index[sp]]) == pytest.approx(0.0, abs=1e-12)
-    g = jax.grad(lambda c: jnp.sum(trans.translate(c)))(C)
-    assert jnp.all(jnp.isfinite(g))
+    _assert_grad_matches_fd(lambda c: jnp.sum(trans.translate(c)), C)
 
 
 # --- digester-pH feedback ---------------------------------------------------
@@ -234,7 +249,7 @@ def test_asm2adm_uses_digester_pH(nets):
 
 def test_adm2asm_uses_digester_pH(nets):
     """adm2asm evaluates its alkalinity charge balance at the supplied digester
-    pH; conservation is unaffected and the gradient stays finite."""
+    pH; conservation is unaffected and the gradient matches a finite difference."""
     asm1, adm1 = nets
     trans = ADM1toASM1(source_model=adm1, target_model=asm1)
     C = adm1.default_concentrations()
@@ -245,8 +260,7 @@ def test_adm2asm_uses_digester_pH(nets):
         float(trans.translate(C, digester_pH=7.0)[salk]), rel=1e-6)
     y = trans.translate(C, digester_pH=7.3)
     assert _asm_n_out(asm1, y) == pytest.approx(_adm_n_full(adm1, C), rel=1e-6)
-    g = jax.grad(lambda c: jnp.sum(trans.translate(c, digester_pH=7.3)))(C)
-    assert jnp.all(jnp.isfinite(g))
+    _assert_grad_matches_fd(lambda c: jnp.sum(trans.translate(c, digester_pH=7.3)), C)
 
 
 @pytest.mark.slow

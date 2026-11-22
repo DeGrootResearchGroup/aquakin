@@ -186,23 +186,25 @@ def test_ifas_plant_evaluates_kla_history(asm1):
 
 
 @pytest.mark.slow
-def test_grad_through_ifas_plant_is_finite(asm1):
+def test_grad_through_ifas_plant_matches_fd(asm1):
     """jax.grad flows through a plant containing an IFAS unit (the biofilm
-    diffusion--reaction core is differentiable end to end)."""
+    diffusion--reaction core is differentiable end to end), and matches a
+    central finite difference of the same solve (step 1e-3 relative on muH)."""
     ifas = _ifas(
         asm1, aeration=Aeration(kla=600.0), biofilm_initial=asm1.concentrations({"XB_H": 3000.0})
     )
     p = _plant(ifas, asm1)
-    y0 = p.run_to_steady_state().state
     muH = asm1.param_index["muH"]
 
     def loss(mu):
         params = asm1.default_parameters().at[muH].set(mu)
-        sol = p.solve(t_span=(0.0, 1.0), y0=y0, params=params)
+        sol = p.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), params=params)
         return jnp.sum(sol.state)
 
-    g = jax.grad(loss)(4.0)
-    assert jnp.isfinite(g)
+    g = float(jax.grad(loss)(4.0))
+    h = 4.0e-3
+    fd = (float(loss(4.0 + h)) - float(loss(4.0 - h))) / (2.0 * h)
+    assert g == pytest.approx(fd, rel=1e-3)
 
 
 # --- layer resolution and the steady-state criterion -------------------------

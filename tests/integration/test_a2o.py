@@ -12,7 +12,6 @@ washes out the nitrifiers or fails bio-P.
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import pytest
 
 import aquakin
@@ -347,7 +346,7 @@ def test_asm2d_grad_flows(asm2d):
     """jax.grad flows through an asm2d BatchReactor solve -- exercising the new
     AD paths (the K_MAX poly-P inhibition's safe_div, clip_negative_states and the
     positivity limiter are all AD-safe) without the cost of the full plant
-    discrete adjoint."""
+    discrete adjoint. The gradient matches a central finite difference."""
     net = asm2d
     cond = aquakin.OperatingConditions(T=293.15)
     # dtmax caps the reverse-mode adjoint of the stiff bio-P kinetics (the
@@ -382,4 +381,8 @@ def test_asm2d_grad_flows(asm2d):
         return sol.C_named("XPP")[-1]
 
     g = float(jax.grad(loss)(1.0))
-    assert np.isfinite(g)
+    # Central difference of the same (capped) solve, step 1e-4 in the scale.
+    h = 1e-4
+    fd = (float(loss(1.0 + h)) - float(loss(1.0 - h))) / (2.0 * h)
+    assert g != 0.0
+    assert g == pytest.approx(fd, rel=1e-4)
