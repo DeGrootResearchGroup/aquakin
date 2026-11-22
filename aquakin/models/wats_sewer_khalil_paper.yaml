@@ -61,13 +61,12 @@ model:
       - Table 2 omits any inhibition term on the two reduction reactions
         (sulfate and elemental-sulfur reduction); a nitrate-inhibition gate is
         included here, consistent with the published sulfate dynamics (sulfate
-        rises while nitrate is present) and with the authors' source code.
+        rises while nitrate is present).
       - The heterotroph yield is not reported numerically; the standard WATS/ASM
         value Y_H = 0.55 is used (a single yield for aerobic and anoxic growth,
         as in the paper).
       - The elemental-sulfur reduction rate is taken as printed in Table 3
-        (k_s0_acid = 15.5 gS/m2/d); its physical plausibility is examined
-        separately.
+        (k_s0_acid = 15.5 gS/m2/d).
 
     A positivity limiter (a pure numerical safeguard, not a model feature)
     throttles net consumption as a species approaches zero.
@@ -278,7 +277,7 @@ reactions:
   rate: "q_ferm * [S_B] / (k_fe + [S_B]) * monod_inh([S_O], k_o) * bio_hf"
   stoichiometry: {S_B: -1, S_VFA: 0.667, S_H2: 0.333}
 - name: sulfate_reduction_VFA_biofilm
-  description: "VFA-driven sulfate reduction to sulfide, biofilm (as in Khalil's published model; the peer review argued this should be fermentable substrate S_B instead -- see the _balanced model)."
+  description: "VFA-driven sulfate reduction to sulfide, biofilm (as published; the _srbsubstrate and _balanced models use fermentable substrate S_B instead)."
   rate: "k_h2s_acid * monod([S_VFA], k_srb) * monod([S_SO4], k_so4) * no_gate * {A_V}"
   stoichiometry: {S_VFA: -2, sumS: 1, S_SO4: -1}
 - name: elemental_S_reduction_VFA_biofilm

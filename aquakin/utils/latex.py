@@ -21,11 +21,11 @@ from aquakin.core.nodes import (
     NegateNode,
     ParamNode,
     PowerNode,
+    RateFunction,
     SafeDivideNode,
     SpeciesNode,
     SqrtNode,
     SubtractNode,
-    _OperatorNode,
     pHInhibitNode,
     pHSwitchNode,
 )
@@ -136,7 +136,7 @@ def to_latex(node: ASTNode) -> str:
     # crashing export -- a rendering that is merely unpolished, rather than a
     # model that cannot be written up.
     name = getattr(node, "FUNCTION_NAME", None)
-    if name and isinstance(node, _OperatorNode):
+    if name and isinstance(node, RateFunction):
         args = ", ".join(to_latex(c) for c in node.children())
         return rf"\mathrm{{{_escape_latex(name)}}}\!\left({args}\right)"
     raise TypeError(f"No LaTeX renderer for node type {type(node).__name__}")
