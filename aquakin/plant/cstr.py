@@ -423,10 +423,18 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, model):
                 "no open-loop kLa to fall back on, so running it this way would "
                 "silently leave it unaerated."
             )
-        for sp, (signal_name, gain) in av.controlled.items():
-            idx = model.species_index[sp]
-            kla_vec = kla_vec.at[idx].set(signals[signal_name] * gain)
+        kla_vec = _apply_controlled_kla(av, kla_vec, signals, model)
     return kla_vec * (sat_vec - C)
+
+
+def _apply_controlled_kla(av: AerationVectors, kla_vec, signals, model):
+    """``kla_vec`` with each closed-loop species' entry set to its control
+    signal times its gain (oxygen at ``gain``, a co-stripped gas at
+    ``gain * ratio``). The one place the controller output becomes a kLa, shared
+    by the RHS transfer term and the post-solve readers."""
+    for sp, (signal_name, gain) in av.controlled.items():
+        kla_vec = kla_vec.at[model.species_index[sp]].set(signals[signal_name] * gain)
+    return kla_vec
 
 
 class AerationUnit:
@@ -456,9 +464,75 @@ class AerationUnit:
         # so de-duplicate (order kept).
         return tuple(dict.fromkeys(sig for sig, _gain in self._av.controlled.values()))
 
-    # Readers onto the canonical ``self._av`` store, for the aeration-energy /
-    # O2-balance code (plant.bsm.evaluation, plant.balance) and tests that
-    # introspect the per-species aeration vectors.
+    @property
+    def stripped_gases(self) -> dict:
+        """The gases co-stripped with oxygen, ``{species: kLa_gas / kLa_O2}``
+        (empty when the tank strips none)."""
+        return dict(self._av.stripped)
+
+    @property
+    def saturation_vector(self) -> jnp.ndarray:
+        """Per-species saturation of the aeration term, shape ``(n_species,)``:
+        the oxygen ``do_sat`` (with ``beta`` and ``pressure_factor`` folded in)
+        and each stripped gas's saturation; zero elsewhere. Not temperature
+        corrected."""
+        return self._av.sat_vec
+
+    def kla_vector(self, signals: dict | None = None) -> jnp.ndarray:
+        """Per-species mass-transfer coefficient, shape ``(n_species,)``.
+
+        The open-loop kLa (with ``alpha`` folded in) on the aerated species and
+        each stripped gas, with every closed-loop entry replaced by its control
+        signal times its gain. The temperature correction is not applied.
+
+        Parameters
+        ----------
+        signals : dict, optional
+            The control-signal bus at the time of interest
+            (:meth:`Plant.signals_at`). Needed only when the tank is under
+            closed-loop control; ``None`` otherwise.
+
+        Returns
+        -------
+        jnp.ndarray
+            kLa per species (1/time), zero for species aeration does not touch.
+
+        Raises
+        ------
+        ValueError
+            If the tank is under closed-loop control and ``signals`` is ``None``.
+        """
+        if not self._av.controlled:
+            return self._av.kla_vec
+        if signals is None:
+            raise ValueError(
+                f"'{self.name}' is under closed-loop aeration control, so its kLa "
+                "is the controller signal; pass the signal bus (plant.signals_at)."
+            )
+        return _apply_controlled_kla(self._av, self._av.kla_vec, signals, self.model)
+
+    def oxygen_kla(self, signals: dict | None = None):
+        """The tank's oxygen kLa: the entry of :meth:`kla_vector` for the
+        aerated species named by ``aeration.species`` (``"SO"`` in ASM1,
+        ``"SO2"`` in ASM3-based models), or 0 for an unaerated tank.
+
+        Parameters
+        ----------
+        signals : dict, optional
+            The control-signal bus, needed only under closed-loop control (see
+            :meth:`kla_vector`).
+
+        Returns
+        -------
+        jnp.ndarray
+            Scalar oxygen kLa (1/time).
+        """
+        if self.aeration is None:
+            return jnp.asarray(0.0)
+        return self.kla_vector(signals)[self.model.species_index[self.aeration.species]]
+
+    # Readers onto the canonical ``self._av`` store, for tests that introspect
+    # the per-species aeration vectors.
     @property
     def _kla_vec(self) -> jnp.ndarray:
         return self._av.kla_vec

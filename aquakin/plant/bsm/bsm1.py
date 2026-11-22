@@ -79,9 +79,19 @@ def build_bsm1(
     ----------
     model : CompiledModel, optional
         Activated-sludge model. Defaults to ``aquakin.load_model("asm1")``. Any
-        model that keeps the ASM1 species names for the shared components (so
-        the BSM1 influent maps by name) works, e.g. ``asmn_n2o``; the clarifier's
-        solids then come from ``settling_species`` / ``tss_species``.
+        other activated-sludge model works; the clarifier's solids then come from
+        ``settling_species`` / ``tss_species`` (derived from the model when not
+        given). A model that names oxygen other than ``SO`` needs its aerated
+        tanks given through ``aeration`` with that species, e.g. the shipped
+        N₂O model ``asm3_2step_n2o`` (oxygen ``SO2``)::
+
+            aer = Aeration(do_setpoint=2.0, species="SO2", stripped={"SN2O": 1.0})
+            build_bsm1(model=load_model("asm3_2step_n2o"),
+                       aeration={f"tank{i}": aer for i in (3, 4, 5)})
+
+        Without that, the default aerated tanks name ``SO`` and the build
+        raises. The influent is then given in that model's own species
+        (``plant.add_influent(..., to=plant.influent_endpoint)``).
     Q_avg : float
         Average dry-weather inlet flow. Used to size the recycle streams
         (internal recycle and RAS). Default 18446 m³/d per Copp 2002.
