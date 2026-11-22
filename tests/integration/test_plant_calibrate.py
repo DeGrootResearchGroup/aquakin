@@ -121,15 +121,29 @@ def test_plant_calibrate_recovers_synthetic_parameter(decay_plant):
     assert float(result.params[gidx]) == pytest.approx(true_k, rel=5e-2)
 
 
-def test_plant_calibrate_gradient_is_finite_through_the_plant(decay_plant):
-    """check_finite=True must pass: the reverse stable-adjoint gradient of the
-    plant-stream loss is finite (the whole point of routing through plant.solve's
-    discrete adjoint)."""
+def test_plant_calibrate_gradient_matches_fd_through_the_plant(decay_plant, monkeypatch):
+    """The objective gradient a plant fit hands the optimizer -- the reverse
+    stable adjoint through the whole plant solve -- equals a central finite
+    difference of the same objective, and check_finite=True passes. The
+    objective is captured from the multistart runner (which then runs as usual)
+    and evaluated at half the true rate, away from the optimum. The step is
+    1e-4 in log k, whose truncation error is far below ``rel=1e-6``."""
+    import aquakin.plant.calibrate as plant_cal
+
     net, plant = decay_plant
     base = plant.default_parameters()
+    gidx = plant.parameter_index(PARAM)
     t_obs = jnp.linspace(1.0, 20.0, 5)
     sol = plant.solve(t_span=(0.0, 20.0), t_eval=t_obs, params=base)
     obs_B = plant.stream(sol, "tank", base).C_named("B")
+    seen = {}
+    real = plant_cal._run_multistart
+
+    def capture(cfg, bundle, theta0, opt_bounds, starts=None, **kw):
+        seen["bundle"] = bundle
+        return real(cfg, bundle, theta0, opt_bounds, starts=starts, **kw)
+
+    monkeypatch.setattr(plant_cal, "_run_multistart", capture)
     # A single L-BFGS-B step from the truth; check_finite would raise on a NaN.
     result = plant.calibrate(
         obs_B,
@@ -143,6 +157,14 @@ def test_plant_calibrate_gradient_is_finite_through_the_plant(decay_plant):
         check_finite=True,
     )
     assert np.isfinite(result.loss)
+
+    value_and_grad = seen["bundle"].value_and_grad
+    x = jnp.asarray([np.log(0.5 * float(base[gidx]))])
+    _, g = value_and_grad(x)
+    h = 1e-4
+    fd = (float(value_and_grad(x + h)[0]) - float(value_and_grad(x - h)[0])) / (2 * h)
+    assert fd < 0.0                                   # loss falls toward the true k
+    assert float(g[0]) == pytest.approx(fd, rel=1e-6)
 
 
 @pytest.mark.slow  # a plant solve inside an optimizer loop
