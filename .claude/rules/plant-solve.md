@@ -214,8 +214,7 @@ not converged — the backstop for the non-affine case.
   kinetic *and* a flow-setpoint param both match the per-call-probe gradient
   bit-for-bit). The cached map must be `stop_gradient`'d before being closed over
   (it is a params-derived value inside the `custom_vjp`; its parameter dependence
-  is the vjp's job). Both the cached jitted forward and the under-trace
-  calibration-gradient path go through the shared `Plant._esdirk_stable_adjoint`.
+  is the vjp's job). The path runs through `Plant._esdirk_stable_adjoint`.
   Falls back to per-call probing when `M` is not state-invariant
   (`_recycle_map_constant` not True). **Measured (clean serial min-of-8 timing):
   a modest reverse-gradient win where the recycle probe is non-trivial — BSM2
