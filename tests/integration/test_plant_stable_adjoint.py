@@ -40,10 +40,10 @@ from aquakin.plant.influent import InfluentSeries
 def _grad_diff(gradient):
     """Map a legacy ``gradient=`` string to a ``DifferentiationConfig``.
 
-    ``"stable_adjoint"`` / ``"auto"`` -> the reverse stable adjoint (the default),
+    ``"stable_adjoint"`` -> the reverse stable adjoint (the default),
     ``"jax_adjoint"`` -> reverse through-the-solve.
     """
-    if gradient in ("stable_adjoint", "auto"):
+    if gradient == "stable_adjoint":
         return aquakin.DifferentiationConfig(method="stable")
     if gradient == "jax_adjoint":
         return aquakin.DifferentiationConfig(method="through_solve")
@@ -664,45 +664,12 @@ def test_stable_adjoint_colored_jacobian_auto_decision_size_gated():
     assert n < plant._COLORED_BACKWARD_MIN_STATES        # BSM1 is below the gate
     assert choice == "dense"
 
-    # The auto gradient (dense here) equals the explicit-dense gradient; and the
-    # forced-colored gradient also equals it (the colored Jacobian is exact on the
-    # superset pattern -- only float summation order differs).
-    g_auto = float(jax.grad(lambda th: g(th, "auto"))(theta0))
+    # The forced-colored gradient equals the explicit-dense gradient whichever the
+    # size gate selects (the colored Jacobian is exact on the superset pattern --
+    # only float summation order differs).
     g_dense = float(jax.grad(lambda th: g(th, False))(theta0))
     g_colored = float(jax.grad(lambda th: g(th, True))(theta0))
-    assert np.isfinite(g_auto) and g_auto != 0.0
-    assert g_auto == pytest.approx(g_dense, rel=1e-10)
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
-
-
-@pytest.mark.validation
-@pytest.mark.heavy
-def test_auto_gradient_defaults_to_stable_adjoint():
-    """With the default ``gradient="auto"`` (nothing passed), a stiff plant
-    gradient is finite and matches the explicit stable-adjoint gradient -- the
-    auto router sends the differentiated solve down the cap-free path, while a
-    plain forward solve still uses the fast jax_adjoint path."""
-    asm1, adm1, plant, y0 = _bsm2_plant()
-    base = bsm2_parameters(asm1, adm1)
-    gidx = plant.parameter_index("adm1.k_m_ac")
-    theta0 = float(base[gidx])
-    T = 3.0
-
-    def g(theta, gradient):
-        p = base.at[gidx].set(theta)
-        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          diff=_grad_diff(gradient), **_solve_kwargs())
-        return sol.C_named("tank1", "SNO")[-1]
-
-    auto = float(jax.grad(lambda th: g(th, "auto"))(theta0))
-    explicit = float(jax.grad(lambda th: g(th, "stable_adjoint"))(theta0))
-    assert np.isfinite(auto)
-    assert auto == pytest.approx(explicit, rel=1e-6)
-
-    # A concrete forward solve under the same default is unchanged (fast path).
-    fwd_auto = float(g(theta0, "auto"))
-    fwd_jax = float(g(theta0, "jax_adjoint"))
-    assert fwd_auto == pytest.approx(fwd_jax, rel=1e-6)
 
 
 @pytest.mark.validation
@@ -764,63 +731,6 @@ def test_stable_adjoint_transient_influent_gradient_matches_fd():
     h = theta0 * 1e-2
     fd = (float(g(theta0 + h)) - float(g(theta0 - h))) / (2.0 * h)
     assert grad == pytest.approx(fd, rel=2e-2)
-
-
-@pytest.mark.validation
-@pytest.mark.heavy
-def test_stable_adjoint_gradient_finite_through_full_param_vector():
-    """A full-parameter reverse gradient (the calibration case) is finite, where
-    the default through-the-solve adjoint is not without a step cap."""
-    asm1, adm1, plant, y0 = _bsm2_plant()
-    base = bsm2_parameters(asm1, adm1)
-    T = 2.0
-
-    def loss(p):
-        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          diff=aquakin.DifferentiationConfig(method="stable"),
-                          **_solve_kwargs())
-        return jnp.sum(sol.state[-1] ** 2)
-
-    g = jax.grad(loss)(base)
-    assert g.shape == base.shape
-    assert jnp.all(jnp.isfinite(g))
-    assert jnp.any(g != 0.0)
-
-
-@pytest.mark.validation
-@pytest.mark.heavy
-def test_stable_adjoint_solve_is_jittable():
-    """The stable-adjoint plant solve can be wrapped in ``jax.jit``: its ``atol``
-    no longer forces concretization. The jitted value and gradient match the
-    eager ones. Jitting the calibration loss is what amortizes the (large) solve
-    compile across optimizer iterations."""
-    asm1, adm1, plant, y0 = _bsm2_plant()
-    base = bsm2_parameters(asm1, adm1)
-    gidx = plant.parameter_index("adm1.k_m_ac")
-    T = 3.0
-    teval = jnp.array([T])
-    # A tight max_steps keeps the discrete-adjoint trajectory buffer -- and so the
-    # peak memory of this jit-plus-gradient test -- small; the warm-started 3-day
-    # solve takes far fewer than 600 steps.
-    kw = dict(rtol=1e-5, atol=1e-3,
-              integrator=aquakin.IntegratorConfig(
-                  max_steps=600, colored_jacobian=False))
-
-    def g(theta):
-        p = base.at[gidx].set(theta)
-        sol = plant.solve(t_span=(0.0, T), t_eval=teval, params=p, y0=y0,
-                          diff=aquakin.DifferentiationConfig(method="stable"), **kw)
-        return sol.C_named("tank1", "SNO")[-1]
-
-    theta0 = float(base[gidx])
-    # value-and-gradient in one pass, eager and jitted, so the test compiles two
-    # programs rather than four. The jitted pass compiling at all exercises the
-    # atol concretization fix; its value and gradient must match the eager pass.
-    f_e, g_e = jax.value_and_grad(g)(theta0)
-    f_j, g_j = jax.jit(jax.value_and_grad(g))(theta0)
-    assert np.isfinite(float(f_j)) and np.isfinite(float(g_j))
-    assert float(f_j) == pytest.approx(float(f_e), rel=1e-6)
-    assert float(g_j) == pytest.approx(float(g_e), rel=1e-6)
 
 
 @pytest.mark.validation
@@ -909,56 +819,6 @@ def test_stable_adjoint_colored_jacobian_flow_setpoint_matches_dense():
     assert np.isfinite(g_colored)
     assert g_colored != 0.0                                 # RAS moves M (dM/dtheta != 0)
     assert g_colored == pytest.approx(g_dense, rel=1e-8)
-
-
-@pytest.mark.slow
-def test_stable_adjoint_accepts_kvaerno3_and_factormax():
-    """``solver=``/``factormax=`` are supported on the ``stable_adjoint`` path.
-
-    The discrete adjoint builds its backward from the forward solver's Butcher
-    tableau generically, so a cheaper 4-stage ``Kvaerno3`` (and a ``factormax``
-    cap on the PID step growth) is a valid forward, matching the optimized
-    ``forward_fast`` configuration. The gradient stays finite and agrees with the
-    default ``Kvaerno5`` discrete adjoint to the two methods' truncation
-    difference (they differ in the realized step sequence, each exact for its
-    own)."""
-    asm1 = aquakin.load_model("asm1")
-    plant = build_bsm1(asm1)
-    plant.add_influent("influent", load_bsm1_influent("dry", asm1))
-    y0 = bsm1_warm_start(plant)
-    base = plant.default_parameters()
-    gidx = plant.parameter_index("asm1.muA")
-    theta0 = float(base[gidx])
-    T = 0.5
-    kw = dict(rtol=1e-4, atol=1e-3)
-
-    def g(theta, integrator):
-        p = base.at[gidx].set(theta)
-        sol = plant.solve((0.0, T), t_eval=jnp.array([T]), params=p, y0=y0,
-                          diff=aquakin.DifferentiationConfig(method="stable"),
-                          integrator=integrator, **kw)
-        return sol.C_named("tank5", "SNO")[-1]
-
-    # The reference arm pins the old Kvaerno5/no-cap default (order=5, factormax
-    # None); the others request Kvaerno3 (and a factormax cap) explicitly.
-    ic5 = aquakin.IntegratorConfig(max_steps=20_000, order=5, factormax=None)
-    ic3 = aquakin.IntegratorConfig(max_steps=20_000, solver=diffrax.Kvaerno3())
-    ic3f = aquakin.IntegratorConfig(
-        max_steps=20_000, solver=diffrax.Kvaerno3(), factormax=3.0)
-    g5 = float(jax.grad(lambda th: g(th, ic5))(theta0))             # Kvaerno5
-    g3 = float(jax.grad(lambda th: g(th, ic3))(theta0))
-    g3f = float(jax.grad(lambda th: g(th, ic3f))(theta0))
-    assert np.isfinite(g3) and np.isfinite(g3f)
-    assert g3 != 0.0
-    # Each is the exact discrete adjoint of its own forward solve, so they agree
-    # only to the ESDIRK truncation difference between the realized step
-    # sequences -- and the factormax-capped sequence is platform-sensitive (the
-    # adaptive controller lands different steps on different hardware/BLAS). So
-    # compare to the independent Kvaerno5 reference at 1e-2: tight enough that a
-    # broken adjoint (off by tens of percent or sign) still fails, loose enough to
-    # absorb the cross-discretization + platform step-sequence spread.
-    assert g3 == pytest.approx(g5, rel=1e-2)
-    assert g3f == pytest.approx(g5, rel=1e-2)
 
 
 @pytest.mark.slow

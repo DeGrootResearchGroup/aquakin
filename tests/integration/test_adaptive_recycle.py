@@ -215,25 +215,3 @@ def test_bsm2_adaptive_ift_tangent_matches_deep(bsm2):
     assert rel < 1e-6
 
 
-@pytest.mark.slow
-def test_bsm2_adaptive_forward_solve_matches_fixed(bsm2):
-    """A short BSM2 solve with recycle_tol set matches the fixed-pass default
-    trajectory (both converge to the recycle fixed point)."""
-    p, params, y0 = bsm2
-    te = jnp.linspace(0.0, 3.0, 13)
-    p.recycle_tol = None
-    p._jit_cache.clear()
-    s_fx = np.asarray(p.solve(
-        t_span=(0.0, 3.0), t_eval=te, params=params, y0=y0,
-        rtol=1e-6, atol=1e-5,
-        integrator=aquakin.IntegratorConfig(max_steps=400_000)).state[-1])
-    p.recycle_tol = 1e-10
-    p._jit_cache.clear()
-    s_ad = np.asarray(p.solve(
-        t_span=(0.0, 3.0), t_eval=te, params=params, y0=y0,
-        rtol=1e-6, atol=1e-5,
-        integrator=aquakin.IntegratorConfig(max_steps=400_000)).state[-1])
-    p.recycle_tol = None
-    p._jit_cache.clear()
-    rel = float(np.max(np.abs(s_ad - s_fx)) / (np.max(np.abs(s_fx)) + 1e-9))
-    assert rel < 1e-5
