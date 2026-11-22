@@ -302,6 +302,7 @@ aquakin/
 │   ├── model_format.md
 │   └── adding_models.md
 │
+├── conftest.py                      # runs the README / user-guide examples as tests (Sybil)
 ├── pyproject.toml
 ├── README.md
 ├── CLAUDE.md                        # this file

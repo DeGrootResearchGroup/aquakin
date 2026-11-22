@@ -11,6 +11,7 @@ step-by-step introduction, see [Your first model](adding_models.md).
 First-order decay of a species `A` into `B`:
 
 ```yaml
+# first_order_decay.yaml
 model:
   name: first_order_decay
   version: "1.0"

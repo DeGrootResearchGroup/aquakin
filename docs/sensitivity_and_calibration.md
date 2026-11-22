@@ -866,6 +866,8 @@ The plant examples below use BSM2, built with its influent wired as in
 [Plant-wide simulation](plants.md#the-benchmark-plants), and need a measured
 `observations` array. A BSM2 solve takes minutes, and a fit many solves.
 
+% skip: next "a BSM2 plant calibration that needs measured data; its API is checked by the plant calibration tests"
+
 ```python
 from aquakin.plant.bsm import build_bsm2, bsm2_warm_start
 # plant = build_bsm2(...) with its influent, as in Plant-wide simulation
@@ -995,6 +997,8 @@ channel's `sigma` or `estimate_sigma: true`. See
 the way `plant.calibrate` does, and work in its coordinates, so their results
 feed `aquakin.identifiability` and `aquakin.design_criterion` directly.
 
+% skip: next "a BSM2 plant calibration that needs measured data; its API is checked by the plant calibration tests"
+
 ```python
 from aquakin.plant import plant_fisher_information, plant_profile_likelihood
 
@@ -1034,6 +1038,8 @@ only linear algebra. It returns the same `CandidateScore` list as
 `rank_experiments`, best first, and takes `criterion=`, `subset=` and
 `param_draws=` as that does:
 
+% skip: next "a BSM2 plant calibration that needs measured data; its API is checked by the plant calibration tests"
+
 ```python
 from aquakin.plant import SensorSet, plant_rank_sensor_sets
 
@@ -1053,6 +1059,8 @@ ranked_sensors[0].index, ranked_sensors[0].improvement
 at each grid value of the profiled one, with the same warm-started sweep as
 `profile_likelihood`, and every grid point reuses one compiled objective.
 Other keywords go to `plant.calibrate`:
+
+% skip: next "a BSM2 plant calibration that needs measured data; its API is checked by the plant calibration tests"
 
 ```python
 prof_plant = plant_profile_likelihood(

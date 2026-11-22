@@ -105,6 +105,8 @@ test = [
     # cooperates with pytest-xdist (`-n`) and pytest-split (each shard emits a
     # partial `coverage.xml` that Codecov merges by flag).
     "pytest-cov>=5",
+    # sybil runs the code examples in README.md and the user guide (conftest.py).
+    "sybil>=9",
     "aquakin[dataframe,plot,ui]",
 ]
 
