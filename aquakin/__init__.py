@@ -45,6 +45,7 @@ _logging.getLogger("aquakin").addHandler(_logging.NullHandler())
 
 from aquakin.core.conditions import OperatingConditions, SpatialConditions
 from aquakin.core.model import CompiledModel, compile_model
+from aquakin.core.nodes import RateFunction
 from aquakin.core.parser import parse_rate_expression
 from aquakin.core.registry import register_rate_function, registered_rate_functions
 from aquakin.integrate.batch import BatchReactor, BatchSolution
@@ -278,6 +279,7 @@ __all__ = [
     "PredictiveBand",
     "ProfileResult",
     "Progress",
+    "RateFunction",
     "RatioSplitter",
     "ScenarioComparison",
     "SensitivityResult",

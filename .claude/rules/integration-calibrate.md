@@ -21,12 +21,18 @@ Split out of `.claude/rules/integration.md`.
 
 ### Module layout
 
-- `integrate/calibrate.py` holds only `calibrate()` and re-exports, through
-  `__all__`, every name it has exported; `tests/unit/test_calibrate_exports.py`
-  pins the list. **New calibration code goes in the `integrate/calibration/`
-  module for its concern** (`config`, `observation`, `loss`, `coords`, `result`,
-  `problem`, `objective`, `multistart`, `laplace`, `driver`), never back into
-  `calibrate.py`, and the facade's export list does not grow.
+- `integrate/calibrate.py` holds only `calibrate()`, and its `__all__` lists
+  only non-underscore names (`calibrate`, the configs and results, and the
+  helpers it has always exported). **It is not a re-export facade for private
+  names:** import a private helper
+  from the `integrate/calibration/` module that defines it (or, from
+  `aquakin.plant`, from `integrate/seam.py`), never through `calibrate.py`, so
+  no private name is kept alive there for an importer. **New calibration code
+  goes in the `integrate/calibration/` module for its concern** (`config`,
+  `observation`, `loss`, `coords`, `result`, `problem`, `objective`,
+  `multistart`, `laplace`, `driver`), never back into `calibrate.py`.
+  `_laplace_covariance` is the one leftover re-export, until
+  `tests/integration/test_calibrate.py` imports it from `calibration/laplace.py`.
 - `calibration/*` modules must not import `calibrate.py` (it imports them), and
   `calibration/__init__.py` stays a docstring with no imports, so `fisher.py`
   can import the pieces without a cycle. Cross-module references that are only
@@ -171,8 +177,9 @@ The plant builds its columns from each observable's stream model.
 `observe(ys, p, species_idx, fn, t=)` helper in `calibration/observation.py`, used by both
 `_predict` and `_FisherSetup.jacobian`; a three-argument `fn(t, C, p)`
 (`observation_takes_time`, by signature) gets the sample times in `t_obs`'s
-unit (native times divided by `_CalibrationProblem.obs_time_factor` /
-`_FisherSetup.time_factor`). `NaN` observations are masked in `_build_loss` /
+unit exactly as given (`_CalibrationProblem.obs_times`; `_FisherSetup.tobs`,
+converted to native time by `_FisherSetup.time_factor` only at the solve), never
+native times divided back. `NaN` observations are masked in `_build_loss` /
 `_build_residual` (`_build_masked_*`, only when a `NaN` is present, so the
 unmasked path is unchanged); `Experiment(mask=)` sets the unmeasured entries'
 sigma to `inf` in `_FisherSetup` and is part of the design `_structure_key`; it is a defaulted field on

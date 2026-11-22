@@ -144,10 +144,8 @@ not converged — the backstop for the non-affine case.
   solve reaches tolerance for `rho` up to 0.99 where the fixed 3-pass leaves
   13–97%, and its IFT gradient matches central finite differences to ~2e-10; on
   the real BSM2 reject loop the adaptive forward fixed point matches a 14-pass
-  deep sweep to ~4e-15, its IFT tangent matches the deep-sweep gradient to
-  ~6e-19, and a short BSM2 solve matches the fixed-pass trajectory to ~3e-8
-  (within the solver tolerance — the adaptive path is the more-converged of the
-  two). `recycle_tol` is read inside `_resolve_recycle_concentrations`, so it
+  deep sweep to ~4e-15, and its IFT tangent matches the deep-sweep gradient to
+  ~6e-19. `recycle_tol` is read inside `_resolve_recycle_concentrations`, so it
   reaches every solve path automatically (no per-path threading); the cached
   affine `recycle_map` still supplies the warm-start seed. Because the default
   routes every plant solve through `jax.lax.custom_root`, the

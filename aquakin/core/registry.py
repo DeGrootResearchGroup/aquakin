@@ -16,10 +16,10 @@ kernel is bit-identical to its own scalar closure, because both call the one
     >>> from dataclasses import dataclass
     >>> import jax.numpy as jnp
     >>> import aquakin
-    >>> from aquakin.core.nodes import ASTNode, _OperatorNode
+    >>> from aquakin.core.nodes import ASTNode
     >>>
     >>> @dataclass(frozen=True)
-    ... class HillNode(_OperatorNode):
+    ... class HillNode(aquakin.RateFunction):
     ...     X: ASTNode
     ...     K: ASTNode
     ...     n: ASTNode
@@ -46,7 +46,7 @@ from dataclasses import MISSING, fields, is_dataclass
 
 from aquakin.core import parser as _parser
 from aquakin.core import vector_kernel as _vector_kernel
-from aquakin.core.nodes import ConstantNode, _OperatorNode
+from aquakin.core.nodes import ConstantNode, RateFunction
 
 __all__ = [
     "register_rate_function",
@@ -87,7 +87,7 @@ def register_rate_function(node_cls: type) -> type:
     Parameters
     ----------
     node_cls : type
-        A frozen dataclass subclassing ``aquakin.core.nodes._OperatorNode``,
+        A frozen dataclass subclassing :class:`aquakin.RateFunction`,
         declaring:
 
         - ``FUNCTION_NAME`` -- the call spelling in a rate expression;
@@ -95,7 +95,9 @@ def register_rate_function(node_cls: type) -> type:
         - ``op(operands)`` -- a staticmethod taking one tuple of operand values
           and returning the node's value, written with ``jax.numpy`` so it is
           differentiable. Operand order is the node's dataclass fields followed
-          by any ``EXTRA_CONDITIONS`` it declares.
+          by any ``EXTRA_CONDITIONS`` it declares. ``op`` gets none of the
+          built-in guards: see :class:`aquakin.RateFunction` for the guarded
+          helpers in :mod:`aquakin.core.kernels`.
 
         Every dataclass field must hold an AST child; the parser constructs the
         node by passing one parsed argument per field, in order, so the field
@@ -109,7 +111,7 @@ def register_rate_function(node_cls: type) -> type:
     Raises
     ------
     TypeError
-        If ``node_cls`` is not a frozen dataclass subclassing ``_OperatorNode``,
+        If ``node_cls`` is not a frozen dataclass subclassing ``aquakin.RateFunction``,
         or is missing ``FUNCTION_NAME`` / ``KIND`` / ``op``.
     ValueError
         If it takes no arguments, if a field does not hold an AST child, or if
@@ -124,9 +126,9 @@ def register_rate_function(node_cls: type) -> type:
     while iterating in a notebook, and is why collisions are only checked
     against the built-ins.
     """
-    if not isinstance(node_cls, type) or not issubclass(node_cls, _OperatorNode):
+    if not isinstance(node_cls, type) or not issubclass(node_cls, RateFunction):
         raise TypeError(
-            f"register_rate_function expects a subclass of _OperatorNode; got {node_cls!r}. "
+            f"register_rate_function expects a subclass of aquakin.RateFunction; got {node_cls!r}. "
             "A rate function has to be a node class so the parser, the batched kernel and "
             "the dimensional check can all read its shape off the type."
         )

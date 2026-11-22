@@ -125,5 +125,7 @@ results. The design and the owner's decisions are in
   has open) is stored relative to the study folder by `create_study` /
   `update_study`, and left out when it is the default; a relative one is kept as
   written.
-- The editor drives studies through the job worker (`aquakin/__main__.py`'s
-  `start_study` / `cancel_study`); see `.claude/rules/ui.md`.
+- The editor reads, creates, edits and freezes studies through the worker's
+  study commands (`aquakin/__main__.py`), and runs one as its own process,
+  `aquakin study run --json <path>` (`aquakin_ui/jobs.py`'s `StudyRun`), never
+  as a worker request; see `.claude/rules/ui.md`.

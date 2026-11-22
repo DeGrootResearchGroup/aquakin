@@ -18,8 +18,8 @@ look things up.
 
 Everything not listed here (the AST node types, the compile context, the schema
 models, the raw Diffrax solver objects) is internal and should not be imported
-from `aquakin` directly. The one exception is a rate function of your own: it
-subclasses `aquakin.core.nodes._OperatorNode`, which has no public name yet (see
+from `aquakin` directly. A rate function of your own subclasses the public
+`RateFunction` (see
 [Rate functions of your own](model_format.md#rate-functions-of-your-own)). Reactors are **stateless after construction** —
 `solve()` takes every variable input as an argument — which is what lets you
 `jax.vmap` a reactor over an ensemble.
@@ -32,7 +32,7 @@ subclasses `aquakin.core.nodes._OperatorNode`, which has no public name yet (see
 | Load a model from a YAML file | `load_model_from_file` |
 | Reset the model cache | `clear_model_cache` |
 | Work with a loaded model | `CompiledModel` (its attributes and methods: `summary`, `species`, `time_unit`, `default_concentrations`, `default_parameters`, `default_conditions`, `concentrations`, `influent`, `parameter_values`, `units_of`, `check_units`, `check_conservation`, …) |
-| Add a rate function aquakin does not ship | `register_rate_function` (before loading the model), `registered_rate_functions` |
+| Add a rate function aquakin does not ship | subclass `RateFunction`, then `register_rate_function` (before loading the model); `registered_rate_functions`; the guarded `aquakin.core.kernels.safe_pow`, `safe_sqrt` and `safe_log` for its arithmetic |
 | Build a model from a spec, or parse one expression | `compile_model`, `parse_rate_expression` |
 
 ## Conditions

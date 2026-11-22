@@ -30,7 +30,7 @@ guarded definitions the rate language uses, because a clock starts every solve
 at `t = 0` and that is exactly where their derivative is infinite. An unguarded
 `sqrt(t)` leaves the forward solve correct and breaks only the gradient, which
 surfaces as an exhausted step budget pointing at the integrator (#700 / the
-shared-lexer PR); `log10` is written as `_safe_log(x)/ln(10)` so there is one
+shared-lexer PR); `log10` is written as `safe_log(x)/ln(10)` so there is one
 guarded logarithm, not two. New functions go in `FUNCTIONS`
 (name → `(callable, arities)`), which the parser, the arity check and the
 error messages all read, so they cannot drift. A function that is associative is

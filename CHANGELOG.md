@@ -21,8 +21,8 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 ### Added
 
-- `aquakin.register_rate_function`: add a rate function aquakin does not ship,
-  without editing the package — the rate-law counterpart of the `Unit` protocol
+- `aquakin.register_rate_function` and `aquakin.RateFunction`: add a rate
+  function aquakin does not ship, without editing the package — the rate-law counterpart of the `Unit` protocol
   that already lets you add a plant unit operation. A rate law needing a
   function outside the built-in set previously meant forking aquakin or folding
   the term into a precomputed condition field, which put its coefficients
@@ -38,10 +38,23 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
   function — defining a node class is never enough on its own. A function may
   optionally declare how its result's dimension follows from its arguments', so
   `check_units` can check expressions using it. `registered_rate_functions`
-  lists what is registered.
+  lists what is registered. A rate function subclasses the public
+  `aquakin.RateFunction`, so extending aquakin as documented needs no private
+  name. Its `op` gets none of the built-in guards, so the guarded helpers it
+  can use — `safe_pow`, `safe_sqrt` and `safe_log` in `aquakin.core.kernels` —
+  are public too: a fractional power written as plain `x**n` has an infinite
+  derivative at a depleted species.
 
 ### Fixed
 
+- The shipped sewer (`wats_sewer*`) and `adm1` model descriptions shown by
+  `model.summary()` now describe the model and how a variant differs from its
+  base, instead of its development history; the models themselves are unchanged.
+- A plant with `HeatBalanceTemperature` can now be solved inside `jax.jit` or
+  `jax.vmap`, so `aquakin.monte_carlo`, `aquakin.compare_scenarios` and
+  `aquakin.dgsm` work over it (they jit the function even with
+  `batched=False`). Building its initial temperatures converted a traced value
+  to a Python float and raised `ConcretizationTypeError`.
 - `Plant.steady_state`'s pseudo-arclength fallback (and
   `arclength_continuation_solve`) no longer reports a steady state on a
   different branch as the operating point past a fold. Near a saddle-node the

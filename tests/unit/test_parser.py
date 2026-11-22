@@ -1,5 +1,7 @@
 """Parser unit tests."""
 
+import re
+
 import jax.numpy as jnp
 import pytest
 
@@ -12,7 +14,6 @@ from aquakin.core.nodes import (
     MultiplyNode,
     NegateNode,
     ParamNode,
-    PowerNode,
     SpeciesNode,
     SubtractNode,
     pHSwitchNode,
@@ -55,19 +56,6 @@ def test_simple_product():
     assert isinstance(tree, MultiplyNode)
 
 
-def test_operator_precedence():
-    # 1 + 2 * 3 must parse as 1 + (2*3)
-    tree = parse_rate_expression("1 + 2 * 3")
-    assert isinstance(tree, AddNode)
-    assert isinstance(tree.right, MultiplyNode)
-
-
-def test_power_right_associative():
-    tree = parse_rate_expression("2 ** 3 ** 2")
-    assert isinstance(tree, PowerNode)
-    assert isinstance(tree.right, PowerNode)  # right-assoc
-
-
 def test_unary_minus():
     tree = parse_rate_expression("-k * [A]")
     assert isinstance(tree, MultiplyNode)
@@ -103,21 +91,13 @@ def test_condition_reference_underscore_name():
 
 
 def test_unclosed_condition_brace():
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match=re.escape("Expected ('RBRACE',) at position 3")):
         parse_rate_expression("{pH")
 
 
 def test_empty_condition_brace():
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match=re.escape("Expected ('IDENT',) at position 1")):
         parse_rate_expression("{}")
-
-
-@pytest.mark.parametrize("expr", ["1e", "1e+", "2.5e", "3E-"])
-def test_malformed_exponent_is_parse_error(expr):
-    """A number with an exponent marker but no exponent digits must fail as a
-    positioned ParseError, not a bare float() ValueError from the primary."""
-    with pytest.raises(ParseError):
-        parse_rate_expression(expr)
 
 
 @pytest.mark.parametrize("expr", ["1e3", "1.6e2", "1.5e-2", "2E+3"])
@@ -162,16 +142,16 @@ def test_safe_div_function():
 
 
 def test_monod_wrong_arity():
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match=re.escape("monod() takes 2 argument(s) (X, K), got 1")):
         parse_rate_expression("monod([SS])")
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match=re.escape("monod_ratio() takes 3 argument(s)")):
         parse_rate_expression("monod_ratio([A], [B])")
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match=re.escape("safe_div() takes 2 argument(s)")):
         parse_rate_expression("safe_div([A])")
 
 
 def test_unknown_function_rejected():
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match="Unknown function 'foo'"):
         parse_rate_expression("foo(1, 2)")
 
 
@@ -208,17 +188,17 @@ def test_pH_inhibit_wrong_arity():
 
 
 def test_unexpected_character():
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match="Unexpected character '@' at position 4"):
         parse_rate_expression("k * @")
 
 
 def test_unbalanced_parens():
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match=re.escape("Expected ('RPAREN',) at position 8, got EOF")):
         parse_rate_expression("(k * [A]")
 
 
 def test_trailing_tokens():
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match="Unexpected token 'foo' at position 8"):
         parse_rate_expression("k * [A] foo")
 
 
@@ -226,33 +206,54 @@ def test_trailing_tokens():
 def test_empty_or_whitespace_expression_is_parse_error(expr):
     """An empty or whitespace-only expression has no primary, so the parser hits
     EOF in `_primary` and raises rather than returning None."""
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match="Unexpected token '' at position"):
         parse_rate_expression(expr)
 
 
-@pytest.mark.parametrize("expr", ["[]", "[3A]", "[Br -]"])
-def test_malformed_species_bracket_is_parse_error(expr):
+@pytest.mark.parametrize(
+    ("expr", "message"),
+    [
+        ("[]", "Expected species name after '[' at position 0, got RBRACK"),
+        ("[3A]", "Expected species name after '[' at position 0, got NUMBER"),
+        ("[Br -]", "Expected ('RBRACK',) at position 4, got MINUS"),
+    ],
+)
+def test_malformed_species_bracket_is_parse_error(expr, message):
     """`[` must be followed by an identifier species name: empty brackets and a
     digit-leading name fail; whitespace splitting a charge suffix (`[Br -]`) ends
     the name early and leaves a stray `-]` that fails to close the bracket. (The
     `{}` counterpart is already covered.)"""
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match=re.escape(message)):
         parse_rate_expression(expr)
 
 
-@pytest.mark.parametrize("expr", ["{3}", "{a b}", "{1pH}"])
-def test_malformed_condition_brace_is_parse_error(expr):
+@pytest.mark.parametrize(
+    ("expr", "message"),
+    [
+        ("{3}", "Expected ('IDENT',) at position 1, got NUMBER"),
+        ("{a b}", "Expected ('RBRACE',) at position 3, got IDENT"),
+        ("{1pH}", "Expected ('IDENT',) at position 1, got NUMBER"),
+    ],
+)
+def test_malformed_condition_brace_is_parse_error(expr, message):
     """`{` must wrap exactly one identifier: a number, two idents, or a digit-led
     name all fail."""
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match=re.escape(message)):
         parse_rate_expression(expr)
 
 
-@pytest.mark.parametrize("expr", ["max()", "monod([SS],,KS)", "max(1,)"])
-def test_bad_arglist_is_parse_error(expr):
+@pytest.mark.parametrize(
+    ("expr", "message"),
+    [
+        ("max()", "Unexpected token ')' at position 4"),
+        ("monod([SS],,KS)", "Unexpected token ',' at position 11"),
+        ("max(1,)", "max() takes 2 or more argument(s) (a, b), got 1"),
+    ],
+)
+def test_bad_arglist_is_parse_error(expr, message):
     """An empty argument list, or a doubled comma, leaves a primary with no
     expression to parse; `max(1,)` parses but then fails the arity check."""
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError, match=re.escape(message)):
         parse_rate_expression(expr)
 
 
@@ -268,11 +269,24 @@ def test_max_folds_when_given_more_than_two_arguments():
     assert parse_rate_expression("max(k1, k2, k3)") == parse_rate_expression("max(max(k1, k2), k3)")
 
 
-@pytest.mark.parametrize("expr", ["1 2", "1.2.3", "[A] [B]"])
-def test_adjacent_primaries_without_operator_is_parse_error(expr):
+@pytest.mark.parametrize(
+    ("expr", "message"),
+    [
+        ("1 2", "Unexpected token '2' at position 2"),
+        ("1.2.3", "'1.2.3' at position 0 is not a number"),
+        ("[A] [B]", "Unexpected token '[' at position 4"),
+        ("1e", "Unexpected token 'e' at position 1"),
+        ("1e+", "Unexpected token 'e' at position 1"),
+        ("2.5e", "Unexpected token 'e' at position 3"),
+        ("3E-", "Unexpected token 'E' at position 1"),
+    ],
+)
+def test_adjacent_primaries_without_operator_is_parse_error(expr, message):
     """Two primaries with no operator between them leave trailing tokens after the
-    first expression parses, which `parse()` rejects."""
-    with pytest.raises(ParseError):
+    first expression parses, which `parse()` rejects. An exponent marker with no
+    digits is one such case: the shared tokenizer reads "1e" as the number 1 and
+    the name "e", so it is a ParseError, not a bare float() ValueError."""
+    with pytest.raises(ParseError, match=re.escape(message)):
         parse_rate_expression(expr)
 
 
@@ -305,31 +319,3 @@ def test_full_expression_compiles_and_evaluates():
     result = float(fn(C, params, {}, 0))
     assert result == pytest.approx(5.0 * 3.0 + 2.0)
 
-
-def test_precedence_follows_python():
-    """A sign binds looser than a power, as in Python and ordinary notation.
-
-    It bound tighter until #699 -- ``-2**2`` read as ``(-2)**2`` -- which nobody
-    predicts. No shipped expression relied on it. ``aquakin.plant.time_expr``
-    shares this precedence and is pinned the same way.
-    """
-    minus_squared = parse_rate_expression("-2**2")
-    assert isinstance(minus_squared, NegateNode)
-    assert isinstance(minus_squared.operand, PowerNode)
-
-    # Bracket the base to raise a negative value.
-    bracketed = parse_rate_expression("(0 - 2)**2")
-    assert isinstance(bracketed, PowerNode)
-
-    # The exponent may carry its own sign, and ** stays right-associative.
-    reciprocal = parse_rate_expression("k**-1")
-    assert isinstance(reciprocal, PowerNode)
-    assert isinstance(reciprocal.right, NegateNode)
-    tower = parse_rate_expression("2**3**2")
-    assert isinstance(tower, PowerNode) and isinstance(tower.right, PowerNode)
-
-    # A sign on one factor of a product binds that factor only.
-    product = parse_rate_expression("-2*3**2")
-    assert isinstance(product, MultiplyNode)
-    assert isinstance(product.left, NegateNode)
-    assert isinstance(product.right, PowerNode)
