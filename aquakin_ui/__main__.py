@@ -26,6 +26,9 @@ def main(argv=None) -> int:
     from aquakin_ui.app import Editor
 
     server = get_server(client_type="vue3")
+    # get_server creates the server when none exists (create_if_missing defaults
+    # to True), so it returns None only when asked not to create one.
+    assert server is not None
     editor = Editor(server, path=args.flowsheet)
     try:
         server.start(port=args.port, host="127.0.0.1", open_browser=not args.no_browser)

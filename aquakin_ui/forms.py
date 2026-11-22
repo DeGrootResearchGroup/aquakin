@@ -98,7 +98,7 @@ def _placeholder(s: dict) -> str:
     return f"{_text(s['default'])} (default)"
 
 
-def _row(key, label, widget="text", value="", **extra) -> dict:
+def _row(key, label, widget="text", value: object = "", **extra) -> dict:
     return {
         "key": key,
         "label": label,
@@ -181,7 +181,7 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
                     hint=s["help"],
                 )
             )
-            if mode != "none":
+            if mode != "none" and value:  # a mode other than none is read from value
                 clock = (doc.meta.get("options") or {}).get("time_unit") or "d"
                 oxygen = (value or {}).get("species") or _oxygen(species) or ""
                 units = {s["name"]: s.get("unit", "") for s in info["species"]} if info else {}
@@ -322,15 +322,15 @@ def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, d
 
     Raises
     ------
-    ValueError
-        If a field's text cannot be read as its setting's type; the message
-        starts with the field's label.
+    FieldError
+        If a field's text cannot be read as its setting's type (a ``ValueError``
+        whose ``key`` names the row); the message starts with the field's label.
     """
     labels = {r["key"]: r["label"].removesuffix(" *") for r in rows}
     try:
         return _read_rows(doc, uid, rows)
-    except _FieldError as exc:
-        raise FieldError(exc.key, f"{labels.get(exc.key, exc.key)}: {exc.message}") from None
+    except FieldError as exc:
+        raise FieldError(exc.key, f"{labels.get(exc.key, exc.key)}: {exc}") from None
 
 
 class FieldError(ValueError):
@@ -341,17 +341,12 @@ class FieldError(ValueError):
         self.key = key
 
 
-class _FieldError(Exception):
-    def __init__(self, key: str, message: str):
-        self.key, self.message = key, message
-
-
 def _field(key: str, read, *args):
     """``read(*args)``, a field's error naming the field."""
     try:
         return read(*args)
     except ValueError as exc:
-        raise _FieldError(key, str(exc)) from None
+        raise FieldError(key, str(exc)) from None
 
 
 def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, dict]:

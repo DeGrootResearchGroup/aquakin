@@ -75,6 +75,10 @@ lint = ["ruff>=0.15,<0.16"]
 # interface never imports aquakin or JAX (it asks an `aquakin serve` worker).
 # trame-client pins the Vue the widget is built against (Vue 3.5).
 ui = ["trame>=3.6", "trame-vuetify>=2.7", "trame-client>=3.6"]
+# `typecheck` pins pyright, which checks `aquakin_ui` (see [tool.pyright]); pinned
+# exactly, like ruff's cap, because a pyright release can add errors. It needs the
+# `ui` extra installed too, so trame's types resolve.
+typecheck = ["pyright==1.1.414"]
 # `browser` drives the editor in Chromium for `tests/browser` (Playwright). Not
 # part of `test`: it needs a browser download (`python -m playwright install
 # chromium`), which only the `browser` CI job and a developer running those
@@ -105,6 +109,8 @@ test = [
     # cooperates with pytest-xdist (`-n`) and pytest-split (each shard emits a
     # partial `coverage.xml` that Codecov merges by flag).
     "pytest-cov>=5",
+    # sybil runs the code examples in README.md and the user guide (conftest.py).
+    "sybil>=9",
     "aquakin[dataframe,plot,ui]",
 ]
 
@@ -149,6 +155,15 @@ omit = ["aquakin/models/_make_*.py"]
 
 [tool.coverage.report]
 show_missing = false
+
+# ---------------------------------------------------------------------------
+# pyright -- type checker for the editor package. The CI `typecheck` job runs
+# `pyright` (basic mode) over `aquakin_ui/` only; `aquakin` itself is not
+# type-checked. `pythonVersion` is the oldest Python the package supports.
+[tool.pyright]
+include = ["aquakin_ui"]
+typeCheckingMode = "basic"
+pythonVersion = "3.11"
 
 # ---------------------------------------------------------------------------
 # ruff -- linter (and formatter config). The CI `lint` job is a required gate: it

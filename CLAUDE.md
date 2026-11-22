@@ -34,6 +34,7 @@ Claude-facing files** at the end.
 
 | Rule | Loads for | Covers |
 |---|---|---|
+| `.claude/rules/docs-examples.md` | `README.md`, the user-guide pages, the root `conftest.py` | the README and user-guide code examples are tests (Sybil): pages run top to bottom, stated values are checked, skips need a reason |
 | `.claude/rules/tests.md` | `tests/**` | what makes a test able to fail, gradient tests, shared fixtures, the tiers and what CI actually runs |
 | `.claude/rules/core.md` | `aquakin/core/**`, `aquakin/utils/**` | AST rate evaluation, parser, **the one expression tokenizer (`core/lexer.py`) every expression language shares**, vectorized kernel, `SpatialConditions`, parameter namespacing |
 | `.claude/rules/core-speciation.md` | `core/ph_solver.py`, `core/speciation.py` | charge-balance pH solver, derived conditions, the `speciation:` block |
@@ -226,8 +227,10 @@ The markers are `validation`, `slow`, `heavy` and `xheavy` (definitions in
 pytest tests/unit tests/integration tests/ui -m "not validation and not slow"   # the PR merge gate
 pytest -m slow                             # the multi-minute stiff/plant solves
 pytest -m validation                       # validation suite (published data)
-pytest                                     # everything
+pytest                                     # everything in tests/ (the docs examples run by path, below)
 pytest tests/browser                       # the editor in Chromium (`browser` extra; non-required CI job)
+pytest README.md docs -m "not slow" -n 2 --dist loadfile   # the README / user-guide examples (Sybil)
+pytest docs -m slow -n 2 --dist loadfile  # the user-guide pages of whole-plant solves
 ```
 
 A test under `tests/validation/` must carry `@pytest.mark.validation`, or no CI
@@ -479,6 +482,13 @@ act on the following:
    Ruff is pinned via the `lint` extra (`pip install -e ".[lint]"`); see the
    `[tool.ruff]` config in `pyproject.toml` for the rule set and per-file
    ignores. Not needed for docs/config-only changes that touch no `.py` files.
+
+   **Type check** (a change under `aquakin_ui/`): run `pyright` from the repo
+   root (`pip install -e ".[ui,typecheck]"`). The CI `typecheck (pyright)` job
+   runs it in basic mode over `aquakin_ui` (`[tool.pyright]` in
+   `pyproject.toml`) and it must report 0 errors. Fix a type error where the
+   value comes from: narrow a value that can be `None` on that path, or correct
+   a wrong annotation. A `# type: ignore` needs a reason on the line.
 
 2. **Tests** — Every behaviour change comes with a test that would fail without
    it (`.claude/rules/tests.md` has the full table and the quality bar):

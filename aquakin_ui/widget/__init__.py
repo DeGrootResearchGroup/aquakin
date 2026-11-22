@@ -27,6 +27,11 @@ class Flowsheet(AbstractElement):
         Handlers for finished edits; each receives one event payload.
     """
 
+    # trame serves these through AbstractElement.__getattr__ / __setattr__ (as
+    # aliases of its props and events lists); declared so their type is known.
+    _attr_names: list
+    _event_names: list
+
     def __init__(self, children=None, **kwargs):
         super().__init__("aquakin-flowsheet", children, **kwargs)
         if self.server:

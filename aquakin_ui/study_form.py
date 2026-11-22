@@ -235,13 +235,16 @@ def _read(field: dict, value):
     if t == "run_time":
         if not value["dynamic"]:
             return None
-        out = {"t_span": [_number(label, value["start"]), _number(label, value["stop"])]}
+        # t_eval, when given, is a list of times or an even grid (start / stop / num).
+        run: dict[str, object] = {
+            "t_span": [_number(label, value["start"]), _number(label, value["stop"])]
+        }
         every = _read_times(label, value["every"])
         if every is not None:
-            out["t_eval"] = every
+            run["t_eval"] = every
         if str(value.get("unit") or "").strip():
-            out["time_unit"] = value["unit"].strip()
-        return out
+            run["time_unit"] = value["unit"].strip()
+        return run
     if t == "initial_state":
         if value["mode"] != "file":
             return value["mode"]

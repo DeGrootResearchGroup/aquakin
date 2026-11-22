@@ -72,6 +72,8 @@ dewatering, and the reject-water recycle. Three things differ from BSM1:
 
 This block takes several minutes:
 
+% skip: next "a BSM2 solve that takes several minutes; its API is checked by the BSM2 tests"
+
 ```python
 from aquakin.plant.bsm import (bsm2_asm1_model, bsm2_constant_influent, bsm2_parameters,
                                bsm2_warm_start, build_bsm2, evaluate_bsm2)
@@ -674,6 +676,8 @@ On top of the EQI/OCI evaluation, `aquakin` reports a **greenhouse-gas
 footprint** (kg CO₂-equivalent per day) and a monetized **operating cost**
 (currency per day), and tabulates scenarios side by side. This block uses the
 BSM2 runs from above and takes several minutes:
+
+% skip: next "a BSM2 solve that takes several minutes; its API is checked by the BSM2 tests"
 
 ```python
 _, _, bsm2_do_eval = run_bsm2(do_control=True)

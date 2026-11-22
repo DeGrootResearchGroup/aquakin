@@ -26,6 +26,16 @@ fresh import would never run it), a fresh-interpreter import of every module,
 and the reverse AST scan of `aquakin/`. Tests may import aquakin (to build
 expected values). `tests/ui` runs in the required fast gate (the `ui` CI job).
 
+## Types (pyright, mechanically checked)
+
+`aquakin_ui` must stay at 0 errors under basic-mode pyright (the CI `typecheck
+(pyright)` job; `[tool.pyright]` in `pyproject.toml`). Fix a type where the value
+comes from: narrow a value that can be `None` on that path, pass a known value
+down rather than re-reading an optional attribute, and correct an annotation
+that is wrong. An `assert` narrows only an invariant a reader can check on the
+spot (with the reason beside it); a `None` that a page event or a missing file
+can produce gets handled and tested, not asserted away.
+
 ## Structure
 
 | module | holds | notes |
@@ -38,9 +48,27 @@ expected values). `tests/ui` runs in the required fast gate (the `ui` CI job).
 | `study_form.py` | `fields_for`, `draft_for`, `study_from`, `missing` | **pure**: the study dialog's draft from the worker's `study_form` (numbers kept as text, an even time grid as start / stop / count) and back, empty fields and defaults left out; `missing` names a kind's required fields by label. Lists no setting of its own |
 | `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart`, `xy_chart`, `analysis_view`, `ANALYSIS_VIEWS`, `SIMULATE` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`). `xy_chart` is the core: a line, data points (slot-2 orange, with a fit/data legend when both) and a labelled reference hairline (a profile's threshold). `analysis_view` dispatches through `ANALYSIS_VIEWS` (one `_<kind>_view` per kind but `SIMULATE`, which the editor draws itself) and raises on a kind it lacks |
 | `settings.py` | `Settings`, `DEFAULTS`, `settings_path` | the user's preferences, a JSON file in the configuration folder (`AQUAKIN_UI_CONFIG` overrides; `tests/ui/conftest.py` points it at a temporary file for every test, so tests never touch the user's); unknown keys and wrong types are ignored on read; a failed write keeps the value for the session |
+| `process.py` | `start_piped`, `Piped` | the one way the worker and a study run are started: piped text stdin / stdout, stdout read on a reader thread `start_piped` starts and keeps (it closes stdout when it ends), stderr to its own `mkstemp` log, a new session (process group on Windows). Start any further child process through it, not with another `Popen`. **Every child is discarded through `Piped.close`, on every path that lets go of it** (stop, replacement, timeout, exit, a finished run): it closes stdin, kills after an optional grace, reaps, and only then joins the reader (`READER_TIMEOUT`) and closes stdout, because closing a pipe another thread is reading can block or raise. Do not reap a child or close its pipes by hand (a `kill` that only makes a run end, as `StudyRun.cancel`'s does, is fine: the reader then discards it); `tests/ui/test_processes.py` runs with `ResourceWarning` as an error so a leak fails it |
 | `jobs.py` | `StudyRun` | one study run = one `python -m aquakin study run --json` process: JSON progress events on stdout, `cancel` on stdin (killed after `CANCEL_GRACE` if no checkpoint comes); its own temporary log |
-| `app.py` | `Editor` | the page; turns finished canvas edits into document changes; the Studies tab |
+| `app.py` | `Editor` | the editor's state (`__init__`, `_init_state`), drawing (`publish`), undo, the canvas events, the unit form, `_off_page` / `_worker_study`, and the binding of every function below onto `Editor` |
+| `checks.py` | `CHECK_DELAY` | aquakin's background checks (`schedule_checks`, `_run_checks`, the unit / plant check and cache) and `model_info` |
+| `files.py` | | Open (`open_spec`, bound as `Editor.open`) and Save, `_unsaved` / `_unless_unsaved`, `_save_refusal`, `_spec_file`, `_apply_pending` |
+| `studies.py` | `simulation_name`, `SIMULATION` | listing, running, freezing and copying studies; Simulate; the results view; the study dialog's actions; the replace / unfreeze questions; run events |
+| `page.py` | `PAGE_CSS`, `DRAG_TYPE` | the trame / Vuetify page: layout, toolbar, palette, side panel, unit form, the flowsheet dialogs |
+| `study_page.py` | `STATE_COLOURS`, `UNREADABLE` | the Studies tab and its dialogs; the study dialog is built a section at a time (`_study_heading`, `_study_field`, one `_<type>_input` per field type, `_study_dialog_actions`); `_js`, `_bound`, `_REDRAW` |
 | `widget/` | `Flowsheet` (trame element), `module.py`, `serve/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
+
+**`Editor` is split by concern, bound like `Plant`'s modules.** Each module above
+holds plain functions whose first parameter is `self: Editor` (imported under
+`TYPE_CHECKING`), and `app.py` binds each onto `Editor` under its method name
+(`run_study = studies.run_study`), so callers, page events and tests still see
+one `Editor`. Put new behaviour in its concern's module and bind it; do not grow
+`app.py`, and do not use mixins (pyright rejects a mixin method typed `self:
+Editor`). A builder that never touches the editor is a plain function called
+directly (`_table`, `_observables_editor`), not bound. An attribute a moved
+function assigns is annotated in `Editor.__init__`, or pyright infers it from
+the `None` there alone. `_worker_study` stays in `app.py`: it is the one call
+that names its command by variable, and `test_protocol` pins where it is.
 
 Icons (`icons/*.svg`) are original line icons (see `icons/README.md`): 24-unit
 viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
@@ -63,7 +91,7 @@ that imports both. Keep it that way rather than copying knowledge across:
   reasons. Decide "has results" from `has_results`, never from a state's name,
   and never rebuild `studies/<name>/study.yaml` or `../../flowsheet.yaml` here:
   a new study's `flowsheet:` is sent as the spec's absolute path and aquakin
-  stores it relative. `STATE_COLOURS` (app.py) is the one table of state names
+  stores it relative. `STATE_COLOURS` (`study_page.py`) is the one table of state names
   on this side, pinned to aquakin's `STATES`.
 - **Every study kind has a view** (`results.SIMULATE` + `ANALYSIS_VIEWS` equal
   aquakin's `KINDS`).

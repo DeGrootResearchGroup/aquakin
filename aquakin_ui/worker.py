@@ -3,8 +3,9 @@
 The interface never imports aquakin or JAX. It asks a worker process instead,
 one JSON request per line, so the page starts without JAX and the solver never
 loads the interface. Requests are serialized with a lock; replies are read on a
-daemon thread so a timeout works on every platform. A timeout or a dead worker
-stops the process, and the next request starts a fresh one. The worker's
+daemon thread so a timeout works on every platform. A timeout, a broken pipe or a
+dead worker discards the process (:meth:`aquakin_ui.process.Piped.close`: killed,
+reaped, both pipes closed), and the next request starts a fresh one. The worker's
 standard error goes to a log file, whose last lines are quoted when it fails.
 """
 
@@ -13,18 +14,20 @@ from __future__ import annotations
 import contextlib
 import itertools
 import json
-import os
 import queue
-import subprocess
 import sys
-import tempfile
 import threading
 from pathlib import Path
+from typing import IO
+
+from aquakin_ui.process import Piped, start_piped
 
 #: Seconds to wait for one reply from a running worker.
 TIMEOUT = 120.0
 #: Extra seconds allowed for the first reply of a fresh worker (importing JAX).
 START_TIMEOUT = 60.0
+#: Seconds a stopped worker may take to exit after its input closes.
+STOP_GRACE = 5.0
 
 
 class WorkerError(RuntimeError):
@@ -64,44 +67,40 @@ class AquakinWorker:
         self.command = command or [sys.executable, "-m", "aquakin", "serve"]
         self.timeout = timeout
         self.start_timeout = start_timeout
-        self._proc = None
+        self._proc: Piped | None = None
         self._replies: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._ids = itertools.count(1)
         self._fresh = False
-        self.log_path = None
+        self.log_path: Path | None = None
 
-    def _start(self):
-        flags = {}
-        if sys.platform == "win32":
-            flags["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            flags["start_new_session"] = True  # out of reach of the terminal's Ctrl-C
+    def _start(self) -> Piped:
+        # A worker being replaced (dead, or alive but no longer reading) goes first.
+        self._discard()
         # One log per worker, so two editors never share (or truncate) a log.
-        fd, name = tempfile.mkstemp(prefix="aquakin-ui-worker-", suffix=".log")
         self._remove_log()
-        self.log_path = Path(name)
-        log = os.fdopen(fd, "w")
-        self._proc = subprocess.Popen(
-            self.command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=log,
-            text=True,
-            bufsize=1,
-            **flags,
-        )
-        log.close()
-        self._fresh = True
-        self._replies = queue.Queue()
-        proc, replies = self._proc, self._replies
+        replies = self._replies = queue.Queue()
 
-        def read():
-            for line in proc.stdout:
+        def read(piped: Piped) -> None:
+            for line in piped.stdout:
                 replies.put(line)
             replies.put(None)
 
-        threading.Thread(target=read, daemon=True).start()
+        proc = start_piped(self.command, "aquakin-ui-worker-", read)
+        self._proc = proc
+        self.log_path = proc.log_path
+        self._fresh = True
+        return proc
+
+    def _discard(self, grace: float = 0.0) -> None:
+        if self._proc is not None:
+            self._proc.close(grace)
+            self._proc = None
+
+    @staticmethod
+    def _send(stdin: IO[str], line: str) -> None:
+        stdin.write(line)
+        stdin.flush()
 
     def _remove_log(self):
         if self.log_path is not None:
@@ -118,14 +117,9 @@ class AquakinWorker:
         return ("\n" + "\n".join(lines)) if lines else ""
 
     def stop(self):
-        """Stop the worker (closing its input ends its loop)."""
-        if self._proc is not None:
-            try:
-                self._proc.stdin.close()
-                self._proc.wait(timeout=5)
-            except Exception:
-                self._proc.kill()
-            self._proc = None
+        """Stop the worker: closing its input ends its loop; one still running
+        after :data:`STOP_GRACE` seconds is killed."""
+        self._discard(STOP_GRACE)
         self._remove_log()
         self.log_path = None
 
@@ -152,29 +146,28 @@ class AquakinWorker:
             exception's class name), times out, or exits.
         """
         with self._lock:
-            if self._proc is None or self._proc.poll() is not None:
-                self._start()
+            proc = self._proc
+            if proc is None or proc.proc.poll() is not None:
+                proc = self._start()
             rid = next(self._ids)
             line = json.dumps({"id": rid, "command": command, **fields}) + "\n"
             try:
-                self._proc.stdin.write(line)
-                self._proc.stdin.flush()
+                self._send(proc.stdin, line)
             except BrokenPipeError:
-                self._start()
-                self._proc.stdin.write(line)
-                self._proc.stdin.flush()
+                # Alive but no longer reading: replace it.
+                proc = self._start()
+                self._send(proc.stdin, line)
             wait = self.timeout + (self.start_timeout if self._fresh else 0.0)
             try:
                 raw = self._replies.get(timeout=wait)
             except queue.Empty:
-                self._proc.kill()
-                self._proc = None
+                self._discard()
                 raise WorkerError(
                     f"aquakin did not answer '{command}' within {wait:g} s{self._log_tail()}"
                 ) from None
             self._fresh = False
             if raw is None:
-                self._proc = None
+                self._discard()
                 raise WorkerError(f"aquakin exited while answering '{command}'{self._log_tail()}")
             reply = json.loads(raw)
             if reply.get("id") != rid:

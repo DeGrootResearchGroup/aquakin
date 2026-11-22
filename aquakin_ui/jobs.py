@@ -12,18 +12,25 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
-import subprocess
 import sys
-import tempfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
+
+from aquakin_ui.process import Piped, start_piped
 
 __all__ = ["StudyRun"]
 
 #: Seconds a cancelled run may take to reach a checkpoint before it is killed.
 CANCEL_GRACE = 30.0
+
+
+def _log_tail(path: Path, n: int = 5) -> str:
+    try:
+        lines = path.read_text().strip().splitlines()[-n:]
+    except OSError:
+        return ""
+    return (": " + " / ".join(lines)) if lines else ""
 
 
 class StudyRun:
@@ -59,28 +66,13 @@ class StudyRun:
         self.finished = threading.Event()
         self.final: dict | None = None
         self.cancelled = False  # a cancel was asked for
-        fd, name = tempfile.mkstemp(prefix="aquakin-study-", suffix=".log")
-        self.log_path = Path(name)
-        log = os.fdopen(fd, "w")
-        flags = {}
-        if sys.platform == "win32":
-            flags["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            flags["start_new_session"] = True
-        self._proc = subprocess.Popen(
-            self.command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=log,
-            text=True,
-            bufsize=1,
-            **flags,
-        )
-        log.close()
-        threading.Thread(target=self._read, daemon=True).start()
+        self._proc = start_piped(self.command, "aquakin-study-", self._read)
+        self.log_path = self._proc.log_path
 
-    def _read(self) -> None:
-        for line in self._proc.stdout:
+    def _read(self, piped: Piped) -> None:
+        # Runs on the reader thread, which may start before ``start_piped``
+        # returns: it uses only ``piped`` and what ``__init__`` set before.
+        for line in piped.stdout:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -88,7 +80,9 @@ class StudyRun:
             if event.get("event") != "progress":
                 self.final = event
             self.on_event(event)
-        self._proc.wait()
+        piped.proc.wait()
+        # Ended: reaped and both pipes closed before anyone is told it finished.
+        piped.close()
         if self.final is None:
             # Asked to stop and killed before a checkpoint: that is a cancel (the
             # study keeps whatever results it had), not a failure.
@@ -97,20 +91,13 @@ class StudyRun:
                 if self.cancelled
                 else {
                     "event": "error",
-                    "error": f"the run ended without a result{self._log_tail()}",
+                    "error": f"the run ended without a result{_log_tail(piped.log_path)}",
                 }
             )
             self.on_event(self.final)
         self.finished.set()
         with contextlib.suppress(OSError):
-            self.log_path.unlink()
-
-    def _log_tail(self, n: int = 5) -> str:
-        try:
-            lines = self.log_path.read_text().strip().splitlines()[-n:]
-        except OSError:
-            return ""
-        return (": " + " / ".join(lines)) if lines else ""
+            piped.log_path.unlink()
 
     def cancel(self) -> None:
         """Ask the run to stop at its next checkpoint; kill it if it has not
@@ -127,7 +114,7 @@ class StudyRun:
 
         def kill_later():
             if not self.finished.wait(CANCEL_GRACE):
-                self._proc.kill()
+                self._proc.proc.kill()
 
         threading.Thread(target=kill_later, daemon=True).start()
 

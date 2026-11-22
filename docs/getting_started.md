@@ -71,6 +71,10 @@ print(f"[BrO3-] at 10 min: {float(sol.C_named('BrO3-')[-1]):.3g} mol/L")
 # [BrO3-] at 10 min: 5.7e-07 mol/L
 ```
 
+% invisible-code-block: python
+%
+%     assert f"{float(sol.C_named('BrO3-')[-1]):.3g}" == "5.7e-07", "the BrO3- value stated above changed"
+
 `params` is optional — it defaults to `model.default_parameters()` — so the
 minimal call is `reactor.solve(C0, t_span=(0.0, 600.0))`. Without `t_eval`
 the solution holds only the final state.

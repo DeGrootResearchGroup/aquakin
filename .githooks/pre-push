@@ -5,6 +5,7 @@
 # on the PR. Mirrors the CI `lint` job exactly:
 #     ruff check aquakin aquakin_ui tests scripts examples
 #     ruff format --check aquakin aquakin_ui
+# and, when pyright is installed, the CI `typecheck` job's `pyright`.
 #
 # Enable it once per clone (git does not install repo hooks automatically):
 #     git config core.hooksPath .githooks
@@ -36,9 +37,22 @@ if ! ruff format --check aquakin aquakin_ui; then
   fail=1
 fi
 
+# The CI `typecheck` job: pyright over aquakin_ui ([tool.pyright] in pyproject.toml).
+# It needs the `typecheck` and `ui` extras; without pyright, say so and go on.
+if command -v pyright >/dev/null 2>&1; then
+  echo "pre-push: pyright" >&2
+  if ! pyright; then
+    echo "pre-push: pyright reported errors in aquakin_ui (see above)." >&2
+    fail=1
+  fi
+else
+  echo "pre-push: pyright not found -- skipping the type check." >&2
+  echo "          install it with:  pip install -e \".[ui,typecheck]\"" >&2
+fi
+
 if [ "$fail" -ne 0 ]; then
-  echo "pre-push: blocked. Fix the ruff issues above (or 'git push --no-verify' to bypass)." >&2
+  echo "pre-push: blocked. Fix the issues above (or 'git push --no-verify' to bypass)." >&2
   exit 1
 fi
 
-echo "pre-push: ruff gate clean." >&2
+echo "pre-push: all gates that ran are clean." >&2

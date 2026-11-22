@@ -34,6 +34,7 @@ pytest==9.0.3
 pytest-xdist==3.8.0
 pytest-timeout==2.4.0
 pytest-split==0.11.0
+sybil==10.1.0
 
 # --- optional postprocessing extras (installed in the test env) ---------------
 pandas==3.0.3
