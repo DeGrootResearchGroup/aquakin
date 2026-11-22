@@ -70,6 +70,13 @@ that imports both. Keep it that way rather than copying knowledge across:
 
 ## Sync rules (each was a bug found in the browser)
 
+- **trame sends a value only when it differs from the one it last pushed**
+  (`state.dirty` cannot force it; a page's first state does not count). A value
+  that must reach the page again unchanged carries a new `revision`
+  (`cancel_apply`, `_show_kept_selection`); state set outside a page handler is
+  pushed where it is set (`with self.state:`, `schedule_checks`), or a later
+  change back to the last pushed value is dropped.
+
 - **Python owns the flowsheet.** The canvas draws `nodes`/`edges` and emits only
   finished edits (`connect`, `move`, `remove`, `dropped`, `select`); dragging,
   panning and wire drawing stay in the browser.
@@ -77,10 +84,15 @@ that imports both. Keep it that way rather than copying knowledge across:
   `ui-widget/src/FlowsheetCanvas.vue`): replacing Vue Flow's lists rebuilds every
   node (losing its measured size) and re-validates every edge, which drops them.
 - **Wire validation sits on the handles** (`UnitNode.vue`), never on Vue Flow's
-  canvas-wide `is-valid-connection`, which it also applies to loaded edges.
+  canvas-wide `is-valid-connection`: on the handles it judges only a wire being
+  drawn, never edges loaded from Python, which stays the authority (the
+  canvas-wide check was once seen to drop loaded edges; with Vue Flow 1.48 it
+  does not, so `tests/browser` can pin that validation exists, not where).
 - **No echoes:** removals and selection changes the canvas makes while applying
   Python's update are not reported back (only ids Python still has; the
-  selection reference is reset after each sync). Python marks its selected unit.
+  selection reference is reset after each sync). Python marks its selected unit,
+  and when it keeps one the canvas did not select (unreadable form edits)
+  `_show_kept_selection` sends it back.
 - **The form is edited in the browser and sent whole** on Apply (or when the
   aeration mode / model changes the rows): a per-keystroke round trip lost clicks
   and overwrote text. Help sits in a fixed panel, not under each field (a hint
@@ -172,10 +184,10 @@ that imports both. Keep it that way rather than copying knowledge across:
   error, when they cannot be read). Save, Open, Simulate and Run carry them
   too (`_apply_pending`) and wait when they cannot be applied.
   `refresh_selection` clears the flag. When the rows Python computes equal the
-  last ones sent, trame sends nothing and the page keeps its edits; even
-  `state.dirty` did not reach the page, so a reset of the form (`cancel_apply`)
-  marks the first row with a new `revision` (only there: a background redraw
-  must never overwrite typing).
+  last ones sent, trame sends nothing and the page keeps its edits (the first
+  sync rule), so a reset of the form (`cancel_apply`) marks the first row with
+  a new `revision` (only there: a background redraw must never overwrite
+  typing).
 - **Aeration's species** is a form row (`aeration.species`, the model's
   species) while aeration is on; a stored species the model lacks (ASM1's `SO`
   on an ASM3 plant) is replaced by the model's oxygen (`forms._oxygen`), and
@@ -225,18 +237,19 @@ file the editor needs at run time goes in `REQUIRED` there.
 against a real worker or a stand-in process (`command=`), and an `Editor` built
 and driven without a browser. An `Editor` test that needs to count requests or
 make a command fail passes `worker=tests/ui/inprocess.InProcessWorker()`
-(aquakin's own `serve`, answered in the test process, with `sent` and `refuse`);
-one that needs the page's loop (background checks, `_off_page`, run events)
-runs inside `asyncio.run`, and a `state.change` handler fires only after
-`state.ready()`. Each sync rule Python owns has an `Editor` test
-(`test_editor_sync.py`, `test_editor_runs.py`, `test_editor.py`).
+(aquakin's `serve` in the test process, with `sent` and `refuse`); one that
+needs the page's loop runs inside `asyncio.run`, and a `state.change` handler
+fires only after `state.ready()`. An `Editor` test cannot see what trame drops
+(the first sync rule): pin that in `tests/browser`.
 
 `tests/browser/` serves the editor (`python -m aquakin_ui --no-browser --port 0`)
 and drives it in Chromium with Playwright; it holds the canvas's rules (the diff,
 handle validation, no echoes, one removal, Delete not Backspace, the form sent on
-Apply). It is not in the required gate and is skipped without the `playwright`
-package. Run it (`pytest tests/browser`) and add to it when a change touches
-the canvas or the form; a widget change needs the bundle rebuilt first. Read
+Apply). Skipped without Playwright (`pip install playwright`, then
+`python -m playwright install chromium`). Run it (`pytest tests/browser`) when a
+change touches the canvas or the form; a widget change needs the bundle rebuilt
+first. A test that depends on the start-up checks having finished waits for them
+(`_checks_done`): their late republish can otherwise hide a missing update. Read
 Python's document from the header chip ("10 units · 11 connections") and
 messages through a recorder (the snackbar closes after four seconds), never by
 a negative check with no sync point after it.

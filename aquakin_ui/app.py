@@ -163,6 +163,7 @@ class Editor:
         self._results: dict = {}  # the results on show
         self._study_flowsheet: str | None = None  # the spec the study being edited follows
         self._form_revision = 0  # makes a reset of the unit form reach the page
+        self._selection_revision = 0  # makes a kept selection reach the canvas
         self._history: list[tuple] = []  # document snapshots to undo to, oldest first
         self._after_unsaved = None  # what the unsaved-changes question goes on to do
         self._init_state(path)
@@ -443,12 +444,28 @@ class Editor:
         they cannot be, that unit stays selected so nothing typed is lost)."""
         if pending is not None and self.state.selected in self.doc.units:
             if not self.apply_properties(pending):
-                self.state.dirty("nodes")  # the canvas shows the selection Python keeps
+                self._show_kept_selection()
                 return
         self.state.selected = s["nodes"][0] if len(s["nodes"]) == 1 else None
         if self.state.selected is not None:
             self.state.panel = "properties"  # its form, from whichever tab was open
         self.refresh_selection()
+
+    def _show_kept_selection(self) -> None:
+        """Show the canvas the unit Python keeps selected, over the one the canvas
+        has just selected itself. trame sends a value only when it differs from
+        the one it last pushed (``state.dirty`` included), and the nodes may not
+        have changed, so the kept node carries a new revision."""
+        self._selection_revision += 1
+        uid = self.state.selected
+        self.state.nodes = [
+            {
+                **{k: v for k, v in n.items() if k != "revision"},
+                "selected": n["id"] == uid,
+                **({"revision": self._selection_revision} if n["id"] == uid else {}),
+            }
+            for n in self.state.nodes
+        ]
 
     # -- the unit form ------------------------------------------------------
 

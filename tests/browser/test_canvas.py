@@ -182,3 +182,19 @@ def test_the_first_checks_are_reported_when_they_finish(page):
     they finish, the page stops saying "checking" and says there are none."""
     _checks_done(page)
     expect(page.get_by_text("aquakin is checking the flowsheet")).to_have_count(0)
+
+
+def test_the_canvas_shows_the_unit_python_keeps_selected(page):
+    """When the form's edits cannot be read, Python keeps their unit selected,
+    and the canvas shows that unit selected rather than the one clicked."""
+    _checks_done(page)
+    _unit(page, "tank1").click()
+    page.get_by_label("volume *").fill("lots")
+    _unit(page, "tank2").click()
+    expect(page.get_by_label("identifier")).to_have_value("tank1")
+    expect(_unit(page, "tank1")).to_have_class(re.compile(r"\bselected\b"))
+    expect(_unit(page, "tank2")).not_to_have_class(re.compile(r"\bselected\b"))
+    # Every later click is refused the same way while the edits stand.
+    _unit(page, "tank3").click()
+    expect(_unit(page, "tank1")).to_have_class(re.compile(r"\bselected\b"))
+    expect(_unit(page, "tank3")).not_to_have_class(re.compile(r"\bselected\b"))
