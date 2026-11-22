@@ -349,18 +349,23 @@ def bsm1():
 
 @pytest.mark.slow
 def test_bsm1_steady_state_matches_forward(bsm1):
-    plant, asm1, y0 = bsm1
+    plant, _asm1, y0 = bsm1
     ss = plant.steady_state(y0=y0)
     assert ss.method == "ptc" and bool(ss.converged)
     assert float(ss.residual) < 1e-5
-    fwd = plant.run_to_steady_state(y0=y0, max_time=300.0)
-    # The two independent steady-state routes agree on the operating point.
-    i = asm1.species_index
-    a = plant.states_by_unit(ss.state)
-    b = plant.states_by_unit(fwd.state)
-    for sp in ["XB_H", "XB_A", "SNH", "SNO", "SO"]:
-        assert abs(float(a["tank5"][i[sp]]) - float(b["tank5"][i[sp]])) <= \
-            0.03 * abs(float(b["tank5"][i[sp]])) + 0.05, sp
+    # The forward reference stops on the criterion PTC converges on, held 1e-8
+    # tight. The default norm test stops while the slow states still move (its
+    # scaled residual is ~1e-2 here, tank-5 SNH ~7% off), so it is not a
+    # reference for the root.
+    fwd = plant.run_to_steady_state(y0=y0, criterion="scaled_residual", tol=1e-8,
+                                    max_time=1000.0)
+    assert bool(fwd.converged) and float(fwd.residual) <= 1e-8
+    # The two independent steady-state routes agree on the operating point. The
+    # scaled residuals here (PTC ~1e-7, forward ~4e-9) put the two states ~2e-8
+    # apart, relative, over every state above 1e-3; 1e-6 leaves a wide margin.
+    a, b = np.asarray(ss.state), np.asarray(fwd.state)
+    big = np.abs(a) > 1e-3
+    assert np.max(np.abs(b[big] - a[big]) / np.abs(a[big])) < 1e-6
 
 
 @pytest.mark.slow
@@ -776,13 +781,16 @@ def test_bsm2_steady_state_matches_forward():
     assert ss.method == "ptc" and bool(ss.converged)
     assert int(ss.iterations) <= 150
     assert float(ss.residual) < 1e-5
-    fwd = plant.run_to_steady_state(params, y0=y0, max_time=400.0, max_steps=800_000)
-    i = asm1.species_index
-    a = plant.states_by_unit(ss.state)
-    b = plant.states_by_unit(fwd.state)
-    for sp in ["XB_H", "XB_A", "SNH", "SNO"]:
-        assert abs(float(a["tank5"][i[sp]]) - float(b["tank5"][i[sp]])) <= \
-            0.03 * abs(float(b["tank5"][i[sp]])) + 0.05, sp
+    # The forward reference stops on PTC's own criterion, held 1e-8 tight (the
+    # default norm test stops while the digester's slow states still move).
+    fwd = plant.run_to_steady_state(params, y0=y0, criterion="scaled_residual", tol=1e-8,
+                                    max_time=2000.0, max_steps=800_000)
+    assert bool(fwd.converged) and float(fwd.residual) <= 1e-8
+    # The scaled residuals here (PTC ~3e-10, forward ~4e-9) put the two states
+    # ~1e-7 apart, relative, over every state above 1e-3; 1e-6 leaves a margin.
+    a, b = np.asarray(ss.state), np.asarray(fwd.state)
+    big = np.abs(a) > 1e-3
+    assert np.max(np.abs(b[big] - a[big]) / np.abs(a[big])) < 1e-6
 
 
 def test_ptc_line_search_bounds_finite_blowup():
