@@ -466,9 +466,12 @@ act on the following:
    - Installation or dependency changes
    - New examples
 
-6. **CHANGELOG.md** — Does this change warrant a changelog entry? Add it under
-   the `[Unreleased]` section, in the appropriate Keep a Changelog category
-   (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`).
+6. **Changelog** — Does this change warrant a changelog entry? Add a
+   **fragment** to `changelog.d/` — one file, `<issue>.<type>.md` or
+   `+<slug>.<type>.md`, the type a Keep a Changelog group (`added` / `changed` /
+   `deprecated` / `removed` / `fixed` / `security`) — and **never edit
+   `CHANGELOG.md`** (towncrier writes it at release; `changelog.d/README.md` has
+   the format, and `tests/unit/test_changelog_fragments.py` checks it).
    Entries are curated for users deciding whether to upgrade — write for a human,
    not one line per commit. Document, for example:
    - New or changed public API, built-in models, or model-file format
