@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
+from aquakin.integrate.steady import scaled_resnorm
 from aquakin.plant.bsm.bsm2 import BSM2_Q_REF, build_bsm2
 from aquakin.plant.influent import InfluentSeries
 
@@ -63,8 +64,14 @@ def steady(plant):
 
 
 def test_bsm2_builds_and_reaches_steady_state(steady):
-    _plant, sol = steady
+    """After 200 days the plant is stationary: the largest relative rate of
+    change, ``max |dy/dt| / max(|y|, 1)``, is below 1e-4 per day. (It is about
+    1e-5 at day 200 and about 5e-3 at day 50, so this separates a settled plant
+    from one still in its start-up transient.)"""
+    plant, sol = steady
     assert jnp.all(jnp.isfinite(sol.state))
+    y = sol.final_state
+    assert float(scaled_resnorm(plant.derivative(y), y, 1.0)) < 1e-4
 
 
 def test_bsm2_activated_sludge_healthy(steady):

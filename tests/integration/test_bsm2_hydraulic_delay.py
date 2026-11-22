@@ -132,11 +132,11 @@ def test_plant_finite_and_steady_state_unchanged(delay_run):
     assert float(out.Q[-1]) == pytest.approx(BSM2_Q_REF, rel=1e-4)
 
 
-def test_grad_through_delay_plant_is_finite(asm1):
+def test_grad_through_delay_plant_matches_closed_form(asm1):
     """jax.grad flows through a HydraulicDelayUnit solve. Its outlet is the held
     load over the held flow (a 1/Q division) and the lag divides by tau -- exactly
     where a reverse-mode NaN could hide -- so differentiate a short solve w.r.t.
-    the initial state (load + flow) and check it stays finite."""
+    the initial state (load + flow) and check it against the closed form."""
     import jax
 
     from aquakin.plant import Plant
@@ -158,3 +158,8 @@ def test_grad_through_delay_plant_is_finite(asm1):
 
     g = jax.grad(loss)(y0)
     assert jnp.all(jnp.isfinite(g))
+    # The lag is linear, d(state)/dt = (inlet - state) / tau, so every held
+    # component forgets its initial value as exp(-t / tau) and the gradient of
+    # the summed state is exp(-0.2 / 0.02) = exp(-10) in every component. The
+    # sensitivity starts at 1, so the solve's error is absolute on that scale.
+    assert jnp.allclose(g, jnp.exp(-10.0), rtol=0.0, atol=1e-6)
