@@ -14,6 +14,7 @@ import pytest
 import aquakin
 from aquakin.integrate import _common
 from aquakin.plant import CSTRUnit, InfluentSeries, Plant
+from tests.conftest import FIXTURES
 
 # ----- load_model caching -----------------------------------------------
 
@@ -66,12 +67,16 @@ def test_different_settings_do_not_collide():
     assert np.all(np.isfinite(np.asarray(s_tight.C)))
 
 
-def test_each_compile_affecting_setting_keys_the_cache(simple_model):
+def test_each_compile_affecting_setting_keys_the_cache():
     """Every setting that changes the compiled solve -- rtol, atol, adjoint,
     dtmax, max_steps -- must produce a DISTINCT cache entry. A future edit that
     dropped one from ``settings_cache_key`` would otherwise be a silent
     wrong-result cache hit; here it surfaces as a failure. (The toy A->B model
     keeps the compiles cheap; the cache mechanism is model-agnostic.)"""
+    # A model of its own, not the shared ``simple_model`` fixture: the cache is
+    # keyed on model identity, so the default-settings keys checked last below
+    # could already exist from another test's solve of the shared model.
+    simple_model = aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
 
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0 = jnp.asarray([1.0, 0.0])

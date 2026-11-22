@@ -51,6 +51,20 @@ hides the gap from the coverage number.
 - **Never use `sleep` as synchronization in a test**: wait on the condition
   itself, with a timeout, so a slow runner cannot make it fail.
 
+## Keep the suite fast
+
+Compiling a solve costs far more than running it, so tests share compiled programs.
+
+- **Never reload a model per test.** The solve caches key on model identity, so a
+  fresh `load_model_from_file` recompiles every solve. Use the session
+  `simple_model` or `load_model(...)` (cached), and put reactors, plants and
+  solves several tests read in module or session fixtures. A test that mutates
+  a shared object (sets an attribute, counts or clears a cache) builds its own.
+- **Use the single-CSTR plant** (`make_cstr_plant`) for any property that does
+  not depend on plant size; build BSM1 / BSM2 only to test what needs them.
+- **A fast-tier test over about 10 s needs a reason**; otherwise shrink it or mark
+  it `slow`.
+
 ## Gradients
 
 Every integration suite that solves has an AD test, and it **checks the value**:

@@ -41,7 +41,9 @@ REF = {
 REF_DIG = {"S_gas_ch4": 1.6535, "S_ac": 0.0893, "X_ac": 0.677, "S_IN": 0.0945}
 
 
-def _solve():
+@pytest.fixture(scope="module")
+def solved():
+    """The open-loop BSM2 plant and its 150-day solve, shared by both tests."""
     # Benchmark-faithful configuration: the 15 °C-referenced ASM1 model with the
     # constant influent carrying the BSM2 temperature (14.858 °C), so the AS line
     # operates at the reference steady-state temperature and the rate corrections
@@ -63,8 +65,8 @@ def _solve():
 
 
 @pytest.mark.validation
-def test_bsm2_activated_sludge_matches_reference():
-    plant, sol = _solve()
+def test_bsm2_activated_sludge_matches_reference(solved):
+    plant, sol = solved
     assert jnp.all(jnp.isfinite(sol.state))
     worst, worst_name = 0.0, ""
     for tk, ref in REF.items():
@@ -77,8 +79,8 @@ def test_bsm2_activated_sludge_matches_reference():
 
 
 @pytest.mark.validation
-def test_bsm2_digester_matches_reference():
-    plant, sol = _solve()
+def test_bsm2_digester_matches_reference(solved):
+    plant, sol = solved
     adm1 = plant.units["digester"].model
     d = plant.states_by_unit(sol.final_state)["digester"]
     for sp, rv in REF_DIG.items():

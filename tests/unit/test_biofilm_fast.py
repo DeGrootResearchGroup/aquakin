@@ -10,7 +10,6 @@ paths (`solve_sensitivity`, `steady_state`) stay in the slow suite.
 """
 
 import copy
-import pathlib
 import warnings
 
 import jax
@@ -20,15 +19,13 @@ import pytest
 
 import aquakin
 
-_FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures"
+
+@pytest.fixture(scope="module")
+def net(simple_model):
+    return simple_model
 
 
 @pytest.fixture(scope="module")
-def net():
-    return aquakin.load_model_from_file(_FIXTURES / "simple_model.yaml")
-
-
-@pytest.fixture()
 def cond():
     return aquakin.SpatialConditions.uniform(T=293.15)
 
@@ -46,13 +43,34 @@ def _tiny(net, cond, **kw):
     return aquakin.BiofilmReactor(net, cond, **d)
 
 
+@pytest.fixture(scope="module")
+def tiny(net, cond):
+    """One default :func:`_tiny` reactor shared by the read-only tests, so its
+    compiled solves are built once per signature rather than once per test.
+    Tests that change the reactor or inspect its ``_jit_cache`` build their own."""
+    return _tiny(net, cond)
+
+
+@pytest.fixture(scope="module")
+def tiny_sol(tiny):
+    """The shared reactor's solve from A = 1 over (0, 1), with no ``t_eval``."""
+    return tiny.solve(jnp.array([1.0, 0.0]), t_span=(0.0, 1.0))
+
+
+@pytest.fixture(scope="module")
+def tiny_sol_t3(tiny):
+    """The shared reactor's solve from A = 1 over (0, 1), at three ``t_eval`` points."""
+    return tiny.solve(
+        jnp.array([1.0, 0.0]), t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 3)
+    )
+
+
 def test_64bit_precision_enabled():
     assert jax.config.x64_enabled
 
 
-def test_build_and_solve_smoke(net, cond):
-    r = _tiny(net, cond)
-    sol = r.solve(jnp.array([1.0, 0.0]), t_span=(0.0, 1.0))
+def test_build_and_solve_smoke(net, tiny, tiny_sol):
+    r, sol = tiny, tiny_sol
     assert isinstance(sol, aquakin.BiofilmSolution)
     assert sol.C.shape == (1, net.n_species)
     assert sol.profile.shape == (1, r.n_layers + 1, net.n_species)
@@ -60,10 +78,8 @@ def test_build_and_solve_smoke(net, cond):
     assert np.all(np.isfinite(np.asarray(sol.C)))
 
 
-def test_solve_t_eval_shapes_and_accessors(net, cond):
-    r = _tiny(net, cond)
-    t_eval = jnp.linspace(0.0, 1.0, 3)
-    sol = r.solve(jnp.array([1.0, 0.0]), t_span=(0.0, 1.0), t_eval=t_eval)
+def test_solve_t_eval_shapes_and_accessors(net, tiny, tiny_sol_t3):
+    r, sol = tiny, tiny_sol_t3
     assert sol.C.shape == (3, net.n_species)
     assert sol.profile.shape == (3, r.n_layers + 1, net.n_species)
     assert sol.profile_named("A").shape == (3, r.n_layers + 1)
@@ -72,8 +88,8 @@ def test_solve_t_eval_shapes_and_accessors(net, cond):
     assert np.allclose(np.asarray(sol.C_named("A")), np.asarray(sol.profile_named("A")[:, 0]))
 
 
-def test_c0_broadcast_and_full_profile_accepted(net, cond):
-    r = _tiny(net, cond)
+def test_c0_broadcast_and_full_profile_accepted(net, tiny):
+    r = tiny
     n_comp = r.n_layers + 1
     sol_bc = r.solve(jnp.zeros(net.n_species), t_span=(0.0, 0.5))
     sol_full = r.solve(jnp.zeros((n_comp, net.n_species)), t_span=(0.0, 0.5))
@@ -81,20 +97,20 @@ def test_c0_broadcast_and_full_profile_accepted(net, cond):
     assert sol_full.profile.shape[1:] == (n_comp, net.n_species)
 
 
-def test_solve_rejects_bad_c0_shape(net, cond):
-    r = _tiny(net, cond)
+def test_solve_rejects_bad_c0_shape(net, tiny):
+    r = tiny
     with pytest.raises(ValueError, match="C0 has shape"):
         r.solve(jnp.zeros(net.n_species + 1), t_span=(0.0, 1.0))
 
 
-def test_solve_rejects_bad_params_shape(net, cond):
-    r = _tiny(net, cond)
+def test_solve_rejects_bad_params_shape(net, tiny):
+    r = tiny
     with pytest.raises(ValueError, match="params has shape"):
         r.solve(jnp.zeros(net.n_species), params=jnp.zeros(net.n_params + 1), t_span=(0.0, 1.0))
 
 
-def test_solve_requires_t_span(net, cond):
-    r = _tiny(net, cond)
+def test_solve_requires_t_span(tiny):
+    r = tiny
     # t_span is a required positional argument, so Python raises TypeError
     # naming it when it is omitted (an explicit t_span=None still raises the
     # curated ValueError -- see test_integrate_raises).
@@ -102,14 +118,14 @@ def test_solve_requires_t_span(net, cond):
         r.solve(jnp.array([1.0, 0.0]))
 
 
-def test_solve_rejects_nonincreasing_t_span(net, cond):
-    r = _tiny(net, cond)
+def test_solve_rejects_nonincreasing_t_span(tiny):
+    r = tiny
     with pytest.raises(ValueError, match="end must exceed start"):
         r.solve(jnp.array([1.0, 0.0]), t_span=(1.0, 0.0))
 
 
-def test_solve_rejects_out_of_span_t_eval(net, cond):
-    r = _tiny(net, cond)
+def test_solve_rejects_out_of_span_t_eval(tiny):
+    r = tiny
     with pytest.raises(ValueError, match="within t_span"):
         r.solve(jnp.array([1.0, 0.0]), t_span=(0.0, 1.0), t_eval=jnp.array([0.0, 2.0]))
 
@@ -150,8 +166,8 @@ def test_default_fixed_mask_warns_on_reactive_particulate(net, cond):
         _tiny(net, cond, soluble_mask=jnp.array([True, False]))
 
 
-def test_grad_flows_through_solve(net, cond):
-    r = _tiny(net, cond)
+def test_grad_flows_through_solve(net, tiny):
+    r = tiny
     ki = net.param_index["A_to_B.k"]
     ai = net.species_index["A"]
     y0 = jnp.zeros((r.n_layers + 1, net.n_species)).at[0, ai].set(1.0)
@@ -165,10 +181,10 @@ def test_grad_flows_through_solve(net, cond):
     assert float(g) < 0.0  # more decay with larger k -> lower final bulk A
 
 
-def test_well_mixed_limit_matches_batch(net, cond):
+def test_well_mixed_limit_matches_batch(net, cond, tiny):
     # A uniform IC with uniform kinetics has zero transport, so the bulk follows
     # the batch decay exactly.
-    r = _tiny(net, cond)
+    r = tiny
     batch = aquakin.BatchReactor(net, cond)
     C0 = jnp.array([1.0, 0.0])
     t_eval = jnp.linspace(0.0, 5.0, 6)
@@ -179,27 +195,24 @@ def test_well_mixed_limit_matches_batch(net, cond):
     )
 
 
-def test_profile_named_unknown_species_raises(net, cond):
-    r = _tiny(net, cond)
-    sol = r.solve(jnp.array([1.0, 0.0]), t_span=(0.0, 1.0))
+def test_profile_named_unknown_species_raises(tiny_sol):
+    sol = tiny_sol
     with pytest.raises(KeyError):
         sol.profile_named("ZZZ")
 
 
-def test_to_dataframe_bulk(net, cond):
+def test_to_dataframe_bulk(tiny_sol_t3):
     pytest.importorskip("pandas")
-    r = _tiny(net, cond)
-    sol = r.solve(jnp.array([1.0, 0.0]), t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 3))
+    sol = tiny_sol_t3
     df = sol.to_dataframe()
     assert list(df.columns) == ["A", "B"]
     assert df.index.name == "t"
     assert len(df) == 3
 
 
-def test_to_dataframe_profile(net, cond):
+def test_to_dataframe_profile(tiny, tiny_sol_t3):
     pytest.importorskip("pandas")
-    r = _tiny(net, cond)
-    sol = r.solve(jnp.array([1.0, 0.0]), t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 3))
+    r, sol = tiny, tiny_sol_t3
     pdf = sol.to_dataframe(profile=True)
     assert list(pdf.index.names) == ["t", "compartment"]
     assert "depth" in pdf.columns

@@ -33,9 +33,14 @@ def pytest_runtest_teardown(item, nextitem):
         pytest.fail(mem_watchdog.watchdog_message(item.nodeid, available, floor), pytrace=False)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def simple_model():
-    """Load the simple A -> B test model."""
+    """Load the simple A -> B test model, once per session.
+
+    The compiled-solve caches key on the model's identity, so one shared model
+    lets every test reuse a solve another test already compiled. Do not mutate
+    it: a test that needs to change the model loads its own copy.
+    """
     return aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
 
 
