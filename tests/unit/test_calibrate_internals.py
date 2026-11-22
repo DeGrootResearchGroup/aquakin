@@ -683,6 +683,26 @@ def test_scale_objective_uses_the_starting_loss(base):
     assert unscaled.loss_scale == 1.0
 
 
+def test_scale_objective_leaves_a_failed_start_unscaled(base):
+    """A forward solve that fails at the start leaves the objective unscaled
+    (the multistart runner reports that failure); any other error propagates."""
+    m, C0, obs, t_obs, free = base
+    problem = dataclasses.replace(_resolve(m, C0, obs, t_obs, free), data_mean_square=1e-8)
+
+    def failed_solve(x):
+        raise RuntimeError("Callback error: the step budget was exhausted")
+
+    bundle = _ObjectiveBundle(failed_solve, None, None, False)
+    _scale_objective(problem, bundle, jnp.zeros(1))
+    assert bundle.loss_scale == 1.0
+
+    def programming_error(x):
+        raise TypeError("not a solve failure")
+
+    with pytest.raises(TypeError, match="not a solve failure"):
+        _scale_objective(problem, _ObjectiveBundle(programming_error, None, None, False), jnp.zeros(1))
+
+
 # ---------- config normalisers: _resolve_laplace / _free_ic_fields ----------
 
 
