@@ -110,8 +110,8 @@ def _closed_loop_plant(asm1, adm1):
 # The DO loop is fast (Ti=0.002 d), so reactor-4 oxygen reaches the setpoint
 # within a fraction of a day regardless of the slower biology -- a short horizon
 # suffices and keeps the (stiff full-plant) solves cheap for CI. The closed- and
-# open-loop solutions are each computed once at module scope and shared across
-# the assertions below.
+# open-loop solutions are each computed once and shared across the assertions
+# below (the open-loop one is the session-wide ``bsm2_open_loop_10d``).
 _T_END = 10.0
 _T_EVAL = jnp.array([0.0, _T_END])
 
@@ -135,14 +135,9 @@ def closed_sol(closed_plant, params):
 
 
 @pytest.fixture(scope="module")
-def open_sol(asm1, adm1):
-    plant = build_bsm2(asm1, adm1, do_control=False)
-    plant.add_influent("feed", bsm2_constant_influent(asm1))
-    params = bsm2_parameters(asm1, adm1)
-    return plant.solve(
-        (0.0, _T_END), t_eval=_T_EVAL, params=params,
-        rtol=1e-4, atol=1e-3,
-        integrator=aquakin.IntegratorConfig(max_steps=200_000))
+def open_sol(bsm2_open_loop_10d):
+    """The open-loop contrast: the shared 10-day open-loop solve (``conftest.py``)."""
+    return bsm2_open_loop_10d[1]
 
 
 def test_closed_loop_builds_and_is_finite(closed_plant, closed_sol):
