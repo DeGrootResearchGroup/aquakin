@@ -38,6 +38,7 @@ from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
     DifferentiationConfig,
     IntegratorConfig,
+    friendly_solve_errors,
     init_solver_settings,
     resolve_state_atol,
     solve_chemistry,
@@ -164,6 +165,18 @@ class CFDReactor:
             ``return_mask=True``, a ``(C_new, finite_mask)`` tuple where
             ``finite_mask`` has shape ``(n_cells,)`` and is ``True`` for
             cells whose every species value is finite.
+
+        Raises
+        ------
+        ValueError
+            If ``C``, ``conditions``, ``dt`` or ``params`` has the wrong shape
+            or value.
+        RuntimeError
+            If the per-cell solve exhausts its ``max_steps`` budget, whether
+            or not this call compiled the step (the message names the step
+            budget and the remedies); or, under ``on_nan="raise"``, if any cell's result is
+            non-finite. The C++ caller can catch it and retry with a smaller
+            transport timestep.
         """
         C_np = np.ascontiguousarray(np.asarray(C, dtype=np.float64))
         if C_np.ndim != 2:
@@ -211,8 +224,9 @@ class CFDReactor:
             inner = self._build_step()
             self._jit_cache[n_cells] = inner
 
-        C_new = inner(jnp.asarray(C_np), cond_jax, jnp.asarray(dt_f), params_jax)
-        C_new_np = np.asarray(C_new)
+        with friendly_solve_errors(self.max_steps, what="CFD reactor step"):
+            C_new = inner(jnp.asarray(C_np), cond_jax, jnp.asarray(dt_f), params_jax)
+            C_new_np = np.asarray(C_new)
 
         # The finiteness scan is only needed to raise or to build the mask;
         # under on_nan="ignore" without return_mask we skip it (fast path).
