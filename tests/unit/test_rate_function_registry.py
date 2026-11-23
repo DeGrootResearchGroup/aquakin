@@ -454,6 +454,20 @@ def test_the_public_base_is_the_one_every_operator_node_derives_from():
     assert not hasattr(nodes, "_OperatorNode")
 
 
+def test_ast_node_is_exported_as_the_type_a_parsed_expression_has():
+    """``parse_rate_expression`` and a rate function's arguments are typed
+    ``aquakin.ASTNode``, the same class the parser builds, so it is public."""
+    import aquakin
+    from aquakin.core import nodes
+
+    assert "ASTNode" in aquakin.__all__
+    assert aquakin.ASTNode is nodes.ASTNode
+    assert issubclass(aquakin.RateFunction, aquakin.ASTNode)
+    parsed = aquakin.parse_rate_expression("monod([S], K) * k")
+    assert isinstance(parsed, aquakin.ASTNode)
+    assert isinstance(parsed.left, aquakin.ASTNode) and isinstance(parsed.right, aquakin.ASTNode)
+
+
 def test_rejects_a_node_that_does_not_derive_from_the_public_base():
     """A leaf-style ``ASTNode`` subclass has the dataclass shape but no ``op``
     machinery, so it is refused by type, and the message names the base."""

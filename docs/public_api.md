@@ -16,10 +16,11 @@ APIs with worked examples. Start there; use this page and the API reference to
 look things up.
 ```
 
-Everything not listed here (the AST node types, the compile context, the schema
+Everything not listed here (the concrete AST node classes, the compile context, the schema
 models, the raw Diffrax solver objects) is internal and should not be imported
 from `aquakin` directly. A rate function of your own subclasses the public
-`RateFunction` (see
+`RateFunction`, whose arguments are `ASTNode`s, the type of a parsed
+sub-expression (see
 [Rate functions of your own](model_format.md#rate-functions-of-your-own)). Reactors are **stateless after construction** —
 `solve()` takes every variable input as an argument — which is what lets you
 `jax.vmap` a reactor over an ensemble.
@@ -32,8 +33,8 @@ from `aquakin` directly. A rate function of your own subclasses the public
 | Load a model from a YAML file | `load_model_from_file` |
 | Reset the model cache | `clear_model_cache` |
 | Work with a loaded model | `CompiledModel` (its attributes and methods: `summary`, `species`, `time_unit`, `default_concentrations`, `default_parameters`, `default_conditions`, `concentrations`, `influent`, `parameter_values`, `units_of`, `check_units`, `check_conservation`, …) |
-| Add a rate function aquakin does not ship | subclass `RateFunction`, then `register_rate_function` (before loading the model); `registered_rate_functions`; the guarded `aquakin.core.kernels.safe_pow`, `safe_sqrt` and `safe_log` for its arithmetic |
-| Build a model from a spec, or parse one expression | `compile_model`, `parse_rate_expression` |
+| Add a rate function aquakin does not ship | subclass `RateFunction` (its arguments are `ASTNode`s), then `register_rate_function` (before loading the model); `registered_rate_functions`; the guarded `aquakin.core.kernels.safe_pow`, `safe_sqrt` and `safe_log` for its arithmetic |
+| Build a model from a spec, or parse one expression | `compile_model`, `parse_rate_expression` (returns an `ASTNode`) |
 
 ## Conditions
 

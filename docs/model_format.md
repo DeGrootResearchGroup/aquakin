@@ -426,20 +426,19 @@ A rate function is a node class: a frozen dataclass whose fields are its
 arguments, carrying the call spelling (`FUNCTION_NAME`), a kernel key (`KIND`)
 and the arithmetic itself (`op`), written with `jax.numpy` so it differentiates.
 It subclasses `aquakin.RateFunction`, the base every rate function shares,
-built-in or your own; its arguments are annotated `ASTNode` (from
-`aquakin.core.nodes`), the type of a parsed sub-expression.
+built-in or your own; its arguments are annotated `aquakin.ASTNode`, the type
+of a parsed sub-expression.
 
 ```python
 from dataclasses import dataclass
 import aquakin
 from aquakin.core.kernels import safe_pow
-from aquakin.core.nodes import ASTNode
 
 @dataclass(frozen=True)
 class HillNode(aquakin.RateFunction):
-    X: ASTNode
-    K: ASTNode
-    n: ASTNode
+    X: aquakin.ASTNode
+    K: aquakin.ASTNode
+    n: aquakin.ASTNode
 
     KIND = "hill"            # the batched kernel's key for this node type
     FUNCTION_NAME = "hill"   # how it is spelled in a rate expression
