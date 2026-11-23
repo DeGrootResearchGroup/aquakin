@@ -250,20 +250,22 @@ def test_base_and_time_unit(reactor, params):
     assert res.value == pytest.approx(np.log(_info(2.0) + _info(1.0 / K)), rel=1e-6)
 
 
-@pytest.mark.parametrize("criterion", ["A", "E", "modified_E"])
-def test_other_criteria_improve(reactor, params, criterion):
+def test_minimized_criterion_improves(reactor, params):
+    """A criterion where smaller is better (A) is minimized, as D is maximized
+    in the tests above. E and modified-E differ from these only in the final
+    expression of the eigenvalues, whose values ``test_design_criterion_values``
+    pins."""
     res = aquakin.optimize_experiment(
         reactor,
         _exp([1.0, 2.0, 3.0]),
         ["A_to_B.k"],
         params=params,
         free_ic=FreeICConfig(["A"]),
-        criterion=criterion,
+        criterion="A",
         time_bounds=(0.1, 20.0),
         min_spacing=0.5,
     )
-    better = res.value > res.initial_value if criterion == "E" else res.value < res.initial_value
-    assert better
+    assert res.value < res.initial_value
 
 
 def test_optimize_validation(reactor, params):
@@ -289,10 +291,11 @@ def test_optimize_validation(reactor, params):
         opt(reactor, _exp([1.0]), k, initial_bounds={(3, "A"): (1.0, 2.0)})
     with pytest.raises(ValueError, match="lo < hi"):
         opt(reactor, _exp([1.0]), k, initial_bounds={"A": (2.0, 1.0)})
-    # One sample cannot separate k from A0: singular for every criterion.
-    with pytest.raises(ValueError, match="singular"):
+    # One sample cannot separate k from A0: singular for every criterion. D (-inf)
+    # and E (0) reach the two different sides of the starting-design check.
+    with pytest.raises(ValueError, match="singular for criterion 'D'"):
         opt(reactor, _exp([1.0]), k, params=params, free_ic=FreeICConfig(["A"]))
-    with pytest.raises(ValueError, match="singular"):
+    with pytest.raises(ValueError, match="singular for criterion 'E'"):
         opt(reactor, _exp([1.0]), k, params=params, free_ic=FreeICConfig(["A"]), criterion="E")
     with pytest.raises(ValueError, match="Unknown criterion"):
         opt(reactor, _exp([1.0]), k, criterion="Z")

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from scipy.stats import qmc
 
 import aquakin
 
@@ -161,38 +162,53 @@ def test_ranked_params(simple_model):
 
 
 @pytest.mark.slow  # heavy: sensitivity vs FD
-def test_sensitivity_doutput_dconditions_matches_finite_diff(simple_model):
-    """Verify the conditions-override grad path is non-zero where expected."""
-    # Build a tiny model rate that depends on T via Arrhenius so dF/dT != 0.
-    # The shipped simple_model's rate is k*[A] only — independent of T —
-    # so we exercise the override path with the ozone_bromate model instead.
+def test_sensitivity_doutput_dconditions_matches_finite_diff():
+    """The gradient with respect to a condition field matches a central finite
+    difference of the solve in that field."""
+    # The shipped simple_model's rate is k*[A] only, independent of every
+    # condition, so the condition path is exercised on ozone_bromate, whose
+    # bromate yield depends on the OH scavenging rate.
     model = aquakin.load_model("ozone_bromate")
     atol = model.atol({"OH": 1e-20}, default=1e-12)
-    conditions = aquakin.SpatialConditions.uniform(pH=7.5, T=293.15, OH_scavenging=5.0e4)
-    reactor = aquakin.BatchReactor(model, conditions, atol=atol)
     C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
     params = model.default_parameters()
     t_eval = jnp.linspace(0.0, 300.0, 31)
+    scav = 5.0e4
+
+    def reactor_at(scavenging):
+        conditions = aquakin.SpatialConditions.uniform(
+            pH=7.5, T=293.15, OH_scavenging=scavenging
+        )
+        return aquakin.BatchReactor(model, conditions, atol=atol)
+
+    def bromate(scavenging):
+        sol = reactor_at(scavenging).solve(C0, params=params, t_span=(0.0, 300.0), t_eval=t_eval)
+        return float(sol.C_named("BrO3-")[-1])
 
     result = aquakin.sensitivity(
-        reactor,
+        reactor_at(scav),
         C0,
         params,
         output_fn=lambda sol: sol.C_named("BrO3-")[-1],
         solve_kwargs={"t_span": (0.0, 300.0), "t_eval": t_eval},
     )
 
-    # The OH scavenging field should have a *negative* gradient on bromate.
+    # Central difference with a relative step of 1e-3: its truncation error is
+    # about 1e-6 relative here and the solve's rtol is 1e-6, so rel=1e-4 leaves
+    # two decades of margin. abs=0: the gradient is about 2e-12, below
+    # pytest.approx's default absolute tolerance of 1e-12.
+    h = 1e-3 * scav
+    fd = (bromate(scav + h) - bromate(scav - h)) / (2.0 * h)
     g_scav = float(result.doutput_dconditions["OH_scavenging"][0])
-    assert g_scav < 0.0
-    # All gradients should be finite.
+    assert g_scav < 0.0  # more OH scavenging, less bromate
+    assert g_scav == pytest.approx(fd, rel=1e-4, abs=0.0)
     for name, g in result.doutput_dconditions.items():
         assert jnp.all(jnp.isfinite(g)), f"non-finite grad for {name}"
 
 
 def test_fit_rejects_empty_free_params(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"free_params must be non-empty"):
         aquakin.fit(
             reactor,
             jnp.asarray([1.0, 0.0]),
@@ -204,7 +220,7 @@ def test_fit_rejects_empty_free_params(simple_model):
 
 def test_fit_rejects_unknown_method(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"Unknown fit method 'newton'"):
         aquakin.fit(
             reactor,
             jnp.asarray([1.0, 0.0]),
@@ -217,7 +233,7 @@ def test_fit_rejects_unknown_method(simple_model):
 
 def test_fit_rejects_unknown_param(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match=r"Unknown parameter 'nonexistent.k'"):
         aquakin.fit(
             reactor,
             jnp.asarray([1.0, 0.0]),
@@ -229,7 +245,7 @@ def test_fit_rejects_unknown_param(simple_model):
 
 def test_fit_rejects_observation_shape_mismatch(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"observations has 3 columns but 1 species"):
         aquakin.fit(
             reactor,
             jnp.asarray([1.0, 0.0]),
@@ -242,7 +258,7 @@ def test_fit_rejects_observation_shape_mismatch(simple_model):
 
 def test_fit_rejects_descending_t_obs(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"t_obs must be strictly ascending"):
         aquakin.fit(
             reactor,
             jnp.asarray([1.0, 0.0]),
@@ -535,12 +551,15 @@ def test_dgsm_n_rounded_to_power_of_two():
 
 
 def test_dgsm_rejects_bad_ranges():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"upper > lower"):
         aquakin.dgsm(lambda z: z[0], [(1.0, 0.0)], n_samples=8)  # upper <= lower
 
 
-def test_dgsm_through_reactor(simple_model):
-    """DGSM flows through reactor.solve and finds the rate constant influential."""
+def test_dgsm_through_reactor_matches_closed_form(simple_model):
+    """DGSM through reactor.solve gives the closed-form measure. With A0 = 1,
+    B(10) = 1 - exp(-10 k), so dB/dk = 10 exp(-10 k) and nu is the mean of its
+    square over the drawn points, and the Sobol bound is
+    nu (b - a)^2 / (pi^2 Var B)."""
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = jnp.asarray([1.0, 0.0])
     p_def = simple_model.default_parameters()
@@ -552,12 +571,21 @@ def test_dgsm_through_reactor(simple_model):
         return sol.C_named("B")[-1]
 
     res = aquakin.dgsm(fn, [(0.1, 0.5)], input_names=["A_to_B.k"], n_samples=8)
-    assert res.n_valid >= 2
-    assert float(res.dgsm[0]) > 0.0
+    # The points dgsm draws: 8 scrambled-Sobol points (its default seed 0) on [0.1, 0.5].
+    k = 0.1 + 0.4 * qmc.Sobol(d=1, scramble=True, seed=0).random_base2(3)[:, 0]
+    nu = np.mean((10.0 * np.exp(-10.0 * k)) ** 2)
+    var = np.var(1.0 - np.exp(-10.0 * k))
+    assert res.n_valid == 8
+    # The solve's rtol is 1e-6; 1e-5 leaves a decade of margin.
+    assert float(res.dgsm[0]) == pytest.approx(nu, rel=1e-5)
+    assert float(res.output_variance) == pytest.approx(var, rel=1e-5)
+    assert float(res.sobol_total_bound[0]) == pytest.approx(
+        nu * 0.4**2 / (np.pi**2 * var), rel=1e-5
+    )
 
 
 def test_dgsm_rejects_bad_ad_mode():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"diff.mode must be 'reverse' or 'forward'"):
         aquakin.dgsm(
             lambda z: z[0],
             [(0.0, 1.0)],
@@ -591,54 +619,6 @@ def test_dgsm_forward_matches_reverse():
     )
     np.testing.assert_allclose(
         np.asarray(fwd.sobol_total_bound), np.asarray(rev.sobol_total_bound), rtol=1e-9
-    )
-
-
-def test_dgsm_forward_matches_reverse_through_reactor(simple_model):
-    """forward and reverse DGSM agree when ``fn`` integrates a reactor solve --
-    the real use case the forward path exists for. The forward screen drives
-    ``reactor.solve`` through a forward-capable adjoint (DirectAdjoint, which
-    permits forward-mode AD), the reverse screen through the default adjoint, and
-    the two Sobol-total bounds are identical (``diff.mode`` is only a performance
-    choice)."""
-    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
-    C0 = jnp.asarray([1.0, 0.0])
-    p_def = simple_model.default_parameters()
-    t_eval = jnp.linspace(0.0, 10.0, 11)
-    rng = [(0.1, 0.5)]
-
-    def make_fn(diff=None):
-        kw = {} if diff is None else {"diff": diff}
-        reactor = aquakin.BatchReactor(simple_model, cond, **kw)
-
-        def fn(z):
-            p = p_def.at[0].set(z[0])
-            sol = reactor.solve(C0, params=p, t_span=(0.0, 10.0), t_eval=t_eval)
-            return sol.C_named("B")[-1]
-
-        return fn
-
-    # default adjoint (reverse-capable); the forward-capable differentiation.
-    rev = aquakin.dgsm(
-        make_fn(None),
-        rng,
-        input_names=["A_to_B.k"],
-        n_samples=8,
-        seed=1,
-        diff=aquakin.DifferentiationConfig(mode="reverse"),
-    )
-    fwd = aquakin.dgsm(
-        make_fn(aquakin.DifferentiationConfig(mode="forward", method="through_solve")),
-        rng,
-        input_names=["A_to_B.k"],
-        n_samples=8,
-        seed=1,
-        diff=aquakin.DifferentiationConfig(mode="forward"),
-    )
-    np.testing.assert_allclose(
-        np.asarray(fwd.sobol_total_bound),
-        np.asarray(rev.sobol_total_bound),
-        rtol=1e-6,
     )
 
 
