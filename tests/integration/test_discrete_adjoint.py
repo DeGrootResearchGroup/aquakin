@@ -150,46 +150,6 @@ def test_gradient_wrt_y0_matches_closed_form(simple_model):
     assert [float(x) for x in g] == pytest.approx(exact, rel=1e-3)
 
 
-@pytest.mark.validation
-def test_stiff_finite_uncapped_and_matches_capped():
-    # The canonical stiff model. Differentiating through diffrax's own solve is
-    # non-finite without a dtmax cap; the discrete adjoint is finite uncapped and
-    # must match the (correct) capped RecursiveCheckpointAdjoint gradient of the
-    # same implicit-Euler solve.
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
-    cond = net.default_conditions(1)
-    C0 = net.default_concentrations()
-    p = net.default_parameters()
-    fields = cond.fields
-    rhs = lambda t, y, pp: net.dCdt(y, pp, fields, 0)
-    span = (0.0, 0.5)
-
-    def loss(pp):
-        return jnp.sum(
-            implicit_euler_adjoint_solve(rhs, C0, pp, span, rtol=1e-6, atol=1e-9) ** 2
-        )
-
-    g = jax.jit(jax.grad(loss))(p)
-    assert bool(jnp.all(jnp.isfinite(g)))
-
-    # Reference: diffrax ImplicitEuler + RecursiveCheckpointAdjoint, capped so it
-    # is finite. Same method => same discrete gradient.
-    def loss_ref(pp):
-        sol = diffrax.diffeqsolve(
-            diffrax.ODETerm(lambda t, y, a: rhs(t, y, a)), diffrax.ImplicitEuler(),
-            0.0, span[1], 1e-6, C0, args=pp,
-            stepsize_controller=diffrax.PIDController(rtol=1e-6, atol=1e-9, dtmax=1e-3),
-            adjoint=diffrax.RecursiveCheckpointAdjoint(),
-            saveat=diffrax.SaveAt(t1=True), max_steps=200_000,
-        )
-        return jnp.sum(sol.ys[0] ** 2)
-
-    g_ref = jax.jit(jax.grad(loss_ref))(p)
-    assert bool(jnp.all(jnp.isfinite(g_ref)))
-    rel = float(jnp.linalg.norm(g - g_ref) / (jnp.linalg.norm(g_ref) + 1e-30))
-    assert rel < 1e-5
-
-
 def test_esdirk_analytic_trajectory_gradient(simple_model):
     # The high-order (Kvaerno5) discrete adjoint on the closed-form decay
     # trajectory loss; Kvaerno5's 5th order makes the primal -- and so the

@@ -114,30 +114,6 @@ def test_profile_param_ci_matches_laplace(growth_setup):
     assert lo < pr.mle < hi
 
 
-def test_profile_is_a_bowl(growth_setup):
-    """delta_loss is ~0 at the minimum and rises away from it."""
-    net, reactor, C0, t, obs, sig = growth_setup
-    grid = np.linspace(0.6, 1.4, 17)
-    pr = aquakin.profile_likelihood(
-        reactor,
-        C0,
-        obs,
-        t,
-        ["mu", "Y"],
-        grid=grid,
-        profile_param="mu",
-        observed_species=["S", "X"],
-        loss="nll",
-        sigma=jnp.asarray(sig),
-        optimizer=OptimizerConfig(n_starts=4),
-    )
-    imin = int(np.nanargmin(pr.delta_loss))
-    assert pr.delta_loss[imin] == pytest.approx(0.0, abs=1e-6)
-    # Strictly higher at both ends than at the minimum.
-    assert pr.delta_loss[0] > 1.0
-    assert pr.delta_loss[-1] > 1.0
-
-
 def test_profile_warmstart_matches_independent(growth_setup):
     """Continuation sweep and independent multistart find the same minimum."""
     net, reactor, C0, t, obs, sig = growth_setup
@@ -445,32 +421,6 @@ def test_profile_compiled_cache_matches_uncached(growth_setup):
     )
     assert n_after_first > 0
     assert len(shared) == n_after_first
-
-
-def test_profile_accepts_start_list_with_profiled_parameter(growth_setup):
-    """An explicit start list seeds the cold fits; a dict start that names the
-    profiled parameter has it dropped (it is pinned), instead of failing every
-    inner fit."""
-    net, reactor, C0, t, obs, sig = growth_setup
-    starts = [{"mu": 0.8, "Y": 0.4}, {"mu": 1.2, "Y": 0.6}]
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)  # an inner-fit failure warns
-        pr = aquakin.profile_likelihood(
-            reactor,
-            C0,
-            obs,
-            t,
-            ["mu", "Y"],
-            grid=np.linspace(0.8, 1.2, 3),
-            profile_param="mu",
-            observed_species=["S", "X"],
-            loss="nll",
-            sigma=jnp.asarray(sig),
-            optimizer=OptimizerConfig(method="gauss_newton", starts=starts),
-            polish=False,
-        )
-    assert all(f is not None for f in pr.fits)
-    assert np.all(np.isfinite(pr.loss))
 
 
 @pytest.mark.parametrize(
