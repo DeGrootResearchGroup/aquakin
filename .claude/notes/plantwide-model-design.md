@@ -145,9 +145,10 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
   it is the intermediate that accumulates first when a digester is overloaded.
 - Methanogen inhibition by O₂ and nitrate is not in ADM1. The form and its
   constants need a source, or are stated as our choice.
-- The fraction of decayed biomass that is unbiodegradable aerobically but
-  partly degradable in a digester (Ikumi et al., 2014) is an open decision for
-  the first version.
+- Particulate organics the activated-sludge models treat as unbiodegradable
+  stay largely unbiodegradable in a digester (Ikumi et al., 2014), so `XI` is
+  inert in every unit and the first version has no anaerobic conversion of
+  inert material.
 
 ### `plantwide_bio_p`
 
@@ -236,59 +237,77 @@ process is the same.
 
 ## References
 
-To be checked against the papers before they are cited in a model file.
+DOIs were found from publisher, PubMed and repository records; three entries
+have no DOI that could be confirmed and are marked. Check each against the
+paper itself before citing it in a model file.
 
 - Barker, P.S. & Dold, P.L. (1997). General model for biological nutrient
   removal activated-sludge systems: model presentation. *Water Environ. Res.*
-  69(5), 969–984.
+  69(5), 969–984. DOI not confirmed; the companion paper (model application,
+  985–991) is https://doi.org/10.2175/106143097X125678.
 - Batstone, D.J. et al. (2002). *Anaerobic Digestion Model No. 1 (ADM1).* IWA
-  Scientific and Technical Report No. 13.
+  Scientific and Technical Report No. 13. ISBN 1 900222 78 7; no DOI
+  confirmed.
 - Batstone, D.J. et al. (2012). Towards a generalized physicochemical framework.
   *Water Sci. Technol.* 66(6), 1147–1161.
+  https://doi.org/10.2166/wst.2012.300
 - Flores-Alsina, X. et al. (2015). A plant-wide aqueous phase chemistry module
   describing pH variations and ion speciation/pairing in wastewater treatment
   process models. *Water Res.* 85, 255–265.
+  https://doi.org/10.1016/j.watres.2015.07.014
 - Hauduc, H. et al. (2015). A dynamic physicochemical model for chemical
   phosphorus removal. *Water Res.* 73, 157–170.
+  https://doi.org/10.1016/j.watres.2014.12.053
 - Henze, M. et al. (1999). Activated Sludge Model No. 2d, ASM2d. *Water Sci.
-  Technol.* 39(1), 165–182.
+  Technol.* 39(1), 165–182. https://doi.org/10.1016/S0273-1223(98)00829-4
 - Hiatt, W.C. & Grady, C.P.L. (2008). An updated process model for carbon
   oxidation, nitrification, and denitrification. *Water Environ. Res.* 80(11),
-  2145–2156.
+  2145–2156. https://doi.org/10.2175/106143008X304776
 - Ikumi, D.S., Harding, T.H. & Ekama, G.A. (2014). Biodegradability of
   wastewater and activated sludge organics in anaerobic digestion. *Water Res.*
-  56, 267–279.
+  56, 267–279. https://doi.org/10.1016/j.watres.2014.02.008
 - Kaelin, D. et al. (2009). Extension of ASM3 for two-step nitrification and
   denitrification and its calibration and validation with batch tests and
   pilot scale data. *Water Res.* 43(6), 1680–1692.
+  https://doi.org/10.1016/j.watres.2008.12.039
 - Kazadi Mbamba, C., Batstone, D.J., Flores-Alsina, X. & Tait, S. (2015a). A
   generalised chemical precipitation modelling approach in wastewater treatment
   applied to calcite. *Water Res.* 68, 342–353.
+  https://doi.org/10.1016/j.watres.2014.10.011
 - Kazadi Mbamba, C., Tait, S., Flores-Alsina, X. & Batstone, D.J. (2015b). A
   systematic study of multiple minerals precipitation modelling in wastewater
   treatment. *Water Res.* 85, 359–370.
+  https://doi.org/10.1016/j.watres.2015.08.041
 - López-Vázquez, C.M. et al. (2009). Modeling the PAO–GAO competition: effects
   of carbon source, pH and temperature. *Water Res.* 43(2), 450–462.
+  https://doi.org/10.1016/j.watres.2008.10.032
 - Meijer, S.C.F., van Loosdrecht, M.C.M. & Heijnen, J.J. (2001). Metabolic
   modelling of full-scale biological nitrogen and phosphorus removing WWTP's.
   *Water Res.* 35(11), 2711–2723.
+  https://doi.org/10.1016/S0043-1354(00)00567-4
 - Nopens, I. et al. (2009). An ASM/ADM model interface for dynamic plant-wide
   simulation. *Water Res.* 43(7), 1913–1923.
+  https://doi.org/10.1016/j.watres.2009.01.012
 - Siegrist, H. et al. (2002). Mathematical model for meso- and thermophilic
   anaerobic sewage sludge digestion. *Environ. Sci. Technol.* 36(5), 1113–1123.
+  https://doi.org/10.1021/es010139p
 - Smith, S. et al. (2008). Phosphate complexation model and its implications
   for chemical phosphorus removal. *Water Environ. Res.* 80(5), 428–438.
+  https://doi.org/10.1002/j.1554-7531.2008.tb00349.x
 - Solon, K. et al. (2017). Plant-wide modelling of phosphorus transformations in
   wastewater treatment systems: impacts of control and operational strategies.
-  *Water Res.* 113, 97–110.
+  *Water Res.* 113, 97–110. https://doi.org/10.1016/j.watres.2017.02.007
 - Sötemann, S.W. et al. (2005). Integrated chemical, physical and biological
   processes modelling. Part 2: Anaerobic digestion of sewage sludges. *Water SA*
-  31(4), 545–568.
+  31(4), 545–568. No DOI confirmed; open access at
+  https://ajol.info/index.php/wsa/article/view/5145
 - Strous, M., Heijnen, J.J., Kuenen, J.G. & Jetten, M.S.M. (1998). The
   sequencing batch reactor as a powerful tool for the study of slowly growing
   anaerobic ammonium-oxidizing microorganisms. *Appl. Microbiol. Biotechnol.*
-  50(5), 589–596.
+  50(5), 589–596. https://doi.org/10.1007/s002530051340
 - Strous, M., Kuenen, J.G. & Jetten, M.S.M. (1999). Key physiology of anaerobic
   ammonium oxidation. *Appl. Environ. Microbiol.* 65(7), 3248–3250.
-- Varga, E. et al. (2018). Recent advances in bio-P modelling: a new approach
-  verified by full-scale observations. *WRRmod 2018*, 47–60.
+  https://doi.org/10.1128/aem.65.7.3248-3250.1999
+- Varga, E., Hauduc, H. et al. (2018). Recent advances in bio-P modelling – a
+  new approach verified by full-scale observations. *Water Sci. Technol.*
+  https://doi.org/10.2166/wst.2018.490 (also presented at WRRmod 2018).
