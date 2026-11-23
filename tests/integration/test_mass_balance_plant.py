@@ -181,10 +181,23 @@ def test_mass_balance_default_ports_are_influents_and_dangling_outputs():
     assert mb.effluent_ports == plant.check().dangling_outputs   # ["tank.out"]
 
 
+# The whole-plant balances below start from the shipped warm start rather than
+# a steady state: the balance carries the accumulation term, so it closes over
+# any window. The window opens one day in, after the fast transients away from
+# the warm start (hours long) have passed: the gas and flux integrals are
+# trapezoids over the saved points, accurate only where the trajectory is
+# smooth on the save grid (from t = 0 on the same grids BSM1 misses COD by
+# ~50%, and still ~2% on 201 points). Over the window the plant
+# inventory is still moving (BSM1: accumulation ~28% of the COD inflow), so
+# the accumulation bookkeeping is exercised, not just in = out + gas.
+_BSM_WINDOW = (1.0, 3.0)
+
+
 @pytest.mark.slow
-def test_mass_balance_closes_on_bsm1_steady_state():
-    """The full BSM1 plant closes COD and N to ~machine precision at steady
-    state (single-model water line: no digester gas phase)."""
+def test_mass_balance_closes_on_bsm1_from_warm_start():
+    """The full BSM1 plant closes COD and N to 1e-4 over a window in which its
+    inventory is still changing (single-model water line: no digester gas
+    phase)."""
     from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
 
     net = aquakin.load_model("asm1")
@@ -193,10 +206,8 @@ def test_mass_balance_closes_on_bsm1_steady_state():
                          "SND": 6.95, "XND": 10.59, "SI": 30.0, "XI": 51.2,
                          "SALK": 7.0}, Q=18446.0)
     plant.add_influent("feed", feed, to="inlet_mix.fresh")
-    ss = plant.run_to_steady_state(y0=jnp.asarray(bsm1_warm_start(plant)),
-                                   max_time=200.0)
-    sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.linspace(0.0, 2.0, 9),
-                      y0=ss.state)
+    sol = plant.solve(t_span=(0.0, _BSM_WINDOW[1]), t_eval=jnp.linspace(*_BSM_WINDOW, 33),
+                      y0=jnp.asarray(bsm1_warm_start(plant)))
     mb = plant.mass_balance(sol, components=("COD", "N"))
     assert abs(mb["COD"].relative_imbalance) < 1e-4
     assert abs(mb["N"].relative_imbalance) < 1e-4
@@ -210,7 +221,9 @@ def test_mass_balance_closes_on_bsm1_takacs_lumped_settler():
     whose head block is one TSS value per layer rather than per species -- the
     regression guard for the lumped-settler branch of the settler's
     ``component_inventory`` (which would otherwise fail to reshape the TSS head
-    block)."""
+    block). This one stays at steady state: the lumped blanket's N inventory
+    assumes the model-default solids composition, so it is exact only where
+    the blanket does not accumulate."""
     from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
 
     net = aquakin.load_model("asm1")
@@ -231,11 +244,11 @@ def test_mass_balance_closes_on_bsm1_takacs_lumped_settler():
 
 
 @pytest.mark.slow
-def test_mass_balance_closes_on_bsm2_steady_state():
+def test_mass_balance_closes_on_bsm2_from_warm_start():
     """The two-model BSM2 plant (ASM1 water line + ADM1 digester, biogas, the
-    reject recycle) closes COD and N to <0.5% at steady state -- the digester
-    biogas falls out of the reaction integral and the cross-model inventories
-    sum on the canonical g basis."""
+    reject recycle) closes COD and N to <0.5% over a window from the warm start
+    -- the digester biogas falls out of the reaction integral and the
+    cross-model inventories sum on the canonical g basis."""
     from aquakin.plant.bsm import (
         bsm2_constant_influent,
         bsm2_parameters,
@@ -248,11 +261,8 @@ def test_mass_balance_closes_on_bsm2_steady_state():
     plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", bsm2_constant_influent(asm1))
     params = bsm2_parameters(asm1, adm1)
-    ss = plant.run_to_steady_state(params=params,
-                                   y0=jnp.asarray(bsm2_warm_start(plant)),
-                                   max_time=400.0)
-    sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.linspace(0.0, 2.0, 9),
-                      params=params, y0=ss.state)
+    sol = plant.solve(t_span=(0.0, _BSM_WINDOW[1]), t_eval=jnp.linspace(*_BSM_WINDOW, 9),
+                      params=params, y0=jnp.asarray(bsm2_warm_start(plant)))
     mb = plant.mass_balance(sol, components=("COD", "N"), params=params)
     assert abs(mb["COD"].relative_imbalance) < 5e-3
     assert abs(mb["N"].relative_imbalance) < 5e-3
