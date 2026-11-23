@@ -256,6 +256,8 @@ def _objective_scale(data_mean_square: float | None, start_loss: float) -> float
     ----------
     data_mean_square : float or None
         :func:`_data_mean_square` of the problem (``None``: do not scale).
+        :func:`aquakin.fit`, whose loss is a sum of squares, passes the data's
+        sum of squares instead, so the floor stays relative to its loss.
     start_loss : float
         The objective at the optimizer's (first) start.
 

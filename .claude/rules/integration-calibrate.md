@@ -55,7 +55,8 @@ Split out of `.claude/rules/integration.md`.
   `_objective_scale` (`min(1, start loss)`, floored at `_SCALE_FLOOR` times
   `_CalibrationProblem.data_mean_square`; `"mse"` only, `data_mean_square` is
   `None` for the other losses). Both resolvers set `data_mean_square` with
-  `_data_mean_square`.
+  `_data_mean_square`. **`fit()` reuses the same two helpers** (its floor is
+  the data's sum of squares, its loss being a sum); do not write another scale.
 - **Only the optimizer sees the scaled objective.** The reported `loss`
   (multiplied back in `_fit_result`), the Laplace Hessian and the profile use
   the unscaled loss: do not fold the scale into `_data_term`,
