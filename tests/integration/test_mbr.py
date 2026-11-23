@@ -36,11 +36,11 @@ def _mbr(asm1, **kw):
     return MBRUnit("mbr", asm1, **kw)
 
 
-def _plant(asm1, mbr, Q=1000.0):
+def _plant(asm1, mbr, Q=1000.0, **extra):
     p = Plant("mbr_plant", time_unit="d")
     p.add_unit(mbr)
     p.add_influent("feed", InfluentSeries.constant(
-        asm1, SS=300.0, SNH=40.0, XS=200.0, XB_H=80.0, Q=Q), to="mbr.feed")
+        asm1, SS=300.0, SNH=40.0, XS=200.0, XB_H=80.0, Q=Q, **extra), to="mbr.feed")
     return p
 
 
@@ -107,12 +107,29 @@ def test_membrane_retains_solids_high_mlss(asm1):
 
 
 def test_srt_set_by_wasting(asm1):
-    """More wasting -> shorter SRT -> lower steady MLSS."""
-    def mlss(qw):
-        mbr = _mbr(asm1, waste_flow=qw)
-        sol = _plant(asm1, mbr).solve(t_span=(0.0, 40.0), t_eval=jnp.array([40.0]))
-        return float(sol.state[-1, asm1.species_index["XB_H"]])
-    assert mlss(10.0) > mlss(40.0)                            # less waste -> more MLSS
+    """The inert solids follow the SRT the wasting sets, by hand.
+
+    ``XI`` takes part in no ASM1 reaction, so in the MBR it obeys
+    ``V dXI/dt = Q XI_in - (Q_w + (1 - rej) Q_perm) XI``: a first-order approach
+    to ``Q XI_in / (Q_w + (1 - rej) Q_perm)`` with rate ``(Q_w + (1 - rej) Q_perm)
+    / V``, i.e. 1/SRT with the membrane's small solids leak. The solve
+    (``rtol=1e-6``) matches the closed form to 3.1e-7 (measured), so
+    ``rel=1e-5``. More wasting also lowers the steady biomass."""
+    Q, V, rej, xi_in, t_end = 1000.0, 1000.0, 0.999, 50.0, 40.0
+    xi, xbh = asm1.species_index["XI"], asm1.species_index["XB_H"]
+
+    def solve(qw):
+        mbr = _mbr(asm1, waste_flow=qw, volume=V, rejection=rej)
+        sol = _plant(asm1, mbr, Q=Q, XI=xi_in).solve(
+            t_span=(0.0, t_end), t_eval=jnp.array([0.0, t_end]))
+        loss = qw + (1.0 - rej) * (Q - qw)                    # solids-leaving flow
+        xi_ss = Q * xi_in / loss
+        x0 = float(sol.state[0, xi])
+        expected = xi_ss + (x0 - xi_ss) * np.exp(-loss / V * t_end)
+        assert float(sol.state[-1, xi]) == pytest.approx(expected, rel=1e-5), qw
+        return float(sol.state[-1, xbh])
+
+    assert solve(10.0) > solve(40.0)                          # less waste -> more MLSS
 
 
 # --- fouling / TMP ----------------------------------------------------------
@@ -127,22 +144,33 @@ def fouling_plant(asm1):
 
 
 def test_fouling_grows_and_drives_tmp(asm1, fouling_plant):
+    """The fouling resistance follows its closed form and drives the TMP.
+
+    ``dR_f/dt = rate J - relax R_f`` with a constant flux ``J = Q_perm / area``
+    gives ``R_f(t) = (rate J / relax) (1 - exp(-relax t))`` from ``R_f(0) = 0``.
+    The solve (``rtol=1e-6``) matches it to 4e-7 relative (measured), so
+    ``rtol=1e-5``. The TMP is ``mu J (R_m + R_f)``."""
     mbr, p = fouling_plant
-    sol = p.solve(t_span=(0.0, 20.0), t_eval=jnp.linspace(0.0, 20.0, 41))
+    t = jnp.linspace(0.0, 20.0, 41)
+    sol = p.solve(t_span=(0.0, 20.0), t_eval=t)
     R_f = np.asarray(sol.state[:, asm1.n_species])
-    assert R_f[-1] > R_f[0] >= 0.0                            # fouling builds
-    assert R_f[-1] == pytest.approx(R_f[-2], abs=1e-3) or R_f[-1] > R_f[1]  # toward quasi-steady
+    q_perm = 1000.0 - mbr.waste_flow
+    J = q_perm / mbr.membrane_area
+    R_ss = mbr.fouling_rate * J / mbr.fouling_relax
+    np.testing.assert_allclose(
+        R_f, R_ss * (1.0 - np.exp(-mbr.fouling_relax * np.asarray(t))), rtol=1e-5, atol=1e-12)
     perm = p.stream(sol, "mbr.permeate")
-    tmp_lo = float(mbr.tmp(jnp.asarray(R_f[1]), perm.Q[1]))
-    tmp_hi = float(mbr.tmp(jnp.asarray(R_f[-1]), perm.Q[-1]))
-    assert tmp_hi > tmp_lo                                    # TMP rises with fouling
+    tmp_end = float(mbr.tmp(jnp.asarray(R_f[-1]), perm.Q[-1]))
+    assert tmp_end == pytest.approx(
+        mbr.tmp_viscosity * J * (mbr.membrane_resistance + R_f[-1]), rel=1e-9)
+    assert tmp_end > float(mbr.tmp(jnp.asarray(R_f[1]), perm.Q[1]))  # TMP rises with fouling
 
 
 def test_no_fouling_by_default(asm1):
     mbr = _mbr(asm1)                                          # fouling_rate=0
     p = _plant(asm1, mbr)
     sol = p.solve(t_span=(0.0, 10.0), t_eval=jnp.array([10.0]))
-    assert float(sol.state[-1, asm1.n_species]) == pytest.approx(0.0)
+    assert float(sol.state[-1, asm1.n_species]) == 0.0              # dR_f/dt = 0 exactly
 
 
 # --- aeration reuse (DO control auto-wiring) --------------------------------
@@ -196,9 +224,11 @@ def test_mass_balance_closes(asm1):
     p = _plant(asm1, mbr)
     sol = p.solve(t_span=(0.0, 60.0), t_eval=jnp.linspace(40.0, 60.0, 21))  # near steady
     mb = p.mass_balance(sol)
+    # The balance integrates the saved flows by the trapezoid rule on a 1-day
+    # grid; it closes to 1.9e-6 of the inflow here (measured: 5e-8 on a 0.25-day
+    # grid), so 1e-4 holds the quadrature error with margin.
     for q in ("COD", "N"):
-        infl = mb[q].inflow
-        assert abs(mb[q].imbalance) < 0.02 * abs(infl)          # closes to a few %
+        assert abs(mb[q].imbalance) < 1e-4 * abs(mb[q].inflow)
 
 
 # --- AD ---------------------------------------------------------------------

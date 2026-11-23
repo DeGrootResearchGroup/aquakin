@@ -83,9 +83,13 @@ def test_bsm2_digester_matches_reference(solved):
     plant, sol = solved
     adm1 = plant.units["digester"].model
     d = plant.states_by_unit(sol.final_state)["digester"]
+    # Within 2%, the bound the standalone digester validation uses: the
+    # digester's stoichiometry and constants are the reference's, and the ~1%
+    # residual is this model's charge-balance pH against the reference DAE
+    # (measured here: S_ac 0.82%, S_gas_ch4 0.62%, X_ac and S_IN < 0.04%).
     for sp, rv in REF_DIG.items():
         mv = float(d[adm1.species_index[sp]])
-        assert mv == pytest.approx(rv, rel=0.06), f"digester {sp}: {mv} vs {rv}"
+        assert mv == pytest.approx(rv, rel=0.02), f"digester {sp}: {mv} vs {rv}"
     # Headspace methane (the defining digester output) much tighter.
     assert float(d[adm1.species_index["S_gas_ch4"]]) == pytest.approx(
         REF_DIG["S_gas_ch4"], rel=0.01)

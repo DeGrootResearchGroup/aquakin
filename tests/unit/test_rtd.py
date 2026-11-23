@@ -10,7 +10,9 @@ from aquakin.utils import rtd
 def test_cstr_moments():
     """For an ideal CSTR, E(t) = (1/tau) * exp(-t/tau).
 
-    Mean should equal tau, variance tau^2, Morrill ~= 21.85.
+    Mean should equal tau, variance tau^2, Morrill ~= 21.85. At 1000 samples
+    per tau over 20 tau, the trapezoidal moments and the interpolated
+    percentiles are within 1.1e-6 of the closed forms (measured), so ``rel=1e-5``.
     """
     tau = 100.0
     t = jnp.linspace(0.0, 20.0 * tau, 20_000)
@@ -20,19 +22,26 @@ def test_cstr_moments():
     var = float(rtd.variance(t, C))
     morrill = float(rtd.morrill_index(t, C))
 
-    assert mean == pytest.approx(tau, rel=5e-3)
-    assert var == pytest.approx(tau**2, rel=2e-2)
-    assert morrill == pytest.approx(np.log(0.1) / np.log(0.9), rel=2e-3)
+    assert mean == pytest.approx(tau, rel=1e-5)
+    assert var == pytest.approx(tau**2, rel=1e-5)
+    assert morrill == pytest.approx(np.log(0.1) / np.log(0.9), rel=1e-5)
 
 
 def test_pfr_morrill_near_one():
-    """A narrow Gaussian impulse approximates plug flow; Morrill -> 1."""
+    """A narrow Gaussian impulse approximates plug flow; Morrill -> 1.
+
+    For a Gaussian E(t) the percentiles are exact, t_q = tau + z_q sigma with
+    z_0.9 = 1.2815516, so Morrill = (tau + z sigma) / (tau - z sigma) = 1.02596.
+    At 50 samples per sigma the interpolated value is within 2.1e-6 of it
+    (measured), so ``rel=1e-5``.
+    """
     tau = 100.0
     sigma = 1.0
     t = jnp.linspace(0.0, 200.0, 10_000)
     C = jnp.exp(-0.5 * ((t - tau) / sigma) ** 2)
     morrill = float(rtd.morrill_index(t, C))
-    assert morrill == pytest.approx(1.0, abs=0.05)
+    z90 = 1.2815515655446004  # standard normal 0.9 quantile
+    assert morrill == pytest.approx((tau + z90 * sigma) / (tau - z90 * sigma), rel=1e-5)
 
 
 def test_F_curve_bounds_and_monotonic():
@@ -56,14 +65,14 @@ def test_E_curve_integrates_to_one():
 def test_percentile_time_invalid_q():
     t = jnp.linspace(0.0, 10.0, 11)
     C = jnp.ones_like(t)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"q must be in \[0, 1\]"):
         rtd.percentile_time(t, C, q=1.5)
 
 
 def test_mismatched_lengths_rejected():
     t = jnp.linspace(0.0, 10.0, 11)
     C = jnp.ones(10)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="same length"):
         rtd.E_curve(t, C)
 
 
@@ -142,7 +151,14 @@ def test_percentile_time_with_dead_time():
 
 
 def test_percentile_time_dead_time_gaussian():
-    """A narrow pulse after a long dead time: t10 is near tau - 1.28 sigma."""
+    """A narrow pulse after a long dead time: t10 is near tau - 1.28 sigma.
+
+    The grid step (0.1) is half of sigma, so the trapezoidal F and its linear
+    interpolation are coarse: the result is 0.0123 below the exact Gaussian
+    percentile (measured). ``abs=0.015`` holds that discretization error and
+    would still catch t10 being pulled back across the leading F = 0 stretch.
+    """
     t = jnp.linspace(0.0, 10.0, 101)
     C = jnp.exp(-0.5 * ((t - 5.0) / 0.2) ** 2)
-    assert float(rtd.percentile_time(t, C, 0.1)) == pytest.approx(5.0 - 1.2816 * 0.2, abs=0.03)
+    z90 = 1.2815515655446004  # standard normal 0.9 quantile (t10 = tau - z sigma)
+    assert float(rtd.percentile_time(t, C, 0.1)) == pytest.approx(5.0 - z90 * 0.2, abs=0.015)

@@ -201,12 +201,17 @@ def test_colder_suppresses_nitrification(asm1):
            "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0}
 
     def steady_snh(celsius):
+        # The algebraic (PTC) steady state, not a forward run: it converges in
+        # under 40 iterations at both temperatures and agrees with integrating
+        # to steady state (which stops on a 1e-3 change criterion) to 0.5% at
+        # 20 degC and 3% at 10 degC, far inside the margins asserted below.
         plant = build_bsm1(asm1)
         plant.add_influent("feed", asm1.influent(inf, Q=18446.0))
         plant.set_temperature(celsius)
-        ss = plant.run_to_steady_state(max_time=300.0)
-        return float(plant.stream(ss.solution, plant.effluent_endpoint)
-                     .C_named("SNH")[-1])
+        ss = plant.steady_state()
+        assert ss.converged and ss.method == "ptc", celsius
+        tank5 = plant.states_by_unit(ss.state)["tank5"]
+        return float(tank5[asm1.species_index["SNH"]])   # = effluent (soluble)
 
     warm = steady_snh(20.0)
     cold = steady_snh(10.0)

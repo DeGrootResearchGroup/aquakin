@@ -20,8 +20,11 @@ def test_sobol_normal_sample_recovers_mean_std():
     s = np.array([0.3, 1.0])
     Z, n = _sobol_normal_sample(m, s, 2, 4096, 0)
     assert n == 4096
-    assert np.allclose(Z.mean(axis=0), m, atol=3e-3)
-    assert np.allclose(Z.std(axis=0), s, rtol=3e-2)
+    # Scrambled-Sobol QMC error at n = 4096: over seeds 0-3 the sample mean is
+    # within 6.6e-5 and the sample std within 4.7e-4 (relative) of the target
+    # (measured; plain Monte Carlo would be ~s/sqrt(n) = 1.6e-2 for the mean).
+    assert np.allclose(Z.mean(axis=0), m, rtol=0.0, atol=5e-4)
+    assert np.allclose(Z.std(axis=0), s, rtol=3e-3, atol=0.0)
 
 
 @pytest.mark.parametrize("kind,theta",
@@ -57,5 +60,8 @@ def test_gaussian_dgsm_single_lognormal_input_bound_near_one():
     bound, *_ = _dgsm_aggregate(grad_sq, g.reshape(n, 1), rng2=None,
                                 poincare=np.array([s ** 2]))
     analytic = np.exp(s ** 2) * s ** 2 / (np.exp(s ** 2) - 1.0)
-    assert float(bound[0, 0]) == pytest.approx(analytic, rel=0.02)
+    # The bound is a ratio of two QMC estimates (mean squared gradient over the
+    # output variance) from n = 8192 points; over seeds 0-3 it is within 3.6e-3
+    # of the closed form (measured, the largest at seed 0), hence 1e-2.
+    assert float(bound[0, 0]) == pytest.approx(analytic, rel=1e-2)
     assert float(bound[0, 0]) >= 1.0           # a valid Sobol total-index upper bound
