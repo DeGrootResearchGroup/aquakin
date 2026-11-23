@@ -68,7 +68,9 @@ Compiling a solve costs far more than running it, so tests share compiled progra
 - **Use the single-CSTR plant** (`make_cstr_plant`) for any property that does
   not depend on plant size; build BSM1 / BSM2 only to test what needs them.
 - **A fast-tier test over about 10 s needs a reason**; otherwise shrink it or mark
-  it `slow`.
+  it `slow`. `tests/unit/test_fast_tier_budget.py` fails one recorded over 30 s
+  in `.test_durations` (it catches a new one on the weekly durations refresh PR):
+  fix the test, do not add it to that file's `RECORDED` list to get green.
 
 ## Gradients
 
