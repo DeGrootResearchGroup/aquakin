@@ -333,7 +333,10 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   the colored and dense gradients are equal on the superset pattern. So the auto
   decision is a per-host *performance* choice, never a tested outcome — the tests
   assert its self-consistency and gradient correctness, not which branch it picks.
-  `plant.colored_jacobian_decision()` returns `("colored"|"dense", ratio)`. **`"auto"` governs only the
+  That measured-ratio decision has since been replaced by a deterministic size
+  gate (`Plant._COLORED_BACKWARD_MIN_STATES`, 100 states: BSM1 dense, BSM2
+  colored), and `plant.colored_jacobian_decision()` returns
+  `("colored"|"dense", n_states)`. **`"auto"` governs only the
   `stable_adjoint` backward** — it leaves the **forward** `jax_adjoint` solve dense
   (forward coloring swaps the implicit linear solver and so is not guaranteed
   bit-identical; making it the all-solves default is a separate, full-suite-
