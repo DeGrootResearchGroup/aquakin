@@ -30,6 +30,7 @@ from aquakin.integrate._common import (
     friendly_solve_errors,
     to_native_time,
 )
+from aquakin.integrate._config import FORWARD_THROUGH_SOLVE_DIFF, STABLE_REVERSE_DIFF
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.integrate.events import Event, events_to_native_time, solve_with_events
 from aquakin.integrate.seam import _coerce_atol, _run_diffeqsolve
@@ -386,7 +387,7 @@ def _validate_solve_args(self, *, events, event, integrator, forward_fast, gradi
     ``method='through_solve'``); ``events=`` with the low-level ``event=`` or
     with ``integrator.solver`` / ``colored_jacobian=True`` (the segmented
     located-event solve manages its own integrator); and ``forward_fast`` with
-    ``events=`` / ``gradient='stable_adjoint'`` / traced inputs (it is a
+    ``events=`` / the internal ``"stable_adjoint"`` route / traced inputs (it is a
     non-differentiable concrete-only path) / a non-default integrator
     ``solver`` / ``order`` / ``factormax`` / ``dtmax`` / ``colored_jacobian``
     (it honours only ``rtol`` / ``atol`` / ``max_steps``).
@@ -448,8 +449,8 @@ def _validate_solve_args(self, *, events, event, integrator, forward_fast, gradi
         if gradient == "stable_adjoint":
             raise ValueError(
                 "forward_fast is a non-differentiable forward path; it is "
-                "incompatible with gradient='stable_adjoint'. For a reverse-mode "
-                "gradient use the default solve."
+                f"incompatible with the stable discrete adjoint ({STABLE_REVERSE_DIFF}). "
+                "For a reverse-mode gradient use the default solve."
             )
         if any(isinstance(v, jax.core.Tracer) for v in (params, y0)):
             raise ValueError(
@@ -559,7 +560,7 @@ def _solve_stable_adjoint(
     time_factor,
     time_unit,
 ):
-    """The cap-free reverse-mode discrete-adjoint solve (``gradient='stable_adjoint'``).
+    """The cap-free reverse-mode discrete-adjoint solve (the internal ``"stable_adjoint"`` route).
 
     A robust adaptive ESDIRK forward paired with the per-step transposed-solve
     discrete adjoint over the saved trajectory, which stays finite at any step
@@ -568,13 +569,15 @@ def _solve_stable_adjoint(
     """
     if adjoint is not None or dtmax is not None:
         raise ValueError(
-            "gradient='stable_adjoint' forms its own discrete adjoint and "
-            "controls its own steps; do not also pass adjoint= or dtmax=."
+            f"The stable discrete adjoint ({STABLE_REVERSE_DIFF}) forms its own "
+            "discrete adjoint and controls its own steps; do not also pass "
+            "adjoint= or dtmax=."
         )
     if event is not None:
         raise ValueError(
             "event= (e.g. a steady-state terminating event) is only "
-            "supported on the forward gradient='jax_adjoint' path."
+            "supported on the forward path that differentiates through the "
+            f"solve ({FORWARD_THROUGH_SOLVE_DIFF} or method='through_solve')."
         )
     # solver=/factormax= ARE supported here: the discrete adjoint builds
     # its backward from the forward solver's Butcher tableau generically
@@ -736,7 +739,7 @@ def _solve_jax_adjoint(
     time_factor,
     time_unit,
 ):
-    """The ``gradient="jax_adjoint"`` diffrax solve -- the default path.
+    """The diffrax solve (the internal ``"jax_adjoint"`` route) -- the default path.
 
     Runs the plant under the standard diffrax integrator: a plain concrete
     forward integration, or -- when wrapped in ``jax.grad`` / ``jacfwd`` --
