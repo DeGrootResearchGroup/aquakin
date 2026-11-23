@@ -343,26 +343,29 @@ def bsm1():
     """The BSM1 plant built once and shared across the steady-state tests that
     only READ it -- ``steady_state`` / ``run_to_steady_state`` / ``jax.grad`` do
     not mutate the plant, so its per-instance compiled-solve cache amortises the
-    PTC compile across these tests instead of rebuilding + recompiling per test.
-    (The cache-assertion test below builds its own fresh plant: it asserts an
-    empty cache.)"""
+    PTC compile across these tests instead of rebuilding + recompiling per test."""
     return _bsm1()
 
 
 @pytest.mark.slow
 def test_bsm1_steady_state_matches_forward(bsm1):
-    plant, asm1, y0 = bsm1
+    plant, _asm1, y0 = bsm1
     ss = plant.steady_state(y0=y0)
     assert ss.method == "ptc" and bool(ss.converged)
     assert float(ss.residual) < 1e-5
-    fwd = plant.run_to_steady_state(y0=y0, max_time=300.0)
-    # The two independent steady-state routes agree on the operating point.
-    i = asm1.species_index
-    a = plant.states_by_unit(ss.state)
-    b = plant.states_by_unit(fwd.state)
-    for sp in ["XB_H", "XB_A", "SNH", "SNO", "SO"]:
-        assert abs(float(a["tank5"][i[sp]]) - float(b["tank5"][i[sp]])) <= \
-            0.03 * abs(float(b["tank5"][i[sp]])) + 0.05, sp
+    # The forward reference stops on the criterion PTC converges on, held 1e-8
+    # tight. The default norm test stops while the slow states still move (its
+    # scaled residual is ~1e-2 here, tank-5 SNH ~7% off), so it is not a
+    # reference for the root.
+    fwd = plant.run_to_steady_state(y0=y0, criterion="scaled_residual", tol=1e-8,
+                                    max_time=1000.0)
+    assert bool(fwd.converged) and float(fwd.residual) <= 1e-8
+    # The two independent steady-state routes agree on the operating point. The
+    # scaled residuals here (PTC ~1e-7, forward ~4e-9) put the two states ~2e-8
+    # apart, relative, over every state above 1e-3; 1e-6 leaves a wide margin.
+    a, b = np.asarray(ss.state), np.asarray(fwd.state)
+    big = np.abs(a) > 1e-3
+    assert np.max(np.abs(b[big] - a[big]) / np.abs(a[big])) < 1e-6
 
 
 @pytest.mark.slow
@@ -436,78 +439,22 @@ def test_bsm1_steady_state_differentiable_wrt_recycle_flow(bsm1):
     assert float(g[ras]) < 0.0
 
 
-@pytest.mark.slow
-def test_bsm1_steady_state_solve_is_cached():
-    # The eager PTC while_loop recompiles on every call; a persisted jitted solver
-    # makes a repeated concrete steady_state reuse the compile. Pin the behaviour
-    # (not the wall time): one cache entry, reused across params, bit-identical
-    # re-call, and the gradient path bypasses the cache (and stays finite).
-    plant, _asm1, y0 = _bsm1()
-    params = plant.default_parameters()
-    assert not plant._steady_jit_cache                 # empty before first solve
-    r1 = plant.steady_state(params, y0=y0)
-    assert bool(r1.converged)
-    assert len(plant._steady_jit_cache) == 1           # compiled + cached once
-    # A swept-params call reuses the SAME compiled solver (rhs reads params as an
-    # argument), so no new entry is added.
-    r2 = plant.steady_state(params.at[0].multiply(1.001), y0=y0)
-    assert bool(r2.converged) and len(plant._steady_jit_cache) == 1
-    # Same-params re-call is bit-identical (the cached compiled solve).
-    r3 = plant.steady_state(params, y0=y0)
-    assert float(jnp.max(jnp.abs(r1.state - r3.state))) == 0.0
-    # Under a gradient the call is traced, so it takes the IFT path, NOT the
-    # concrete cache -- no concrete entry is added and the gradient is finite.
-    g = jax.grad(lambda p: plant.steady_state(p, y0=y0).state.sum())(params)
-    assert bool(jnp.all(jnp.isfinite(g)))
-    assert len(plant._steady_jit_cache) == 1
-
-
-@pytest.mark.slow
-def test_bsm1_steady_state_falls_back_to_forward(bsm1):
-    # If PTC is starved of iterations it falls back to the forward solve.
-    plant, _asm1, y0 = bsm1
-    ss = plant.steady_state(y0=y0, max_iter=1, fallback=True,
-                            fallback_kwargs={"max_time": 300.0})
-    assert ss.method == "ptc->forward"
-    assert bool(ss.converged)
-
-
-def test_bsm1_steady_state_keeps_ptc_result_when_ladder_declines(bsm1):
-    # With no fallback configured (no continuation start, arclength/forward off)
-    # the escalation ladder has nothing to try, so a starved solve returns the
-    # non-converged PTC result verbatim rather than a fallback method -- the
-    # shared _steady_fallback_ladder "return None -> keep PTC" contract.
-    plant, _asm1, y0 = bsm1
-    ss = plant.steady_state(y0=y0, max_iter=1, arclength=False, fallback=False)
-    assert ss.method == "ptc"
-    assert not bool(ss.converged)
-
-
-def _design_cstr():
-    """A single CSTR (A -> B, k = 0.1, V/Q = 10) fed 1 g/m3 of A, plus a design
-    override that raises the feed to 5 g/m3 (steady state A = B = 2.5)."""
-    from aquakin.plant import CSTRUnit, Plant
-    from aquakin.plant.influent import InfluentSeries
-
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    inf = InfluentSeries(t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
-                         C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=net)
-    plant = Plant("one", time_unit="s")
-    plant.add_unit(CSTRUnit(name="tank", model=net, volume=100.0,
-                            input_port_names=["inlet"], conditions={"T": 293.15}))
-    plant.add_influent("feed", inf, to="tank.inlet")
+def _design_cstr(make_cstr_plant):
+    """The conftest single CSTR (A -> B, k = 0.1, V/Q = 10, fed 1 g/m3 of A),
+    plus a design override that raises the feed to 5 g/m3 (steady state
+    A = B = 2.5)."""
     design = {"influent": {"feed": {"Q": jnp.asarray(10.0), "C": jnp.asarray([5.0, 0.0])}}}
-    return plant, design
+    return make_cstr_plant(), design
 
 
 @pytest.mark.parametrize("extra", [{}, {"atol": 1e-10}], ids=["default_atol", "atol"])
-def test_steady_state_forward_fallback_honours_design(extra):
+def test_steady_state_forward_fallback_honours_design(extra, make_cstr_plant):
     # A starved PTC falls back to forward integration; that fallback must
     # integrate the design-override feed, not the recorded influent (which
     # would give A = B = 0.5 and still report converged). An explicit solver
     # ``atol`` reaches the design rung too. The fallback is held to ``tol``, so
     # it sits above the ~1e-12 round-off floor of the scaled residual.
-    plant, design = _design_cstr()
+    plant, design = _design_cstr(make_cstr_plant)
     ss = plant.steady_state(design=design, max_iter=1, tol=1e-10, arclength=False,
                             fallback_kwargs={"ss_rtol": 1e-8, "ss_atol": 1e-8, **extra})
     assert ss.method == "ptc->forward"
@@ -516,11 +463,11 @@ def test_steady_state_forward_fallback_honours_design(extra):
 
 
 @pytest.mark.parametrize("criterion", ["norm", "scaled_residual"])
-def test_steady_state_design_forward_fallback_takes_criterion(criterion):
+def test_steady_state_design_forward_fallback_takes_criterion(criterion, make_cstr_plant):
     # The design-override forward rung takes run_to_steady_state's criterion /
     # tol / scale_floor and returns the scaled residual (issue #628). With the
     # design feed equal to the recorded one it matches the plain fallback.
-    plant, _ = _design_cstr()
+    plant, _ = _design_cstr(make_cstr_plant)
     same = {"influent": {"feed": {"Q": jnp.asarray(10.0), "C": jnp.asarray([1.0, 0.0])}}}
     kw = {"criterion": criterion, "tol": 1e-9, "scale_floor": 1e-6,
           "ss_rtol": 1e-10, "ss_atol": 1e-10}
@@ -539,13 +486,13 @@ def test_steady_state_design_forward_fallback_takes_criterion(criterion):
 
 
 @pytest.mark.parametrize("use_design", [False, True], ids=["plain", "design"])
-def test_steady_state_forward_fallback_holds_caller_tol(use_design):
+def test_steady_state_forward_fallback_holds_caller_tol(use_design, make_cstr_plant):
     # A starved PTC falls back to a forward run, which must stop on the scaled
     # residual at the caller's ``tol`` / ``scale_floor`` (issue #741). On the
     # default norm test the run stops at a residual near ss_rtol=1e-3, orders
     # above ``tol``, and was still reported converged. The steady state is
     # A = B = 0.5 for the recorded feed (2.5 for the design feed).
-    plant, design = _design_cstr()
+    plant, design = _design_cstr(make_cstr_plant)
     tol = 1e-10
     ss = plant.steady_state(design=design if use_design else None, max_iter=1, tol=tol,
                             scale_floor=1e-6, arclength=False)
@@ -557,11 +504,11 @@ def test_steady_state_forward_fallback_holds_caller_tol(use_design):
 
 
 @pytest.mark.parametrize("use_design", [False, True], ids=["plain", "design"])
-def test_steady_state_forward_fallback_not_converged_above_tol(use_design):
+def test_steady_state_forward_fallback_not_converged_above_tol(use_design, make_cstr_plant):
     # An explicit ``criterion="norm"`` in fallback_kwargs is honoured, but the
     # result is reported converged only if its scaled residual meets ``tol``:
     # the norm test stops near ss_rtol=1e-3, far above 1e-10 (issue #741).
-    plant, design = _design_cstr()
+    plant, design = _design_cstr(make_cstr_plant)
     tol = 1e-10
     ss = plant.steady_state(design=design if use_design else None, max_iter=1, tol=tol,
                             arclength=False, fallback_kwargs={"criterion": "norm"})
@@ -570,8 +517,8 @@ def test_steady_state_forward_fallback_not_converged_above_tol(use_design):
     assert not bool(ss.converged)
 
 
-def test_steady_state_design_forward_fallback_rejects_bad_criterion():
-    plant, design = _design_cstr()
+def test_steady_state_design_forward_fallback_rejects_bad_criterion(make_cstr_plant):
+    plant, design = _design_cstr(make_cstr_plant)
     with pytest.raises(ValueError, match="criterion"):
         plant.steady_state(design=design, max_iter=1, tol=1e-12, arclength=False,
                            fallback_kwargs={"criterion": "bogus"})
@@ -581,11 +528,11 @@ def test_steady_state_design_forward_fallback_rejects_bad_criterion():
     (True, "continuation_from and arclength"),
     (False, "continuation_from fallback"),
 ], ids=["arclength", "no_arclength"])
-def test_steady_state_design_skips_parameter_continuation(arclength, named):
+def test_steady_state_design_skips_parameter_continuation(arclength, named, make_cstr_plant):
     # The continuation rungs deform in params alone; with a design override
     # they are skipped (rather than crashing on the (params, design) pytree),
     # and the explicit request is reported rather than dropped silently.
-    plant, design = _design_cstr()
+    plant, design = _design_cstr(make_cstr_plant)
     p = plant.default_parameters()
     with pytest.warns(UserWarning, match=named):
         ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False,
@@ -595,11 +542,11 @@ def test_steady_state_design_skips_parameter_continuation(arclength, named):
     assert not bool(ss.converged)
 
 
-def test_steady_state_design_no_skip_warning_without_continuation():
+def test_steady_state_design_no_skip_warning_without_continuation(make_cstr_plant):
     # A caller who did not ask for continuation is not warned, even with the
     # default arclength=True (that rung needs continuation_from anyway).
     import warnings
-    plant, design = _design_cstr()
+    plant, design = _design_cstr(make_cstr_plant)
     with warnings.catch_warnings():
         warnings.filterwarnings("error", message=r"steady_state\(design=")
         ss = plant.steady_state(design=design, max_iter=1, tol=1e-12, fallback=False)
@@ -736,6 +683,36 @@ def test_plant_steady_state_gradient_matches_closed_form(make_cstr_plant):
     assert float(g[0]) == pytest.approx(-0.1 / (0.1 + k) ** 2, rel=1e-8)
 
 
+def test_steady_state_solve_is_cached(make_cstr_plant):
+    # The eager PTC while_loop recompiles on every call; a persisted jitted solver
+    # makes a repeated concrete steady_state reuse the compile. Pin the behaviour
+    # (not the wall time): one cache entry, reused across params, bit-identical
+    # re-call, and the gradient path bypasses the cache. Nothing here depends on
+    # the plant's size, so it runs on the single CSTR, whose IFT gradient has the
+    # closed form dA*/dk = -(Q/V) / (Q/V + k)^2.
+    plant = make_cstr_plant()
+    params = plant.default_parameters()
+    assert not plant._steady_jit_cache                 # empty before first solve
+    r1 = plant.steady_state(params, tol=1e-10)
+    assert bool(r1.converged)
+    np.testing.assert_allclose(np.asarray(r1.state), _cstr_steady(float(params[0])),
+                               rtol=1e-8)
+    assert len(plant._steady_jit_cache) == 1           # compiled + cached once
+    # A swept-params call reuses the SAME compiled solver (rhs reads params as an
+    # argument), so no new entry is added.
+    r2 = plant.steady_state(params.at[0].multiply(1.001), tol=1e-10)
+    assert bool(r2.converged) and len(plant._steady_jit_cache) == 1
+    # Same-params re-call is bit-identical (the cached compiled solve).
+    r3 = plant.steady_state(params, tol=1e-10)
+    assert float(jnp.max(jnp.abs(r1.state - r3.state))) == 0.0
+    # Under a gradient the call is traced, so it takes the IFT path, NOT the
+    # concrete cache -- no concrete entry is added.
+    g = jax.grad(lambda p: plant.steady_state(p, tol=1e-10).state[0])(params)
+    k = float(params[0])
+    assert float(g[0]) == pytest.approx(-0.1 / (0.1 + k) ** 2, rel=1e-8)
+    assert len(plant._steady_jit_cache) == 1
+
+
 def test_colored_steady_state_on_a_recycle_loop_matches_closed_form():
     # A mixer -> CSTR -> 50/50 splitter loop (simple A -> B model, V = 100,
     # fresh feed Q = 10 of A = 1). The recycle only raises the flow through the
@@ -837,13 +814,16 @@ def test_bsm2_steady_state_matches_forward():
     assert ss.method == "ptc" and bool(ss.converged)
     assert int(ss.iterations) <= 150
     assert float(ss.residual) < 1e-5
-    fwd = plant.run_to_steady_state(params, y0=y0, max_time=400.0, max_steps=800_000)
-    i = asm1.species_index
-    a = plant.states_by_unit(ss.state)
-    b = plant.states_by_unit(fwd.state)
-    for sp in ["XB_H", "XB_A", "SNH", "SNO"]:
-        assert abs(float(a["tank5"][i[sp]]) - float(b["tank5"][i[sp]])) <= \
-            0.03 * abs(float(b["tank5"][i[sp]])) + 0.05, sp
+    # The forward reference stops on PTC's own criterion, held 1e-8 tight (the
+    # default norm test stops while the digester's slow states still move).
+    fwd = plant.run_to_steady_state(params, y0=y0, criterion="scaled_residual", tol=1e-8,
+                                    max_time=2000.0, max_steps=800_000)
+    assert bool(fwd.converged) and float(fwd.residual) <= 1e-8
+    # The scaled residuals here (PTC ~3e-10, forward ~4e-9) put the two states
+    # ~1e-7 apart, relative, over every state above 1e-3; 1e-6 leaves a margin.
+    a, b = np.asarray(ss.state), np.asarray(fwd.state)
+    big = np.abs(a) > 1e-3
+    assert np.max(np.abs(b[big] - a[big]) / np.abs(a[big])) < 1e-6
 
 
 def test_ptc_line_search_bounds_finite_blowup():
@@ -992,38 +972,12 @@ def test_bsm2_steady_state_per_state_scaling_converges_competitively():
 
 
 @pytest.mark.slow
-def test_steady_state_forward_mode_ad(bsm1):
-    """The steady-state IFT gradient is now a ``custom_jvp``, so the plant steady
-    state is differentiable in BOTH directions: forward-mode ``jacfwd`` flows
-    through ``plant.steady_state`` (previously rejected by the reverse-only
-    ``custom_vjp``), and it agrees with reverse-mode ``jax.grad`` and with finite
-    differences. This is the forward-mode capability the many-output sensitivity
-    screen needs."""
-    plant, asm1, y0 = bsm1
-    base = plant.default_parameters()
-    i = plant.parameter_index("asm1.muA")
-    si = asm1.species_index
-
-    def out(theta):
-        s = plant.steady_state(base.at[i].set(theta), y0=y0).state
-        return plant.states_by_unit(s)["tank5"][si["SNO"]]
-
-    th = float(base[i])
-    fwd = float(jax.jacfwd(out)(th))                 # forward mode (the new path)
-    rev = float(jax.grad(out)(th))                   # reverse mode (unchanged)
-    h = th * 1e-4
-    fd = (float(out(th + h)) - float(out(th - h))) / (2.0 * h)
-    assert np.isfinite(fwd) and np.isfinite(rev)
-    assert fwd == pytest.approx(rev, rel=1e-7)       # both IFT, same root
-    assert fwd == pytest.approx(fd, rel=1e-4)        # the true sensitivity (FD floor)
-
-
-@pytest.mark.slow
 def test_steady_state_sensitivity_helper(bsm1):
     """``plant.steady_state_sensitivity`` returns the exact IFT output sensitivity
     in either AD direction from a single steady-state solve. Forward and reverse
-    give the same result; it matches a ``jax.grad`` through ``steady_state`` and
-    finite differences; the elasticity option is finite."""
+    give the same result; it matches a ``jax.grad`` and a ``jax.jacfwd`` through
+    ``steady_state`` (the IFT tangent is a ``custom_jvp``, so both AD directions
+    flow through it) and finite differences; the elasticity option is finite."""
     plant, asm1, y0 = bsm1
     base = plant.default_parameters()
     si = asm1.species_index
@@ -1049,8 +1003,10 @@ def test_steady_state_sensitivity_helper(bsm1):
         return plant.states_by_unit(s)["tank5"][si["SNO"]]
 
     g = float(jax.grad(scalar)(th))
+    fwd = float(jax.jacfwd(scalar)(th))
     h = th * 1e-4
     fd = (scalar(th + h) - scalar(th - h)) / (2.0 * h)
+    assert fwd == pytest.approx(g, rel=1e-7)          # both IFT, same root
     assert float(Sf[1, i]) == pytest.approx(g, rel=1e-7)
     assert float(Sf[1, i]) == pytest.approx(float(fd), rel=1e-4)  # FD floor
 

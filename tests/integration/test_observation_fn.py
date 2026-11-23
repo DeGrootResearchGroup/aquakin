@@ -13,7 +13,6 @@ import pytest
 
 import aquakin
 from aquakin import Experiment, LaplaceConfig, OptimizerConfig
-from tests.conftest import FIXTURES
 
 K, A0, SIGMA = 0.25, 1.5, 0.01
 T_OBS = jnp.linspace(0.5, 12.0, 25)
@@ -25,20 +24,16 @@ def surrogate(C, p):
 
 
 # Module-scoped so the reactor, its compiled solves and the truth trajectory
-# are built once for the file; no test mutates them.
+# are built once for the file; no test mutates them. The model is the
+# session-scoped ``simple_model`` from ``tests/conftest.py``.
 @pytest.fixture(scope="module")
-def model():
-    return aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
-
-
-@pytest.fixture(scope="module")
-def reactor(model):
-    return aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1, T=293.15))
+def reactor(simple_model):
+    return aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
 
 
 @pytest.fixture(scope="module")
-def params(model):
-    return model.default_parameters().at[0].set(K)
+def params(simple_model):
+    return simple_model.default_parameters().at[0].set(K)
 
 
 @pytest.fixture(scope="module")

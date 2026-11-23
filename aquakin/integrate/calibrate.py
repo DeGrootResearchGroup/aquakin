@@ -50,7 +50,6 @@ from aquakin.integrate.calibration.config import (
 )
 from aquakin.integrate.calibration.coords import _free_ic_fields
 from aquakin.integrate.calibration.driver import _check_start_args, _run_fit
-from aquakin.integrate.calibration.laplace import _laplace_covariance
 from aquakin.integrate.calibration.loss import (
     _check_sigma_arg,
     _convert_observations,
@@ -60,22 +59,17 @@ from aquakin.integrate.calibration.objective import _FitConfig
 from aquakin.integrate.calibration.problem import _ReactorForwardModel, _resolve_problem
 from aquakin.integrate.calibration.result import CalibrationResult, PredictiveBand
 
-# ``calibrate`` and the configs and results it takes and returns, plus the
-# non-underscore helpers this module has always exported (whether those stay is
-# a public-API decision, so they are kept). The implementation lives in the
-# ``aquakin.integrate.calibration`` subpackage, whose private helpers are
-# imported from their own modules (or, by the plant layer, from
-# ``aquakin.integrate.seam``), never through here. ``_laplace_covariance`` is
-# still re-exported because ``tests/integration/test_calibrate.py`` imports it
-# from here; it leaves once that test imports it from
-# ``aquakin.integrate.calibration.laplace``.
+# ``calibrate`` and the configs and results it takes and returns. Names defined
+# elsewhere are not re-exported: the public ones are imported from ``aquakin``,
+# and the implementation lives in the ``aquakin.integrate.calibration``
+# subpackage, whose private helpers are imported from their own modules (or, by
+# the plant layer, from ``aquakin.integrate.seam``), never through here.
 __all__ = [
     "CalibrationResult",
     "FreeICConfig",
     "LaplaceConfig",
     "OptimizerConfig",
     "PredictiveBand",
-    "_laplace_covariance",
     "calibrate",
 ]
 

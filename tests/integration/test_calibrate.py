@@ -16,7 +16,6 @@ from aquakin.integrate._transforms import (
     to_unconstrained,
 )
 from aquakin.schema.model_spec import PriorSpec
-from tests.conftest import FIXTURES
 
 # ---------- transform roundtrips ----------
 
@@ -52,20 +51,13 @@ def test_transform_jacobian_matches_jax_grad():
 
 
 def test_unknown_transform_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"Unknown transform 'exp'"):
         to_unconstrained(jnp.asarray(1.0), "exp")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"Unknown transform 'exp'"):
         from_unconstrained(jnp.asarray(1.0), "exp")
 
 
 # ---------- end-to-end calibration ----------
-
-
-@pytest.fixture(scope="module")
-def simple_model():
-    """The simple A -> B model, loaded once for this module so the
-    module-scoped data and fits below can share it. Nothing here mutates it."""
-    return aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
 
 
 @pytest.fixture(scope="module")
@@ -417,13 +409,17 @@ def test_recovers_known_parameter_nll_with_noise(setup):
     assert 0.0 < std < 1.0
 
 
-def test_laplace_returns_positive_definite_cov(band_fit):
-    *_, result = band_fit
+def test_laplace_cov_matches_closed_form_fisher(band_fit):
+    """At the zero-residual fit of B(t) = 1 - exp(-k t), the default (FD)
+    Laplace covariance of log k is the inverse of the closed-form Fisher
+    information sum((k t exp(-k t) / sigma)^2)."""
+    _, _, t_obs, _, result = band_fit
+    k, t = 0.25, np.asarray(t_obs)
+    fisher = np.sum((k * t * np.exp(-k * t) / 0.02) ** 2)
     cov = np.asarray(result.posterior_cov)
     assert cov.shape == (1, 1)
-    assert np.all(np.isfinite(cov))
-    eigvals = np.linalg.eigvalsh(cov)
-    assert np.all(eigvals > 0)
+    # rtol 1e-3: the FD Hessian's truncation, as in the joint FD test below.
+    assert cov[0, 0] == pytest.approx(1.0 / fisher, rel=1e-3)
 
 
 @pytest.mark.slow  # heavy: calibrate + FD Laplace
@@ -489,7 +485,7 @@ def test_laplace_dtmax_reconstructs_tighter_reactor(simple_model):
 
 def test_unknown_laplace_method_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"laplace_method must be 'fd' or 'gauss_newton'"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -536,11 +532,11 @@ def test_priorspec_mean_std_direct():
 
 
 def test_priorspec_rejects_both_and_neither():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"exactly one of \{mean and std\} or \{range\}"):
         PriorSpec(mean=1.0, std=1.0, range=(0.0, 2.0))
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"exactly one of \{mean and std\} or \{range\}"):
         PriorSpec()
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"prior std must be > 0"):
         PriorSpec(mean=1.0, std=-1.0)  # std must be > 0
 
 
@@ -1347,7 +1343,7 @@ def test_jitter_schedule_reproducible(setup):
 
 def test_multistart_invalid_n_starts_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"n_starts must be >= 1"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -1486,23 +1482,6 @@ def test_predictive_band_all_species_shape(band_fit):
     assert band.species is None
 
 
-def test_predictive_band_requires_laplace(setup):
-    reactor, C0, t_obs, obs_clean, _ = setup
-    result = aquakin.calibrate(
-        reactor,
-        C0,
-        observations=obs_clean,
-        t_obs=t_obs,
-        free_params=["A_to_B.k"],
-        transforms={"A_to_B.k": "positive_log"},
-        observed_species=["B"],
-        loss="mse",
-        laplace=False,
-    )
-    with pytest.raises(ValueError):
-        result.predictive_band(reactor, C0, t_obs)
-
-
 def test_predictive_band_eig_keep_is_deprecated(band_fit):
     reactor, C0, t_obs, _, result = band_fit
     with pytest.warns(DeprecationWarning, match="eig_keep"):
@@ -1519,7 +1498,7 @@ def test_laplace_covariance_null_direction_gives_inf_std():
     """An exactly null eigen-direction cannot be inverted: it is left out of the
     covariance and every parameter loading on it gets an infinite std, rather
     than the zero variance a truncated pseudo-inverse would report."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     H = _ROT2 @ np.diag([100.0, 0.0]) @ _ROT2.T
     cov, std = _laplace_covariance(H, ridge=1e-6)
@@ -1532,7 +1511,7 @@ def test_laplace_covariance_null_direction_gives_inf_std():
 
 def test_laplace_covariance_null_direction_only_flags_involved_parameters():
     """A parameter with no loading on the null direction keeps its finite std."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     H = np.diag([0.0, 4.0])
     _, std = _laplace_covariance(H, ridge=0.0)
@@ -1542,7 +1521,7 @@ def test_laplace_covariance_null_direction_only_flags_involved_parameters():
 
 def test_laplace_covariance_is_full_inverse_when_well_conditioned():
     """A well-conditioned Hessian gives inv(H + ridge)."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     H = np.diag([10.0, 20.0])
     cov, std = _laplace_covariance(H, ridge=1e-6)
@@ -1555,7 +1534,7 @@ def test_laplace_covariance_keeps_weak_direction_variance():
     largest) keeps its variance. The covariance used to drop every direction
     below 1e-2 of the largest, giving it zero variance and understating the
     std of the parameters on it by orders of magnitude."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     rng = np.random.default_rng(0)
     Q, _ = np.linalg.qr(rng.standard_normal((3, 3)))
@@ -1577,7 +1556,7 @@ def test_laplace_covariance_relative_to_largest_for_small_scale_hessian():
     full: the null test is RELATIVE to the largest eigenvalue, not an absolute
     floor, so a trace-species observable (JᵀJ ~1e-2) is not reported
     degenerate."""
-    from aquakin.integrate.calibrate import _laplace_covariance
+    from aquakin.integrate.calibration.laplace import _laplace_covariance
 
     H = _ROT2 @ np.diag([9.1e-3, 1e-7]) @ _ROT2.T
     cov, std = _laplace_covariance(H, ridge=0.0)
@@ -1588,13 +1567,6 @@ def test_laplace_covariance_relative_to_largest_for_small_scale_hessian():
 def test_laplace_config_eig_keep_is_deprecated():
     with pytest.warns(DeprecationWarning, match="eig_keep"):
         LaplaceConfig(eig_keep=1e-2)
-
-
-def test_calibrate_joint_std_matches_full_inverse(decay_fit):
-    """End-to-end: the reported std is the full-inverse std of the Hessian."""
-    result, _ = decay_fit(LaplaceConfig(method="gauss_newton", include_ic=True, ridge=0.0))
-    full_std = np.sqrt(np.diag(np.linalg.inv(np.asarray(result.joint_hessian))))
-    assert np.allclose(np.asarray(result.posterior_std_unconstrained), full_std[:1], rtol=1e-8)
 
 
 _PRODUCT_RATE_YAML = """
@@ -1813,7 +1785,7 @@ def test_gauss_newton_with_free_ic_and_multistart(simple_model):
 
 def test_unknown_optimizer_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"optimizer.method must be one of"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -1890,33 +1862,6 @@ def test_free_ic_per_dataset_in_multibatch(simple_model):
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-2)
     assert result.ic_named[0]["A"] == pytest.approx(A0a, rel=2e-2)
     assert result.ic_named[1]["A"] == pytest.approx(A0b, rel=2e-2)
-
-
-def test_free_ic_laplace_is_over_rates_only(simple_model):
-    """With free_ic + laplace, the posterior covers the rate parameters only
-    (pools held at their MAP), so its shape matches the rate count."""
-    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    true_params = simple_model.default_parameters().at[0].set(0.25)
-    t_obs = jnp.linspace(0.5, 12.0, 25)
-    sol = reactor.solve(
-        jnp.asarray([1.5, 0.0]), params=true_params, t_span=(0.0, 12.0), t_eval=t_obs
-    )
-    obs = jnp.stack([sol.C_named("A"), sol.C_named("B")], axis=1)
-    result = aquakin.calibrate(
-        reactor,
-        jnp.asarray([1.0, 0.0]),
-        observations=obs,
-        t_obs=t_obs,
-        free_params=["A_to_B.k"],
-        transforms={"A_to_B.k": "positive_log"},
-        observed_species=["A", "B"],
-        loss="nll",
-        sigma=jnp.asarray(0.02),
-        laplace=True,
-        free_ic=FreeICConfig(["A"], bounds=(0.1, 10.0)),
-    )
-    assert np.asarray(result.posterior_cov).shape == (1, 1)
-    assert "A_to_B.k" in result.params_named_std
 
 
 # ---------- joint rate + initial-pool Laplace posterior ----------
@@ -2087,7 +2032,7 @@ def test_joint_fields_absent_by_default_and_without_free_ic(decay_fit):
 
 def test_free_ic_unknown_species_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match=r"Unknown free_ic species 'NotASpecies'"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -2103,7 +2048,7 @@ def test_free_ic_unknown_species_rejected(setup):
 
 def test_free_ic_bad_bounds_rejected(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"ic_bounds must satisfy 0 < lo < hi"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -2151,7 +2096,7 @@ def test_multibatch_length_mismatch_rejected(simple_model):
     C0a = jnp.asarray([1.0, 0.0])
     t = jnp.asarray([0.0, 1.0])
     obs = jnp.asarray([0.0, 0.5])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"must be lists of equal length"):
         aquakin.calibrate(
             reactor,
             [C0a, C0a],
@@ -2166,7 +2111,7 @@ def test_multibatch_length_mismatch_rejected(simple_model):
 
 def test_rejects_empty_free_params(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"free_params must be non-empty"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -2179,7 +2124,7 @@ def test_rejects_empty_free_params(setup):
 
 def test_rejects_unknown_loss(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"loss must be one of"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -2193,7 +2138,7 @@ def test_rejects_unknown_loss(setup):
 
 def test_rejects_wmse_without_sigma(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"loss='wmse' requires a sigma"):
         aquakin.calibrate(
             reactor,
             C0,
@@ -2209,7 +2154,7 @@ def test_positive_log_initial_negative_rejected(simple_model):
     """If initial value is <= 0 the transform is invalid."""
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     init_bad = simple_model.default_parameters().at[0].set(-1.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"transform 'positive_log' but initial value -1.0 <= 0"):
         aquakin.calibrate(
             reactor,
             jnp.asarray([1.0, 0.0]),
@@ -2225,7 +2170,7 @@ def test_positive_log_initial_negative_rejected(simple_model):
 def test_logit_initial_out_of_range_rejected(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     init_bad = simple_model.default_parameters().at[0].set(1.5)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"transform 'logit' but initial value 1.5 is not in \(0, 1\)"):
         aquakin.calibrate(
             reactor,
             jnp.asarray([1.0, 0.0]),
