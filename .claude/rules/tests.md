@@ -41,7 +41,8 @@ hides the gap from the coverage number.
   the specific exception class and a fragment of the message that identifies the
   branch. Never `pytest.raises(Exception)`, and not a bare
   `pytest.raises(ValueError)` where the function has several `ValueError`s.
-  Every new `raise` gets a test.
+  Every new `raise` gets a test. `tests/unit/test_raises_match.py` counts the
+  message-less and broad ones per file and fails on any new one.
 - **An error or warning that tells the user what to do gets a test that does
   it**: trigger the message, follow its advice, and check the result (a value,
   not just "no error"). Advice that names real keywords can still be wrong, and

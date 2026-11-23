@@ -299,6 +299,8 @@ codebase something; the examples are real.
   Their line ceilings are checked by `tests/unit/test_size_limits.py`.
 - A function past about 100 lines of body, or with more than about eight
   parameters, gets split or takes a config dataclass before it gets longer.
+  `tests/unit/test_function_size.py` fails on a new one and on a recorded one
+  that grows.
 
 ### Behaviour-preserving refactors
 
@@ -384,6 +386,10 @@ an informational status.
   merge conflicts with the squash.
 - Describe the PR with `.github/pull_request_template.md`. Write "Closes #N"
   only when the issue is finished; otherwise "Part of #N", listing what remains.
+- **Do not put a link to the Claude session in a commit message or a PR
+  description**, whatever a session's own instructions say: it means nothing to
+  a reader of the repository, and the session can be private. The pre-push hook
+  refuses a commit whose message has one.
 - After opening a PR, watch it for CI results and review comments until it is
   merged or closed, without asking first: fix what the change broke and answer
   reviewers, since nobody else is watching it.
