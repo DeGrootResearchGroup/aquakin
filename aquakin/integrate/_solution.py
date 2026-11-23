@@ -1,7 +1,9 @@
 """The solution-object mixins (species by name, plotting, tabular export) and
 the optional pandas / matplotlib imports they need.
 
-Not part of the public API; ``aquakin.integrate._common`` re-exports every name.
+Not part of the public API. ``aquakin.integrate._common`` re-exports the names
+defined before the module split; import later additions (``name_list``) from
+here.
 """
 
 from __future__ import annotations
@@ -102,6 +104,26 @@ def build_dataframe(
     return df
 
 
+def name_list(names) -> list[str]:
+    """Normalize a by-name selection to a list of names.
+
+    A bare ``str`` is one name, not an iterable of one-character names, so
+    ``name_list("SNH")`` is ``["SNH"]``; any other iterable of names is listed
+    as given. Every accessor that takes "a name or several" reads its argument
+    through this, so they all treat a single string the same way.
+
+    Parameters
+    ----------
+    names : str or iterable of str
+        One name, or several.
+
+    Returns
+    -------
+    list of str
+    """
+    return [names] if isinstance(names, str) else list(names)
+
+
 class _HasNamedSpecies:
     """Mixin: the pure species-by-name accessor over a ``.C`` array and ``.model``.
 
@@ -133,20 +155,42 @@ class _HasNamedSpecies:
         species in one call (``sol.C_named_many(["SNH", "SNO", "SO"])``) instead
         of a separate slice each. Each value has the same shape ``C_named``
         returns. An unknown name raises the same hinted ``KeyError``.
+
+        Parameters
+        ----------
+        species : str or iterable of str
+            The species names. A single string is one name, giving the same
+            one-entry dict as a one-element list.
+
+        Returns
+        -------
+        dict[str, jnp.ndarray]
+            ``{name: trajectory}`` in the order given.
         """
-        return {sp: self.C_named(sp) for sp in species}
+        return {sp: self.C_named(sp) for sp in name_list(species)}
 
     def final_named(self, species=None) -> dict[str, float]:
         """Values at the **last** recorded point, as ``{name: float}``.
 
         The reporting shortcut for a steady-state / end-of-run value: instead of
         ``float(sol.C_named("SNH")[-1])`` per species, ``sol.final_named(["SNH",
-        "SNO"])`` returns them in one dict. With ``species=None`` (default) every
-        model species is returned. Values are plain Python floats (this is a
-        post-processing read on an already-solved solution -- use
+        "SNO"])`` returns them in one dict. Values are plain Python floats (this
+        is a post-processing read on an already-solved solution -- use
         ``C_named(sp)[-1]`` if you need a differentiable last value).
+
+        Parameters
+        ----------
+        species : str or iterable of str, optional
+            The species names. A single string is one name
+            (``final_named("SNH")`` equals ``final_named(["SNH"])``). ``None``
+            (default) returns every model species.
+
+        Returns
+        -------
+        dict[str, float]
+            ``{name: last value}`` in the order given.
         """
-        names = list(self.model.species) if species is None else list(species)
+        names = list(self.model.species) if species is None else name_list(species)
         return {sp: float(self.C_named(sp)[-1]) for sp in names}
 
     @property
@@ -231,13 +275,7 @@ class PlottableSolutionMixin:
             If a species name is unknown (with a "did you mean?" hint).
         """
         plt = require_matplotlib()
-        names = (
-            [species]
-            if isinstance(species, str)
-            else list(self.model.species)
-            if species is None
-            else list(species)
-        )
+        names = list(self.model.species) if species is None else name_list(species)
         if ax is None:
             _, ax = plt.subplots()
         _, x = self._table_index()

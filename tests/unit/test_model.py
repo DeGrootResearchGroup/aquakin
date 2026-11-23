@@ -232,6 +232,28 @@ def test_final_named_and_C_named_many_on_solution(simple_model):
         sol.final_named(["AA"])
 
 
+def test_by_name_accessors_take_a_bare_name():
+    """A bare string is one species name, not an iterable of characters:
+    ``final_named("SNH")`` and ``C_named_many("SNH")`` return the same one-key
+    dict as the one-element list, and ``final_named`` / ``C_named_many`` with a
+    list are unchanged. Multi-character names, so iterating the string would
+    look up ``"S"`` and fail."""
+    asm1 = aquakin.load_model("asm1")
+    n_t = 3
+    C = jnp.arange(n_t * asm1.n_species, dtype=float).reshape(n_t, asm1.n_species)
+    sol = aquakin.BatchSolution(t=jnp.arange(float(n_t)), C=C, model=asm1)
+    j = asm1.species_index["SNH"]
+
+    assert sol.final_named("SNH") == {"SNH": float(C[-1, j])}
+    assert sol.final_named("SNH") == sol.final_named(["SNH"])
+    many = sol.C_named_many("SNH")
+    assert list(many) == ["SNH"]
+    assert jnp.array_equal(many["SNH"], C[:, j])
+    assert list(sol.C_named_many(["SNH", "SNO"])) == ["SNH", "SNO"]
+    with pytest.raises(KeyError, match="Unknown species 'SNHH'"):
+        sol.final_named("SNHH")
+
+
 def test_solve_time_unit_conversion_is_equivalent(tmp_path):
     """Solving a days model with t in hours gives the same physics, with the
     result times reported back in hours."""
