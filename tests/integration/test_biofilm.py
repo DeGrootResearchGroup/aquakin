@@ -6,8 +6,6 @@ so these check the transport operator (conservation, the well-mixed limit, and
 diffusion limitation) and that gradients flow through the layered solve.
 """
 
-import os
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -19,14 +17,10 @@ import aquakin
 # PR gate; runs in the merge-to-main suite (see the ``slow`` marker).
 pytestmark = pytest.mark.slow
 
-FIXTURE = os.path.join(
-    os.path.dirname(__file__), "..", "fixtures", "simple_model.yaml"
-)
-
-
 @pytest.fixture(scope="module")
-def net():
-    return aquakin.load_model_from_file(FIXTURE)
+def net(simple_model):
+    """The session A -> B model (shared so compiled solves are reused)."""
+    return simple_model
 
 
 @pytest.fixture

@@ -373,18 +373,87 @@ def test_plant_time_event_reset_matches_closed_form(cstr_plant):
 def test_plant_events_reject_unsupported_integrator(cstr_plant):
     """The located-event segmented solve manages its own integrator, so an
     explicit colored-Jacobian / custom solver (which it cannot honour) is
-    rejected. The default IntegratorConfig (the fast stack) is accepted -- events
-    run their own segmented solve regardless of the differentiation config."""
+    rejected. An explicit default IntegratorConfig is accepted, and the solve
+    through a never-resetting event follows the closed form."""
     import diffrax
 
     plant = cstr_plant
     ev = Event(at_times=[1.0])
+    sol = plant.solve((0.0, 2.0), jnp.array([2.0]), y0=jnp.array([0.2, 0.0]),
+                      events=[ev], rtol=1e-9, atol=1e-12,
+                      integrator=aquakin.IntegratorConfig())
+    assert sol.events_log == [(1.0, "event0")]
+    # An adaptive solve at rtol = 1e-9: two decades above it.
+    np.testing.assert_allclose(np.asarray(sol.state[-1]),
+                               _tank_closed_form(2.0, 0.2, 0.0),
+                               rtol=1e-7, atol=1e-10)
     with pytest.raises(ValueError, match="not supported"):
         plant.solve((0.0, 2.0), events=[ev],
                     integrator=aquakin.IntegratorConfig(colored_jacobian=True))
     with pytest.raises(ValueError, match="not supported"):
         plant.solve((0.0, 2.0), events=[ev],
                     integrator=aquakin.IntegratorConfig(solver=diffrax.Kvaerno5()))
+
+
+def test_plant_event_resets_several_units_by_name(simple_model):
+    """An event that resets two units at once through ``states_by_unit`` /
+    ``initial_state(overrides=)``: in two tanks in series (each ``V = 100``,
+    tank ``a`` fed ``Q = 10`` of ``A = 1``) a time event at ``t = 5`` sets
+    ``a``'s ``A`` to 5 and ``b``'s ``B`` to 0, leaving the other entries. The
+    plant is linear, ``y' = M y + f``, so the closed form on each side of the
+    reset is ``y(t) = y* + exp(M t) (y(0) - y*)`` with ``y* = -M^-1 f``."""
+    from scipy.linalg import expm
+
+    from aquakin.plant import CSTRUnit, Plant
+    from aquakin.plant.influent import InfluentSeries
+
+    plant = Plant("two_tanks", time_unit="s")
+    for name in ("a", "b"):
+        plant.add_unit(CSTRUnit(name=name, model=simple_model, volume=100.0,
+                                input_port_names=["inlet"],
+                                conditions={"T": 293.15}))
+    plant.add_influent("feed", InfluentSeries(
+        t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([10.0, 10.0]),
+        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=simple_model),
+        to="a.inlet")
+    plant.connect("a", "b")
+
+    def reset(t, y, args):
+        units = plant.states_by_unit(y)
+        units["a"] = units["a"].at[0].set(5.0)
+        units["b"] = units["b"].at[1].set(0.0)
+        return plant.initial_state(overrides=units)
+
+    y0 = plant.initial_state(overrides={"a": jnp.array([0.2, 0.0]),
+                                        "b": jnp.array([0.1, 0.3])})
+    ev = Event(at_times=[5.0], apply=reset, name="reset")
+    teval = jnp.linspace(0.0, 10.0, 11)
+    sol = plant.solve((0.0, 10.0), teval, y0=y0, events=[ev],
+                      rtol=1e-9, atol=1e-12)
+    assert sol.events_log == [(5.0, "reset")]
+
+    # State order (A_a, B_a, A_b, B_b); dilution Q/V = 0.1 and k = 0.1.
+    M = np.array([[-0.2, 0.0, 0.0, 0.0],
+                  [0.1, -0.1, 0.0, 0.0],
+                  [0.1, 0.0, -0.2, 0.0],
+                  [0.0, 0.1, 0.1, -0.1]])
+    y_star = -np.linalg.solve(M, np.array([0.1, 0.0, 0.0, 0.0]))
+
+    def closed_form(t, start):
+        return y_star + expm(M * t) @ (start - y_star)
+
+    start = np.array([0.2, 0.0, 0.1, 0.3])
+    t = np.asarray(teval)
+    # The save at t = 5 reports the pre-reset value.
+    before = [closed_form(ti, start) for ti in t[:6]]
+    after_reset = closed_form(5.0, start)
+    after_reset[0], after_reset[3] = 5.0, 0.0
+    after = [closed_form(ti - 5.0, after_reset) for ti in t[6:]]
+    expected = np.array(before + after)
+    got = np.concatenate([np.asarray(sol.unit_state("a")),
+                          np.asarray(sol.unit_state("b"))], axis=1)
+    # An adaptive solve at rtol = 1e-9: two decades above it.
+    np.testing.assert_allclose(got, expected, rtol=1e-7, atol=1e-10)
 
 
 def test_state_event_step_budget_raises_friendly(simple_model):

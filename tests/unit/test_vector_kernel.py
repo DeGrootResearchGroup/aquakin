@@ -123,8 +123,11 @@ def test_kernel_jacobian_is_finite_and_matches_scalar(name):
     rng = np.random.default_rng(7)
     C = jnp.asarray(rng.uniform(0.0, 5.0, net.n_species))
     Cc, p, ca = _prepared_inputs(net, C)
-    Jk = jax.jacfwd(lambda CC: net._rate_kernel(CC, p, ca, 0))(Cc)
-    Js = jax.jacfwd(lambda CC: _scalar_rates(net, CC, p, ca, 0))(Cc)
+    # Compiled: the eager per-op dispatch of two Jacobians over every model is
+    # slow, and this check compares with allclose, not bit for bit (the
+    # bit-identity of the forward value is pinned eagerly above).
+    Jk = jax.jit(jax.jacfwd(lambda CC: net._rate_kernel(CC, p, ca, 0)))(Cc)
+    Js = jax.jit(jax.jacfwd(lambda CC: _scalar_rates(net, CC, p, ca, 0)))(Cc)
     assert bool(jnp.all(jnp.isfinite(Jk))), f"{name}: non-finite kernel Jacobian"
     assert jnp.allclose(Jk, Js, rtol=1e-9, atol=1e-12), name
 
