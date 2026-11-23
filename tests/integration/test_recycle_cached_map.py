@@ -163,8 +163,13 @@ def test_no_recycle_plant_trivially_constant(primed_once_through):
     assert np.all(np.isfinite(np.asarray(sol.state)))
 
 
-def test_grad_flows_through_cached_path(primed):
+def test_grad_through_cached_maps_matches_central_difference(primed):
+    """``jax.grad`` through a solve that closes over the cached recycle
+    concentration map ``M`` and flow map ``A`` matches a central finite
+    difference of the same loss in a scale on every parameter."""
     plant, y0 = primed
+    assert plant._recycle._recycle_map_constant is True
+    assert plant._recycle._flow_map_constant is True
     base = plant.default_parameters()
 
     def loss(scale):
@@ -175,8 +180,13 @@ def test_grad_flows_through_cached_path(primed):
                           integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
         return jnp.sum(sol.state[-1] ** 2)
 
-    g = jax.grad(loss)(1.0)
-    assert jnp.isfinite(g)
+    g = float(jax.grad(loss)(1.0))
+    h = 1e-2
+    fd = (float(loss(1.0 + h)) - float(loss(1.0 - h))) / (2.0 * h)
+    # The step's truncation error is about 7e-5 relative (measured with the
+    # solve at rtol = 1e-8) and the adaptive solve at rtol = 1e-5 adds noise of
+    # the same order to the difference, so 1e-3 sits a decade above both.
+    assert g == pytest.approx(fd, rel=1e-3)
 
 
 def test_outputs_at_cached_matches_probe(primed):
@@ -306,19 +316,3 @@ def test_cached_flow_steady_state_matches_probe(primed):
 def test_no_recycle_flow_trivially_constant(primed_once_through):
     plant, _ = primed_once_through
     assert plant._recycle._flow_map_constant is True           # no recycle edges
-
-
-def test_grad_flows_through_cached_flow_path(primed):
-    plant, y0 = primed
-    base = plant.default_parameters()
-
-    def loss(scale):
-        sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.array([2.0]),
-                          params=base * scale, y0=y0,
-                          diff=aquakin.DifferentiationConfig(method="through_solve"),
-                          rtol=1e-5, atol=1e-3,
-                          integrator=aquakin.IntegratorConfig(max_steps=1_000_000))
-        return jnp.sum(sol.state[-1] ** 2)
-
-    g = jax.grad(loss)(1.0)
-    assert jnp.isfinite(g)

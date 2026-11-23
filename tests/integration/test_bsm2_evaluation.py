@@ -1,9 +1,9 @@
 """BSM2 performance-evaluation tests (EQI / OCI).
 
 Exercises ``evaluate_bsm2``: the wiring from a solved BSM2 plant to the
-headline Effluent Quality Index and Operational Cost Index. One open-loop solve
-is shared at module scope (the suite runs close to the CI runner's limit, so the
-heavy full-plant solves are kept to a minimum); the open-vs-closed-loop
+headline Effluent Quality Index and Operational Cost Index. The open-loop solve
+is the session-scoped ``bsm2_open_loop_10d`` (``tests/integration/conftest.py``),
+shared with ``test_bsm2_control.py``; the open-vs-closed-loop
 comparison that the control work motivates is demonstrated in
 ``examples/bsm2_evaluation.py``.
 """
@@ -33,19 +33,9 @@ def adm1():
 
 
 @pytest.fixture(scope="module")
-def evaluated(asm1, adm1):
-    """Build an open-loop BSM2 plant, solve briefly, and evaluate it once."""
-    plant = build_bsm2(asm1, adm1, do_control=False)
-    plant.add_influent("feed", bsm2_constant_influent(asm1))
-    params = bsm2_parameters(asm1, adm1)
-    sol = plant.solve(
-        (0.0, 10.0),
-        t_eval=jnp.linspace(0.0, 10.0, 11),
-        params=params,
-        rtol=1e-4,
-        atol=1e-3,
-        integrator=aquakin.IntegratorConfig(max_steps=300_000),
-    )
+def evaluated(bsm2_open_loop_10d):
+    """Evaluate the shared 10-day open-loop BSM2 solve (``conftest.py``) once."""
+    plant, sol, params = bsm2_open_loop_10d
     return plant, sol, params, evaluate_bsm2(plant, sol, params)
 
 
@@ -97,7 +87,7 @@ def test_aeration_system_replaces_AE_with_blower_energy(evaluated):
     assert ev_default.air_flow is None
 
 
-def test_aeration_energy_matches_fixed_kla(evaluated, asm1, adm1):
+def test_aeration_energy_matches_fixed_kla(evaluated):
     """For the open-loop plant kLa is fixed, so the aeration energy equals the
     closed-form ``S_sat / (1.8e3) * Σ_i V_i kLa_i`` independent of the horizon."""
     from aquakin.plant.bsm.bsm2 import (

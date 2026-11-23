@@ -152,11 +152,19 @@ def test_volume_cycles_fill_and_decant(asm1, cycle_run):
 
 
 @pytest.mark.slow
-def test_event_aligned_save_grid_is_finite(cycle_run):
-    """A save grid that lands exactly on phase-boundary event times must stay
-    finite -- the segment-endpoint emission, not a dense edge-evaluation."""
-    _, sol = cycle_run(_GRID_EVENT_ALIGNED)
+def test_event_aligned_save_grid_follows_the_volume_closed_form(asm1, cycle_run):
+    """A save grid that lands exactly on phase-boundary event times reads the
+    segment-endpoint emission, not a dense edge-evaluation: every row is finite
+    and the volume equals its piecewise-linear closed form there too."""
+    p, sol = cycle_run(_GRID_EVENT_ALIGNED)
     assert np.all(np.isfinite(np.asarray(sol.state)))
+    V = np.asarray(sol.state[:, asm1.n_species])
+    # dV/dt is piecewise constant between located events; the implicit solve
+    # (default rtol 1e-6, coupled to the stiff biology) holds V to ~1e-5 of
+    # it, so the check is two decades above the solve's rtol. A 1% error in
+    # the fill or decant flow moves V by 2e-2.
+    np.testing.assert_allclose(V, _volume_closed_form(p.units["sbr"], _GRID_EVENT_ALIGNED),
+                               rtol=1e-4)
     assert sol.events_log and len(sol.events_log) >= 8   # phase switches logged
 
 
@@ -196,6 +204,105 @@ def test_layered_settling_solves_finite(asm1):
     assert float(eff.C[i, xbh]) < float(sol.state[i, xbh])          # clarified
 
 
+# --- a small SBR in the fast tier ---------------------------------------------
+#
+# The cycle tests above solve ASM1 and are ``slow``. This SBR runs the same
+# event-driven fill / react / settle / decant / idle cycle on the two-species
+# A -> B decay model (in seconds, B taken as the settling particulate), which
+# compiles and solves in seconds, so the fast gate exercises the SBR solve and
+# its gradient too.
+
+_SMALL_V_FULL, _SMALL_Q = 100.0, 10.0          # m3, m3/s: fill / decant 50 m3
+
+
+def _small_sbr_plant(simple_model):
+    """A one-SBR plant on the A -> B model: heel 50 m3, filled to 100 m3 and
+    decanted back to 50 m3 each 27 s cycle."""
+    phases = [
+        SBRPhase("fill", 5.0, feed=True),
+        SBRPhase("react", 10.0, mixed=True),
+        SBRPhase("settle", 5.0, settle=True),
+        SBRPhase("decant", 5.0, decant=True),
+        SBRPhase("idle", 2.0),
+    ]
+    sbr = SBRUnit("sbr", simple_model, phases, full_volume=_SMALL_V_FULL,
+                  feed_flow=_SMALL_Q, decant_flow=_SMALL_Q,
+                  settling=InterfaceSettling(v_settle=2.0, area=10.0, remix_rate=1.0),
+                  particulate_species=["B"], initial_fraction=0.5,
+                  conditions={"T": 293.15})
+    p = Plant("small_sbr", time_unit="s")
+    p.add_unit(sbr)
+    p.add_influent("feed", InfluentSeries.constant(simple_model, A=1.0, B=0.0, Q=_SMALL_Q),
+                   to="sbr.feed")
+    return p
+
+
+def _volume_closed_form(sbr, t):
+    """The SBR's liquid volume from its schedule alone: the initial heel, rising
+    at ``feed_flow`` through each fill phase and falling at ``decant_flow``
+    through each decant phase, constant otherwise (piecewise linear in t)."""
+    t = np.asarray(t, dtype=float)
+    durations = np.array([p.duration for p in sbr.phases])
+    starts = np.concatenate([[0.0], np.cumsum(durations)])
+    period = starts[-1]
+    n_cycles, tau = np.divmod(t, period)
+    V = np.full_like(t, sbr.initial_fraction * sbr.full_volume)
+    for k, phase in enumerate(sbr.phases):
+        rate = sbr.feed_flow * phase.feed - sbr.decant_flow * phase.decant
+        in_phase = np.clip(tau - starts[k], 0.0, durations[k])
+        V += rate * (n_cycles * durations[k] + in_phase)
+    return V
+
+
+def test_small_sbr_volume_follows_fill_and_decant(simple_model):
+    """Over one cycle the small SBR's volume equals its piecewise-linear closed
+    form at every save point, the phase boundaries included; the decant is
+    clarified (B, the particulate, well below the bulk) while A passes through."""
+    p = _small_sbr_plant(simple_model)
+    t = np.linspace(0.0, 27.0, 55)                # 0.5 s grid, on every boundary
+    sol = p.solve(t_span=(0.0, 27.0), t_eval=jnp.asarray(t), rtol=1e-8)
+    V = np.asarray(sol.state[:, simple_model.n_species])
+    # dV/dt is piecewise constant between located events; the implicit solve
+    # reproduces the closed form to within its tolerance (rtol 1e-8).
+    np.testing.assert_allclose(V, _volume_closed_form(p.units["sbr"], t), rtol=1e-6)
+    assert V.max() == pytest.approx(_SMALL_V_FULL) and V[-1] == pytest.approx(50.0)
+
+    eff = p.stream(sol, "sbr.effluent")
+    decant = np.where(np.asarray(eff.Q) > 0.0)[0]
+    assert decant.size >= 8                       # the decant phase is sampled
+    a, b = simple_model.species_index["A"], simple_model.species_index["B"]
+    C = np.asarray(sol.state)
+    C_eff = np.asarray(eff.C)
+    assert np.all(C_eff[decant, b] < 0.5 * C[decant, b])
+    np.testing.assert_allclose(C_eff[decant, a], C[decant, a], rtol=1e-12)
+
+
+def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simple_model):
+    """d(A + 2B at the end of the decant)/dk from a full tank through the settle
+    and decant phases (two located-event segments, the settling state and the
+    clarified draw) matches a central finite difference. The span is the two
+    phases rather than a whole cycle because each event segment recompiles."""
+    p = _small_sbr_plant(simple_model)
+    base = p.default_parameters()
+    a, b = simple_model.species_index["A"], simple_model.species_index["B"]
+    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(_SMALL_V_FULL)
+    y0 = p.initial_state(overrides={"sbr": full})
+
+    def loss(k):
+        sol = p.solve(t_span=(15.0, 25.0), t_eval=jnp.array([25.0]),
+                      params=base.at[0].set(k), y0=y0, rtol=1e-10, atol=1e-12)
+        return sol.state[-1, a] + 2.0 * sol.state[-1, b]
+
+    k0 = float(base[0])
+    h = 1e-4 * k0
+    g = float(jax.grad(loss)(k0))
+    fd = (float(loss(k0 + h)) - float(loss(k0 - h))) / (2.0 * h)
+    # Central difference: O(h^2) ~ 1e-8 relative truncation, plus the solver's
+    # 1e-10 tolerance over a 1e-4 step, ~1e-6.
+    assert g == pytest.approx(fd, rel=1e-5)
+    assert g != 0.0
+
+
 def test_mass_balance_reads_sbr_inventory(asm1):
     """Regression for #348: mass_balance must read the SBR's [C, V, settling]
     inventory (volume at index n_species, settling state massless) rather than
@@ -224,18 +331,27 @@ def test_mass_balance_reads_sbr_inventory(asm1):
 
 
 @pytest.mark.slow
-def test_grad_through_a_cycle(asm1):
+def test_grad_through_a_cycle_matches_finite_difference(asm1):
+    """d(sum of squared end-of-cycle states)/d(parameter scale) through one ASM1
+    SBR cycle matches a central finite difference."""
     sbr = _sbr(asm1)
     p = _plant(asm1, sbr)
     base = p.default_parameters()
 
     def loss(scale):
         sol = p.solve(t_span=(0.0, 0.65), t_eval=jnp.array([0.65]),
-                      params=base * scale)
+                      params=base * scale, rtol=1e-10, atol=1e-8)
         return jnp.sum(sol.state ** 2)
 
-    g = jax.grad(loss)(1.0)
-    assert jnp.isfinite(g)
+    g = float(jax.grad(loss)(1.0))
+    h = 1e-3
+    fd = (float(loss(1.0 + h)) - float(loss(1.0 - h))) / (2.0 * h)
+    assert np.isfinite(g)
+    # The tight tolerances keep the solve's error out of the difference
+    # quotient: at these the central difference agrees with itself to ~2e-6
+    # for h from 1e-4 to 1e-3, while at the default tolerances (the
+    # auto-scaled atol) it moves by ~1e-3.
+    assert g == pytest.approx(fd, rel=1e-5)
 
 
 # --- settling models (unit level) -------------------------------------------

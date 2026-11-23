@@ -388,7 +388,7 @@ def build_implicit_solver(
         object itself (so construction stays funneled here).
     solver : diffrax.AbstractSolver, optional
         A user-supplied ESDIRK solver -- the one escape hatch (e.g.
-        ``Plant.solve(solver=...)``). Overrides ``order``. ``None`` builds the
+        ``Plant.solve(integrator=IntegratorConfig(solver=...))``). Overrides ``order``. ``None`` builds the
         canonical solver of ``order``.
     colored_root_finder : diffrax root finder, optional
         A sparsity-colored root finder (``ColoredVeryChord``) that materializes the

@@ -268,9 +268,12 @@ file the editor needs at run time goes in `REQUIRED` there.
 
 `tests/ui/`: independence, the document and forms (pure), the worker client
 against a real worker or a stand-in process (`command=`), and an `Editor` built
-and driven without a browser. An `Editor` test that needs to count requests or
-make a command fail passes `worker=tests/ui/inprocess.InProcessWorker()`
-(aquakin's `serve` in the test process, with `sent` and `refuse`); one that
+and driven without a browser. An `Editor` test passes
+`worker=tests/ui/inprocess.InProcessWorker()` (aquakin's `serve` in the test
+process, with `sent` and `refuse`) unless the subprocess is its subject; those
+share the session `real_worker` fixture. A study run whose ending is not under
+test uses `in_process_runs` (a thread, not a process; `hold()` keeps it running
+until the test looks); one real run per ending stays end to end. One that
 needs the page's loop runs inside `asyncio.run`, and a `state.change` handler
 fires only after `state.ready()`. An `Editor` test cannot see what trame drops
 (the first sync rule): pin that in `tests/browser`.

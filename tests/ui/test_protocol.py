@@ -114,18 +114,14 @@ def test_a_refusal_carries_its_message_and_type_apart(tmp_path):
     }
 
 
-def test_the_client_keeps_the_type_off_the_message(tmp_path):
-    from aquakin_ui.worker import AquakinWorker, WorkerError
+def test_the_client_keeps_the_type_off_the_message(tmp_path, real_worker):
+    from aquakin_ui.worker import WorkerError
 
     missing = tmp_path / "none"
-    w = AquakinWorker()
-    try:
-        with pytest.raises(WorkerError) as info:
-            w.request("study_results", path=str(missing))
-        assert str(info.value) == f"{missing / 'study.yaml'} does not exist"
-        assert info.value.type == "StudyError"
-        with pytest.raises(WorkerError, match="unknown command 'nope'") as info:
-            w.request("nope")
-        assert info.value.type is None
-    finally:
-        w.stop()
+    with pytest.raises(WorkerError) as info:
+        real_worker.request("study_results", path=str(missing))
+    assert str(info.value) == f"{missing / 'study.yaml'} does not exist"
+    assert info.value.type == "StudyError"
+    with pytest.raises(WorkerError, match="unknown command 'nope'") as info:
+        real_worker.request("nope")
+    assert info.value.type is None

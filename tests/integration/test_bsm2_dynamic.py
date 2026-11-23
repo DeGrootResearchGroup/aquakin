@@ -24,8 +24,8 @@ from aquakin.plant.bsm.bsm2 import (
 )
 from aquakin.plant.influent import load_bsm2_influent
 
-# Slow module: full two-model BSM2 plant solves (steady-state warmup + dynamic
-# runs). Excluded from the fast PR gate; runs in the merge-to-main suite.
+# Slow module: full two-model BSM2 plant solves (an algebraic steady state +
+# dynamic runs). Excluded from the fast PR gate; runs in the merge-to-main suite.
 pytestmark = pytest.mark.slow
 
 
@@ -45,17 +45,19 @@ def _build(asm1, adm1, influent):
 
 
 def _steady_state(asm1, adm1):
-    """A warm BSM2 steady state (computed once, cached) used as the dynamic-run
-    initial condition."""
+    """The constant-influent BSM2 steady state (computed once, cached), used as
+    the dynamic-run initial condition.
+
+    Solved algebraically (pseudo-transient continuation from the warm start)
+    rather than by a 150-day dynamic solve: the two agree to a scaled state
+    difference of about 6e-4, and the tests below assert on the 14-day dynamic
+    response, not on how the steady state is reached."""
     if "y" in _SS_CACHE:
         return _SS_CACHE["y"]
     plant = _build(asm1, adm1, bsm2_constant_influent(asm1))
-    y0 = bsm2_warm_start(plant)
-    sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
-                      params=bsm2_parameters(asm1, adm1), y0=y0,
-                      rtol=1e-5, atol=1e-3,
-                      integrator=aquakin.IntegratorConfig(max_steps=500_000))
-    _SS_CACHE["y"] = sol.state[-1]
+    ss = plant.steady_state(bsm2_parameters(asm1, adm1), y0=bsm2_warm_start(plant))
+    assert bool(ss.converged)
+    _SS_CACHE["y"] = ss.state
     return _SS_CACHE["y"]
 
 
