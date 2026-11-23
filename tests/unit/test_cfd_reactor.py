@@ -18,9 +18,7 @@ def reactor(simple_model):
 @pytest.fixture
 def fresh_reactor(simple_model):
     """A reactor with an empty ``_jit_cache``, for the tests that count its
-    entries and for the solver-failure test: a failure inside an already
-    compiled step currently surfaces as a ``ValueError`` rather than the
-    ``RuntimeError`` of the first call, so that test keeps its own reactor."""
+    entries and for a step whose own call compiles it."""
     return aquakin.CFDReactor(simple_model)
 
 
@@ -127,20 +125,24 @@ def test_step_jit_cache_keyed_on_n_cells(fresh_reactor, simple_model):
     assert set(fresh_reactor._jit_cache.keys()) == {2, 5}
 
 
-def test_step_raises_on_pathological_inputs(fresh_reactor, simple_state):
-    """The seam re-raises whatever exception the stiff solver produces.
+def test_step_raises_on_pathological_inputs(reactor, fresh_reactor, simple_state):
+    """A solver failure raises the one documented error, cold or warm.
 
-    Diffrax's adaptive controller hits ``max_steps`` (or similar) when the
-    integration cannot make progress; the seam propagates that exception so
-    the C++ caller can decide whether to retry with a smaller ``dt``.
-    Either Diffrax raises (typical) or the on_nan policy raises after the
-    integration completes with NaN. Both routes surface as exceptions.
+    NaN parameters stall Diffrax's adaptive controller until it exhausts
+    ``max_steps``. ``step`` re-raises that as the ``RuntimeError`` naming the
+    step budget both on a cold reactor (the failing call compiles the step) and
+    on a warm one (the step was compiled by an earlier successful call). The two
+    once surfaced as different types: ``JaxRuntimeError`` cold, ``ValueError``
+    warm.
     """
     C, conds = simple_state
-    with pytest.raises(
-        RuntimeError, match=r"maximum number of solver steps|non-finite concentrations"
-    ):
-        fresh_reactor.step(C, conds, dt=1.0, params=np.asarray([np.nan]))
+    bad = np.asarray([np.nan])
+    msg = r"CFD reactor step hit its integrator step budget \(max_steps=\d+\)"
+    reactor.step(C, conds, dt=1.0)  # warm: the compiled step already exists
+    for r in (fresh_reactor, reactor):
+        with pytest.raises(RuntimeError, match=msg) as info:
+            r.step(C, conds, dt=1.0, params=bad)
+        assert type(info.value) is RuntimeError
 
 
 def test_invalid_on_nan_rejected(simple_model):
