@@ -8,70 +8,70 @@ paths:
 
 # Rules — `aquakin_ui/` (the browser flowsheet editor, `aquakin-ui`)
 
-A local browser flowsheet editor: palette, Vue Flow canvas, a unit form generated
-from aquakin's unit catalogue, aquakin's checks, and Open/Save of flowsheet specs
-(`Plant.to_spec` / `Plant.from_spec`, see `.claude/rules/plant-spec.md`). trame +
-Vuetify, the same stack as aquaflux's `aquaflux-ui`. `ui` extra; entry point
-`aquakin-ui [flowsheet.yaml] [--port] [--no-browser]` (`aquakin_ui.__main__:main`).
+A local trame + Vuetify editor (`ui` extra; `aquakin_ui.__main__:main`): palette,
+Vue Flow canvas, a unit form generated from aquakin's unit catalogue, aquakin's
+checks, and Open / Save of flowsheet specs (`.claude/rules/plant-spec.md`).
 
 ## ⚠️ The independence rule (binding, mechanically checked)
 
-**`aquakin_ui` imports neither `aquakin` nor `jax`; `aquakin` never imports
-`aquakin_ui`.** Everything about units, models and plants comes from one
-long-lived `python -m aquakin serve` worker (`aquakin/__main__.py`, client
-`aquakin_ui/worker.py`). Pinned by `tests/ui/test_independence.py`, which
-finds every `aquakin_ui/**/*.py` itself: an AST scan of each for an `aquakin` /
-`jax` import anywhere in the file (a function-level import counts, though a
-fresh import would never run it), a fresh-interpreter import of every module,
-and the reverse AST scan of `aquakin/`. Tests may import aquakin (to build
-expected values). `tests/ui` runs in the required fast gate (the `ui` CI job).
+**`aquakin_ui` imports neither `aquakin` nor `jax`, anywhere in a file (a
+function-level import counts); `aquakin` never imports `aquakin_ui`.** Everything
+about units, models and plants comes from one long-lived `python -m aquakin
+serve` worker (`aquakin/__main__.py`, client `aquakin_ui/worker.py`), so the page
+starts without JAX. `tests/ui/test_independence.py` pins it, finding every module
+itself. Tests may import aquakin to build expected values.
 
 ## Types (pyright, mechanically checked)
 
-`aquakin_ui` must stay at 0 errors under basic-mode pyright (the CI `typecheck
-(pyright)` job; `[tool.pyright]` in `pyproject.toml`). Fix a type where the value
-comes from: narrow a value that can be `None` on that path, pass a known value
-down rather than re-reading an optional attribute, and correct an annotation
-that is wrong. An `assert` narrows only an invariant a reader can check on the
-spot (with the reason beside it); a `None` that a page event or a missing file
-can produce gets handled and tested, not asserted away.
+`aquakin_ui` must stay at 0 errors under basic-mode pyright. Fix a type where the
+value comes from (narrow a `None` on that path, pass a known value down, correct
+a wrong annotation). An `assert` narrows only an invariant a reader can check on
+the spot; a `None` a page event or a missing file can produce is handled and
+tested, not asserted away.
 
 ## Structure
 
-| module | holds | notes |
-|---|---|---|
-| `worker.py` | `AquakinWorker`, `WorkerError` | one process, requests serialized by a lock, replies read on a daemon thread; a fresh worker's first reply gets `START_TIMEOUT` extra (importing JAX); reply ids checked; stderr to a per-worker log file (`mkstemp`, removed on `stop`) quoted in errors |
-| `catalog.py` | `Catalog`, `plain` | the worker's catalogue reply, its summaries and help made plain text (`plain`: docstring ``code``, :roles: and *emphasis* lose their markup); `ports_for` reads the catalogue's port rules (no round trip) |
-| `document.py` | `Flowsheet`, `Unit`, `edge_id` | **pure**: units keyed by stable id (the plant's unit name), labels as display text; `from_spec`/`to_spec` (format 2; `from_spec` refuses a kind the catalogue lacks, which would otherwise break every redraw), `connect` (refuses with a reason), `dropped_by` (previews the connections new settings would remove) and `apply`, `remove` (also drops streams/endpoints naming the unit), `port_status`, `back_edges` (aquakin's recycles when known, else a DFS), `lanes`, `auto_layout` (wraps into bands of 7 ranks) |
-| `forms.py` | `rows_for`, `read_rows` | **pure**: one row per catalogue setting (conditions and aeration expand); read-only settings and the aeration fields the form does not show are kept on read-back. **Numbers are shown exactly** (`_float_text`, the shortest round-trip text): Apply reads every field back, so a rounded display would change values nobody edited. The aeration value is read only in the mode the form was drawn with, and a unit's conditions are kept when its model could not be described (no condition rows). Each row carries a `suffix`, the unit its help names (`unit_in`: "(m³)", "(g/m³, i.e. mg/L)", ", m³/d"; help writes flows and times per day and they are shown on the plant's clock, m³/h on an hourly plant), a condition's model unit (T in K), kLa's 1/clock, the DO set-point's oxygen unit. An unreadable field raises `FieldError` with its row `key` (shown under the field from `sel_errors`). `suggest_species` gives settling settings the model's X species when their ASM1 default (or empty one) does not fit; new units and model changes take it. Lists no setting or type of its own (the settling settings are named by their role) |
-| `icons.py` | `ICONS`, `COLOURS`, `CATEGORY_LABELS`, `SVG`, `icon_name` | the only per-kind presentation table; an unlisted kind gets the tank icon |
-| `study_form.py` | `fields_for`, `draft_for`, `study_from`, `missing` | **pure**: the study dialog's draft from the worker's `study_form` (numbers kept as text, an even time grid as start / stop / count) and back, empty fields and defaults left out; `missing` names a kind's required fields by label. Lists no setting of its own |
-| `results.py` | `fmt`, `steady_table`, `channels_of`, `line_chart`, `xy_chart`, `analysis_view`, `ANALYSIS_VIEWS`, `SIMULATE` | **pure**: the results view's tables (a column per stream, a row per channel with its unit) and SVG charts (one channel each, so never two y-axes; the dataviz palette's slot-1 blue, `#3987e5` in dark mode, set in `PAGE_CSS`; a CSS-hover crosshair and a native `<title>` tooltip per sampled time, at most `MAX_HOVER` of them, the line thinned to `MAX_POINTS`). `xy_chart` is the core: a line, data points (slot-2 orange, with a fit/data legend when both) and a labelled reference hairline (a profile's threshold). `analysis_view` dispatches through `ANALYSIS_VIEWS` (one `_<kind>_view` per kind but `SIMULATE`, which the editor draws itself) and raises on a kind it lacks |
-| `settings.py` | `Settings`, `DEFAULTS`, `settings_path` | the user's preferences, a JSON file in the configuration folder (`AQUAKIN_UI_CONFIG` overrides; `tests/ui/conftest.py` points it at a temporary file for every test, so tests never touch the user's); unknown keys and wrong types are ignored on read; a failed write keeps the value for the session |
-| `process.py` | `start_piped`, `Piped` | the one way the worker and a study run are started: piped text stdin / stdout, stdout read on a reader thread `start_piped` starts and keeps (it closes stdout when it ends), stderr to its own `mkstemp` log, a new session (process group on Windows). Start any further child process through it, not with another `Popen`. **Every child is discarded through `Piped.close`, on every path that lets go of it** (stop, replacement, timeout, exit, a finished run): it closes stdin, kills after an optional grace, reaps, and only then joins the reader (`READER_TIMEOUT`) and closes stdout, because closing a pipe another thread is reading can block or raise. Do not reap a child or close its pipes by hand (a `kill` that only makes a run end, as `StudyRun.cancel`'s does, is fine: the reader then discards it); `tests/ui/test_processes.py` runs with `ResourceWarning` as an error so a leak fails it |
-| `jobs.py` | `StudyRun` | one study run = one `python -m aquakin study run --json` process: JSON progress events on stdout, `cancel` on stdin (killed after `CANCEL_GRACE` if no checkpoint comes); its own temporary log |
-| `app.py` | `Editor` | the editor's state (`__init__`, `_init_state`), drawing (`publish`), undo, the canvas events, the unit form, `_off_page` / `_worker_study`, and the binding of every function below onto `Editor` |
-| `checks.py` | `CHECK_DELAY` | aquakin's background checks (`schedule_checks`, `_run_checks`, the unit / plant check and cache) and `model_info` |
-| `files.py` | | Open (`open_spec`, bound as `Editor.open`) and Save, `_unsaved` / `_unless_unsaved`, `_save_refusal`, `_spec_file`, `_apply_pending` |
-| `studies.py` | `simulation_name`, `SIMULATION` | listing, running, freezing and copying studies; Simulate; the results view; the study dialog's actions; the replace / unfreeze questions; run events |
-| `page.py` | `PAGE_CSS`, `DRAG_TYPE` | the trame / Vuetify page: layout, toolbar, palette, side panel, unit form, the flowsheet dialogs |
-| `study_page.py` | `STATE_COLOURS`, `UNREADABLE` | the Studies tab and its dialogs; the study dialog is built a section at a time (`_study_heading`, `_study_field`, one `_<type>_input` per field type, `_study_dialog_actions`); `_js`, `_bound`, `_REDRAW` |
-| `widget/` | `Flowsheet` (trame element), `module.py`, `serve/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
+| module | what an edit must not get wrong |
+|---|---|
+| `worker.py`, `catalog.py` | the only worker client; the catalogue as plain data (ports without a round trip) |
+| `document.py` | **pure** (no page, no worker); units keyed by stable id (the plant's unit name), labels display only; `from_spec` refuses a kind the catalogue lacks (it would break every redraw) |
+| `forms.py` | **pure**; lists no setting, type or choice: every row follows from the catalogue. **Numbers are shown exactly** (`_float_text`): Apply reads every field back, so a rounded display changes values nobody edited. The aeration value is read only in the mode the form was drawn with; a unit's conditions are kept when its model could not be described; read-only settings and unshown aeration fields survive read-back. An unreadable field raises `FieldError` with its row key. Each row's `suffix` is the unit its help names, flows and times on the plant's clock |
+| `icons.py` | the only per-kind presentation table; an unlisted kind gets the tank icon |
+| `study_form.py` | **pure**; lists no setting of its own (all from the worker's `study_form`) |
+| `results.py` | **pure**; one channel per chart, never two y-axes; colours are the dataviz palette (dark-mode blue set in `PAGE_CSS`); `analysis_view` raises on a kind `ANALYSIS_VIEWS` lacks |
+| `settings.py` | the user's preferences file (`AQUAKIN_UI_CONFIG` overrides); `tests/ui/conftest.py` points it at a temporary file, so a test never touches the user's |
+| `process.py`, `jobs.py` | starting / discarding child processes (below); `StudyRun`, one `aquakin study run --json` process per run |
+| `app.py` | `Editor`: state, drawing, undo, canvas events, the unit form, and the binding of every function below; do not grow it |
+| `checks.py`, `files.py`, `studies.py`, `page.py`, `study_page.py` | bound `Editor` concerns: checks; Open / Save; studies; the page; the Studies tab |
+| `widget/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
 
-**`Editor` is split by concern, bound like `Plant`'s modules.** Each module above
-holds plain functions whose first parameter is `self: Editor` (imported under
-`TYPE_CHECKING`), and `app.py` binds each onto `Editor` under its method name
-(`run_study = studies.run_study`), so callers, page events and tests still see
-one `Editor`. Put new behaviour in its concern's module and bind it; do not grow
-`app.py`, and do not use mixins (pyright rejects a mixin method typed `self:
-Editor`). A builder that never touches the editor is a plain function called
-directly (`_table`, `_observables_editor`), not bound. An attribute a moved
-function assigns is annotated in `Editor.__init__`, or pyright infers it from
-the `None` there alone. `_worker_study` stays in `app.py`: it is the one call
-that names its command by variable, and `test_protocol` pins where it is.
+**`Editor` is split by concern, bound like `Plant`'s modules.** Each module holds
+plain functions whose first parameter is `self: Editor` (imported under
+`TYPE_CHECKING`), and `app.py` binds each under its method name (`run_study =
+studies.run_study`), so callers, page events and tests see one `Editor`. Put new
+behaviour in its concern's module and bind it. Do not use mixins (pyright rejects
+a mixin method typed `self: Editor`). A builder that never touches the editor is a
+plain function called directly (`_table`), not bound. Annotate in
+`Editor.__init__` every attribute a moved function assigns, or pyright infers it
+from the `None` there alone. `_worker_study` stays in `app.py`: it is the one
+call that names its command by variable, and `tests/ui/test_protocol.py` pins
+where it is.
 
-Icons (`icons/*.svg`) are original line icons (see `icons/README.md`): 24-unit
-viewBox, `currentColor` strokes, one shared vocabulary. Keep new ones to it.
+New icons (`icons/*.svg`) keep to `icons/README.md`: 24-unit viewBox,
+`currentColor` strokes, one shared vocabulary.
+
+## Child processes (`start_piped` / `Piped.close`)
+
+- **Start every child process through `process.start_piped`**, never another
+  `Popen`: piped text stdin / stdout, stdout on a reader thread it keeps, stderr
+  to its own `mkstemp` log (two processes never share one), a new session.
+- **Discard every child through `Piped.close`, on every path that lets go of it**
+  (stop, replacement, timeout, exit, a finished run). It kills, reaps, and only
+  then joins the reader and closes stdout, because closing a pipe another thread
+  is reading can block or raise. Do not reap a child or close its pipes by hand;
+  a `kill` that only makes a run end (`StudyRun.cancel`'s) is fine, as the reader
+  then discards it. `tests/ui/test_processes.py` makes `ResourceWarning` an error
+  so a leak fails.
 
 ## The worker protocol (pinned by `tests/ui/test_protocol.py`)
 
@@ -80,19 +80,19 @@ that imports both. Keep it that way rather than copying knowledge across:
 
 - **Every command name the editor sends** (`worker.request("...")`,
   `_worker_study("...")`, always a literal) is one of `_handlers()` in
-  `aquakin/__main__.py`. A new command is added there first.
+  `aquakin/__main__.py`. Add a new command there first.
 - **A refusal is `{"error": message, "type": class name}`**
   (`aquakin.plant.errors.error_reply`; also `check_unit` / `check_spec` results
-  and the run's `error` event). `WorkerError` carries the message as its text and
-  `.type`. Show the message as it stands; never parse a class name out of text.
-- **Study state and paths come from the worker**: `list_studies` gives each
-  study's `path`, `state`, `has_results` and `flowsheet` (the spec it builds
-  from); `study_results` and the run's `done` event give `has_results` and the
-  reasons. Decide "has results" from `has_results`, never from a state's name,
-  and never rebuild `studies/<name>/study.yaml` or `../../flowsheet.yaml` here:
-  a new study's `flowsheet:` is sent as the spec's absolute path and aquakin
-  stores it relative. `STATE_COLOURS` (`study_page.py`) is the one table of state names
-  on this side, pinned to aquakin's `STATES`.
+  and a run's `error` event). `WorkerError` carries the message as its text and
+  `.type`. Show the message as it stands; never parse a class name out of text,
+  and never show exception class names on the page.
+- **Study state and paths come from the worker** (`list_studies`: `path`,
+  `state`, `has_results`, `flowsheet`; `study_results` and a run's `done` event:
+  `has_results`, `reasons`). Decide "has results" from `has_results`, never from
+  a state's name. Never rebuild `studies/<name>/study.yaml` or
+  `../../flowsheet.yaml` here: send a new study's `flowsheet:` as the spec's
+  absolute path and aquakin stores it relative. `STATE_COLOURS` (`study_page.py`)
+  is this side's one table of state names, pinned to aquakin's `STATES`.
 - **Every study kind has a view** (`results.SIMULATE` + `ANALYSIS_VIEWS` equal
   aquakin's `KINDS`).
 
@@ -101,194 +101,120 @@ that imports both. Keep it that way rather than copying knowledge across:
 - **trame sends a value only when it differs from the one it last pushed**
   (`state.dirty` cannot force it; a page's first state does not count). A value
   that must reach the page again unchanged carries a new `revision`
-  (`cancel_apply`, `_show_kept_selection`); state set outside a page handler is
-  pushed where it is set (`with self.state:`, `schedule_checks`), or a later
-  change back to the last pushed value is dropped.
-
-- **Python owns the flowsheet.** The canvas draws `nodes`/`edges` and emits only
-  finished edits (`connect`, `move`, `remove`, `dropped`, `select`); dragging,
-  panning and wire drawing stay in the browser.
-- **Apply Python's updates as a diff** (`syncNodes`/`syncEdges` in
+  (`cancel_apply`, `_show_kept_selection`). Push state set outside a page handler
+  where it is set (`with self.state:`, `schedule_checks`), or a later change back
+  to the last pushed value is dropped.
+- **Python owns the flowsheet.** The canvas emits only finished edits (`connect`,
+  `move`, `remove`, `dropped`, `select`); dragging and wire drawing stay in it.
+- **Apply Python's updates as a diff** (`syncNodes` / `syncEdges` in
   `ui-widget/src/FlowsheetCanvas.vue`): replacing Vue Flow's lists rebuilds every
-  node (losing its measured size) and re-validates every edge, which drops them.
+  node (losing its measured size) and re-validates every edge, dropping some.
 - **Wire validation sits on the handles** (`UnitNode.vue`), never on Vue Flow's
-  canvas-wide validator (the `<VueFlow>` prop, `useVueFlow` options or store):
-  on the handles it judges only a wire being drawn. Vue Flow runs the
-  canvas-wide one on every edge `addEdges` adds, against the edges already
-  there, and the check refuses a used handle, so it would drop a wire Python
-  holds that drawing would refuse (a file with two wires into one input, opened
-  over a drawn flowsheet). Python stays the authority on loaded wires. Pinned
-  in the page (`tests/browser`, that opening) and in the source
-  (`tests/ui/test_widget_source.py`: no validator in the `<VueFlow>`
-  component, one bound on every `<Handle>`).
+  canvas-wide validator (the `<VueFlow>` prop, `useVueFlow` options or store).
+  The canvas-wide one runs on every edge `addEdges` adds and refuses a used
+  handle, so it would drop a wire Python holds (a file with two wires into one
+  input). Python is the authority on loaded wires; `tests/ui/test_widget_source.py`
+  pins the placement.
 - **No echoes:** removals and selection changes the canvas makes while applying
-  Python's update are not reported back (only ids Python still has; the
-  selection reference is reset after each sync). Python marks its selected unit,
-  and when it keeps one the canvas did not select (unreadable form edits)
-  `_show_kept_selection` sends it back.
+  Python's update are not reported back. When Python keeps a selection the canvas
+  did not make (unreadable form edits), `_show_kept_selection` sends it back.
+- **A deleted unit and its wires are one removal** (one `remove`, one Undo),
+  though Vue Flow reports two changes. Delete removes; Backspace is not a delete
+  key (it reached the canvas behind a dialog).
 - **The form is edited in the browser and sent whole** on Apply (or when the
-  aeration mode / model changes the rows): a per-keystroke round trip lost clicks
-  and overwrote text. Help sits in a fixed panel, not under each field (a hint
-  collapsing on blur moved Apply between press and release).
-- **aquakin's checks run in the background** (`Editor.schedule_checks`, after
-  `CHECK_DELAY` of quiet, worker calls in an executor), each unit and the plant
-  cached by its spec, so the canvas never waits; `checking` shows meanwhile and
-  "None" is claimed only after a check finished. A move only republishes. The
-  document is read on the loop thread (`_unit_check`, `_plant_request`
-  snapshot each request); only the worker call (`_ask_unit`, `_ask_plant`) runs
-  in the executor, so an edit made during a check cannot be half-read.
-- **Open and Save go through aquakin** (`read_spec` and `write_spec` worker
-  commands): Open reads YAML 1.2 like `Plant.from_spec`; Save is
-  `aquakin.plant.spec.write_spec` (settings filled in, version and hashes
-  recorded, outside model and table files copied into `models/` and `data/`,
-  atomic replace), and the document is reloaded from what was written (unless
-  it was edited while saving). Both run off the page's thread (`_off_page`, a
-  `busy` state disables the buttons meanwhile; without a served page, at start-up
-  and in tests, they run inline). Never write the spec file from `aquakin_ui`
-  directly. `_check_unit` / `_check_plant` are the synchronous versions for
-  tests and scripts; a page handler must not call them.
+  aeration mode / model changes the rows); never a per-keystroke round trip (it
+  lost clicks and overwrote text). Help sits in a fixed panel, not under each
+  field (a collapsing hint moved Apply between press and release).
+- **Unapplied form edits are never lost:** every form widget sets `sel_dirty`;
+  while it is set the canvas's select event carries `sel_rows`, and `on_select`
+  applies them to the unit selected until then (or keeps it selected, with the
+  field-named error). Save, Open, Simulate and Run apply them first
+  (`_apply_pending`) and wait when they cannot be applied. A reset of the form
+  (`cancel_apply`) marks its first row with a new `revision`; only there: a
+  background redraw must never overwrite typing.
+- **Removing a wired port asks first** (`Flowsheet.dropped_by`; nothing changes
+  until `confirm_apply`).
+- **aquakin's checks run in the background** (`schedule_checks`, after
+  `CHECK_DELAY` of quiet), each unit and the plant cached by its spec, so the
+  canvas never waits; "None" is claimed only after a check finished. Read the
+  document on the loop thread (`_unit_check`, `_plant_request`) and run only the
+  worker call (`_ask_unit`, `_ask_plant`) in the executor. A page handler must
+  not call the synchronous `_check_unit` / `_check_plant`.
+- **Open and Save go through aquakin** (`read_spec` / `write_spec`); never write
+  the spec file from `aquakin_ui`. Both run off the page's thread (`_off_page`).
 - **Save refuses to overwrite work** (`_save_refusal`): each window is its own
-  document, so two may hold one file. Save refuses a file whose sha256 changed
-  since this window opened (or last saved) it, and any other existing file.
-- **Studies** (`Editor.refresh_studies` / `run_study` / `cancel_run` /
-  `freeze_study` / `unfreeze_study` / `copy_study`): listed through the worker
-  (`list_studies`, with `check_study`'s state); freeze / unfreeze / copy are
-  worker commands; a run is a `StudyRun` process, never a worker request (the
-  worker kills a request after `TIMEOUT`, and a run must not hold up checks or
-  Save). Run events arrive on a reader thread and are applied on the page's
-  loop (`call_soon_threadsafe`). **Replacing results and unfreezing ask first**
-  (`_ask` / `answer_study`) and offer "Copy first", which copies the study with
-  its results, then goes ahead (owner's decision). Replacing on a run carries a
-  "Don't ask again" box and the Studies tab an "Ask before replacing results"
-  switch (owner's decision); both go through `Editor.set_ask_replace`, which
-  keeps the `ask_before_replacing` preference (the switch calls it on change;
-  nothing watches the state, so code must call the method, not set the state).
-  Unfreezing always asks.
-- **The study dialog** (`Editor.new_study` / `edit_study` / `set_study_kind` /
-  `save_study_dialog`): fields come from the worker's `study_form`, choices from
-  `plant_choices` (the drawn ports when the plant does not build); switching kind
-  keeps the fields both kinds have. The draft is edited in the browser and sent
-  whole on Create / Save, and written by the worker (`create_study` /
-  `update_study`) off the page's thread; errors show beside the buttons, not at
-  the foot of the scrolled form. **Values inside the draft are nested, and the
-  page does not redraw on a nested change**: every widget bound into it uses
-  `_bound` (which reassigns `study_draft` after each change) and every row
-  add / remove ends with `_REDRAW`, or rows do not appear and a stream's
-  channels stay empty. Each field heading carries the `<input id>-label` id
-  Vuetify's `aria-labelledby` points at.
-- **Simulate** (`Editor.simulate`): saves first when the document differs from
-  what was last opened or saved (`_saved`, a JSON snapshot; a move counts),
-  then, off the page's thread, creates the spec's Simulate study from the worker's
-  `simulation_study` if the project has none and runs it through `run_study`, so
-  replacing its results asks first like any study. **Studies are per folder but
-  a spec is per file**: the study is `simulation` for `flowsheet.yaml` and
-  `simulation_<stem>` for any other spec (`simulation_name`), an existing one
-  whose listed `flowsheet` is another file is pointed back, and a frozen one is
-  refused (it would run its snapshot, not the drawing). The study dialog sends
-  a new study's `flowsheet:` as the open spec's path and keeps an edited
-  study's own (the form has no such field, so `study_from` would drop it). **A measured channel may be a measure
-  expression** (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, see `.claude/rules/plant-analysis.md`):
-  the channels widget is a `VCombobox`, not a `VSelect`, so free text becomes a
-  chip and travels as a plain string the draft must not touch — aquakin reads it
-  when the study is written (`create_study` / `update_study`), and the refusal
-  shows beside the buttons like any other. Do **not** add a per-keystroke
-  validation round trip for it (the form rule above); `aquakin_ui` cannot read an
-  expression itself anyway. A structured measure read from a file still rides in
-  the row's `measures` map, keyed by name. A run started this way opens its
-  results when it finishes (`_show_when_done`). **Results** (`show_results`) asks the worker for
-  `study_results`, whose own `reasons` make the out-of-date note; the charts are redrawn in Python when the stream or channels
-  change (`choose_results_stream` / `show_charts`).
+  document, so it refuses a file whose sha256 changed since this window opened or
+  saved it, and any other existing file.
 - **The flowsheet's file** (`_spec_file`) is the one last opened or saved here;
-  the toolbar path is only where Open reads and Save writes next (an unsaved
-  new flowsheet has none, and Save, Simulate and New study ask for one rather
-  than writing into the server's working folder). `_project` follows the file,
-  never a half-typed path.
+  the toolbar path is only where Open reads and Save writes next. A new
+  flowsheet has none, and Save, Simulate and New study ask for one rather than
+  writing into the server's working folder. `_project` follows the file, never a
+  half-typed path.
 - **Unsaved work is never dropped silently** (`_unsaved`, against the `_saved`
-  snapshot): Open asks (`request_open` → `_unless_unsaved` → `answer_unsaved`,
-  "Save first" saving to the file, not to the newly typed path); Run and
-  Simulate save the drawing before a live study runs the file.
-- **Undo** (`_remember` before every document edit, `undo`, `UNDO_DEPTH`
-  snapshots of `Flowsheet.snapshot`, cleared on Open). Delete removes; Backspace
-  is not a delete key (a "go back" habit, and it reached the canvas behind a
-  dialog). A widget change needs the bundle rebuilt.
-- **Unapplied form edits:** every form widget sets `sel_dirty`; the canvas's
-  select event carries `sel_rows` while it is set, and `on_select` applies them
-  to the unit selected until then (or keeps it selected, with the field-named
-  error, when they cannot be read). Save, Open, Simulate and Run carry them
-  too (`_apply_pending`) and wait when they cannot be applied.
-  `refresh_selection` clears the flag. When the rows Python computes equal the
-  last ones sent, trame sends nothing and the page keeps its edits (the first
-  sync rule), so a reset of the form (`cancel_apply`) marks the first row with
-  a new `revision` (only there: a background redraw must never overwrite
-  typing).
-- **Aeration's species** is a form row (`aeration.species`, the model's
-  species) while aeration is on; a stored species the model lacks (ASM1's `SO`
-  on an ASM3 plant) is replaced by the model's oxygen (`forms._oxygen`), and
-  `reshape_form` applies such suggestions at once.
-- **A deleted unit and its wires are one removal**: Vue Flow reports them as
-  two changes; the canvas queues them and emits one `remove` (one Undo).
-- **A cancelled run is reported cancelled** even when it is killed before a
-  checkpoint (`StudyRun.cancelled`). "Replace results?" is asked, and
-  unfreezing asks, only for a study with results (`has_results`).
-- **Selecting a unit opens its form** (`on_select` sets the Unit tab). The
-  palette marks kinds with a required setting the form cannot edit
-  (`_needs_python`: an SBR's phases, a dosing unit's reagent). A new flowsheet
-  runs on days (`options: {time_unit: d}`). Errors reach the page without
-  exception class names (the worker sends them apart, see the protocol above).
-- **A scheduled value is text, read by aquakin** (`scheduled_number`,
-  `scheduled_species_values` — an influent's `Q`, `T` and each `composition`
-  entry): `forms._scheduled` keeps a number a number (so a constant feed is
-  written to the spec exactly as before expressions existed) and anything else
-  the text the user typed. `aquakin_ui` cannot read an expression — the
-  independence rule — so an unreadable one is reported by the background check
-  or by Save, never parsed here.
+  snapshot; a move counts): Open asks (`_unless_unsaved`; "Save first" saves to
+  the file, not the newly typed path); Run and Simulate save before a live study
+  runs the file.
+- **Studies:** a run is a `StudyRun` process, never a worker request (the worker
+  kills a request after `TIMEOUT`, and a run must not hold up checks or Save).
+  Apply run events on the page's loop (`call_soon_threadsafe`). A cancelled run
+  is reported cancelled even when killed before a checkpoint.
+  **Replacing results and unfreezing ask first** (`_ask` / `answer_study`), only
+  for a study with results, and offer "Copy first" (owner's decision). Unfreezing
+  always asks; replacing may be turned off ("Don't ask again", the Studies tab's
+  switch), and both go through `Editor.set_ask_replace`: nothing watches the
+  state, so code calls the method, never sets the state.
+- **The study dialog's draft is nested state, and the page does not redraw on a
+  nested change**: every widget bound into it uses `_bound` and every row add /
+  remove ends with `_REDRAW`, or rows do not appear. The draft is sent whole on
+  Create / Save and written by the worker (`create_study` / `update_study`);
+  errors show beside the buttons. Switching kind keeps the fields both kinds
+  have. A new study's `flowsheet:` is the open spec's path; an edited study keeps
+  its own (`study_from` has no such field and would drop it). Each field heading
+  carries the `<input id>-label` id Vuetify's `aria-labelledby` points at.
+- **A measured channel may be a measure expression** (`.claude/rules/plant-analysis.md`):
+  the channels widget is a `VCombobox`, so free text travels as a plain string
+  the draft must not touch; aquakin reads it when the study is written.
+- **Simulate** runs the spec's study (from `simulation_study`) through
+  `run_study`, so replacing results asks like any study. **Studies are per folder
+  but a spec is per file**: one study per spec (`simulation_name`); one whose
+  `flowsheet` is another file is pointed back, and a frozen one is refused (it
+  would run its snapshot, not the drawing).
+- **A scheduled value is text, read by aquakin** (an influent's `Q`, `T` and
+  `composition` entries): `forms._scheduled` keeps a number a number (a
+  constant feed is written exactly as before) and anything else as typed.
+  Never parse an expression here; the background check or Save reports it.
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
-- Icons are sent once (`icons` prop, injected into nodes); the spec text only
-  while the Spec tab is open.
-- **Removing a wired port asks first:** `Editor.apply_properties` previews with
-  `Flowsheet.dropped_by` and, when connections would go, opens a dialog listing
-  them; nothing changes until `confirm_apply` (`cancel_apply` restores the form).
+- **A stored aeration species the model lacks** is replaced by the model's
+  oxygen (`forms._oxygen`), and `reshape_form` applies such suggestions at once.
+- Icons are sent once; the spec text only while the Spec tab is open.
 
 ## The widget build
 
 `ui-widget/` holds the Vue source; `npm install && npm run build` writes
-`aquakin_ui/widget/serve/` (`AK_DEV=1` keeps Vue Flow's development warnings,
-which the production build strips; read them when edges vanish). Vue is not
-bundled: trame-client provides it (3.5), hence the `trame-client` floor in the
-`ui` extra. Commit the rebuilt bundle with any widget change: the build is
-reproducible byte for byte from `package-lock.json`, and the `widget` CI job
-(path-filtered, not required) fails when the committed bundle is not a fresh
-`npm ci && npm run build`. It also builds the wheel and runs
-`scripts/check_ui_package.py`, which fails unless the wheel carries the bundle
-and every `icons/*.svg` byte for byte (the release build runs it too). A new
-file the editor needs at run time goes in `REQUIRED` there.
+`aquakin_ui/widget/serve/` (`AK_DEV=1` keeps Vue Flow's development warnings;
+read them when edges vanish). Vue is not bundled: trame-client provides it, hence
+the `trame-client` floor in the `ui` extra. **Commit the rebuilt bundle with any
+widget change**: the `widget` CI job fails when it is not a fresh `npm ci && npm
+run build` (reproducible from `package-lock.json`). `scripts/check_ui_package.py`
+fails unless the wheel carries the bundle and every `icons/*.svg`; a new file the
+editor needs at run time goes in its `REQUIRED`.
 
 ## Testing
 
-`tests/ui/`: independence, the document and forms (pure), the worker client
-against a real worker or a stand-in process (`command=`), and an `Editor` built
-and driven without a browser. An `Editor` test passes
-`worker=tests/ui/inprocess.InProcessWorker()` (aquakin's `serve` in the test
-process, with `sent` and `refuse`) unless the subprocess is its subject; those
-share the session `real_worker` fixture. A study run whose ending is not under
-test uses `in_process_runs` (a thread, not a process; `hold()` keeps it running
-until the test looks); one real run per ending stays end to end. One that
-needs the page's loop runs inside `asyncio.run`, and a `state.change` handler
-fires only after `state.ready()`. An `Editor` test cannot see what trame drops
-(the first sync rule): pin that in `tests/browser`.
-
-`tests/browser/` serves the editor (`python -m aquakin_ui --no-browser --port 0`)
-and drives it in Chromium with Playwright; it holds the canvas's rules (the diff,
-handle validation, no echoes, one removal, Delete not Backspace, the form sent on
-Apply). It runs in the `browser` CI job (path-filtered, not required, not in
-`fast gate`); locally it needs the `browser` extra and a Chromium
-(`python -m playwright install chromium`) and is skipped without Playwright. Run
-it (`pytest tests/browser`) when a change touches the canvas or the form; a
-widget change needs the bundle rebuilt first, and a page that loads more than
-BSM1 adds its files to the job's path filter. A test that depends on the
-start-up checks having finished waits for them (`_checks_done`): their late
-republish can otherwise hide a missing update. Read
-Python's document from the header chip ("10 units · 11 connections") and
-messages through a recorder (the snackbar closes after four seconds), never by
-a negative check with no sync point after it.
+- An `Editor` test passes `worker=InProcessWorker()` (`tests/ui/inprocess.py`)
+  unless the subprocess is its subject (those share `real_worker`). A run whose
+  ending is not under test uses `in_process_runs` (`hold()` keeps it running);
+  keep one real run per ending end to end.
+- A test that needs the page's loop runs inside `asyncio.run`; a `state.change`
+  handler fires only after `state.ready()`.
+- An `Editor` test cannot see what trame drops (the first sync rule): pin that
+  in `tests/browser`, which serves the editor and drives it in Chromium with
+  Playwright (the `browser` extra and `python -m playwright install chromium`;
+  skipped without Playwright; not in the fast gate). Run `pytest tests/browser`
+  when a change touches the canvas or the form, after rebuilding the bundle, and
+  add a page's files beyond BSM1 to the job's path filter.
+- In `tests/browser`, wait for the start-up checks (`_checks_done`) when a test
+  depends on them; read Python's document from the header chip ("N units · M
+  connections · K recycles") and messages through a recorder (the snackbar
+  closes after four seconds); never a negative check with no sync point after it.
