@@ -6,7 +6,7 @@ every session begins with a manual install and the committed pre-push hook
 (``.githooks/pre-push``) stays off. In a cloud session this script
 
 * installs the project editable with the extras that run the CI gates (``test``,
-  which pulls in ``ui``; ``lint``; ``typecheck``), pinned by ``constraints.txt``
+  which pulls in ``ui``; ``lint``; ``typecheck``; ``docs``), pinned by ``constraints.txt``
   so ruff and pyright match CI, unless the same install already succeeded in
   this Python environment (with ``PIP_NO_CACHE_DIR``, inherited by the build
   subprocess too, so pip keeps no download cache outside the environment); and
@@ -61,9 +61,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-#: The extras a contributor needs to run the CI gates (``test`` includes ``ui``).
+#: The extras a contributor needs to run the CI gates (``test`` includes ``ui``;
+#: ``docs`` is the Sphinx toolchain for the strict docs build).
 #: ``browser`` is left out: it needs a separate Chromium download.
-EXTRAS = ("test", "lint", "typecheck")
+EXTRAS = ("test", "lint", "typecheck", "docs")
 #: The repository files that decide what the install puts in the environment.
 INPUTS = ("pyproject.toml", "constraints.txt", "scripts/session_start.py")
 #: The requirement pip installs (the checkout, editable, with :data:`EXTRAS`).

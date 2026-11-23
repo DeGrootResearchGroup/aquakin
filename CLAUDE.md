@@ -283,6 +283,10 @@ codebase something; the examples are real.
 - **Say what you verified.** State which tests you ran and their result. If
   something could not be run (no JAX in the environment, a `slow` solve), say
   that; do not describe unrun code as working.
+- **A failure that also happens on unmodified `main` gets an issue**: find or
+  open one and link it from the PR, rather than describing it again in each PR
+  body. A failure that is only mentioned is never fixed (one macOS-only failure
+  was re-reported in nine PRs before #825 tracked it).
 
 ### Keep modules and functions small enough to read
 
@@ -352,14 +356,18 @@ Run ruff before committing or pushing (Post-Change Checklist item 1). The
 committed pre-push hook (`.githooks/pre-push`) runs the same gate; enable it
 once per clone with `git config core.hooksPath .githooks`. A Claude Code cloud
 session does both for you: the SessionStart hook in `.claude/settings.json`
-(`scripts/session_start.py`) installs `.[test,lint,typecheck]` pinned by
+(`scripts/session_start.py`) installs `.[test,lint,typecheck,docs]` pinned by
 `constraints.txt`, enables the pre-push hook, and puts the pinned `ruff` and
 `pyright` first on `PATH`.
 
 **Every push to a PR branch starts a full CI run, so push finished work, once.**
 Before pushing, run locally everything CI would tell you: ruff, pyright (for
-`aquakin_ui`), the tests the change touches, and the patch coverage
-(`scripts/patch_coverage.py`, checklist item 2). Collect follow-up fixes into
+`aquakin_ui`), the tests the change touches, the patch coverage
+(`scripts/patch_coverage.py`, checklist item 2), and, for a change to `docs/` or
+to a public docstring, the strict docs build CI runs:
+`sphinx-build -b html -W --keep-going docs <out>` (prefix
+`AQUAKIN_DOCS_OFFLINE=1` where the network cannot reach the intersphinx
+inventories, as in a cloud session). Collect follow-up fixes into
 one push; do not push to see what CI says, and do not push again only to change
 an informational status.
 
@@ -369,6 +377,11 @@ an informational status.
 - Check the PR's state before pushing to its branch: a commit pushed while it
   is being merged is lost. After a merge, new work starts a new branch from
   `main`.
+- **When a PR your branch was stacked on is squash-merged, merge `main` into
+  your branch and resolve the conflicts by taking `main`'s side for the
+  parent's changes**; do not rebase or force-push a pushed branch. The parent's
+  pre-squash commits are still on your branch, so without this every later
+  merge conflicts with the squash.
 - Describe the PR with `.github/pull_request_template.md`. Write "Closes #N"
   only when the issue is finished; otherwise "Part of #N", listing what remains.
 - After opening a PR, watch it for CI results and review comments until it is
