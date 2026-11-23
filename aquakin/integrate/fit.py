@@ -18,6 +18,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from aquakin.integrate._common import Reactor, native_time_factor
+from aquakin.integrate.calibration.loss import _data_mean_square, _objective_scale
 
 
 @dataclass
@@ -28,15 +29,16 @@ class FitResult:
     Attributes
     ----------
     params : jnp.ndarray
-        Full parameter vector after optimisation (fixed params unchanged).
+        Full parameter vector after optimization (fixed params unchanged).
     params_named : dict[str, float]
         Convenience mapping ``namespaced_name -> value`` for the free params.
     loss : float
-        Final loss (sum of squared residuals).
+        Final loss (sum of squared residuals), in the square of the data's
+        unit.
     converged : bool
-        Whether scipy's optimiser reported success.
+        Whether scipy's optimizer reported success.
     message : str
-        Optimiser status message.
+        Optimizer status message.
     n_iter : int
         Number of iterations taken.
     """
@@ -76,7 +78,7 @@ def fit(
        reports :attr:`FitResult.loss` as the **sum** of squared residuals
        (SciPy ``least_squares`` cost), whereas ``calibrate`` with ``loss="mse"``
        reports the **mean** squared error. The optima coincide (a positive
-       constant factor does not move the minimiser); only the absolute loss
+       constant factor does not move the minimizer); only the absolute loss
        value differs in scale.
 
     Parameters
@@ -94,7 +96,7 @@ def fit(
         solution is sampled at ``t_obs``. In the model's native time unit
         unless ``time_unit`` is given.
     free_params : list[str]
-        Namespaced parameter names to optimise. Other parameters are held at
+        Namespaced parameter names to optimize. Other parameters are held at
         their default (or ``initial_params``) values.
     method : str
         Currently only ``"adjoint"`` is supported, which uses Diffrax's
@@ -109,7 +111,7 @@ def fit(
         The time unit ``t_obs`` is expressed in (``"s"``, ``"min"``, ``"h"``,
         ``"d"``), matching :meth:`BatchReactor.solve`. ``t_obs`` is converted
         into the model's native (rate-constant) time unit before the solve, so
-        a user who standardises on e.g. hours can pass the same hour-valued
+        a user who standardizes on e.g. hours can pass the same hour-valued
         ``t_obs`` here as to ``solve``. Default ``None`` interprets ``t_obs`` in
         the native unit. The fitted rate constants are always in native units.
 
@@ -124,6 +126,12 @@ def fit(
     (``(-inf, +inf)``) while the others keep their boxes; a warning is emitted
     in that mixed case. If no free parameter has bounds, the solve is fully
     unconstrained.
+
+    The optimizer minimizes the loss divided by its value at the start (when
+    that is below 1), as :func:`aquakin.calibrate` does for ``loss="mse"``:
+    SciPy's stopping tests are absolute below 1, so on data of order 1e-6
+    (concentrations in mol/L) the unscaled loss would stop at the start. The
+    scale does not move the minimum, and :attr:`FitResult.loss` is unscaled.
     """
     if method != "adjoint":
         raise ValueError(f"Unknown fit method {method!r}; only 'adjoint' is supported.")
@@ -184,10 +192,20 @@ def fit(
 
     loss_value_and_grad = jax.jit(jax.value_and_grad(loss_from_free))
 
+    # The optimizer sees the loss divided by its value at the start, so
+    # L-BFGS-B's stopping tests, which are absolute below 1, are relative to
+    # the starting misfit whatever the data's unit; the same scale calibrate()
+    # applies (see _objective_scale). The floor is relative to the data's sum
+    # of squares, matching this loss being a sum rather than a mean.
+    x0_np = np.asarray(p0_full[free_indices_arr])
+    start_loss = float(loss_value_and_grad(jnp.asarray(x0_np))[0])
+    data_sum_square = _data_mean_square("mse", [observations]) * observations.size
+    loss_scale = _objective_scale(data_sum_square, start_loss)
+
     def _np_loss_and_grad(x_np):
         x = jnp.asarray(x_np)
         val, grad = loss_value_and_grad(x)
-        return float(val), np.asarray(grad)
+        return float(val) / loss_scale, np.asarray(grad) / loss_scale
 
     # Per-parameter bounds: each free parameter keeps its declared box bounds;
     # a parameter without declared bounds is left unbounded as (-inf, +inf)
@@ -211,7 +229,6 @@ def fit(
     # All free parameters unbounded => no box constraints at all.
     use_bounds = len(unbounded) < len(free_params)
 
-    x0_np = np.asarray(p0_full[free_indices_arr])
     result = minimize(
         _np_loss_and_grad,
         x0_np,
@@ -224,7 +241,7 @@ def fit(
     return FitResult(
         params=final_full,
         params_named={name: float(v) for name, v in zip(free_params, result.x)},
-        loss=float(result.fun),
+        loss=float(result.fun) * loss_scale,
         converged=bool(result.success),
         message=str(result.message),
         n_iter=int(result.nit),

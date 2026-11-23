@@ -279,6 +279,97 @@ def test_fit_recovers_known_rate(simple_model):
     assert result.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
 
 
+_OZONE_FREE = ["O3_Br_direct.k1", "O3_decay_OH.k_dec"]
+
+
+@pytest.fixture(scope="module")
+def ozone_fit_problem():
+    """Noise-free ozone / bromate observations in mol/L (order 1e-6 to 1e-8),
+    the reactor that made them, the truth for the two free rate constants, and
+    a start that is a factor of two off both."""
+    model = aquakin.load_model("ozone_bromate")
+    reactor = aquakin.BatchReactor(model, model.default_conditions())
+    C0, p = model.default_concentrations(), model.default_parameters()
+    t_obs = jnp.linspace(60.0, 600.0, 10)
+    obs = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_obs, params=p).C_named_many(
+        ["O3", "BrO3-"]
+    )
+    y = jnp.stack([obs["O3"], obs["BrO3-"]], axis=1)
+    idx = [model.param_index[n] for n in _OZONE_FREE]
+    truth = {n: float(p[i]) for n, i in zip(_OZONE_FREE, idx)}
+    start = p.at[idx[0]].set(0.5 * p[idx[0]]).at[idx[1]].set(2.0 * p[idx[1]])
+    return reactor, C0, y, t_obs, truth, start
+
+
+def _fit_ozone(problem, observations):
+    reactor, C0, _y, t_obs, _truth, start = problem
+    return aquakin.fit(
+        reactor,
+        C0,
+        observations,
+        t_obs,
+        _OZONE_FREE,
+        initial_params=start,
+        observed_species=["O3", "BrO3-"],
+    )
+
+
+def _fit_ozone_loss_at_start(problem, observations):
+    reactor, C0, _y, t_obs, _truth, start = problem
+    pred = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_obs, params=start).C_named_many(
+        ["O3", "BrO3-"]
+    )
+    return float(jnp.sum((jnp.stack([pred["O3"], pred["BrO3-"]], axis=1) - observations) ** 2))
+
+
+def test_fit_recovers_rates_from_mol_per_litre_data(ozone_fit_problem):
+    """On mol/L data the sum of squares is ~5e-12 at the start, below SciPy's
+    absolute stopping thresholds; unscaled, L-BFGS-B returned the start
+    unchanged with ``converged=True``. The data are noise-free, so the truth is
+    the exact minimum. L-BFGS-B now stops on its projected-gradient test, which
+    is absolute in the raw rate constants (of order 100 here), about 0.2 % from
+    the truth with the loss reduced over a million-fold: 1 % is well inside the
+    50 % and 100 % start errors, and the loss check pins that the optimizer
+    actually descended."""
+    _r, _c0, y, _t, truth, _start = ozone_fit_problem
+    start_loss = _fit_ozone_loss_at_start(ozone_fit_problem, y)
+    result = _fit_ozone(ozone_fit_problem, y)
+    assert result.converged
+    for name, value in truth.items():
+        assert result.params_named[name] == pytest.approx(value, rel=1e-2)
+    assert result.loss < 1e-6 * start_loss
+
+
+def test_fit_is_independent_of_the_data_unit(simple_model):
+    """``A -> B`` is linear, so ``C0`` and the data scaled by 1e-6 (the same
+    batch in another unit) have the same best-fit rate. The fitted rate must
+    agree and the reported loss, the unscaled sum of squares, must scale by
+    1e-12. The data carry a fixed +/-2 % perturbation so the minimum loss is
+    not zero and its ratio is meaningful."""
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
+    t_obs = jnp.linspace(0.5, 10.0, 20)
+    true_params = simple_model.default_parameters().at[0].set(0.25)
+    C0 = jnp.asarray([1.0, 0.0])
+    clean = reactor.solve(C0, params=true_params, t_span=(0.0, 10.0), t_eval=t_obs).C_named("B")
+    obs = clean * (1.0 + 0.02 * jnp.where(jnp.arange(20) % 2 == 0, 1.0, -1.0))
+
+    def _fit(factor):
+        return aquakin.fit(
+            reactor,
+            factor * C0,
+            observations=factor * obs,
+            t_obs=t_obs,
+            free_params=["A_to_B.k"],
+            observed_species=["B"],
+        )
+
+    base, small = _fit(1.0), _fit(1e-6)
+    assert base.loss > 0.0
+    assert small.converged
+    assert small.params_named["A_to_B.k"] == pytest.approx(base.params_named["A_to_B.k"], rel=1e-5)
+    assert small.loss == pytest.approx(1e-12 * base.loss, rel=1e-4)
+
+
 _PARTIAL_BOUNDS_YAML = """
 model:
   name: chain_decay

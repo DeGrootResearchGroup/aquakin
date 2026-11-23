@@ -303,7 +303,8 @@ of several batches.
 1e-6 mol/L it is of order 1e-12. The optimizer's stopping tolerance
 (`OptimizerConfig(tol=)`) is therefore applied relative to the misfit at the
 start, which gives the same fit whatever unit the data are in; the reported
-`loss` and the Laplace posterior are of the `"mse"` itself. That posterior
+`loss` and the Laplace posterior are of the `"mse"` itself. `aquakin.fit`
+scales its sum of squares the same way. That posterior
 assumes a unit noise level on the data's own scale, so its standard deviations
 are only meaningful with `"nll"` (or `"wmse"`) and a `sigma`, or
 `sigma="estimate"` below.
