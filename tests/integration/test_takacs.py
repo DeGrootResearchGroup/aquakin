@@ -16,7 +16,9 @@ def asm1():
 
 
 def _clarifier_plant(asm1, *, Q_inlet=56000.0, overflow_Q=18446.0, C_inlet=None,
-                     **clarifier_kw):
+                     Q_after=None, **clarifier_kw):
+    """A lone Takács settler fed at ``Q_inlet``; with ``Q_after`` the feed
+    ramps linearly to it over day 0-1 and holds, so the blanket is transient."""
     plant = Plant("clarifier", time_unit="d")
     plant.add_unit(
         TakacsClarifier(
@@ -30,10 +32,11 @@ def _clarifier_plant(asm1, *, Q_inlet=56000.0, overflow_Q=18446.0, C_inlet=None,
     )
     if C_inlet is None:
         C_inlet = asm1.default_concentrations()
+    Q_end = Q_inlet if Q_after is None else Q_after
     inf = InfluentSeries(
-        t=jnp.asarray([0.0, 10.0]),
-        Q=jnp.asarray([Q_inlet, Q_inlet]),
-        C=jnp.stack([C_inlet, C_inlet]),
+        t=jnp.asarray([0.0, 1.0, 10.0]),
+        Q=jnp.asarray([Q_inlet, Q_end, Q_end]),
+        C=jnp.stack([C_inlet, C_inlet, C_inlet]),
         model=asm1,
     )
     plant.add_influent("feed", inf, to="clar.inlet")
@@ -477,6 +480,58 @@ def test_lumped_tss_grad_through_rhs(asm1):
     lm = TakacsClarifier(name="lm", model=asm1, area=1500.0, height=4.0,
                          overflow_Q=18061.0, composition_mode="lumped_tss")
     _check_rhs_gradient_against_fd(lm, asm1)
+
+
+@pytest.fixture(scope="module")
+def transient_balances(asm1):
+    """``{mode: MassBalance}`` of COD and N over days 0.5-2 of a lone settler
+    whose feed flow ramps down over day 0-1, so the blanket is still filling,
+    fed solids whose N per g TSS differs from the model default."""
+    C = asm1.concentrations(XND=20.0, XI=200.0)
+    out = {}
+    for mode in ("lumped_tss", "per_species"):
+        plant = _clarifier_plant(asm1, C_inlet=C, Q_after=30000.0,
+                                 composition_mode=mode)
+        sol = plant.solve(t_span=(0.0, 2.0), t_eval=jnp.linspace(0.5, 2.0, 33),
+                          rtol=1e-6, atol=1e-6)
+        out[mode] = plant.mass_balance(sol, components=("COD", "N"))
+    return out
+
+
+def test_lumped_tss_mass_balance_notes_approximate_nitrogen(transient_balances):
+    """A lumped_tss settler's blanket N is valued at the default solids
+    composition, so off steady state its N closure misses by ~1e-3 whatever the
+    sampling while COD closes; the balance says so on N only, and following the
+    note's advice (per_species) closes N with no note."""
+    lumped = transient_balances["lumped_tss"]
+    # COD is exact in both modes: only the trapezoid sampling (~5e-5 at 33 points).
+    assert abs(lumped["COD"].relative_imbalance) < 2e-4
+    assert lumped["COD"].notes == []
+    # N misses by an order of magnitude more than the sampling error ...
+    assert abs(lumped["N"].relative_imbalance) > 5e-4
+    # ... and carries the settler's note, which summary() prints.
+    assert len(lumped["N"].notes) == 1
+    note = lumped["N"].notes[0]
+    assert "TakacsClarifier 'clar'" in note and "composition_mode='per_species'" in note
+    assert f"note (N): {note}" in lumped.summary()
+
+    exact = transient_balances["per_species"]
+    assert abs(exact["N"].relative_imbalance) < 2e-4
+    assert exact["N"].notes == [] and exact["COD"].notes == []
+    assert "note (" not in exact.summary()
+
+
+def test_inventory_caveats_name_n_and_p_only_in_lumped_mode(asm1):
+    """``inventory_caveats`` is the declared interface the balance reads: N and P
+    for a lumped_tss settler, nothing for per_species."""
+    from aquakin.plant.units import ApproximateInventoryUnit
+
+    kw = dict(model=asm1, area=1500.0, height=4.0, overflow_Q=18446.0)
+    lumped = TakacsClarifier(name="a", composition_mode="lumped_tss", **kw)
+    exact = TakacsClarifier(name="b", composition_mode="per_species", **kw)
+    assert isinstance(lumped, ApproximateInventoryUnit)
+    assert sorted(lumped.inventory_caveats()) == ["N", "P"]
+    assert exact.inventory_caveats() == {}
 
 
 @pytest.mark.parametrize("interface_flux", ["takacs", "godunov"])

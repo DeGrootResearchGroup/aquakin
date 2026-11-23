@@ -118,7 +118,19 @@ paths:
   `params=` reads a calibrated/BSM-specific composition such as `i_XB`). Closes
   BSM1 to ~1e-7 and BSM2 (two models, biogas, recycles) to COD ~0.08% / N
   ~0.03% at steady state; the gas integrals are exact at steady state and
-  otherwise accurate to the `t_eval` sampling. **The reaction integral must run
+  otherwise accurate to the `t_eval` sampling. **Exception: a lumped-TSS
+  inventory is approximate in N and P, and the balance must say so.** A
+  `TakacsClarifier` with `composition_mode="lumped_tss"` has no blanket
+  composition, so `component_inventory` values its N/P at the model-default
+  solids composition (COD is exact); off steady state that leaves an N/P
+  closure error that does not shrink with `t_eval` (2.2e-3 relative N on BSM1,
+  days 1–3 from the warm start; zero at steady state). Do not tighten a
+  transient N/P closure test on such a plant; use `per_species` or balance at
+  steady state. A unit whose inventory only estimates a component declares
+  `units.ApproximateInventoryUnit` (`inventory_caveats() -> {component: note}`)
+  and `mass_balance` copies each note into that component's
+  `ComponentBalance.notes` (printed by `summary()`); never detect the case by
+  probing a unit's class or private state. **The reaction integral must run
   each unit's kinetics at the conditions its `rhs` used** (the inlet or
   heat-balance operating temperature, not the static `T`): `_reaction_terms_at`
   rebuilds the unit's inputs and signals with `Plant._unit_inputs_and_signals`

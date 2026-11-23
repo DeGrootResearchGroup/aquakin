@@ -158,7 +158,11 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
           by the boundary-layer-to-feed TSS ratio, as in the BSM1 and BSM2
           reference settlers ``settler1dv4`` and ``settler1dv5_bsm2``. The two modes agree at steady state but
           diverge under dynamic flow, because the lumped form has no per-layer
-          composition memory.
+          composition memory. Having no composition, the lumped blanket's N
+          and P inventory is only estimated (see :meth:`component_inventory`),
+          so off steady state :meth:`aquakin.plant.Plant.mass_balance` closes
+          N and P only approximately (COD stays exact) and says so in their
+          ``notes``.
     soluble_holdup : bool
         If ``True`` (default ``False``), the soluble species also occupy the
         layers as well-mixed states advected by the bulk flow (no settling), so
@@ -618,9 +622,17 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
           no per-species split (the lumped model scales the outlet particulates
           from the feed), so the stored TSS is distributed over the particulate
           species by the model-default solids composition to recover the
-          per-component content per unit TSS -- exact for COD (the
-          composition-independent factor ratio), the default solids composition
-          for N/P (a small inventory term).
+          per-component content per unit TSS. That is exact for COD (the TSS
+          factors are COD ratios, so g COD per g TSS does not depend on the
+          composition) but only an estimate for N and P: whenever the blanket's
+          real composition differs from the default and its solids mass
+          changes, the N/P inventory change is off by that mass change times
+          the difference in N (P) per g TSS. At steady state the blanket does
+          not change and the balance closes; off it, the error does not shrink
+          with finer ``t_eval``. On BSM1 with this settler, days 1-3 from the
+          warm start, it is a 2.2e-3 relative N imbalance.
+          :meth:`inventory_caveats` reports this to the mass balance. Use
+          ``per_species`` for an exact inventory.
 
         With ``soluble_holdup`` the soluble tail block ``(n_layers, n_sol)``
         adds its own convective-only inventory (the liquid holdup), same layout
@@ -672,6 +684,31 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
                     np.sum(sol * sol_content[None, :])
                 )
         return out
+
+    def inventory_caveats(self):
+        """The components :meth:`component_inventory` only approximates, each
+        with the reason, for :func:`aquakin.plant.balance.mass_balance` to attach
+        to that component's closure.
+
+        Returns
+        -------
+        dict of str to str
+            ``{"N": note, "P": note}`` in ``lumped_tss`` mode, whose blanket
+            N/P is valued at the model-default solids composition; empty in
+            ``per_species`` mode, whose inventory is exact.
+        """
+        if self.composition_mode != "lumped_tss":
+            return {}
+        return {
+            q: (
+                f"TakacsClarifier '{self.name}' (composition_mode='lumped_tss') "
+                f"values its blanket's {q} at the model-default solids composition, "
+                f"so off steady state the {q} closure is approximate (of order 1e-3 "
+                "relative on BSM1) whatever the t_eval sampling; "
+                "composition_mode='per_species' gives an exact inventory."
+            )
+            for q in ("N", "P")
+        }
 
     def _tss(self, layer_C: jnp.ndarray) -> jnp.ndarray:
         """Total settleable solids (g/m³) in a layer from per-species
