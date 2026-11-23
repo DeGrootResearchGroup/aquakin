@@ -145,6 +145,7 @@ sol.C_named("SNH")                 # one species' trajectory, shape (n_t,)
 sol.C_named_many(["SNH", "SNO"])   # several at once -> {name: trajectory}
 sol.final_named(["SNH", "SNO"])    # last-time values -> {name: float}
 sol.final                          # every species' last value -> {name: float}
+sol.final_named("SNH")             # a single name -> the same one-entry dict
 ```
 
 Species units and descriptions are carried from the model to the solution, so

@@ -4,10 +4,11 @@ Exercises the end-to-end temperature path -- a temperature-carrying influent
 flows through the plant (mixers heat-balance it, units pass it through), each AS
 reactor reads its inlet temperature, and the ASM1 temperature corrections
 (re-referenced to the BSM2 15 degC base by ``bsm2_asm1_model``) slow the
-kinetics in the cold. At the 15 degC reference temperature the plant reproduces
-the validated steady state exactly (the correction is unity there); colder
-influent leaves more residual ammonia (nitrification, the most
-temperature-sensitive process, slows), warmer leaves less.
+kinetics in the cold. Colder influent leaves more residual ammonia at steady
+state (nitrification, the most temperature-sensitive process, slows), warmer
+leaves less. These are qualitative checks; the benchmark-temperature steady
+state is compared with the published BSM2 values in
+``tests/validation/test_bsm2_steadystate.py``.
 """
 
 import jax.numpy as jnp
@@ -34,16 +35,18 @@ def _tank5_snh_at(asm1, adm1, params, T_kelvin):
                           T=jnp.full((2,), float(T_kelvin)))
     plant = build_bsm2(asm1_model=asm1, adm1_model=adm1)
     plant.add_influent("feed", infl)
-    y0 = bsm2_warm_start(plant)
-    sol = plant.solve(t_span=(0.0, 150.0), t_eval=jnp.array([0.0, 150.0]),
-                      params=params, y0=y0,
-                      rtol=1e-5, atol=1e-3,
-                      integrator=aquakin.IntegratorConfig(max_steps=500_000))
-    assert jnp.all(jnp.isfinite(sol.state))
-    return float(sol.C_named("tank5", "SNH")[-1])
+    # The algebraic steady state (pseudo-transient continuation from the warm
+    # start). A 150-day dynamic solve from the same start gives the same tank-5
+    # ammonia to within 1e-3 (relative) at both temperatures, in about half the
+    # time.
+    ss = plant.steady_state(params, y0=bsm2_warm_start(plant))
+    assert bool(ss.converged)
+    assert jnp.all(jnp.isfinite(ss.state))
+    tank5 = plant.states_by_unit(ss.state)["tank5"]
+    return float(tank5[asm1.species_index["SNH"]])
 
 
-@pytest.mark.validation
+@pytest.mark.slow
 def test_bsm2_cold_influent_slows_nitrification():
     asm1 = bsm2_asm1_model()           # temperature corrections referenced to 15 °C
     adm1 = aquakin.load_model("adm1")

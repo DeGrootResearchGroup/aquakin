@@ -42,6 +42,11 @@ hides the gap from the coverage number.
   branch. Never `pytest.raises(Exception)`, and not a bare
   `pytest.raises(ValueError)` where the function has several `ValueError`s.
   Every new `raise` gets a test.
+- **An error or warning that tells the user what to do gets a test that does
+  it**: trigger the message, follow its advice, and check the result (a value,
+  not just "no error"). Advice that names real keywords can still be wrong, and
+  a user who follows it gets a second error. `tests/unit/test_user_hints.py`
+  checks only that the keywords a message names exist.
 
 ## Intermittent failures
 

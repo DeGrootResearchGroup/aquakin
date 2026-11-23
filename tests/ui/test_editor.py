@@ -1,4 +1,12 @@
-"""The editor page, built and driven without a browser."""
+"""The editor page, built and driven without a browser.
+
+The BSM1 editor and ``test_studies_are_listed_run_frozen_and_copied`` talk to a
+real ``aquakin serve`` worker and that test (with ``test_a_run_can_be_cancelled``)
+starts real ``aquakin study run`` processes, end to end. Every other test's
+subject is what the editor does, so it answers through aquakin in this process
+(``InProcessWorker``, and ``InProcessRun`` through the ``in_process_runs``
+fixture): no JAX import and no compile per test.
+"""
 
 import pytest
 import yaml
@@ -7,18 +15,17 @@ from trame.app import get_server
 from aquakin_ui.app import Editor
 from aquakin_ui.document import edge_id
 from aquakin_ui.settings import Settings
-from aquakin_ui.worker import AquakinWorker, WorkerError
+from aquakin_ui.worker import WorkerError
 
 from .conftest import PROJECTS
 from .conftest import study_project as _study_project
+from .inprocess import InProcessWorker
 
 
 @pytest.fixture(scope="module")
-def editor():
+def editor(real_worker):
     server = get_server(name="aquakin-ui-test", client_type="vue3")
-    ed = Editor(server, path=PROJECTS / "bsm1" / "flowsheet.yaml")
-    yield ed
-    ed.worker.stop()
+    return Editor(server, worker=real_worker, path=PROJECTS / "bsm1" / "flowsheet.yaml")
 
 
 def test_the_page_draws_the_flowsheet(editor):
@@ -86,7 +93,7 @@ def test_save_writes_through_aquakin_and_open_reads_it_back(tmp_path):
         spec.replace("models/asm1_bsm2.yaml", str(outside / "asm1_bsm2.yaml"))
     )
     server = get_server(name="aquakin-ui-save-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         n_units = len(ed.doc.units)
         ed.save()
@@ -102,10 +109,12 @@ def test_save_writes_through_aquakin_and_open_reads_it_back(tmp_path):
         ed.worker.stop()
 
 
-def test_studies_are_listed_run_frozen_and_copied(tmp_path):
+def test_studies_are_listed_run_frozen_and_copied(tmp_path, real_worker):
+    """End to end: a real worker and real run processes, whose ``done`` event
+    is checked whole (the shape ``InProcessRun`` copies)."""
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-studies-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=real_worker, path=project / "flowsheet.yaml")
     try:
         [study] = ed.state.studies
         assert study["name"] == "short" and study["state"] == "not run"
@@ -147,17 +156,17 @@ def test_studies_are_listed_run_frozen_and_copied(tmp_path):
         assert ed._study("short_copy")["state"] == "fresh"
     finally:
         ed.stop_runs()
-        ed.worker.stop()
 
 
 def test_a_run_can_be_cancelled(tmp_path):
+    """A real run process, cancelled through its input."""
     project = _study_project(tmp_path)
     (project / "studies" / "short" / "study.yaml").write_text(
         "study:\n  kind: simulate\n  time: {t_span: [0, 50]}\n  streams: [tank]\n"
         "  initial_state: steady\n"
     )
     server = get_server(name="aquakin-ui-cancel-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         ed.run_study("short")
         run = ed._runs["short"]
@@ -169,20 +178,22 @@ def test_a_run_can_be_cancelled(tmp_path):
         ed.worker.stop()
 
 
-def test_simulate_saves_sets_up_runs_and_shows_the_plant(tmp_path):
+def test_simulate_saves_sets_up_runs_and_shows_the_plant(tmp_path, in_process_runs):
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-simulate-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         # A moved unit is an unsaved change: Simulate saves it first.
         ed.on_move([{"id": "tank", "position": {"x": 300.0, "y": 40.0}}])
         before = (project / "flowsheet.yaml").read_text()
+        in_process_runs.hold()
         ed.simulate()
         assert (project / "flowsheet.yaml").read_text() != before
         study = yaml.safe_load((project / "studies" / "simulation" / "study.yaml").read_text())
         assert study["study"]["streams"] == ["tank.out"]
         assert study["study"]["observables"][0]["channels"][:3] == ["Q", "COD", "TKN"]
         assert ed.state.panel == "studies" and ed.state.simulating
+        in_process_runs.release()
         assert ed._runs["simulation"].wait(300)["event"] == "done"
         assert not ed.state.simulating
         # The results open when the run finishes.
@@ -205,8 +216,10 @@ def test_simulate_saves_sets_up_runs_and_shows_the_plant(tmp_path):
         ed.answer_study("go")
         assert not ed.state.ask_replace and not Settings()["ask_before_replacing"]
         assert ed._runs["simulation"].wait(300)["event"] == "done"
+        in_process_runs.hold()
         ed.simulate()  # no question now
         assert not ed.state.study_confirm_open and "simulation" in ed._runs
+        in_process_runs.release()
         assert ed._runs["simulation"].wait(300)["event"] == "done"
         ed.set_ask_replace(True)  # the Studies tab's switch
         assert ed.state.ask_replace and Settings()["ask_before_replacing"]
@@ -229,7 +242,7 @@ class _Failing:
     ``WorkerError``), ``crash`` with any other error."""
 
     def __init__(self):
-        self.worker = AquakinWorker()
+        self.worker = InProcessWorker()
         self.fail: set[str] = set()
         self.crash: set[str] = set()
 
@@ -244,7 +257,7 @@ class _Failing:
         self.worker.stop()
 
 
-def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path):
+def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path, in_process_runs):
     project = _study_project(tmp_path)
     (project / "flowsheet.yaml").rename(project / "plant.yaml")
     blocked = tmp_path / "blocked"
@@ -259,6 +272,7 @@ def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path):
         ed.simulate()
         assert ed.state.message == "could not set up the simulation: simulation_study failed"
         worker.fail = set()
+        in_process_runs.hold()
         ed.simulate()
         study = yaml.safe_load(
             (project / "studies" / "simulation_plant" / "study.yaml").read_text()
@@ -267,6 +281,7 @@ def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path):
         ed.state.panel = "properties"
         ed.simulate()  # already running: shows it
         assert ed.state.panel == "studies" and not ed.state.study_confirm_open
+        in_process_runs.release()
         assert ed._runs["simulation_plant"].wait(300)["event"] == "done"
 
         ed.show_results("nope")
@@ -327,11 +342,11 @@ def test_simulate_results_and_the_dialog_say_what_went_wrong(tmp_path):
         ed.worker.stop()
 
 
-def test_studies_follow_the_spec_that_is_open(tmp_path):
+def test_studies_follow_the_spec_that_is_open(tmp_path, in_process_runs):
     project = _study_project(tmp_path)
     (project / "second.yaml").write_text((project / "flowsheet.yaml").read_text())
     server = get_server(name="aquakin-ui-follow-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
 
     def settings(name):
         return yaml.safe_load((project / "studies" / name / "study.yaml").read_text())["study"]
@@ -378,7 +393,7 @@ def test_studies_follow_the_spec_that_is_open(tmp_path):
 def test_save_refuses_a_file_changed_on_disk(tmp_path):
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-guard-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         spec = project / "flowsheet.yaml"
         spec.write_text(spec.read_text() + "\n# edited elsewhere\n")
@@ -398,7 +413,7 @@ def test_save_refuses_a_file_changed_on_disk(tmp_path):
 def test_a_study_is_set_up_and_edited_in_the_dialog(tmp_path):
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-study-dialog-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         ed.new_study()
         s = ed.state
@@ -464,7 +479,7 @@ def _rows_with(ed, key, value):
 def test_edits_can_be_undone_and_unapplied_form_edits_are_not_lost(tmp_path):
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-undo-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         assert not ed.state.can_undo
         ed.on_remove({"nodes": ["tank"], "edges": []})
@@ -530,11 +545,11 @@ def test_edits_can_be_undone_and_unapplied_form_edits_are_not_lost(tmp_path):
         ed.worker.stop()
 
 
-def test_unsaved_edits_are_saved_or_kept_before_open_and_run(tmp_path):
+def test_unsaved_edits_are_saved_or_kept_before_open_and_run(tmp_path, in_process_runs):
     project = _study_project(tmp_path)
     (project / "other.yaml").write_text((project / "flowsheet.yaml").read_text())
     server = get_server(name="aquakin-ui-unsaved-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         ed.state.spec_path = str(project / "other.yaml")
         ed.request_open()  # nothing unsaved: opens at once
@@ -578,7 +593,7 @@ def test_unsaved_edits_are_saved_or_kept_before_open_and_run(tmp_path):
 
 def test_a_flowsheet_without_a_file_asks_where_to_keep_it(tmp_path):
     server = get_server(name="aquakin-ui-nofile-test", client_type="vue3")
-    ed = Editor(server)
+    ed = Editor(server, worker=InProcessWorker())
     try:
         assert ed.state.spec_path == "" and not ed._unsaved()
         ed.refresh_studies()
@@ -607,10 +622,12 @@ def test_a_flowsheet_without_a_file_asks_where_to_keep_it(tmp_path):
         ed.worker.stop()
 
 
-def test_toolbar_actions_apply_the_forms_edits_and_aeration_suits_the_model(tmp_path):
+def test_toolbar_actions_apply_the_forms_edits_and_aeration_suits_the_model(
+    tmp_path, in_process_runs
+):
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-pending-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         ed.on_select({"nodes": ["tank"], "edges": []})
         ed.save_button(_rows_with(ed, "volume", "1300"))
@@ -641,7 +658,7 @@ def test_toolbar_actions_apply_the_forms_edits_and_aeration_suits_the_model(tmp_
 def test_the_form_marks_the_bad_field_and_new_units_suit_the_model(tmp_path):
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-usability-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         ed.state.panel = "studies"
         ed.on_select({"nodes": ["tank"], "edges": []})
@@ -671,7 +688,7 @@ def test_an_influent_pattern_is_typed_into_the_form_and_saved_as_text(tmp_path):
 
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-influent-expression-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         ed.on_select({"nodes": ["feed"], "edges": []}, None)
         rows = {r["key"]: r for r in ed.state.sel_rows}
@@ -709,7 +726,7 @@ def test_an_unreadable_influent_pattern_is_refused_by_the_form(tmp_path):
     aquakin -- but it still has to reach the field rather than the first solve."""
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-influent-expression-bad-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         ed.on_select({"nodes": ["feed"], "edges": []}, None)
         ed.apply_properties(_rows_with(ed, "Q", "2000 + wobble(t)"))
@@ -726,7 +743,7 @@ def test_a_channel_of_your_own_is_written_from_the_study_dialog(tmp_path):
     beside the buttons, before anything is written."""
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-measure-expression-test", client_type="vue3")
-    ed = Editor(server, path=project / "flowsheet.yaml")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
     try:
         ed.new_study()
         s = ed.state

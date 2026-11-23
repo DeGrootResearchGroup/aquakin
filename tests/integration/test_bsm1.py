@@ -4,8 +4,9 @@ Verifies the end-to-end behaviour of the BSM1 reference plant under
 constant and dynamic influent. Since the shipped influent CSVs are
 synthesised (not the canonical IWA files), the tests assert on the
 *qualitative* BSM1 behaviour — nitrification active, biomass alive,
-flow balance, AD-grad cleanness — rather than on absolute EQI / OCI
-values that would need the canonical files for ~1% comparison.
+flow balance, an AD gradient checked against a finite difference —
+rather than on absolute EQI / OCI values that would need the canonical
+files for ~1% comparison.
 """
 
 import jax
@@ -162,10 +163,10 @@ def test_bsm1_aerobic_anoxic_separation(sol_10d):
     assert so5 > 5 * so1
 
 
-def test_bsm1_grad_through_plant(asm1, constant_influent):
-    """jax.grad through plant.solve must produce finite gradients."""
-    plant = build_bsm1(model=asm1)
-    plant.add_influent("feed", constant_influent, to="inlet_mix.fresh")
+def test_bsm1_grad_through_plant(bsm1_plant):
+    """jax.grad through plant.solve is finite and its derivative along the
+    autotroph growth rate ``muA`` matches a central finite difference."""
+    plant = bsm1_plant
 
     def loss(params):
         # The default reverse-mode gradient (diff.method="stable", the cap-free
@@ -183,8 +184,20 @@ def test_bsm1_grad_through_plant(asm1, constant_influent):
             total = total + sol.C_named(name, "SNO")[-1]
         return total
 
-    g = jax.grad(loss)(plant.default_parameters())
+    p0 = plant.default_parameters()
+    g = jax.grad(loss)(p0)
     assert jnp.all(jnp.isfinite(g))
+
+    # A relative step in muA: v = muA e_muA, so g . v = muA dL/dmuA.
+    i = plant.parameter_index("asm1.muA")
+    v = jnp.zeros_like(p0).at[i].set(p0[i])
+    h = 0.03
+    fd = (float(loss(p0 + h * v)) - float(loss(p0 - h * v))) / (2.0 * h)
+    # The step's truncation error is about 0.2% (2% at h = 0.1, scaling as h^2)
+    # and the adaptive solve at rtol = 1e-3 leaves a few 1e-3 of noise in the
+    # loss, about 0.3% of the difference at this step. 2e-2 sits well above
+    # both; a smaller step lets the solver noise dominate.
+    assert float(g @ v) == pytest.approx(fd, rel=2e-2)
 
 
 def test_bsm1_takacs_reaches_steady_state(asm1, constant_influent):
