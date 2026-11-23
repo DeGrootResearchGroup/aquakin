@@ -14,55 +14,34 @@ import pytest
 import aquakin
 from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.streams import Stream
+from tests.validation.bsm2_digester_reference import (
+    INFLUENT,
+    Q_FEED,
+    REFERENCE_SS,
+    T_OP,
+    V_LIQ,
+    perturbed_start,
+    state_vector,
+    worst_relative_error,
+)
 
 # Every test here runs in the validation job, which selects by this marker.
 pytestmark = pytest.mark.validation
 
 
-Q_FEED = 178.4674
-V_LIQ = 3400.0
-
-# Exact published BSM2 digester feed + steady state (the "ADM1 influent (post
-# ASM2ADM interface)" and "ADM1 effluent" tables of Results/BSM2_steady_state.pdf
-# in the official BSM2 distribution).
-INFLUENT = {
-    "S_aa": 0.04388, "S_IC": 0.0079326, "S_IN": 0.0019721, "S_I": 0.028067,
-    "X_ch": 3.7236, "X_pr": 15.9235, "X_li": 8.047, "X_I": 17.0106,
-    "S_an": 0.0052101,
-}
-
-REFERENCE_SS = {
-    "S_su": 0.012394, "S_aa": 0.0055432, "S_fa": 0.10741, "S_va": 0.012333,
-    "S_bu": 0.014003, "S_pro": 0.017584, "S_ac": 0.089315, "S_ch4": 0.05549,
-    "S_IC": 0.095149, "S_IN": 0.094468, "S_I": 0.13087, "X_c": 0.10792,
-    "X_ch": 0.020517, "X_pr": 0.08422, "X_li": 0.043629, "X_su": 0.31222,
-    "X_aa": 0.93167, "X_fa": 0.33839, "X_c4": 0.33577, "X_pro": 0.10112,
-    "X_ac": 0.67724, "X_h2": 0.28484, "X_I": 17.2162, "S_gas_ch4": 1.6535,
-    "S_gas_co2": 0.01354,
-}
-
-
 def _solve_unit():
     net = aquakin.load_model("adm1")
-    si = net.species_index
     unit = ADM1DigesterUnit(name="digester", model=net, volume=V_LIQ,
-                            conditions={"T": 308.15})
+                            conditions={"T": T_OP})
     params = net.default_parameters()
-
-    C0 = np.zeros(net.n_species)
-    for name, val in REFERENCE_SS.items():
-        C0[si[name]] = val
-    u = np.zeros(net.n_species)
-    for name, val in INFLUENT.items():
-        u[si[name]] = val
-    s_in = Stream(Q=jnp.asarray(Q_FEED), C=jnp.asarray(u), model=net)
+    s_in = Stream(Q=jnp.asarray(Q_FEED), C=jnp.asarray(state_vector(net, INFLUENT)), model=net)
 
     def rhs(t, C, args):
         return unit.rhs(t, C, {"inlet": s_in}, params)
 
     sol = diffrax.diffeqsolve(
         diffrax.ODETerm(rhs), diffrax.Kvaerno5(),
-        t0=0.0, t1=600.0, dt0=None, y0=jnp.asarray(C0),
+        t0=0.0, t1=600.0, dt0=None, y0=jnp.asarray(perturbed_start(net)),
         stepsize_controller=diffrax.PIDController(rtol=1e-8, atol=1e-10),
         max_steps=300_000, saveat=diffrax.SaveAt(t1=True),
     )
@@ -72,17 +51,11 @@ def _solve_unit():
 def test_digester_unit_reproduces_bsm2_steady_state():
     net, C = _solve_unit()
     si = net.species_index
-    worst, worst_name = 0.0, ""
-    for name, ref in REFERENCE_SS.items():
-        if ref < 1e-4:
-            continue
-        rel = abs(float(C[si[name]]) - ref) / ref
-        if rel > worst:
-            worst, worst_name = rel, name
-    # Every state within ~2% of the published BSM2 digester steady state. The
-    # stoichiometry is verified identical to the official adm1_ODE_bsm2.c and the
-    # constants to adm1init_bsm2.m; the residual ~1% is the charge-balance vs
-    # reference-DAE pH difference. Methane is tight.
+    worst, worst_name = worst_relative_error(net, C)
+    # Every state within 2% of the published BSM2 digester steady state, reached
+    # from a start away from it. The stoichiometry is verified identical to the
+    # official adm1_ODE_bsm2.c and the constants to adm1init_bsm2.m; the residual
+    # ~1% is the charge-balance vs reference-DAE pH difference. Methane is tight.
     assert worst < 0.02, f"{worst_name} off by {worst:.1%}"
     # Methane output (defining digester quantity).
     assert float(C[si["S_gas_ch4"]]) == pytest.approx(REFERENCE_SS["S_gas_ch4"], rel=0.015)

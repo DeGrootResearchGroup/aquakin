@@ -35,10 +35,8 @@ RECORDED = {
     "tests/integration/test_plant_identifiability.py": 2,
     "tests/integration/test_study.py": 2,
     "tests/ui/test_main.py": 1,
-    "tests/unit/test_conditions.py": 1,
     "tests/unit/test_plant_units_raises.py": 1,
     "tests/unit/test_precedence.py": 2,
-    "tests/unit/test_rtd.py": 2,
 }
 
 

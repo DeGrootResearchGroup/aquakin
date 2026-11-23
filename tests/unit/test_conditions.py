@@ -50,17 +50,31 @@ def test_condition_defaults_is_a_copy():
 def test_operating_conditions_validates_required():
     oc = OperatingConditions(pH=7.0)
     oc.validate_required(["pH"])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"missing required fields: \['T'\]"):
         oc.validate_required(["pH", "T"])
 
 
 def test_operating_conditions_works_in_reactor():
+    """A reactor driven by OperatingConditions gives the same solution as one
+    driven by the equivalent one-location SpatialConditions.uniform."""
+    import numpy as np
+
     model = aquakin.load_model("ozone_bromate")
-    reactor = aquakin.BatchReactor(
-        model, OperatingConditions(pH=7.5, T=293.15, OH_scavenging=5.0e4))
+    fields = {"pH": 7.5, "T": 293.15, "OH_scavenging": 5.0e4}
     C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
-    sol = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=jnp.array([0.0, 600.0]))
-    assert jnp.all(jnp.isfinite(sol.C))
+
+    def solve(conditions):
+        reactor = aquakin.BatchReactor(model, conditions)
+        return np.asarray(reactor.solve(C0, t_span=(0.0, 600.0),
+                                        t_eval=jnp.array([0.0, 600.0])).C)
+
+    C = solve(OperatingConditions(**fields))
+    # The ozone actually reacts (15% decays over the 600 s), so the comparison
+    # is of a non-trivial solve.
+    o3 = model.species_index["O3"]
+    assert C[-1, o3] < 0.9 * C[0, o3]
+    np.testing.assert_allclose(C, solve(SpatialConditions.uniform(**fields)),
+                               rtol=1e-12, atol=0.0)
 
 
 # ----- construction-time validation ---------------------------------------

@@ -121,18 +121,13 @@ CASES = [
 
 
 @pytest.mark.parametrize("totals", CASES)
-def test_matches_bisection(totals):
-    pH = float(solve_ph(**totals))
-    pH_ref = _bisection_reference(totals)
-    assert pH == pytest.approx(pH_ref, abs=1e-6)
-
-
-@pytest.mark.parametrize("totals", CASES)
-def test_residual_is_zero_at_solution(totals):
-    K = equilibrium_constants(jnp.asarray(293.15))
+def test_matches_bisection_and_zeroes_residual(totals):
+    """The solved pH matches a derivative-free bisection of the same residual,
+    and the charge-balance residual vanishes there."""
     pH = solve_ph(**totals)
-    h = 10.0 ** (-pH)
-    res = float(charge_balance_residual(h, K=K, **totals))
+    assert float(pH) == pytest.approx(_bisection_reference(totals), abs=1e-6)
+    K = equilibrium_constants(jnp.asarray(293.15))
+    res = float(charge_balance_residual(10.0 ** (-pH), K=K, **totals))
     assert abs(res) < 1e-12
 
 
