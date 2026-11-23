@@ -32,7 +32,6 @@ from aquakin.integrate.calibration.coords import (
     _simplex_fraction_cov,
     _simplex_pools,
 )
-from aquakin.integrate.calibration.driver import _scale_objective
 from aquakin.integrate.calibration.laplace import (
     _at_bound_named,
     _at_bound_sides,
@@ -52,6 +51,7 @@ from aquakin.integrate.calibration.multistart import (
     _is_solve_failure,
     _optimizer_bounds,
     _run_multistart,
+    _scale_objective,
 )
 from aquakin.integrate.calibration.objective import (
     _check_start_gradient,
@@ -671,37 +671,51 @@ def test_resolve_problem_records_the_data_mean_square(base):
     assert nll.data_mean_square is None
 
 
-def test_scale_objective_uses_the_starting_loss(base):
-    """The driver sets the optimizer's scale from the objective at the start,
-    and leaves a problem without a data mean square unscaled."""
-    m, C0, obs, t_obs, free = base
-    problem = dataclasses.replace(_resolve(m, C0, obs, t_obs, free), data_mean_square=1e-8)
-    bundle = _ObjectiveBundle(lambda x: (jnp.asarray(3e-12), jnp.zeros(1)), None, None, False)
-    _scale_objective(problem, bundle, jnp.zeros(1))
+def _loss_bundle(value, data_mean_square=1e-8):
+    """A bundle whose objective is ``value`` divided by its scale, as the
+    compiled bundle's is."""
+    box = [1.0]
+
+    def value_and_grad(x):
+        return jnp.asarray(value(x)) / box[0], jnp.zeros(1)
+
+    return _ObjectiveBundle(
+        value_and_grad, None, None, False, scale_box=box, data_mean_square=data_mean_square
+    )
+
+
+def test_scale_objective_uses_the_starting_loss():
+    """The scale is set from the objective at the start, whatever scale the
+    previous start left, and a bundle without a data mean square is unscaled."""
+    bundle = _loss_bundle(lambda x: 3e-12)
+    _scale_objective(bundle, jnp.zeros(1))
     assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15)
-    unscaled = _ObjectiveBundle(lambda x: (jnp.asarray(3e-12), jnp.zeros(1)), None, None, False)
-    _scale_objective(dataclasses.replace(problem, data_mean_square=None), unscaled, jnp.zeros(1))
+    bundle.scale_box[0] = 0.5  # left by an earlier start
+    _scale_objective(bundle, jnp.zeros(1))
+    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15)
+    unscaled = _loss_bundle(lambda x: 3e-12, data_mean_square=None)
+    _scale_objective(unscaled, jnp.zeros(1))
     assert unscaled.loss_scale == 1.0
 
 
-def test_scale_objective_leaves_a_failed_start_unscaled(base):
+def test_scale_objective_leaves_a_failed_start_unscaled():
     """A forward solve that fails at the start leaves the objective unscaled
     (the multistart runner reports that failure); any other error propagates."""
-    m, C0, obs, t_obs, free = base
-    problem = dataclasses.replace(_resolve(m, C0, obs, t_obs, free), data_mean_square=1e-8)
 
     def failed_solve(x):
         raise RuntimeError("Callback error: the step budget was exhausted")
 
-    bundle = _ObjectiveBundle(failed_solve, None, None, False)
-    _scale_objective(problem, bundle, jnp.zeros(1))
+    bundle = _ObjectiveBundle(failed_solve, None, None, False, data_mean_square=1e-8)
+    bundle.scale_box[0] = 0.5  # left by an earlier start
+    _scale_objective(bundle, jnp.zeros(1))
     assert bundle.loss_scale == 1.0
 
     def programming_error(x):
         raise TypeError("not a solve failure")
 
+    bundle = _ObjectiveBundle(programming_error, None, None, False, data_mean_square=1e-8)
     with pytest.raises(TypeError, match="not a solve failure"):
-        _scale_objective(problem, _ObjectiveBundle(programming_error, None, None, False), jnp.zeros(1))
+        _scale_objective(bundle, jnp.zeros(1))
 
 
 # ---------- config normalisers: _resolve_laplace / _free_ic_fields ----------
@@ -935,6 +949,41 @@ def test_run_multistart_propagates_non_solve_errors():
     bundle = _quadratic_bundle(lambda x: TypeError("bug"))
     with pytest.raises(TypeError, match="bug"):
         _run_multistart(_ms_cfg(3), bundle, _THETA0, _NO_BOUNDS)
+
+
+def test_run_multistart_scales_each_start_by_its_own_loss_and_compares_unscaled():
+    """Each start runs at the scale of its own starting loss, as it would alone,
+    and starts are compared on the unscaled loss. On the double well
+    ``(x**2 - 1)**2 + 0.05 x + 0.35`` the start at -0.9 (loss 0.341) falls to the
+    deeper minimum (0.30 near x = -1) and the start at 3 (loss 64.5, scale 1) to
+    the shallower one (0.40 near x = 1): compared scaled (0.30/0.341 against
+    0.40) the shallower one would win."""
+    seen = []
+    box = [1.0]
+
+    def f(x):
+        return (x[0] ** 2 - 1.0) ** 2 + 0.05 * x[0] + 0.35
+
+    vg = jax.value_and_grad(f)
+
+    def value_and_grad(x):
+        seen.append((float(x[0]), box[0]))
+        v, g = vg(jnp.asarray(x))
+        return v / box[0], g / box[0]
+
+    bundle = _ObjectiveBundle(
+        value_and_grad, None, None, False, scale_box=box, data_mean_square=1.0
+    )
+    starts = [jnp.asarray([-0.9]), jnp.asarray([3.0])]
+    out = _run_multistart(_ms_cfg(1), bundle, _THETA0, _NO_BOUNDS, starts=starts)
+    x_star = float(out.x[0])
+    assert x_star < 0.0
+    assert out.fun == pytest.approx(float(f(jnp.asarray([x_star]))), rel=1e-12)
+    # The optimizer's first evaluation at each start (after the one that sets
+    # the scale) sees that start's own scale.
+    for x0 in (-0.9, 3.0):
+        boxes = [b for x, b in seen if x == x0]
+        assert boxes[1] == pytest.approx(min(1.0, float(f(jnp.asarray([x0])))), rel=1e-12)
 
 
 def test_check_start_gradient_wraps_solve_failure():

@@ -168,7 +168,8 @@ class _ObjectiveBundle:
     ``res_j`` / ``jac_j`` are ``None`` for the L-BFGS-B optimiser.
 
     All of them are of the objective divided by :attr:`loss_scale` (1 until
-    the driver sets it from the starting loss, see :func:`_objective_scale`),
+    the multistart runner sets it from each start's loss, see
+    :func:`_scale_objective`),
     so SciPy's absolute tolerances act relative to the starting misfit;
     multiply a value by ``loss_scale`` to get the loss itself."""
 
@@ -183,6 +184,9 @@ class _ObjectiveBundle:
     set_sigma_hat: object = None
     # One-element holder of the scale, shared with the callables above.
     scale_box: list = field(default_factory=lambda: [1.0])
+    # The problem's data mean square for loss="mse" (None: never scaled), from
+    # which each start's scale is set (see :func:`_scale_objective`).
+    data_mean_square: float | None = None
 
     @property
     def loss_scale(self) -> float:
@@ -297,7 +301,14 @@ def _build_objective(
         jac_j = _jac_call
 
     return _ObjectiveBundle(
-        obj_value_and_grad, res_j, jac_j, use_forward, sigma_hat_of, set_sigma_hat, scale_box
+        obj_value_and_grad,
+        res_j,
+        jac_j,
+        use_forward,
+        sigma_hat_of,
+        set_sigma_hat,
+        scale_box,
+        data_mean_square=problem.data_mean_square,
     )
 
 
