@@ -1002,23 +1002,31 @@ def test_check_start_gradient_propagates_non_solve_errors():
 
 
 def test_laplace_posterior_at_bound_mask(simple_model):
-    """No mask (Plant.calibrate's call) and an all-False mask give the same
-    posterior; masking the only rate holds it fixed: nan std, zero covariance."""
+    """Unmasked, the Laplace std of the one rate is the closed form; masking it
+    holds it fixed: nan std, zero covariance.
+
+    For A -> B with A(0) = 1, both species observed with a known sigma and the
+    data exact, the Hessian of the negative log-likelihood in k is
+    ``sum_i 2 (t_i exp(-k t_i))^2 / sigma^2`` (dA/dk = -t exp(-kt), dB/dk the
+    negative of it), so the std is ``sigma / sqrt(2 sum (t exp(-kt))^2)``. The
+    finite-difference Hessian (step 1e-3) matches it to 7e-6 (measured)."""
     m = simple_model
     reactor = _batch_reactor(m)
     C0 = jnp.array([1.0, 0.0])
     t_obs = jnp.array([1.0, 2.0, 4.0])
+    sigma = 0.05
     obs = reactor.solve(C0, params=m.default_parameters(), t_span=(0.0, 4.0), t_eval=t_obs).C
-    prob = _resolve(m, C0, obs, t_obs, [m.parameters[0]], use_model_bounds=False)
+    prob = _resolve(
+        m, C0, obs, t_obs, [m.parameters[0]], use_model_bounds=False, loss="nll", sigma=sigma
+    )
     cfg = dataclasses.replace(_cfg("auto", "jax_adjoint"), laplace=True)
     fm = _ReactorForwardModel(reactor, "jax_adjoint", 1, False)
     theta = prob.rate_theta0()
-    no_mask = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0))
-    all_free = _laplace_posterior(
-        prob, fm, cfg, theta, jnp.zeros(0), at_bound_mask=np.array([False])
-    )
-    assert np.isfinite(no_mask.posterior_std_unconstrained[0])
-    np.testing.assert_array_equal(no_mask.posterior_cov, all_free.posterior_cov)
+    k = float(m.default_parameters()[0])
+    t = np.asarray(t_obs)
+    expected_std = sigma / np.sqrt(2.0 * np.sum((t * np.exp(-k * t)) ** 2))
+    free = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0))
+    assert float(free.posterior_std_unconstrained[0]) == pytest.approx(expected_std, rel=1e-4)
     held = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0), at_bound_mask=np.array([True]))
     assert np.isnan(held.posterior_std_unconstrained[0])
     assert np.all(np.asarray(held.posterior_cov) == 0.0)
