@@ -105,7 +105,8 @@ def test_a_question_answered_after_its_study_went_does_nothing(editor):
 
 def test_a_failed_run_is_reported_and_its_events_applied_on_the_pages_loop(editor):
     """A run's events arrive on its reader thread; with a page served they are
-    applied on the page's loop. A run that fails reports aquakin's message."""
+    applied on the page's loop. A run that fails reports aquakin's message.
+    A real run process, so its ``error`` event is the one the process writes."""
     ed, _ = editor
     applied = []
     original = ed._apply_run_event
@@ -130,11 +131,13 @@ def test_a_failed_run_is_reported_and_its_events_applied_on_the_pages_loop(edito
     assert "broken" not in ed.state.study_progress
 
 
-def test_closing_the_editor_cancels_every_run(editor):
+def test_closing_the_editor_cancels_every_run(editor, in_process_runs):
     ed, _ = editor
+    in_process_runs.hold()  # still running when the editor closes
     ed.run_study("short")
     run = ed._runs["short"]
     ed.stop_runs()
     assert run.cancelled
+    in_process_runs.release()
     assert run.wait(300)["event"] == "cancelled"
     assert ed.state.message == "short: cancelled"

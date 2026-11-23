@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.core.hints import did_you_mean
+from aquakin.integrate._solution import name_list
 from aquakin.plant.errors import UnknownUnitError
 
 if TYPE_CHECKING:
@@ -229,10 +230,12 @@ class PlantSolution:
 
         The multi-species companion to :meth:`C_named` -- read a handful of a
         unit's species in one call (``sol.C_named_many("tank5", ["SNH", "SNO"])``)
-        instead of a slice each. An unknown unit/species raises the same hinted
-        ``KeyError`` :meth:`C_named` gives.
+        instead of a slice each. ``species`` may be a single name (a bare string
+        is one name, giving the same one-entry dict as a one-element list). An
+        unknown unit/species raises the same hinted ``KeyError`` :meth:`C_named`
+        gives.
         """
-        return {sp: self.C_named(unit_name, sp) for sp in species}
+        return {sp: self.C_named(unit_name, sp) for sp in name_list(species)}
 
     def final_named(self, unit_name: str, species=None) -> dict[str, float]:
         """Values at the **last** save time for one unit, as ``{name: float}``.
@@ -240,12 +243,14 @@ class PlantSolution:
         The reporting shortcut for a steady-state value: instead of
         ``float(sol.C_named("tank5", "SNH")[-1])`` per species,
         ``sol.final_named("tank5", ["SNH", "SNO"])`` returns them in one dict.
-        With ``species=None`` (default) every species of the unit's model is
-        returned (see :meth:`Plant.list_species`). Values are plain Python floats
+        A single string is one name (``final_named("tank5", "SNH")`` equals
+        ``final_named("tank5", ["SNH"])``). With ``species=None`` (default)
+        every species of the unit's model is returned (see
+        :meth:`Plant.list_species`). Values are plain Python floats
         (a post-processing read on an already-solved solution -- use
         ``C_named(unit, sp)[-1]`` if you need a differentiable last value).
         """
-        names = self.plant.list_species(unit_name) if species is None else list(species)
+        names = self.plant.list_species(unit_name) if species is None else name_list(species)
         return {sp: float(self.C_named(unit_name, sp)[-1]) for sp in names}
 
     def plot(self, unit_name: str, species=None, *, ax=None, **kwargs):
@@ -284,13 +289,7 @@ class PlantSolution:
         from aquakin.integrate._common import require_matplotlib
 
         plt = require_matplotlib()
-        names = (
-            self.plant.list_species(unit_name)
-            if species is None
-            else [species]
-            if isinstance(species, str)
-            else list(species)
-        )
+        names = self.plant.list_species(unit_name) if species is None else name_list(species)
         if ax is None:
             _, ax = plt.subplots()
         t = np.asarray(self.t)

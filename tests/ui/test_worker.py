@@ -6,19 +6,24 @@ import pytest
 
 from aquakin_ui.worker import AquakinWorker, WorkerError
 
+#: A stand-in worker that answers every request with its own id, until its input closes.
+_ECHO = [
+    sys.executable,
+    "-c",
+    "import json, sys\n"
+    "for line in sys.stdin:\n"
+    "    req = json.loads(line)\n"
+    "    print(json.dumps({'id': req['id'], 'ok': True, 'result': 1}), flush=True)\n",
+]
 
-@pytest.fixture(scope="module")
-def worker():
-    w = AquakinWorker()
-    yield w
-    w.stop()
 
-
-def test_requests_and_refusals(worker):
-    assert "version" in worker.request("ping")
+def test_requests_and_refusals(real_worker):
+    assert "version" in real_worker.request("ping")
     with pytest.raises(WorkerError, match="unknown command"):
-        worker.request("nope")
-    assert worker.request("check_unit", kind="splitter", name="s", settings={"model": "asm1"})["ok"]
+        real_worker.request("nope")
+    assert real_worker.request(
+        "check_unit", kind="splitter", name="s", settings={"model": "asm1"}
+    )["ok"]
 
 
 def test_a_worker_that_does_not_answer_times_out():
@@ -38,7 +43,7 @@ def test_a_worker_that_dies_is_reported_with_its_error_output():
 
 
 def test_each_worker_has_its_own_log_removed_when_it_stops():
-    a, b = AquakinWorker(), AquakinWorker()
+    a, b = AquakinWorker(command=_ECHO), AquakinWorker(command=_ECHO)
     try:
         a.request("ping")
         b.request("ping")

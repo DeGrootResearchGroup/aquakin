@@ -49,7 +49,7 @@ Split out of `.claude/rules/integration.md`.
 - SciPy's stopping tests are absolute once the objective is below 1, so an
   `"mse"` fit on mol/L data (loss ~1e-13) used to stop at its start.
   **The optimizer sees the objective divided by `_ObjectiveBundle.loss_scale`**,
-  set by the driver's `_scale_objective` from the loss at the (first) start via
+  set by `_scale_objective` in the multistart runner from the loss at each start via
   `_objective_scale` (`min(1, start loss)`, floored at `_SCALE_FLOOR` times
   `_CalibrationProblem.data_mean_square`; `"mse"` only, `data_mean_square` is
   `None` for the other losses). Both resolvers set `data_mean_square` with
@@ -58,8 +58,10 @@ Split out of `.claude/rules/integration.md`.
   (multiplied back in `_fit_result`), the Laplace Hessian and the profile use
   the unscaled loss: do not fold the scale into `_data_term`,
   `_residual_parts` or the compiled programs (it is applied outside them, so
-  it is not in `struct_key`). Every start of a multistart shares one scale so
-  their losses compare.
+  it is not in `struct_key`). **Each start is scaled by its own starting loss,
+  and starts are compared on the unscaled loss** (`fun * loss_scale`): a start
+  then runs exactly as it would alone, so a start list returns the best of
+  separate fits from its starts, whatever their order.
 
 ### `calibrate()` internal structure
 

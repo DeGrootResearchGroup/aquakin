@@ -14,8 +14,6 @@ import pytest
 
 import aquakin
 from aquakin.integrate.calibration.loss import _convert_observations, _observation_unit_factors
-from aquakin.plant import CSTRUnit, Plant
-from aquakin.plant.influent import InfluentSeries
 
 # ----- the factors ----------------------------------------------------------------
 
@@ -85,11 +83,10 @@ def test_conversion_of_multi_batch_and_single_column_data():
 
 
 @pytest.fixture(scope="module")
-def decay():
-    model = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    reactor = aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1, T=293.15))
+def decay(simple_model):
+    reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = jnp.asarray([1.0, 0.0])
-    params = model.default_parameters().at[0].set(0.25)
+    params = simple_model.default_parameters().at[0].set(0.25)
     t_obs = jnp.linspace(0.5, 10.0, 12)
     obs = reactor.solve(C0, params=params, t_span=(0.0, 10.0), t_eval=t_obs).C_named("B")
     return reactor, C0, t_obs, obs
@@ -173,24 +170,10 @@ def test_profile_likelihood_forwards_the_units(decay, monkeypatch):
 # ----- the plant ----------------------------------------------------------------------
 
 
-def test_plant_calibrate_converts_before_resolving(monkeypatch):
+def test_plant_calibrate_converts_before_resolving(cstr_plant, monkeypatch):
     import aquakin.plant.calibrate as plant_cal
 
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    plant = Plant("tank", time_unit="s")
-    plant.add_unit(
-        CSTRUnit("tank", net, volume=100.0, input_port_names=["inlet"], conditions={"T": 293.15})
-    )
-    plant.add_influent(
-        "feed",
-        InfluentSeries(
-            t=jnp.asarray([0.0, 100.0]),
-            Q=jnp.asarray([10.0, 10.0]),
-            C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]),
-            model=net,
-        ),
-        to="tank.inlet",
-    )
+    plant = cstr_plant
     seen = {}
 
     class _Stop(Exception):

@@ -11,6 +11,7 @@ import numpy as np
 from scipy.optimize import least_squares, minimize
 
 from aquakin.integrate._transforms import to_unconstrained
+from aquakin.integrate.calibration.loss import _objective_scale
 
 if TYPE_CHECKING:
     from aquakin.integrate.calibration.objective import _FitConfig, _ObjectiveBundle
@@ -20,6 +21,29 @@ if TYPE_CHECKING:
 # Uniform optimiser output so the multistart loop and downstream code are
 # agnostic to which backend (L-BFGS-B or Gauss-Newton least-squares) ran.
 _OptOut = namedtuple("_OptOut", "x fun success message nit")
+
+
+def _scale_objective(bundle: _ObjectiveBundle, x_start) -> None:
+    """Set the factor the optimiser's objective is divided by from its value
+    at ``x_start`` (see :func:`_objective_scale`; only ``loss="mse"`` is
+    scaled, which a bundle marks with a ``data_mean_square``).
+
+    Each start of a multistart is scaled by its own starting loss, so a start
+    runs exactly as it would as the only start of a fit, and an explicit start
+    list returns what the best of separate fits from its starts would. A start
+    whose solve fails is left unscaled: the multistart runner reports that
+    failure."""
+    if bundle.data_mean_square is None:
+        return
+    try:
+        value = bundle.value_and_grad(jnp.asarray(x_start))[0]
+    except Exception as exc:
+        if not _is_solve_failure(exc):
+            raise
+        bundle.scale_box[0] = 1.0
+        return
+    start_loss = float(value) * bundle.loss_scale
+    bundle.scale_box[0] = _objective_scale(bundle.data_mean_square, start_loss)
 
 
 # Outer iterations of the Gauss-Newton noise re-estimation (``sigma="estimate"``);
@@ -276,12 +300,15 @@ def _run_multistart(
     def _try_from(s, x_start):
         current[0] = s
         try:
-            return _run_from(x_start)
+            _scale_objective(bundle, x_start)
+            out = _run_from(x_start)
         except Exception as exc:
             if not _is_solve_failure(exc):
                 raise
             failures.append((s, exc))
             return None
+        # Starts may run at different scales: compare them on the loss itself.
+        return out._replace(fun=out.fun * bundle.loss_scale)
 
     def _better(cand, best):
         return best is None or (np.isfinite(cand.fun) and cand.fun < best.fun)

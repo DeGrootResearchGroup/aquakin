@@ -91,15 +91,11 @@ def wastage_run(asm1, adm1):
     return plant, sol, params
 
 
-def test_wastage_run_finite(wastage_run):
-    _, sol, _ = wastage_run
-    assert jnp.all(jnp.isfinite(sol.state))
-
-
 def test_waste_flow_steps_on_schedule(wastage_run):
     """The waste pump is Qw_low before day 182 and Qw_high after; RAS stays
     fixed (the schedule moves only the wastage, not the recycle)."""
     plant, sol, params = wastage_run
+    assert jnp.all(jnp.isfinite(sol.state))
     waste = plant.stream(sol, "underflow_split.waste", params)
     ras = plant.stream(sol, "underflow_split.ras", params)
     # Sampled at days [0, 150, 250].
