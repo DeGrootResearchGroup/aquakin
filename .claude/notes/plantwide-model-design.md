@@ -271,7 +271,7 @@ paper itself before citing it in a model file.
   pilot scale data. *Water Res.* 43(6), 1680–1692.
   https://doi.org/10.1016/j.watres.2008.12.039
 - Kazadi Mbamba, C., Batstone, D.J., Flores-Alsina, X. & Tait, S. (2015a). A
-  generalised chemical precipitation modelling approach in wastewater treatment
+  `generalised` chemical precipitation modelling approach in wastewater treatment
   applied to calcite. *Water Res.* 68, 342–353.
   https://doi.org/10.1016/j.watres.2014.10.011
 - Kazadi Mbamba, C., Tait, S., Flores-Alsina, X. & Batstone, D.J. (2015b). A
