@@ -36,7 +36,8 @@ Claude-facing files** at the end.
 |---|---|---|
 | `.claude/rules/docs-examples.md` | `README.md`, the user-guide pages, the root `conftest.py` | the README and user-guide code examples are tests (Sybil): pages run top to bottom, stated values are checked, skips need a reason |
 | `.claude/rules/tests.md` | `tests/**` | what makes a test able to fail, gradient tests, shared fixtures, the tiers and what CI actually runs |
-| `.claude/rules/core.md` | `aquakin/core/**`, `aquakin/utils/**` | AST rate evaluation, parser, **the one expression tokenizer (`core/lexer.py`) every expression language shares**, vectorized kernel, `SpatialConditions`, parameter namespacing |
+| `.claude/rules/core.md` | `aquakin/core/**`, `aquakin/utils/**` | AST rate evaluation, parser, **the one expression tokenizer (`core/lexer.py`) every expression language shares**, `SpatialConditions`, parameter namespacing |
+| `.claude/rules/core-rate-functions.md` | `core/nodes.py`, `core/registry.py`, `core/parser.py`, `core/vector_kernel.py` | registering a rate function, authoring a node (one `op`, everything else derived), the vectorized rate kernel |
 | `.claude/rules/core-speciation.md` | `core/ph_solver.py`, `core/speciation.py` | charge-balance pH solver, derived conditions, the `speciation:` block |
 | `.claude/rules/core-precipitation.md` | `core/precipitation*.py` | mineral precipitation: rate law, the `precipitation:` block, the algebraic equilibrium mode |
 | `.claude/rules/integration.md` | `aquakin/integrate/**` | solver choice, operator splitting, located events, compiled-solve caching |

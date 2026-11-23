@@ -46,7 +46,7 @@ MODULE_ALLOWANCE = 25
 # to the file's new length when it shrinks (see the module docstring).
 RECORDED_LINES = {
     # Rule files over RULE_BUDGET, still narrative from being split out verbatim.
-    ".claude/rules/core.md": 422,
+    ".claude/rules/core.md": 298,
     ".claude/rules/integration-differentiation.md": 395,
     ".claude/rules/plant.md": 401,
     ".claude/rules/plant-solve.md": 267,
