@@ -71,6 +71,7 @@ task needs the detail):**
 | Note | Contents |
 |---|---|
 | `.claude/notes/studies-design.md` | the studies design and the owner's decisions (live / frozen, replace with a warning, version notes, unfreezing discards results) |
+| `.claude/notes/plantwide-model-design.md` | draft proposal for a unified plant-wide model built from the literature: the `extends:` chain, state set, sources per level, validation plan, open decisions |
 | `.claude/notes/rate-kernel-log.md` | the vectorized rate kernel's compile measurements (jaxpr share, reduction, end-to-end speedup per model) |
 | `.claude/notes/plant-solve-log.md` | accuracy and validation measurements behind the recycle-resolution rules (affine residuals, `rho`, fixed-pass errors, IFT gradient checks) |
 | `.claude/notes/schema-log.md` | the shipped models' temperature-correction and prior-width figures, and the `extends:` size saving, behind the schema rules |
