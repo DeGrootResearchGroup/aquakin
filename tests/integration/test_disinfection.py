@@ -162,15 +162,30 @@ def test_disinfection_train_in_a_plant(asm1):
 
 
 def test_grad_through_disinfection_plant(asm1):
+    """The gradient through a chlorine-contact plant solve has a closed form.
+
+    The residual obeys ``dCl/dt = (Q/V)(dose - Cl) - k Cl``, i.e. it relaxes at
+    ``lam = Q/V + k = 4 /d`` to ``Cl_ss = (Q/V) dose / lam = 2.5``, so
+    ``Cl(1) = Cl_ss + (Cl0 - Cl_ss) exp(-lam)`` and the loss ``Cl(1)**2`` has
+    ``dL/dCl0 = 2 Cl(1) exp(-lam)``. The train has no reactive unit, so the
+    model parameters do not enter it: the gradient in their scale is zero.
+    """
     p = Plant("disinfect", time_unit="d")
     p.add_unit(ChlorineContactUnit("cl", asm1, volume=500.0, dose=5.0,
                                    ct_per_log=0.5, decay_rate=2.0))
     p.add_influent("feed", InfluentSeries.constant(asm1, SS=60.0, Q=1000.0),
                    to="cl.in")
     base = p.default_parameters()
-    g = jax.grad(lambda s: jnp.sum(
-        p.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), params=base * s).state ** 2))(1.0)
-    assert jnp.isfinite(g)
+
+    def loss(s, y0):
+        sol = p.solve(t_span=(0.0, 1.0), t_eval=jnp.array([1.0]), params=base * s, y0=y0)
+        return jnp.sum(sol.state ** 2)
+
+    g_s, g_y0 = jax.grad(loss, argnums=(0, 1))(1.0, jnp.zeros(1))
+    lam, cl_ss = 1000.0 / 500.0 + 2.0, 2.5
+    cl_1 = cl_ss * (1.0 - np.exp(-lam))  # from Cl0 = 0
+    assert float(g_s) == 0.0
+    assert float(g_y0[0]) == pytest.approx(2.0 * cl_1 * np.exp(-lam), rel=1e-4)
 
 
 def test_grad_through_credit_physics():

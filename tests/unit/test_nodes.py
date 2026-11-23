@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from aquakin.core.context import CompileContext
@@ -277,7 +278,18 @@ def test_ph_inhibit_node():
     assert _eval(node, pH=5.0) > _eval(node, pH=4.5)
 
 
-def test_ph_inhibit_grad_finite():
+def _central_fd(f, x, h):
+    """Central finite-difference gradient of scalar ``f`` at ``x`` (step ``h``)."""
+    x = jnp.asarray(x)
+    return jnp.asarray(
+        [(f(x.at[i].add(h)) - f(x.at[i].add(-h))) / (2.0 * h) for i in range(x.size)]
+    )
+
+
+def test_ph_inhibit_grad_matches_fd():
+    """The gradient w.r.t. both limits matches a central difference (step 1e-6,
+    truncation ~1e-12 relative on this smooth sigmoid); the two unused
+    parameters get exactly zero."""
     from aquakin.core.nodes import pHInhibitNode
 
     node = pHInhibitNode(ParamNode("r.k"), ParamNode("r.A"))  # LL, UL as params
@@ -286,8 +298,11 @@ def test_ph_inhibit_grad_finite():
     def f(p):
         return fn(jnp.zeros(2), p, {"pH": jnp.asarray([5.0]), "T": jnp.asarray([293.15])}, 0)
 
-    g = jax.grad(f)(jnp.asarray([4.0, 5.5, 0.0, 0.0]))
-    assert jnp.all(jnp.isfinite(g))
+    p0 = jnp.asarray([4.0, 5.5, 0.0, 0.0])
+    g = jax.grad(f)(p0)
+    np.testing.assert_allclose(g[:2], _central_fd(f, p0, 1e-6)[:2], rtol=1e-6)
+    assert float(g[0]) != 0.0 and float(g[1]) != 0.0
+    assert list(map(float, g[2:])) == [0.0, 0.0]
 
 
 def test_ph_switch_requires_pH():
@@ -319,7 +334,10 @@ def test_ph_inhibit_equal_limits_is_finite():
 
 
 def test_ph_inhibit_equal_limits_gradient_finite():
-    """The window floor also keeps the gradient finite at the degenerate point."""
+    """The window floor also keeps the gradient finite at the degenerate point,
+    and right: with the width floored to ``1e-6`` the factor is a steep sigmoid
+    of the window centre, so a central difference (step ``1e-9``, well inside
+    the floor) still matches it."""
     from aquakin.core.nodes import pHInhibitNode
 
     node = pHInhibitNode(ParamNode("r.k"), ParamNode("r.A"))  # LL, UL as params
@@ -328,9 +346,11 @@ def test_ph_inhibit_equal_limits_gradient_finite():
     def f(p):
         return fn(jnp.zeros(2), p, {"pH": jnp.asarray([5.0]), "T": jnp.asarray([293.15])}, 0)
 
-    val, g = jax.value_and_grad(f)(jnp.asarray([5.0, 5.0, 0.0, 0.0]))  # LL == UL
+    p0 = jnp.asarray([5.0, 5.0, 0.0, 0.0])  # LL == UL
+    val, g = jax.value_and_grad(f)(p0)
     assert jnp.isfinite(val)
     assert jnp.all(jnp.isfinite(g))
+    np.testing.assert_allclose(g[:2], _central_fd(f, p0, 1e-9)[:2], rtol=1e-5)
 
 
 def test_ph_inhibit_normal_window_unchanged_by_floor():
@@ -629,13 +649,14 @@ def test_the_power_guard_changes_no_value(base, exp):
 @pytest.mark.parametrize("exp", [-1.0, -0.5, 0.0, 0.5, 1.5, 2.0, 3.0])
 def test_the_power_gradient_is_finite_at_a_zero_base(exp):
     """``d/dx x**e = e * x**(e-1)`` is infinite at zero for ``e < 1``; a zero
-    tangent through it is ``0 * inf = nan``. Both are guarded away."""
+    tangent through it is ``0 * inf = nan``. Both are guarded away, to exactly
+    zero (which is also the true derivative for ``e > 1``, and for ``e = 0``)."""
 
     def f(x):
         return PowerNode.op((x, jnp.array(exp)))
 
-    assert jnp.isfinite(jax.jvp(f, (0.0,), (0.0,))[1])
-    assert jnp.isfinite(jax.grad(f)(0.0))
+    assert float(jax.jvp(f, (0.0,), (0.0,))[1]) == 0.0
+    assert float(jax.grad(f)(0.0)) == 0.0
 
 
 def test_the_power_gradient_is_untouched_where_it_was_already_finite():

@@ -274,7 +274,12 @@ def test_forward_mode_through_default_adjoint_gives_friendly_error(simple_model)
 def test_forward_adjoint_enables_forward_mode_through_batch(simple_model):
     """Building the reactor with a forward-mode ``diff=`` config makes the same
     forward-mode solve differentiable (the cure the friendly error points to),
-    and its Jacobian equals the reverse-mode gradient through a default reactor."""
+    while reverse mode through the default adjoint is unaffected, and the two
+    routes agree.
+
+    Both derivatives are checked against the closed form: with
+    ``B(t) = 1 - exp(-k t)``, ``dB(10)/dk = 10 exp(-10 k) = 10 exp(-3)`` at
+    ``k = 0.3``."""
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_model.default_parameters()
@@ -286,14 +291,17 @@ def test_forward_adjoint_enables_forward_mode_through_batch(simple_model):
     def out(z):
         return fwd.solve(C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1]
 
+    expected = 10.0 * float(jnp.exp(-3.0))
     J = jax.jacfwd(out)(jnp.asarray([0.3]))
-    assert jnp.all(jnp.isfinite(J))
+    # The forward solve matches the closed form to rtol 1e-4; its derivative is
+    # held a decade looser, as in test_grad_through_solve_matches_closed_form.
+    assert float(J[0]) == pytest.approx(expected, rel=1e-3)
 
     # Reverse mode through a fresh default reactor still works.
     rev = aquakin.BatchReactor(simple_model, conditions)
     g = jax.grad(lambda z: rev.solve(
         C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1])(jnp.asarray([0.3]))
-    assert jnp.all(jnp.isfinite(g))
+    assert float(g[0]) == pytest.approx(expected, rel=1e-3)
     # The two AD routes through the same solve agree.
     np.testing.assert_allclose(np.asarray(J), np.asarray(g), rtol=1e-8)
 

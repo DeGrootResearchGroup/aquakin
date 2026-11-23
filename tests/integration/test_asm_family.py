@@ -3,7 +3,7 @@
 Each shipped ASM model gets the same checks: it loads, has the right
 shape, evaluates ``dCdt`` to finite values at default state, integrates
 over a short window, and ``jax.grad`` through ``BatchReactor.solve``
-returns finite gradients.
+matches a central finite difference.
 """
 
 import jax
@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import pytest
 
 import aquakin
+from tests.finite_difference import central_fd
 
 # The SUMO-ported ASM/ADM models under test. Names only -- the shape contract
 # (species/reaction/parameter counts) lives in _EXPECTED_SHAPES below and is
@@ -55,45 +56,36 @@ def test_dCdt_finite_at_default_state(name):
     assert jnp.all(jnp.isfinite(dC))
 
 
-@pytest.mark.parametrize("name", _ASM_MODELS)
-@pytest.mark.slow  # heavy: stiff solve x every ASM/ADM model
-def test_short_integration_finite(name):
-    """Each model integrates 0.05 d without producing non-finite values."""
-    net = aquakin.load_model(name)
-    reactor = aquakin.BatchReactor(net, net.default_conditions())
-    sol = reactor.solve(
-        net.default_concentrations(),
-        params=net.default_parameters(),
-        t_span=(0.0, 0.05),
-        t_eval=jnp.linspace(0.0, 0.05, 6),
-    )
-    assert jnp.all(jnp.isfinite(sol.C))
-
-
 @pytest.mark.slow  # jax.grad through a stiff solve x every ASM/ADM model
 @pytest.mark.parametrize("name", _ASM_MODELS)
 def test_ad_grad_through_solve(name):
-    """jax.grad through solve must produce finite gradients."""
+    """Each model integrates 0.05 d to finite values, and ``jax.grad`` through
+    the solve matches a central finite difference (step 1e-4 relative) in its
+    most influential parameter (largest ``|g_i p_i|``)."""
     net = aquakin.load_model(name)
     reactor = aquakin.BatchReactor(net, net.default_conditions())
     C0 = net.default_concentrations()
+    t_eval = jnp.linspace(0.0, 0.05, 6)
 
     # Pick any species that's likely to be sensitive — first one will do.
     target = net.species[0]
 
     def loss(params):
-        sol = reactor.solve(
-            C0, params=params, t_span=(0.0, 0.05), t_eval=jnp.linspace(0.0, 0.05, 6)
-        )
+        sol = reactor.solve(C0, params=params, t_span=(0.0, 0.05), t_eval=t_eval)
         return jnp.sum(sol.C_named(target))
 
-    g = jax.grad(loss)(net.default_parameters())
+    p = net.default_parameters()
+    sol = reactor.solve(C0, params=p, t_span=(0.0, 0.05), t_eval=t_eval)
+    assert jnp.all(jnp.isfinite(sol.C))
+    g = jax.grad(loss)(p)
     assert jnp.all(jnp.isfinite(g))
+    i = int(jnp.argmax(jnp.abs(g * p)))
+    assert float(g[i]) == pytest.approx(central_fd(loss, p, i), rel=1e-4)
 
 
 def test_asm3_short_integration_and_ad_grad_finite():
-    """Fast-gate representative of the two ``slow`` ASM-family checks above
-    (``test_short_integration_finite`` / ``test_ad_grad_through_solve``): asm3
+    """Fast-gate representative of the ``slow`` ASM-family check above
+    (``test_ad_grad_through_solve``): asm3
     is the smallest shipped ASM/ADM model, so a single short stiff solve and a
     ``jax.grad`` through it run cheaply. This keeps a core differentiability path
     -- integrate a stiff biological model and back-propagate -- in the PR gate,
@@ -112,11 +104,63 @@ def test_asm3_short_integration_and_ad_grad_finite():
     p = net.default_parameters()
     sol = reactor.solve(C0, params=p, t_span=(0.0, 0.05), t_eval=t_eval)
     assert jnp.all(jnp.isfinite(sol.C))
-    # ... and so is the reverse-mode gradient through the stiff solve.
+    # ... and so is the reverse-mode gradient through the stiff solve, which
+    # matches a central difference in the autotroph yield (a stoichiometric
+    # parameter, so the check covers the parameter-dependent stoichiometry).
     g = jax.grad(loss)(p)
     assert g.shape == p.shape
     assert jnp.all(jnp.isfinite(g))
-    assert jnp.any(g != 0.0)
+    ya = net.param_index["YA"]
+    assert float(g[ya]) != 0.0
+    assert float(g[ya]) == pytest.approx(central_fd(loss, p, ya), rel=1e-4)
+
+
+# The two-step-nitrification ASM3 variants: (model, conditions, initial state,
+# end time (d), summed output, a parameter the output must depend on). One runs
+# in the fast gate; the rest share its code path and run in the merge suite.
+_TWO_STEP_GRAD_CASES = [
+    pytest.param(
+        "asm3_2step", {"T": 293.15},
+        {"SO2": 0.0, "SNO3": 12.0, "SS": 200.0, "XH": 500.0, "XSTO": 20.0},
+        0.05, "SNO2", "etaH_NO3", id="asm3_2step",
+    ),
+    pytest.param(
+        "asm3_2step_anammox", {"T": 303.15},
+        {"SO2": 0.0, "SNH4": 30.0, "SNO2": 30.0, "XAMX": 200.0},
+        0.5, "SN2", "mu_AMX", id="anammox", marks=pytest.mark.slow,
+    ),
+    pytest.param(
+        "asm3_2step_comammox", {"T": 303.15},
+        {"SO2": 300.0, "SNH4": 30.0, "XCMX": 100.0},
+        0.5, "SNO3", "mu_CMX", id="comammox", marks=pytest.mark.slow,
+    ),
+    pytest.param(
+        "asm3_2step_n2o", {"T": 293.15, "pH": 7.5},
+        {"SO2": 100.0, "SNH4": 30.0, "SNO2": 20.0, "XAOB": 100.0},
+        0.1, "SN2O", "q_AOB_N2O_ND", id="n2o", marks=pytest.mark.slow,
+    ),
+]
+
+
+@pytest.mark.parametrize("name,conditions,state,t_end,output,param", _TWO_STEP_GRAD_CASES)
+def test_two_step_variant_grad_matches_fd(name, conditions, state, t_end, output, param):
+    """``jax.grad`` through a short solve of each two-step variant is non-zero in
+    the parameter that drives the summed output, and matches a central finite
+    difference of it (step 1e-4 relative)."""
+    net = aquakin.load_model(name)
+    r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(**conditions))
+    C0 = net.concentrations(state)
+    t_eval = jnp.linspace(0.0, t_end, 4)
+
+    def loss(p):
+        return jnp.sum(r.solve(C0, params=p, t_span=(0.0, t_end), t_eval=t_eval).C_named(output))
+
+    p = net.default_parameters()
+    g = jax.grad(loss)(p)
+    assert jnp.all(jnp.isfinite(g))
+    i = net.param_index[param]
+    assert float(g[i]) != 0.0
+    assert float(g[i]) == pytest.approx(central_fd(loss, p, i), rel=1e-4)
 
 
 @pytest.mark.parametrize("name", _ASM_MODELS)

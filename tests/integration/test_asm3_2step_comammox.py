@@ -6,7 +6,6 @@ organism), and the headline ecological result: comammox's high ammonia affinity
 lets it out-compete the canonical AOB at LOW ammonium, while the AOB win at HIGH
 ammonium (niche differentiation). COD/N/charge closure is in test_asm_continuity.
 """
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -72,18 +71,3 @@ def test_aob_win_at_high_ammonium(net):
     ra = _rate(net, "Aerobic_growth_of_XAOB_nitritation",
                SO2=5.0, SNH4=5.0, XCMX=1.0, XAOB=1.0, SALK=0.05)
     assert ra > rc
-
-
-def test_grad_through_solve_is_finite(net):
-    cond = aquakin.SpatialConditions.uniform(T=303.15)
-    r = aquakin.BatchReactor(net, cond)
-    C0 = net.concentrations({"SO2": 300.0, "SNH4": 30.0, "XCMX": 100.0})
-
-    def loss(p):
-        sol = r.solve(C0, params=p, t_span=(0.0, 0.5),
-                      t_eval=jnp.linspace(0.0, 0.5, 4))
-        return jnp.sum(sol.C_named("SNO3"))
-
-    g = jax.grad(loss)(net.default_parameters())
-    assert jnp.all(jnp.isfinite(g))
-    assert float(g[net.param_index["mu_CMX"]]) != 0.0

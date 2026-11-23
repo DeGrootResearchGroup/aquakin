@@ -3,10 +3,10 @@ and two-step denitrification), after Kaelin et al. (2009).
 
 These check the structure (the two split state variables, 19 processes), the
 headline two-step signatures (nitrite as an explicit intermediate of both
-nitrification and denitrification), and that gradients flow. COD/N/charge
-closure is covered by tests/integration/test_asm_continuity.py.
+nitrification and denitrification). The gradient through a solve is checked
+against a finite difference in test_asm_family.py; COD/N/charge closure is
+covered by tests/integration/test_asm_continuity.py.
 """
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -79,23 +79,6 @@ def test_nob_washout_leaves_nitrite(net):
     no3 = np.asarray(sol.C_named("SNO3"))
     assert no2[-1] > 10.0                           # ammonia oxidised, stuck at nitrite
     assert no3[-1] < 1e-6                           # no nitrate without NOB
-
-
-def test_grad_through_solve_is_finite(net):
-    cond = aquakin.SpatialConditions.uniform(T=293.15)
-    r = aquakin.BatchReactor(net, cond)
-    C0 = net.concentrations({"SO2": 0.0, "SNO3": 12.0, "SS": 200.0, "XH": 500.0,
-                             "XSTO": 20.0})
-
-    def loss(p):
-        sol = r.solve(C0, params=p, t_span=(0.0, 0.05),
-                      t_eval=jnp.linspace(0.0, 0.05, 4))
-        return jnp.sum(sol.C_named("SNO2"))
-
-    g = jax.grad(loss)(net.default_parameters())
-    assert jnp.all(jnp.isfinite(g))
-    # The nitrite trajectory depends on the first denitrification-step rate.
-    assert float(g[net.param_index["etaH_NO3"]]) != 0.0
 
 
 def test_temperature_slows_nitrification_in_the_cold(net):

@@ -126,7 +126,8 @@ def test_grad_flows_through_a_registered_function():
         return fn(jnp.asarray([a]), jnp.asarray([1.5]), {}, 0)
 
     grad = jax.grad(g)(2.0)
-    assert jnp.isfinite(grad) and float(grad) != 0.0
+    # d/da a^2 / (K^2 + a^2) = 2 a K^2 / (K^2 + a^2)^2 = 9 / 39.0625 at a=2, K=1.5
+    assert float(grad) == pytest.approx(2 * 2.0 * 1.5**2 / (1.5**2 + 2.0**2) ** 2, rel=1e-12)
 
 
 def test_registered_function_renders_as_latex_instead_of_raising():

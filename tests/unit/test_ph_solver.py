@@ -162,7 +162,9 @@ def test_vmap_over_states():
     zcat = jnp.array([1.0e-3, 2.0e-3, 3.0e-3])
     pH = jax.vmap(lambda c, z: solve_ph(tot_carbonate=c, z_cation_eq=z))(carb, zcat)
     assert pH.shape == (3,)
-    assert jnp.all(jnp.isfinite(pH))
+    # Each lane of the batched solve equals its own scalar solve.
+    single = [float(solve_ph(tot_carbonate=c, z_cation_eq=z)) for c, z in zip(carb, zcat)]
+    np.testing.assert_allclose(np.asarray(pH), single, rtol=1e-12, atol=0.0)
 
 
 # --- Implicit-function-theorem (custom_root) path: the ideal solve uses an
