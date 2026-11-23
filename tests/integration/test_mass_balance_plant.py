@@ -181,6 +181,68 @@ def test_mass_balance_default_ports_are_influents_and_dangling_outputs():
     assert mb.effluent_ports == plant.check().dangling_outputs   # ["tank.out"]
 
 
+
+def _anoxic_cstr_plant(T_feed, temperature_model=None):
+    """A single anoxic BSM2-ASM1 CSTR (static ``T`` 293.15 K) fed nitrate and
+    biomass at ``T_feed``, so denitrification makes N2 at a temperature-
+    dependent rate (the BSM2 ASM1 carries Arrhenius corrections)."""
+    from aquakin.plant.bsm.bsm2 import bsm2_asm1_model
+    from aquakin.plant.influent import InfluentSeries
+
+    net = bsm2_asm1_model()
+    plant = Plant("anoxic", time_unit="d")
+    plant.add_unit(CSTRUnit(name="tank", model=net, volume=1000.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15},
+                            aeration=Aeration(kla=0.0)))
+    feed = InfluentSeries.constant(net, SS=200.0, XS=100.0, XB_H=1500.0, SNO=20.0,
+                                   SNH=25.0, SALK=7.0, Q=1000.0, T=T_feed)
+    plant.add_influent("feed", feed, to="tank.inlet")
+    if temperature_model is not None:
+        plant.set_temperature_model(temperature_model)
+    return plant
+
+
+@pytest.mark.parametrize("heat_balance", [False, True], ids=["algebraic", "heat_balance"])
+def test_mass_balance_reacts_at_the_operating_temperature(heat_balance):
+    """The balance's reaction integral (the denitrification N2 and the COD it
+    oxidizes) must run at the temperature the solve ran the kinetics at: the
+    flow-weighted inlet temperature under the algebraic model, the tank's own
+    lagged temperature state under a heat balance -- not the unit's static
+    ``T``. With the feed 10 K below the static ``T`` the static evaluation
+    misses N by ~14% (algebraic) and ~1.4% (heat balance, whose tank cools
+    only ~4 K over the window) (#724)."""
+    tm = aquakin.HeatBalanceTemperature() if heat_balance else None
+    plant = _anoxic_cstr_plant(283.15, tm)
+    sol = plant.solve(t_span=(0.0, 0.5), t_eval=jnp.linspace(0.0, 0.5, 401))
+    mb = plant.mass_balance(sol, components=("COD", "N"))
+    # Denitrification really happens, so the N gas term is being tested.
+    assert mb.gas_detail["denitrification_N2"] > 0.1 * mb["N"].inflow
+    # The gas integrals are trapezoids over the saved points across the
+    # start-up transient: with the feed at the static T the residual is ~2e-3
+    # on 201 points and ~1e-4 on 801, so 401 points closes well inside 2e-3.
+    for q in ("COD", "N"):
+        assert abs(mb[q].relative_imbalance) < 2e-3, (q, mb[q].relative_imbalance)
+
+
+def test_mass_balance_of_a_plant_without_reactions_has_no_gas():
+    """A storage tank reacts nothing and aerates nothing: the gas terms are
+    exactly zero and the inflow splits into outflow plus accumulation."""
+    from aquakin.plant.storage import StorageTank
+
+    net = aquakin.load_model("asm1")
+    plant = Plant("store", time_unit="d")
+    plant.add_unit(StorageTank(name="store", model=net, volume=160.0, output_flow=50.0))
+    plant.add_influent("feed", net.influent({"SS": 60.0, "SNH": 20.0}, Q=100.0), to="store.in")
+    sol = plant.solve(t_span=(0.0, 0.5), t_eval=jnp.linspace(0.0, 0.5, 101))
+    mb = plant.mass_balance(sol, components=("COD", "N"))
+    for q in ("COD", "N"):
+        assert mb[q].gas == 0.0
+        # The default start inventory dilutes out: accumulation is exercised.
+        assert abs(mb[q].accumulation) > 0.1 * mb[q].inflow
+        # Trapezoid flux integrals over the dilution transient on 101 points.
+        assert abs(mb[q].relative_imbalance) < 1e-4, (q, mb[q].relative_imbalance)
+
+
 # The whole-plant balances below start from the shipped warm start rather than
 # a steady state: the balance carries the accumulation term, so it closes over
 # any window. The window opens one day in, after the fast transients away from

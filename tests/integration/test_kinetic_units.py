@@ -266,7 +266,7 @@ def test_mass_balance_reaction_term_is_the_units_reaction_term(asm2d):
     the limited ``model.dCdt`` the reactor's ``rhs`` integrates, not the raw
     ``stoich.T @ rates``."""
     from aquakin.plant import CSTRUnit
-    from aquakin.plant.balance import _reaction_term
+    from aquakin.plant.balance import _reaction_terms_at
 
     tank = CSTRUnit("tank", asm2d, volume=1000.0, input_port_names=["in"],
                     conditions={"T": 293.15})
@@ -279,7 +279,7 @@ def test_mass_balance_reaction_term_is_the_units_reaction_term(asm2d):
     conditions = {"T": jnp.asarray([293.15])}
     assert _limiter_is_active(asm2d, C, conditions) > 1e-3
     params = plant.default_parameters()
-    got = _reaction_term(plant, "tank", C, params)
+    got = _reaction_terms_at(plant, 0.0, C, params, ["tank"])["tank"]
     expected = asm2d.dCdt(C, asm2d.default_parameters(), conditions, 0)
     np.testing.assert_allclose(got, expected, rtol=1e-12, atol=0.0)
 

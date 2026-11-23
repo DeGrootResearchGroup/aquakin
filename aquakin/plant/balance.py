@@ -31,8 +31,8 @@ line in g/m³, the ADM digester in kg/m³ and kmol/m³) via
 
 The gas integrals are evaluated from the saved trajectory, so they are exact at
 steady state (constant rates) and otherwise accurate to the ``t_eval`` sampling;
-the activated-sludge reaction integral uses each reactor's operating
-temperature condition, exact when the influent temperature is constant.
+the reaction integral evaluates each unit's kinetics at the conditions its
+``rhs`` used in the solve (its operating temperature).
 """
 
 from __future__ import annotations
@@ -412,15 +412,75 @@ def _reaction_volume(plant, unit_name, params):
     return np.full(unit.model.n_species, float(unit.volume))
 
 
-def _reaction_term(plant, unit_name, C, params):
-    """The reaction (chemistry) term ``dC/dt`` of a reactive unit, from the same
-    :meth:`~aquakin.plant.kinetic.KineticUnit._reaction` its ``rhs`` calls (the
-    canonical ``model.dCdt``, positivity limiter included, per the plant's time
-    unit), at the unit's static conditions. For an ADM1 digester that term also
-    runs the gas-liquid transfer and overpressure gas outflow, so the biogas
-    export is included."""
-    unit = plant.units[unit_name]
-    return unit._reaction(C, plant._params_for_unit(unit_name, params), unit._condition_arrays)
+def _reaction_terms_at(plant, t, state_full, params_full, reactive, maps=(None, None)):
+    """The reaction (chemistry) term ``dC/dt`` of each reactive unit at one
+    saved instant, ``{unit: (n_species,)}``.
+
+    Each is the same :meth:`~aquakin.plant.kinetic.KineticUnit._reaction` the
+    unit's ``rhs`` calls (the canonical ``model.dCdt``, positivity limiter
+    included, per the plant's time unit), at the conditions that ``rhs`` used:
+    :meth:`~aquakin.plant.kinetic.KineticUnit._reaction_conditions` given the
+    inputs and signals the plant's RHS assembly hands the unit at ``(t,
+    state_full)``. So a reactor's kinetics run at its flow-weighted inlet
+    temperature, or its heat-balance temperature state, as in the solve. For an
+    ADM1 digester the term also runs the gas-liquid transfer and overpressure
+    gas outflow, so the biogas export is included.
+
+    Parameters
+    ----------
+    plant : Plant
+        The plant, with its state and parameter layouts built.
+    t : float or jnp.ndarray
+        Time (the plant's native unit).
+    state_full : jnp.ndarray
+        Flat plant state at ``t``, shape ``(total_state_size,)``.
+    params_full : jnp.ndarray
+        Full plant parameter vector.
+    reactive : list[str]
+        The units whose reaction term to return.
+    maps : tuple, optional
+        The cached ``(recycle_map, flow_map)`` (``RecycleResolver.cached_maps``),
+        or ``(None, None)`` to probe them.
+
+    Returns
+    -------
+    dict[str, jnp.ndarray]
+        ``{unit: dC/dt}`` over the unit's species, per the plant's time unit.
+    """
+    import jax.numpy as jnp
+
+    state_full = jnp.asarray(state_full)
+    states = plant._split_state(state_full)
+    recycle_map, flow_map = maps
+    inputs, signals, _ = plant._unit_inputs_and_signals(
+        jnp.asarray(t), states, params_full, recycle_map=recycle_map, flow_map=flow_map
+    )
+    out = {}
+    for name in reactive:
+        unit = plant.units[name]
+        # The species part only: a unit may carry trailing non-species state
+        # (an MBR's fouling resistance), which the reaction must not see.
+        C = states[name][: unit.model.n_species]
+        conditions = unit._reaction_conditions(inputs[name], signals[name])
+        out[name] = unit._reaction(C, plant._params_for_unit(name, params_full), conditions)
+    return out
+
+
+def _reaction_terms(plant, solution, params, reactive):
+    """:func:`_reaction_terms_at` over every saved time, ``{unit: (n_t,
+    n_species)}``, batched by ``jax.vmap`` as the stream reconstruction is."""
+    import jax
+    import jax.numpy as jnp
+
+    if not reactive:
+        return {}
+    params_full = plant._coerce_params(params)
+    ts = jnp.asarray(solution.t_native)
+    states_flat = jnp.asarray(solution.state)
+    maps = plant._recycle.cached_maps(ts[0], plant._split_state(states_flat[0]), params_full)
+    return jax.vmap(
+        lambda t_i, row: _reaction_terms_at(plant, t_i, row, params_full, reactive, maps)
+    )(ts, states_flat)
 
 
 def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps):
@@ -464,6 +524,7 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
         n: (set(rqs) if hasattr(plant.units[n], "aeration") else {q for q in rqs if q != "N"})
         for n in reactive
     }
+    reactions = _reaction_terms(plant, solution, params, reactive)
     o2_rows, R_rows, strip_rows = [], {q: [] for q in rqs}, {q: [] for q in rqs}
     for i in range(t.shape[0]):
         state_i = solution.state[i]
@@ -475,11 +536,11 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
             unit = plant.units[name]
             start, size = layout[name]
             # Use the species part only: a unit may carry trailing non-species
-            # state (an MBR's fouling resistance), which the per-species reaction
-            # and aeration terms must not see.
+            # state (an MBR's fouling resistance), which the aeration term must
+            # not see.
             n_sp = unit.model.n_species
             C = state_i[start : start + n_sp]
-            react = _reaction_term(plant, name, C, params)
+            react = reactions[name][i]
             for q in gas_comps[name]:
                 R[q] += float(jnp.dot(react, content[name][q]))
             if name in aerated and unit.aeration is not None:

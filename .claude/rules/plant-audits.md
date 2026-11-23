@@ -118,5 +118,11 @@ paths:
   `params=` reads a calibrated/BSM-specific composition such as `i_XB`). Closes
   BSM1 to ~1e-7 and BSM2 (two models, biogas, recycles) to COD ~0.08% / N
   ~0.03% at steady state; the gas integrals are exact at steady state and
-  otherwise accurate to the `t_eval` sampling. **This is the tool that found the
-  ADM1 nitrogen transcription error** (see the `adm1` model note).
+  otherwise accurate to the `t_eval` sampling. **The reaction integral must run
+  each unit's kinetics at the conditions its `rhs` used** (the inlet or
+  heat-balance operating temperature, not the static `T`): `_reaction_terms_at`
+  rebuilds the unit's inputs and signals with `Plant._unit_inputs_and_signals`
+  and asks the unit for `_reaction_conditions`; evaluating at static conditions
+  leaves a spurious imbalance whenever the feed temperature differs. **This is
+  the tool that found the ADM1 nitrogen transcription error** (see the `adm1`
+  model note).

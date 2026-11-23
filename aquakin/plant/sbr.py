@@ -314,6 +314,11 @@ class SBRUnit(AdjustableTemperatureUnit, CouplingAware):
         idx = self._phase_index(t)
         return {self.output_port: self._decant[idx] * self.decant_flow}
 
+    def _reaction_conditions(self, inputs: dict[str, Stream], signals: dict | None) -> dict:
+        """The static conditions: the SBR runs its kinetics at its static ``T``
+        (see the class docstring)."""
+        return self._condition_arrays
+
     def rhs(
         self,
         t: jnp.ndarray,
@@ -340,8 +345,7 @@ class SBRUnit(AdjustableTemperatureUnit, CouplingAware):
         # solids -- mass is conserved whatever the settling model reports.
         convection = q_in / V_safe * (C_in - C) - q_out / V_safe * (c_decant - C)
 
-        # Kinetics at the static operating temperature (see the class docstring).
-        chemistry = self._reaction(C, params, self._condition_arrays)
+        chemistry = self._reaction(C, params, self._reaction_conditions(inputs, signals))
 
         aeration = kla * self._o2_mask * (self.do_sat - C)
 
