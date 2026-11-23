@@ -73,6 +73,14 @@ def test_projection_is_differentiable_in_dose_and_pH():
     assert np.all(np.isfinite(np.asarray(g)))
     # pH sensitivity is the strong one (more OH- -> more Fe(OH)3 -> more residual P).
     assert float(g[1]) > 0.0
+    # Both partials match central differences of the projection (step 1e-4).
+    # With Fe(OH)3 present the free Fe3+ is pinned by pH, so the residual P is
+    # independent of the dose: that partial is zero to within the projection's
+    # own precision (~4e-8 against a pH partial of ~5), hence the absolute term.
+    h = 1e-4
+    fd = [(float(resP((2.0 + h, 7.0))) - float(resP((2.0 - h, 7.0)))) / (2.0 * h),
+          (float(resP((2.0, 7.0 + h))) - float(resP((2.0, 7.0 - h)))) / (2.0 * h)]
+    assert [float(x) for x in g] == pytest.approx(fd, rel=1e-4, abs=1e-6)
 
 
 def test_projection_requires_equilibrium_minerals():
@@ -122,7 +130,12 @@ def test_bounded_dynamic_solve_is_differentiable():
 
     g = jax.grad(loss)(p)
     assert np.all(np.isfinite(np.asarray(g)))
-    assert np.any(np.asarray(g) != 0.0)
+    # The most influential parameter's partial matches a central difference.
+    i = int(np.argmax(np.abs(np.asarray(g * p))))
+    assert float(g[i]) != 0.0
+    h = 1e-4 * float(p[i])
+    fd = (float(loss(p.at[i].add(h))) - float(loss(p.at[i].add(-h)))) / (2.0 * h)
+    assert float(g[i]) == pytest.approx(fd, rel=1e-4)
 
 
 @pytest.mark.slow

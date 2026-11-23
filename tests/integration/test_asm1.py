@@ -93,7 +93,8 @@ def test_decay_only_no_substrate(model):
 
 @pytest.mark.slow  # heavy: jax.grad through stiff ASM1 solve
 def test_AD_grad_through_solve(model):
-    """jax.grad through BatchReactor.solve must produce finite gradients."""
+    """jax.grad through BatchReactor.solve matches a central finite difference
+    (step 1e-4 relative) in the heterotroph growth rate."""
     reactor = aquakin.BatchReactor(model, model.default_conditions())
     C0 = model.default_concentrations()
 
@@ -103,8 +104,14 @@ def test_AD_grad_through_solve(model):
         )
         return jnp.sum(sol.C_named("SNH"))
 
-    g = jax.grad(loss)(model.default_parameters())
+    p = model.default_parameters()
+    g = jax.grad(loss)(p)
     assert jnp.all(jnp.isfinite(g))
+    i = model.param_index["muH"]
+    h = 1e-4 * float(p[i])
+    fd = (float(loss(p.at[i].add(h))) - float(loss(p.at[i].add(-h)))) / (2.0 * h)
+    assert float(g[i]) != 0.0
+    assert float(g[i]) == pytest.approx(fd, rel=1e-4)
 
 
 def test_transforms_default_to_positive_log(model):

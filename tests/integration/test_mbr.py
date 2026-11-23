@@ -117,9 +117,17 @@ def test_srt_set_by_wasting(asm1):
 
 # --- fouling / TMP ----------------------------------------------------------
 
-def test_fouling_grows_and_drives_tmp(asm1):
+@pytest.fixture(scope="module")
+def fouling_plant(asm1):
+    """One fouling MBR plant, shared by the read-only tests below so a solve
+    compiled by one is reused by the other (the compiled solve is cached on the
+    plant instance)."""
     mbr = _mbr(asm1, fouling_rate=1e-3, fouling_relax=0.1)
-    p = _plant(asm1, mbr)
+    return mbr, _plant(asm1, mbr)
+
+
+def test_fouling_grows_and_drives_tmp(asm1, fouling_plant):
+    mbr, p = fouling_plant
     sol = p.solve(t_span=(0.0, 20.0), t_eval=jnp.linspace(0.0, 20.0, 41))
     R_f = np.asarray(sol.state[:, asm1.n_species])
     assert R_f[-1] > R_f[0] >= 0.0                            # fouling builds
@@ -195,10 +203,19 @@ def test_mass_balance_closes(asm1):
 
 # --- AD ---------------------------------------------------------------------
 
-def test_grad_through_mbr(asm1):
-    mbr = _mbr(asm1, fouling_rate=1e-3, fouling_relax=0.1)
-    p = _plant(asm1, mbr)
+def test_grad_through_mbr(fouling_plant):
+    """The gradient through the fouling plant's solve matches a central finite
+    difference (step 1e-4 in a common scale on every parameter). The solve uses
+    the same span and save grid as test_fouling_grows_and_drives_tmp, so the
+    difference's forward solves reuse that test's compiled solve."""
+    _, p = fouling_plant
     base = p.default_parameters()
-    g = jax.grad(lambda s: jnp.sum(
-        p.solve(t_span=(0.0, 5.0), t_eval=jnp.array([5.0]), params=base * s).state ** 2))(1.0)
-    assert jnp.isfinite(g)
+
+    def loss(s):
+        sol = p.solve(t_span=(0.0, 20.0), t_eval=jnp.linspace(0.0, 20.0, 41), params=base * s)
+        return jnp.sum(sol.state[-1] ** 2)
+
+    g = float(jax.grad(loss)(1.0))
+    h = 1e-4
+    fd = (float(loss(1.0 + h)) - float(loss(1.0 - h))) / (2.0 * h)
+    assert g == pytest.approx(fd, rel=1e-5)

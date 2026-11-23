@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 import aquakin
+from aquakin.core.ph_solver import solve_ph
 
 
 @pytest.fixture(scope="module")
@@ -69,18 +70,55 @@ def test_rates_finite(net, cond):
 
 
 def test_ph_is_solved_from_state(net, cond):
+    """The derived pH is the charge-balance solve of the state's own totals
+    (the ``speciation:`` block's species and molar masses), done by hand."""
     C0 = net.default_concentrations()
+    si = net.species_index
     derived = net.derived_condition_fn(C0, net.default_parameters(), cond.fields, 0)
-    assert "pH" in derived
-    assert bool(jnp.isfinite(derived["pH"]))
+    expected = solve_ph(
+        tot_carbonate=C0[si["S_CO2"]] / 12000.0,
+        tot_acetate=C0[si["S_VFA"]] / 64000.0,
+        tot_ammonia=C0[si["S_NH"]] / 14000.0,
+        tot_phosphate=C0[si["S_PO4"]] / 31000.0,
+        tot_sulfide=C0[si["sumS"]] / 32000.0,
+        strong_anion_eq=2.0 * C0[si["S_SO4"]] / 32000.0 + C0[si["S_NO"]] / 14000.0,
+        z_cation_eq=3.28e-3,
+        T_kelvin=293.15,
+    )
+    assert float(derived["pH"]) == pytest.approx(float(expected), rel=1e-12)
 
 
-def test_rhs_jacobian_wrt_params_is_finite(net, cond):
-    C0 = net.default_concentrations()
+@pytest.mark.parametrize(
+    "name,conditions",
+    [
+        ("wats_sewer", {"T": 20.0, "A_V": 56.7, "X_BF": 10.0}),
+        pytest.param(
+            "wats_sewer_extended", {"T": 20.0, "A_V": 56.7, "X_BF": 10.0},
+            marks=pytest.mark.slow,
+        ),
+        pytest.param(
+            "wats_sewer_khalil_paper", {"A_V": 56.7, "X_BF": 10.0, "pH": 7.5},
+            marks=pytest.mark.slow,
+        ),
+    ],
+)
+def test_rhs_parameter_derivative_matches_fd(name, conditions):
+    """The chemistry RHS's derivative w.r.t. the parameters (a JVP along one
+    random direction, scaled by the parameters so every component moves)
+    matches a central difference of it (step 1e-5, error ~1e-10 relative).
+    A non-finite column would poison the JVP, so this also covers finiteness."""
+    model = aquakin.load_model(name)
+    conds = aquakin.SpatialConditions.uniform(**conditions)
+    C0 = model.default_concentrations()
+    p = model.default_parameters()
 
-    def rhs(p):
-        return net.dCdt(C0, p, cond.fields, 0, stoich=net.compute_stoich(p))
+    def rhs(pp):
+        return model.dCdt(C0, pp, conds.fields, 0, stoich=model.compute_stoich(pp))
 
-    J = jax.jacobian(rhs)(net.default_parameters())
-    assert J.shape == (15, len(net.parameters))
-    assert np.all(np.isfinite(np.asarray(J)))
+    v = p * jnp.asarray(np.random.default_rng(0).uniform(0.5, 1.5, p.shape))
+    _, jv = jax.jvp(rhs, (p,), (v,))
+    h = 1e-5
+    fd = (rhs(p + h * v) - rhs(p - h * v)) / (2.0 * h)
+    scale = float(jnp.max(jnp.abs(jv)))
+    assert scale > 0.0
+    np.testing.assert_allclose(np.asarray(jv), np.asarray(fd), rtol=1e-7, atol=1e-8 * scale)

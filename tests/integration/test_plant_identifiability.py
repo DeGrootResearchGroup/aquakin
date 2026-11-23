@@ -96,11 +96,6 @@ def net(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def decay_net():
-    return aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-
-
-@pytest.fixture(scope="module")
 def plant(net):
     return _plant(net)
 
@@ -303,14 +298,14 @@ def test_reverse_mode_solves_with_the_given_integrator(plant):
         )
 
 
-def test_runs_must_share_the_parameter_names(net, plant, decay_net):
+def test_runs_must_share_the_parameter_names(net, plant, simple_model):
     """A per-run plant built on another model has other parameters: rejected
     before any solve, naming the run."""
     other = Plant("decay_tank", time_unit="s")
     other.add_unit(
         CSTRUnit(
             name="tank",
-            model=decay_net,
+            model=simple_model,
             volume=V,
             input_port_names=["inlet"],
             conditions={"T": 293.15},
@@ -479,43 +474,38 @@ def test_profile_input_validation(plant):
         )
 
 
-@pytest.mark.slow  # a BSM1 variational solve
-def test_bsm1_forward_matches_jacobian_built_from_solve_sensitivity():
-    """On BSM1 (one day from the warm start) the forward-mode information of
-    tank-5 SNH and SNO -- observed through the unit, whose outlet is its state
-    -- is the J^T J built by hand from Plant.solve_sensitivity."""
-    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
-
-    asm1 = aquakin.load_model("asm1")
-    feed = {"SS": 60.0, "SNH": 25.0, "XS": 200.0, "XB_H": 50.0, "SI": 30.0}
-    feed |= {"XI": 25.0, "SND": 6.0, "XND": 10.0, "SALK": 7.0}
-    plant = build_bsm1()
-    plant.add_influent("feed", asm1.influent(feed, Q=18446.0))
-    y0 = bsm1_warm_start(plant)
-    wrt = ["asm1.muH", "asm1.muA", "asm1.KNH_A"]
-    t_obs = jnp.linspace(0.25, 1.0, 4)
-    sigma = jnp.asarray([0.5, 1.0])
+def test_forward_matches_jacobian_built_from_a_downstream_unit(net):
+    """Observed through the second of two tanks in series -- a unit whose state
+    starts past the first's, so the observed rows sit at a nonzero offset in the
+    assembled state -- with an explicit ``y0`` and solver options, the forward
+    information is the J^T J built by hand from Plant.solve_sensitivity."""
+    plant = Plant("chain_two_cstr", time_unit="d")
+    for name in ("tank1", "tank2"):
+        plant.add_unit(CSTRUnit(name=name, model=net, volume=V,
+                                input_port_names=["inlet"], conditions={"T": 293.15}))
+    plant.connect("tank1", "tank2.inlet")
+    feed = jnp.asarray([1.0, 0.0, 1.0, 0.0])
+    plant.add_influent("feed", InfluentSeries(
+        t=jnp.asarray([0.0, 100.0]), Q=jnp.asarray([Q, Q]), C=jnp.stack([feed, feed]),
+        model=net), to="tank1.inlet")
+    y0 = plant.initial_state()
+    wrt = [K1, K2]
+    t_obs = jnp.linspace(1.0, 10.0, 4)
+    sigma = jnp.asarray([0.01, 0.02])
     options = dict(max_steps=8_000)
     fim = plant_fisher_information(
-        plant,
-        [("tank5", ["SNH", "SNO"])],
-        t_obs,
-        wrt,
-        sigma=sigma,
-        t_span=(0.0, 1.0),
-        y0=y0,
-        sensitivity_options=options,
+        plant, [("tank2", ["A", "B"])], t_obs, wrt, sigma=sigma, t_span=(0.0, 10.0),
+        y0=y0, sensitivity_options=options,
     )
     params = plant.default_parameters()
-    _, _, S = plant.solve_sensitivity(
-        params, wrt, t_span=(0.0, 1.0), t_eval=t_obs, y0=y0, **options
-    )
-    plant._build_state_layout()
-    start = plant._state_layout["tank5"][0]
-    rows = [start + asm1.species_index[s] for s in ("SNH", "SNO")]
+    _, _, S = plant.solve_sensitivity(params, wrt, t_span=(0.0, 10.0), t_eval=t_obs, y0=y0,
+                                      **options)
+    start = plant._state_layout["tank2"][0]
+    assert start == net.n_species
+    rows = [start + net.species_index[s] for s in ("A", "B")]
     theta = np.asarray([params[plant.parameter_index(n)] for n in wrt])
-    J = (np.asarray(S)[:, rows, :] * theta / np.asarray(sigma)[None, :, None]).reshape(-1, 3)
-    assert np.all(np.isfinite(J)) and np.all(np.abs(J).max(axis=0) > 0.0)
+    J = (np.asarray(S)[:, rows, :] * theta / np.asarray(sigma)[None, :, None]).reshape(-1, 2)
+    assert np.all(np.abs(J).max(axis=0) > 0.0)
     np.testing.assert_allclose(fim.matrix, J.T @ J, rtol=1e-8)
 
 

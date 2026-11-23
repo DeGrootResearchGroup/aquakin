@@ -1,6 +1,7 @@
 """Tests for the BSM2 ideal %TSS separators (thickener / dewatering)."""
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
@@ -90,7 +91,10 @@ def test_overconcentrated_feed_all_to_underflow(asm1):
 
 
 def test_grad_through_separator(asm1):
-    """compute_outputs is differentiable w.r.t. the inlet concentration."""
+    """compute_outputs is differentiable w.r.t. the inlet concentration, and
+    the gradient matches a central finite difference along a random direction
+    scaled by the state (so zero species stay at zero; step 1e-5 relative, which
+    leaves ~4e-8 of truncation from the TSS-dependent flow split)."""
     import jax
     unit = IdealThickener(name="thk", model=asm1, target_tss_percent=7.0)
     C0 = asm1.concentrations(XB_H=2500.0)
@@ -101,4 +105,7 @@ def test_grad_through_separator(asm1):
         return jnp.sum(under.C)
 
     g = jax.grad(loss)(C0)
-    assert jnp.all(jnp.isfinite(g))
+    v = C0 * jnp.asarray(np.random.default_rng(0).uniform(0.5, 1.5, C0.shape))
+    h = 1e-5
+    fd = (float(loss(C0 + h * v)) - float(loss(C0 - h * v))) / (2.0 * h)
+    assert float(g @ v) == pytest.approx(fd, rel=1e-6)

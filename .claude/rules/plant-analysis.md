@@ -51,10 +51,11 @@ param_halfwidth=)`), per-pool free-IC bounds and `fixed_total`, `sigma=
 `_initial_point`, `_fit_result`, ...), so they behave identically. Covered by
 `tests/integration/test_plant_calibrate.py` (single- and multi-stream synthetic
 recovery, a joint rate + initial-condition recovery, a multi-batch shared-rate
-recovery, a full **BSM1** muH recovery through the stiff recycled plant, an
+recovery, the **BSM1** plant-fit objective gradient against a central finite
+difference through the stiff recycled plant, an
 `at_bound` + `sigma="estimate"` fit and a `fixed_total` split recovery (slow),
 stubbed-runner checks of the bounds / free-IC / sigma wiring, and the
-finite-through-the-plant gradient in the fast gate).
+plant objective gradient against a central finite difference in the fast gate).
 **Identifiability** — `plant_fisher_information` / `plant_profile_likelihood`
 ([`plant/identifiability.py`](aquakin/plant/identifiability.py), exported from
 `aquakin.plant`) are the plant versions of the reactor tools. Observables are
@@ -132,7 +133,7 @@ mask, relative sigma, transform chain) are shared with
 of its own `plant_fisher_information`. Covered by
 `tests/integration/test_plant_identifiability.py` (closed-form CSTR
 information in both modes, the hand-built `solve_sensitivity` Jacobian on the
-CSTR and on BSM1 (slow), forward = reverse, the Laplace-Hessian equality,
+CSTR and on a downstream unit of a two-tank plant, forward = reverse, the Laplace-Hessian equality,
 identified / flat profiles (slow), the profile's per-point wiring into
 `calibrate_plant` with it stubbed, and each ranking score equal to its own
 set's `plant_fisher_information` criterion from one counted solve) plus `tests/unit/test_identifiability_helpers.py`

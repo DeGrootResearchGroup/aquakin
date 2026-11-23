@@ -3,10 +3,9 @@ oxidation), after Strous et al. (1998, 1999).
 
 Checks the anammox stoichiometry (the canonical Strous NH4:NO2:NO3 ~ 1:1.32:0.26
 ratio), anaerobic deammonification (NH4 + NO2 -> N2), oxygen inhibition, the
-temperature dependency, and that gradients flow. COD/N/charge closure is covered
-by test_asm_continuity.py.
+temperature dependency. The gradient through a solve is checked in
+test_asm_family.py; COD/N/charge closure is covered by test_asm_continuity.py.
 """
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -94,18 +93,3 @@ def test_temperature_speeds_anammox(net):
     r20 = float(net.rates(C, p, {"T": jnp.array([293.15])}, 0)[j])
     r30 = float(net.rates(C, p, {"T": jnp.array([303.15])}, 0)[j])
     assert r30 > 2.0 * r20
-
-
-def test_grad_through_solve_is_finite(net):
-    cond = aquakin.SpatialConditions.uniform(T=303.15)
-    r = aquakin.BatchReactor(net, cond)
-    C0 = net.concentrations({"SO2": 0.0, "SNH4": 30.0, "SNO2": 30.0, "XAMX": 200.0})
-
-    def loss(p):
-        sol = r.solve(C0, params=p, t_span=(0.0, 0.5),
-                      t_eval=jnp.linspace(0.0, 0.5, 4))
-        return jnp.sum(sol.C_named("SN2"))
-
-    g = jax.grad(loss)(net.default_parameters())
-    assert jnp.all(jnp.isfinite(g))
-    assert float(g[net.param_index["mu_AMX"]]) != 0.0

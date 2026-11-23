@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 import aquakin
+from tests.finite_difference import central_fd
 
 
 @pytest.fixture
@@ -88,7 +89,7 @@ def test_struvite_favoured_at_higher_pH(net):
     assert float(hi.C_named("X_struvite")[-1]) > float(lo.C_named("X_struvite")[-1])
 
 
-def test_grad_through_solve_is_finite(net):
+def test_grad_through_solve_matches_fd(net):
     cond = aquakin.SpatialConditions.uniform(T=308.15, pH=7.8)
     r = aquakin.BatchReactor(net, cond)
     C0 = net.default_concentrations()
@@ -98,9 +99,12 @@ def test_grad_through_solve_is_finite(net):
                       t_eval=jnp.linspace(0.0, 0.2, 4))
         return jnp.sum(sol.C_named("X_struvite"))
 
-    g = jax.grad(loss)(net.default_parameters())
+    p = net.default_parameters()
+    g = jax.grad(loss)(p)
     assert jnp.all(jnp.isfinite(g))
-    assert float(g[net.param_index["struvite_precipitation.k"]]) != 0.0
+    i = net.param_index["struvite_precipitation.k"]
+    assert float(g[i]) != 0.0
+    assert float(g[i]) == pytest.approx(central_fd(loss, p, i), rel=1e-4)
 
 
 # --- speciation -> precipitation composition ---------------------------------
@@ -350,20 +354,26 @@ def test_hydroxide_precipitation_increases_with_pH():
     assert residual(8.0) > residual(9.0) > residual(10.0)
 
 
-def test_hydroxide_fraction_grad_is_finite():
-    # The new ion fraction is AD-clean: jax.grad flows through the solve.
+def test_hydroxide_fraction_grad_matches_fd():
+    # The new ion fraction is AD-clean: jax.grad flows through the solve and
+    # matches a central finite difference. The span stops in the transient: by
+    # t = 3 the solid is at equilibrium, its amount no longer depends on the
+    # rate constant, and the gradient is solver noise (~1e-9).
     net = _load_toy()
     r = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(T=298.15, pH=9.0))
     C0 = net.default_concentrations()
 
     def loss(p):
-        sol = r.solve(C0, params=p, t_span=(0.0, 3.0),
-                      t_eval=jnp.linspace(0.0, 3.0, 5))
+        sol = r.solve(C0, params=p, t_span=(0.0, 0.3),
+                      t_eval=jnp.linspace(0.0, 0.3, 5))
         return jnp.sum(sol.C_named("X_MOH2"))
 
-    g = jax.grad(loss)(net.default_parameters())
+    p = net.default_parameters()
+    g = jax.grad(loss)(p)
     assert jnp.all(jnp.isfinite(g))
-    assert float(g[net.param_index["k_MOH2"]]) != 0.0
+    i = net.param_index["k_MOH2"]
+    assert float(g[i]) != 0.0
+    assert float(g[i]) == pytest.approx(central_fd(loss, p, i), rel=1e-4)
 
 
 def test_schema_hydroxide_ion_may_omit_species():
@@ -573,11 +583,19 @@ def test_shared_ionic_strength_solves_and_differentiates():
                   t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 5))
     assert float(sol.C_named("X_calcite")[-1]) > 1.0
     assert np.all(np.isfinite(sol.C))
-    g = jax.grad(lambda p: jnp.sum(
-        r.solve(C0, params=p, t_span=(0.0, 1.0),
-                t_eval=jnp.linspace(0.0, 1.0, 5)).C_named("X_calcite")))(
-        net.default_parameters())
-    assert jnp.all(jnp.isfinite(g))
+    # Differentiate w.r.t. the strong cation, which reaches the calcite only
+    # through the shared ionic strength (activity). The solid is near
+    # equilibrium by t = 1, so the rate constant barely moves it; the initial
+    # state does. The forward solve above is already compiled, so the central
+    # difference (step 1e-4 relative) is cheap.
+    def loss(c):
+        return jnp.sum(r.solve(c, params=net.default_parameters(), t_span=(0.0, 1.0),
+                               t_eval=jnp.linspace(0.0, 1.0, 5)).C_named("X_calcite"))
+
+    g = jax.grad(loss)(C0)
+    i = net.species_index["S_cat"]
+    assert float(g[i]) != 0.0
+    assert float(g[i]) == pytest.approx(central_fd(loss, C0, i), rel=1e-4)
 
 
 def test_power_order_below_one_rejected_at_load():

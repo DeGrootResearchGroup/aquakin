@@ -167,6 +167,13 @@ def test_default_fixed_mask_warns_on_reactive_particulate(net, cond):
 
 
 def test_grad_flows_through_solve(net, tiny):
+    """``jax.grad`` through the biofilm solve matches a central finite difference.
+
+    The initial state is bulk-only, so diffusion into the film is part of what
+    is differentiated (a uniform state would have no transport). The step
+    ``h = 1e-3`` keeps the difference's truncation error ~1e-6 relative, well
+    above the solver noise.
+    """
     r = tiny
     ki = net.param_index["A_to_B.k"]
     ai = net.species_index["A"]
@@ -176,9 +183,11 @@ def test_grad_flows_through_solve(net, tiny):
         p = net.default_parameters().at[ki].set(k)
         return r.solve(y0, params=p, t_span=(0.0, 1.0)).C_named("A")[-1]
 
-    g = jax.grad(final_bulk_A)(0.1)
-    assert np.isfinite(float(g))
-    assert float(g) < 0.0  # more decay with larger k -> lower final bulk A
+    g = float(jax.grad(final_bulk_A)(0.1))
+    assert g < 0.0  # more decay with larger k -> lower final bulk A
+    h = 1e-3
+    fd = (float(final_bulk_A(0.1 + h)) - float(final_bulk_A(0.1 - h))) / (2.0 * h)
+    assert g == pytest.approx(fd, rel=1e-5)
 
 
 def test_well_mixed_limit_matches_batch(net, cond, tiny):
@@ -219,28 +228,32 @@ def test_to_dataframe_profile(tiny, tiny_sol_t3):
     assert len(pdf) == 3 * (r.n_layers + 1)
 
 
-def test_with_adjoint_clone_does_not_reuse_compiled_solve(net, cond):
-    """A ``with_adjoint`` copy must not reuse a solve compiled with the old
-    adjoint: forward-mode sensitivity after a plain solve must work."""
+def test_adjoint_change_does_not_reuse_compiled_solve(net, cond):
+    """Neither a ``with_adjoint`` copy nor a reactor whose ``adjoint`` is
+    reassigned may reuse the solve compiled with the old (reverse-mode) adjoint:
+    forward-mode differentiation after a plain solve must work, and give the
+    right value.
+
+    ``C0`` is spatially uniform, so there is no transport and the bulk follows
+    the batch decay: ``A(5) = exp(-5 k)``, ``dA(5)/dk = -5 exp(-5 k)``.
+    """
     out = lambda s: s.C_named("A")[-1]
     fwd = aquakin.DifferentiationConfig(mode="forward", method="through_solve")
     r = _tiny(net, cond)
     C0 = net.concentrations({"A": 1.0})
-    r.solve(C0, (0.0, 5.0))  # compiles with the default reverse-mode adjoint
-    res = aquakin.sensitivity(r, C0, output_fn=out, t_span=(0.0, 5.0), diff=fwd)
-    assert np.all(np.isfinite(np.asarray(res.doutput_dparams)))
-
-
-def test_compile_cache_keyed_on_adjoint(net, cond):
-    """Changing a reactor's adjoint must not reuse the solve compiled with the
-    old one (the cache key includes the solver settings)."""
-    r = _tiny(net, cond)
-    C0 = net.concentrations({"A": 1.0})
-    r.solve(C0, (0.0, 5.0))
-    r.adjoint = aquakin.forward_adjoint()
     params = net.default_parameters()
+    k = float(params[net.param_index["A_to_B.k"]])
+    expected = -5.0 * np.exp(-5.0 * k)
+    r.solve(C0, (0.0, 5.0))  # compiles with the default reverse-mode adjoint
+
+    # The clone (sensitivity builds it with with_adjoint) gets fresh caches.
+    res = aquakin.sensitivity(r, C0, output_fn=out, t_span=(0.0, 5.0), diff=fwd)
+    np.testing.assert_allclose(np.asarray(res.doutput_dparams), [expected], rtol=1e-4)
+
+    # Reassigning the adjoint in place: the cache key includes the solver settings.
+    r.adjoint = aquakin.forward_adjoint()
     J = jax.jacfwd(lambda p: r.solve(C0, (0.0, 5.0), params=p).C[-1, 0])(params)
-    assert np.all(np.isfinite(np.asarray(J)))
+    np.testing.assert_allclose(np.asarray(J), [expected], rtol=1e-4)
 
 
 def test_traced_atol_bypasses_the_compile_cache(net, cond):

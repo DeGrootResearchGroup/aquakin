@@ -30,6 +30,9 @@ def test_constant_track_matches_batch(simple_model):
 
 
 def test_grad_through_particle_solve(simple_model):
+    """``jax.grad`` through the track solve gives the closed-form gradient:
+    with ``B(t) = 1 - exp(-k t)`` the loss ``sum_t B(t)**2`` has
+    ``dL/dk = sum_t 2 B(t) t exp(-k t)``."""
     track = aquakin.Track(
         t=jnp.asarray([0.0, 5.0]),
         fields={"T": jnp.asarray([293.15, 293.15])},
@@ -41,8 +44,13 @@ def test_grad_through_particle_solve(simple_model):
         sol = reactor.solve(C0, params=params)
         return jnp.sum(sol.C_named("B") ** 2)
 
-    g = jax.grad(loss)(simple_model.default_parameters())
-    assert jnp.all(jnp.isfinite(g))
+    params = simple_model.default_parameters()
+    g = jax.grad(loss)(params)
+    t = reactor.solve(C0, params=params).t
+    decay = jnp.exp(-float(params[0]) * t)
+    expected = float(jnp.sum(2.0 * (1.0 - decay) * t * decay))
+    # The forward solve matches batch to rtol 1e-5; the gradient is held looser.
+    assert float(g[0]) == pytest.approx(expected, rel=1e-3)
 
 
 def test_track_validates_ascending_time(simple_model):
@@ -139,7 +147,8 @@ def test_integrate_ensemble_distinct_tracks(simple_model):
 
 def test_particle_direct_adjoint_enables_forward_mode(simple_model):
     """ParticleTrackReactor now accepts adjoint=; DirectAdjoint makes the track
-    solve forward-mode differentiable (jacfwd)."""
+    solve forward-mode differentiable (jacfwd). The output ``sum_t B(t)`` has
+    the closed-form derivative ``sum_t t exp(-k t)``."""
 
     track = aquakin.Track(t=jnp.linspace(0.0, 10.0, 11),
                           fields={"T": jnp.full(11, 293.15)})
@@ -149,10 +158,13 @@ def test_particle_direct_adjoint_enables_forward_mode(simple_model):
     C0 = jnp.asarray([1.0, 0.0])
 
     def out(p):
-        return jnp.sum(reactor.solve(C0, params=p).C)
+        return jnp.sum(reactor.solve(C0, params=p).C_named("B"))
 
-    J = jax.jacfwd(out)(simple_model.default_parameters())
-    assert jnp.all(jnp.isfinite(J))
+    params = simple_model.default_parameters()
+    J = jax.jacfwd(out)(params)
+    t = reactor.solve(C0, params=params).t
+    expected = float(jnp.sum(t * jnp.exp(-float(params[0]) * t)))
+    assert float(J[0]) == pytest.approx(expected, rel=1e-3)
 
 
 def test_integrate_ensemble_forwards_adjoint_and_dtmax(simple_model):

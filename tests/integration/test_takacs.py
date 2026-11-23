@@ -15,7 +15,8 @@ def asm1():
     return aquakin.load_model("asm1")
 
 
-def _clarifier_plant(asm1, *, Q_inlet=56000.0, overflow_Q=18446.0, C_inlet=None):
+def _clarifier_plant(asm1, *, Q_inlet=56000.0, overflow_Q=18446.0, C_inlet=None,
+                     **clarifier_kw):
     plant = Plant("clarifier", time_unit="d")
     plant.add_unit(
         TakacsClarifier(
@@ -24,6 +25,7 @@ def _clarifier_plant(asm1, *, Q_inlet=56000.0, overflow_Q=18446.0, C_inlet=None)
             area=1500.0,
             height=4.0,
             overflow_Q=overflow_Q,
+            **clarifier_kw,
         )
     )
     if C_inlet is None:
@@ -434,24 +436,47 @@ def test_lumped_tss_solids_mass(asm1):
         float(ps.solids_mass(ps_state)), rel=1e-9)
 
 
-def test_lumped_tss_grad_through_rhs(asm1):
-    """jax.grad flows through the lumped-mode rhs without NaNs (AD-clean)."""
+def _check_rhs_gradient_against_fd(clar, asm1):
+    """``jax.grad`` of ``sum(rhs**2)`` w.r.t. the clarifier state and the inlet
+    flow equals a central finite difference of the same loss.
+
+    The clarifier reads none of the model's kinetic parameters, so the state and
+    the inlet flow are what its ``rhs`` depends on. The state is the seeded
+    blanket scaled per entry by a random factor: the seed has equal layers, which
+    puts the Takacs ``min`` flux exactly on a kink, where AD takes one branch and
+    a central difference averages the two. A relative step of 1e-4 has a
+    truncation error near 1e-9 here, so ``rel=1e-7`` leaves a wide margin.
+    """
     import jax
 
     from aquakin.plant.streams import Stream
 
-    lm = TakacsClarifier(name="lm", model=asm1, area=1500.0, height=4.0,
-                         overflow_Q=18061.0, composition_mode="lumped_tss")
-    C = asm1.concentrations({"XB_H": 2200.0, "XI": 1100.0})
-    inlet = Stream(Q=jnp.asarray(36892.0), C=C, model=asm1)
-    state = lm.initial_state()
+    rng = np.random.default_rng(0)
+    state = clar.initial_state() * jnp.asarray(rng.uniform(0.8, 1.2, clar.state_size))
+    C = asm1.concentrations({"XB_H": 2200.0, "XI": 1100.0, "SS": 40.0, "SNH": 25.0})
+    params = asm1.default_parameters()
+    q0 = 36892.0
 
-    def loss(p):
-        d = lm.rhs(jnp.asarray(0.0), state, {"inlet": inlet}, p)
+    def loss(y, q):
+        d = clar.rhs(jnp.asarray(0.0), y, {"inlet": Stream(Q=q, C=C, model=asm1)}, params)
         return jnp.sum(d ** 2)
 
-    g = jax.grad(loss)(asm1.default_parameters())
-    assert bool(jnp.all(jnp.isfinite(g)))
+    g_y, g_q = jax.grad(loss, argnums=(0, 1))(state, jnp.asarray(q0))
+    direction = jnp.asarray(rng.uniform(0.5, 1.5, clar.state_size)) * state
+    eps = 1e-4
+    fd_y = (loss(state + eps * direction, q0) - loss(state - eps * direction, q0)) / (2 * eps)
+    fd_q = (loss(state, q0 * (1 + eps)) - loss(state, q0 * (1 - eps))) / (2 * eps * q0)
+    assert float(fd_y) != 0.0 and float(fd_q) != 0.0
+    assert float(g_y @ direction) == pytest.approx(float(fd_y), rel=1e-7)
+    assert float(g_q) == pytest.approx(float(fd_q), rel=1e-7)
+
+
+def test_lumped_tss_grad_through_rhs(asm1):
+    """The lumped-mode rhs gradient w.r.t. its state and inlet flow matches a
+    central finite difference."""
+    lm = TakacsClarifier(name="lm", model=asm1, area=1500.0, height=4.0,
+                         overflow_Q=18061.0, composition_mode="lumped_tss")
+    _check_rhs_gradient_against_fd(lm, asm1)
 
 
 @pytest.mark.parametrize("interface_flux", ["takacs", "godunov"])
@@ -579,23 +604,11 @@ def test_soluble_holdup_damps_vs_passthrough(asm1):
 
 
 def test_soluble_holdup_grad_through_rhs(asm1):
-    """jax.grad flows through the soluble-holdup rhs without NaNs."""
-    import jax
-
-    from aquakin.plant.streams import Stream
-
+    """The soluble-holdup rhs gradient w.r.t. its state (particulate and held
+    soluble layers) and inlet flow matches a central finite difference."""
     held = TakacsClarifier(name="h", model=asm1, area=1500.0, height=4.0,
                            overflow_Q=18061.0, soluble_holdup=True)
-    C = asm1.concentrations({"XB_H": 2200.0, "XI": 1100.0, "SS": 40.0, "SNH": 25.0})
-    inlet = Stream(Q=jnp.asarray(36892.0), C=C, model=asm1)
-    state = held.initial_state()
-
-    def loss(p):
-        d = held.rhs(jnp.asarray(0.0), state, {"inlet": inlet}, p)
-        return jnp.sum(d ** 2)
-
-    g = jax.grad(loss)(asm1.default_parameters())
-    assert bool(jnp.all(jnp.isfinite(g)))
+    _check_rhs_gradient_against_fd(held, asm1)
 
 
 def test_controlled_split_helper():
@@ -720,31 +733,39 @@ def test_plant_default_atol_is_concrete_under_tracing(asm1):
 
 
 @pytest.mark.slow
-def test_bsm1_takacs_solve_is_jittable_and_differentiable(asm1):
-    """``jax.jit`` and ``jax.grad`` of a short ``Plant.solve`` on the reference
-    BSM1 settler (lumped TSS, soluble holdup) with the default ``atol``. The
-    default tolerance formed inside the trace must equal the one formed eagerly
-    and passed explicitly, so the traced value and gradient match that path
-    exactly (issue #594). The first call is a jitted gradient w.r.t. ``y0``, so
-    the colored adjoint builder is built while the default ``atol`` is a tracer."""
+def test_takacs_solve_is_jittable_and_differentiable(asm1):
+    """``jax.jit`` and ``jax.grad`` of a short ``Plant.solve`` through the
+    reference settler configuration (lumped TSS, soluble holdup) with the default
+    ``atol``. The default tolerance formed inside the trace must equal the one
+    formed eagerly and passed explicitly, so the traced value and gradient match
+    that path exactly (issue #594). The first call is a jitted gradient w.r.t.
+    ``y0``, so the colored adjoint builder is built while the default ``atol`` is
+    a tracer.
+
+    None of this depends on the plant's size, so it runs on the one-clarifier
+    plant. Its 80 states are below the colored-backward size gate, which is
+    lowered on this instance so the colored builder is built. The gradient w.r.t.
+    the overflow setpoint (the one plant parameter the clarifier reads) matches a
+    central finite difference: steps of 1e-3 and 1e-4 of the setpoint agree to
+    about 1e-6, so ``rel=1e-5``."""
     import jax
 
     from aquakin.integrate._common import default_atol
-    from aquakin.plant.bsm import bsm1_warm_start, build_bsm1, load_bsm1_influent
 
-    plant = build_bsm1(model=asm1, use_takacs=True)
-    plant.add_influent("feed", load_bsm1_influent("dry", asm1))
-    y0 = bsm1_warm_start(plant)
+    plant = _clarifier_plant(asm1, composition_mode="lumped_tss", soluble_holdup=True)
+    plant._COLORED_BACKWARD_MIN_STATES = 2                   # this instance only
+    plant._build_state_layout()
+    y0 = plant.initial_state()
     p0 = plant.parameter_values({})
-    atol0 = default_atol(jnp.asarray(y0), plant.initial_state())
+    atol0 = default_atol(y0, plant.initial_state())
+    T = 0.05
 
     def loss(p, atol=None, y=y0):
-        s = plant.solve((0.0, 0.05), t_eval=jnp.asarray([0.05]), params=p, y0=y,
-                        atol=atol)
+        s = plant.solve((0.0, T), t_eval=jnp.asarray([T]), params=p, y0=y, atol=atol)
         return jnp.sum(s.final_state ** 2)
 
     assert plant._colored._adjoint_builder is None
-    g_y0 = jax.jit(jax.grad(lambda y: loss(p0, y=y)))(jnp.asarray(y0))
+    g_y0 = jax.jit(jax.grad(lambda y: loss(p0, y=y)))(y0)
     assert plant._colored._adjoint_builder is not None
     assert bool(jnp.all(jnp.isfinite(g_y0)))
     assert float(jnp.max(jnp.abs(g_y0))) > 0.0
@@ -755,6 +776,10 @@ def test_bsm1_takacs_solve_is_jittable_and_differentiable(asm1):
 
     g_default = jax.grad(loss)(p0)
     g_explicit = jax.grad(lambda p: loss(p, atol0))(p0)
-    assert bool(jnp.all(jnp.isfinite(g_default)))
-    assert float(jnp.max(jnp.abs(g_default))) > 0.0
     assert bool(jnp.array_equal(g_default, g_explicit))
+
+    k = plant.parameter_index("clar.overflow_Q")
+    h = 1e-3 * float(p0[k])
+    fd = (float(loss(p0.at[k].add(h))) - float(loss(p0.at[k].add(-h)))) / (2 * h)
+    assert fd != 0.0
+    assert float(g_default[k]) == pytest.approx(fd, rel=1e-5)

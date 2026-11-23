@@ -3,7 +3,8 @@
 These check that the (under-construction) WATS sewer model compiles, that pH
 is solved from the state rather than supplied, and that the chemistry RHS is
 finite and differentiable end-to-end -- the property the AD-based sensitivity
-and calibration workflows depend on. Full stiff time-integration to steady
+and calibration workflows depend on (its parameter derivative is checked
+against a finite difference in test_wats_sewer.py). Full stiff time-integration to steady
 state requires the CSTR-cascade plant build and numerical hardening and is
 covered separately.
 """
@@ -89,17 +90,6 @@ def test_rates_finite(net, cond):
     r = net.rates(net.default_concentrations(), net.default_parameters(), cond.fields, 0)
     assert r.shape == (47,)
     assert bool(jnp.all(jnp.isfinite(r)))
-
-
-def test_rhs_jacobian_wrt_params_is_finite(net, cond):
-    C0 = net.default_concentrations()
-
-    def rhs(p):
-        return net.dCdt(C0, p, cond.fields, 0, stoich=net.compute_stoich(p))
-
-    J = jax.jacobian(rhs)(net.default_parameters())
-    assert J.shape == (20, len(net.parameters))
-    assert np.all(np.isfinite(np.asarray(J)))
 
 
 def test_batch_integrates_and_stays_nonnegative(net, cond):

@@ -114,7 +114,12 @@ def test_grad_flows_through_pH():
     # the pH-gated removal rate) must be finite and non-zero.
     g = jax.grad(final_X)(C0)
     assert np.all(np.isfinite(np.asarray(g)))
-    assert abs(float(g[net.species_index["S_CO2"]])) > 0.0
+    i = net.species_index["S_CO2"]
+    assert abs(float(g[i])) > 0.0
+    # ... and matches a central difference of the same solve (step 1e-4 relative).
+    h = 1e-4 * float(C0[i])
+    fd = (float(final_X(C0.at[i].add(h))) - float(final_X(C0.at[i].add(-h)))) / (2.0 * h)
+    assert float(g[i]) == pytest.approx(fd, rel=1e-4)
 
 
 # A model whose net cation charge comes from a strong-cation STATE (S_cat),
@@ -177,9 +182,11 @@ def test_strong_cation_state_drives_pH():
     C_more = C0.at[si["S_cat"]].add(2.0e-3)
     pH_more = float(net.derived_condition_fn(C_more, p, cond.fields, 0)["pH"])
     assert pH_more > pH
-    g = jax.grad(
-        lambda scat: net.derived_condition_fn(
-            C0.at[si["S_cat"]].set(scat), p, cond.fields, 0
-        )["pH"]
-    )(3.0e-3)
-    assert np.isfinite(float(g)) and float(g) > 0.0
+    def pH_of(scat):
+        return net.derived_condition_fn(C0.at[si["S_cat"]].set(scat), p, cond.fields, 0)["pH"]
+
+    g = float(jax.grad(pH_of)(3.0e-3))
+    assert g > 0.0
+    h = 1e-7  # 3e-5 relative to S_cat
+    fd = (float(pH_of(3.0e-3 + h)) - float(pH_of(3.0e-3 - h))) / (2.0 * h)
+    assert g == pytest.approx(fd, rel=1e-5)

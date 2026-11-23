@@ -88,15 +88,21 @@ def test_mixing_rhs_relaxes_to_inlet(asm1):
 
 
 def test_grad_through_primary_clarifier(asm1):
+    """The outlets partition the tank content exactly, so the total outgoing
+    mass flux ``Q_e C_e + Q_u C_u`` summed over species is ``Q_in * sum(C)``:
+    its gradient w.r.t. the tank content is ``Q_in`` for every species."""
     unit = PrimaryClarifier(name="pc", model=asm1, volume=900.0)
     state = _state(asm1, {"XS": 360.0, "XB_H": 50.0})
+    Q_in = 21000.0
 
     def loss(C):
-        out = _outputs(unit, asm1, 21000.0, C)
-        return jnp.sum(out["underflow"].C) + jnp.sum(out["effluent"].C)
+        out = _outputs(unit, asm1, Q_in, C)
+        return jnp.sum(out["underflow"].Q * out["underflow"].C) + jnp.sum(
+            out["effluent"].Q * out["effluent"].C
+        )
 
     g = jax.grad(loss)(state)
-    assert jnp.all(jnp.isfinite(g))
+    assert jnp.allclose(g, Q_in, rtol=1e-9, atol=0.0)
 
 
 # --- the first-order inflow filter on the HRT (t_m > 0) ----------------------

@@ -15,8 +15,8 @@ SIGMA_A, SIGMA_B = 0.02, 0.05
 
 
 @pytest.fixture(scope="module")
-def noisy(simple_model_module):
-    model = simple_model_module
+def noisy(simple_model):
+    model = simple_model
     reactor = aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = jnp.asarray([1.0, 0.0])
     p = model.default_parameters().at[0].set(TRUE_K)
@@ -31,14 +31,6 @@ def noisy(simple_model_module):
         axis=1,
     )
     return reactor, C0, jnp.asarray(obs_b), jnp.asarray(obs_ab)
-
-
-@pytest.fixture(scope="module")
-def simple_model_module():
-    from pathlib import Path
-
-    path = Path(__file__).resolve().parents[1] / "fixtures" / "simple_model.yaml"
-    return aquakin.load_model_from_file(path)
 
 
 _KW = dict(free_params=["A_to_B.k"], transforms={"A_to_B.k": "positive_log"})
