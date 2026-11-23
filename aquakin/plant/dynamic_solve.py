@@ -57,6 +57,28 @@ def _concrete_teval_key(t_eval):
         return None, False
 
 
+def _auto_colored_backward(n_states, min_states):
+    """The ``colored_jacobian="auto"`` choice for the stable-adjoint backward.
+
+    The one size gate behind both :meth:`Plant.colored_jacobian_decision` and the
+    stable-adjoint solve, so the reported choice is the one the solve makes.
+
+    Parameters
+    ----------
+    n_states : int
+        The plant's flat state length.
+    min_states : int
+        The gate, :attr:`Plant._COLORED_BACKWARD_MIN_STATES` (read off the
+        instance, so a per-plant override applies).
+
+    Returns
+    -------
+    str
+        ``"colored"`` when ``n_states >= min_states``, else ``"dense"``.
+    """
+    return "colored" if n_states >= min_states else "dense"
+
+
 def solve(
     self,
     t_span: tuple[float, float],
@@ -99,10 +121,9 @@ def solve(
         budget; ``solver`` is an explicit override (honoured verbatim);
         ``colored_jacobian`` ({"auto", True, False}) selects sparse colored-AD
         materialisation of the per-step Jacobian. ``"auto"`` (default) governs
-        the ``mode='reverse', method='stable'`` backward decision -- it measures
-        whether the colored ``df/dy`` build pays and enables it only then (a
-        large plant like BSM2 yes, a small one like BSM1 no), and leaves the
-        forward solve dense; ``True`` forces coloring on both paths; ``False``
+        the ``mode='reverse', method='stable'`` backward decision -- it enables
+        the colored ``df/dy`` build by plant size (a large plant like BSM2 yes,
+        a small one like BSM1 no), and leaves the forward solve dense; ``True`` forces coloring on both paths; ``False``
         disables it. Reported by :meth:`colored_jacobian_decision`.
     diff : DifferentiationConfig, optional
         How a gradient / sensitivity flows through the solve.
@@ -588,23 +609,17 @@ def _solve_stable_adjoint(
     # extraction. ``solver=None`` keeps the default Kvaerno5.
     # colored_jacobian colors the per-step df/dy Jacobian build in the
     # BACKWARD pass (its dominant cost), exact (machine-precision) vs dense.
-    # On a concrete solve, derive + cache the colored builder and -- for
-    # "auto" -- measure whether it actually pays (the build is cheaper than
-    # dense); under a first traced solve (before it is built) it is None ->
-    # dense fallback. The decision: True forces it on, "auto" enables it
-    # only when the measured build speedup clears the margin (so it is on
-    # for a large block-sparse plant like BSM2 and off for a small one like
-    # BSM1, where the colored build is slower), False never colors.
-    # The colored backward Jacobian is enabled deterministically by plant
-    # SIZE (the reliable signal -- see _COLORED_BACKWARD_MIN_STATES), not a
-    # build-time benchmark, so no concrete probe solve is needed: the
-    # builder is derived from the plant's default operating point and so
-    # builds even here under the gradient's own trace. ``True`` forces it on
-    # (any size), ``"auto"`` enables it past the size gate, ``False`` never
-    # colors.
+    # It is enabled deterministically by plant SIZE (the reliable signal --
+    # see _COLORED_BACKWARD_MIN_STATES), not a build-time benchmark, so no
+    # concrete probe solve is needed: the builder is derived from the plant's
+    # default operating point and so builds even here under the gradient's
+    # own trace. ``True`` forces it on (any size), ``"auto"`` enables it past
+    # the size gate (_auto_colored_backward, the same gate
+    # colored_jacobian_decision reports), ``False`` never colors.
     n_states = int(y0.shape[0])
     want_colored = colored_jacobian is True or (
-        colored_jacobian == "auto" and n_states >= self._COLORED_BACKWARD_MIN_STATES
+        colored_jacobian == "auto"
+        and _auto_colored_backward(n_states, self._COLORED_BACKWARD_MIN_STATES) == "colored"
     )
     if want_colored and self._colored._adjoint_builder is None:
         self._colored.adjoint_jacobian_builder(t0, rtol, atol, y0=y0)

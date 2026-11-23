@@ -30,7 +30,9 @@ docstrings of `aquakin/plant/colored.py`, `aquakin/plant/solve_cache.py` and
   build exact.
 - **The size-based decision stays on the plant's solve routing**
   (`Plant._COLORED_BACKWARD_MIN_STATES` / `colored_jacobian_decision`); the
-  manager only builds when asked.
+  manager only builds when asked. The report and the stable-adjoint solve must
+  both take it from `aquakin.plant.dynamic_solve._auto_colored_backward`, so the
+  reported choice is the one the solve makes.
 - **A state-layout change must call `plant._colored.reset()`** (a temperature
   block appended changes the state length), because the builders cache patterns
   keyed to the layout.
