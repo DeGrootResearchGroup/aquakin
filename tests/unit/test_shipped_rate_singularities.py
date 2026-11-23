@@ -93,10 +93,12 @@ def test_depleted_competition_terms_give_finite_rates(name, depleted):
     guarded = _guarded_by(net, depleted)
     assert guarded, f"{name}: no safe_div over {depleted} -- the case is stale"
     cols = [net.reaction_names.index(r) for r in guarded]
-    # Row 0 is the exact depletion, where the guarded denominator is 0. (At
-    # -1e-9 the denominator is not 0 unless the model clips the state first,
-    # which not every one does inside ``rates``.)
-    np.testing.assert_array_equal(rates[0, cols], 0.0)
+    # Row 0 is the exact depletion, where the guarded denominator is 0. Row 1
+    # is just past it (-1e-9, as a stiff solver can produce): the rate is
+    # exactly 0 there too, not a small negative growth rate, because each model
+    # either clips the state inside ``rates`` (``clip_negative_states``) or its
+    # rate is otherwise zero at that state.
+    np.testing.assert_array_equal(rates[:, cols], 0.0)
 
 
 def test_safe_div_rewrite_leaves_nonzero_values_unchanged():
