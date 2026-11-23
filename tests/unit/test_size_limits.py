@@ -49,7 +49,6 @@ RECORDED_LINES = {
     ".claude/rules/core.md": 298,
     ".claude/rules/integration-differentiation.md": 395,
     ".claude/rules/plant.md": 401,
-    ".claude/rules/plant-solve.md": 267,
     ".claude/rules/schema.md": 301,
     ".claude/rules/ui.md": 286,
     # The modules the Engineering Standards name as not to grow.
