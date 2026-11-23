@@ -61,10 +61,10 @@ def test_controller_output_saturates(asm1):
     state = ctrl.initial_state()
     # Huge positive error would push kLa far past out_max.
     sig = ctrl.signal_outputs(0.0, state, _so_stream(asm1, -100.0), None)
-    assert float(sig["do_kla"]) == pytest.approx(360.0)
+    assert float(sig["do_kla"]) == 360.0  # the clip returns the bound itself
     # Huge negative error clips at out_min.
     sig = ctrl.signal_outputs(0.0, state, _so_stream(asm1, 100.0), None)
-    assert float(sig["do_kla"]) == pytest.approx(0.0)
+    assert float(sig["do_kla"]) == 0.0
 
 
 def test_controller_integral_tracks_error_sign(asm1):

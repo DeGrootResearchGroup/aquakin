@@ -240,7 +240,7 @@ def test_couplingaware_abc_requires_coupling_pattern():
     class Incomplete(CouplingAware):
         pass
 
-    with pytest.raises(TypeError, match="abstract.*coupling_pattern"):
+    with pytest.raises(TypeError, match=r"abstract.*coupling_pattern"):
         Incomplete()
 
     class Complete(CouplingAware):

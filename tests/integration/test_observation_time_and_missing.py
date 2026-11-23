@@ -278,10 +278,16 @@ def test_fisher_mask_matches_per_entry_sigma(reactor, simple_model):
         reactor, Experiment(C0, T_OBS, sigma=sig), FREE, params=p, transforms=LOG
     )
     np.testing.assert_allclose(fim.matrix, ref.matrix, rtol=1e-12)
+    # Independent entries add their information: the measured entries' matrix
+    # plus the unmeasured entries' one is the fully measured design's.
+    rest = aquakin.fisher_information(
+        reactor, Experiment(C0, T_OBS, sigma=SIGMA, mask=~mask), FREE, params=p, transforms=LOG
+    )
     full = aquakin.fisher_information(
         reactor, Experiment(C0, T_OBS, sigma=SIGMA), FREE, params=p, transforms=LOG
     )
-    assert fim.matrix[0, 0] < full.matrix[0, 0]
+    assert rest.matrix[0, 0] > 0.0
+    np.testing.assert_allclose(fim.matrix + rest.matrix, full.matrix, rtol=1e-12)
 
     gain = 1.0 + DRIFT * np.asarray(T_OBS)
     timed = aquakin.fisher_information(

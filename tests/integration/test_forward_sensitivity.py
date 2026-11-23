@@ -302,11 +302,11 @@ def test_bad_sens_params_raise(simple_model):
     reactor = aquakin.BatchReactor(simple_model, cond)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_model.default_parameters()
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match=r"Unknown parameter 'nope\.k'"):
         reactor.solve_sensitivity(C0, (0.0, 5.0), params=p, sens_params=["nope.k"])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="non-empty list"):
         reactor.solve_sensitivity(C0, (0.0, 5.0), params=p, sens_params=[])
-    with pytest.raises(IndexError):
+    with pytest.raises(IndexError, match="index 99 out of range"):
         reactor.solve_sensitivity(C0, (0.0, 5.0), params=p, sens_params=[99])
 
 
