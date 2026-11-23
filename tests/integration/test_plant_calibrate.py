@@ -247,8 +247,13 @@ def test_plant_calibrate_bsm1_gradient_matches_fd(monkeypatch):
     adjoint flowing through the whole stiff monolithic solve. The objective is
     captured from the multistart runner (the fit itself is not run: the
     single-CSTR fits above check the optimizer end) and evaluated at 0.7 muH.
-    The step is 1e-3 in log muH; steps of 1e-2, 1e-3 and 1e-4 agree with the
-    gradient to 1e-4, 1e-6 and 1e-8, so ``rel=1e-5``."""
+
+    asm1's declared prior on muH is switched off (``use_priors=False``): at
+    0.7 muH its gradient is about 1000 times the data term's, so with it on the
+    comparison would check the prior's closed form, not the adjoint. The step
+    is 1e-4 in log muH; steps of 1e-2, 1e-3 and 1e-4 agree with the gradient to
+    about 9e-4, 6e-6 and 2.5e-6 relative (1e-4 is at the solve-tolerance floor),
+    so ``rel=1e-5`` holds with a 4x margin."""
     import aquakin.plant.calibrate as plant_cal
     from aquakin import load_model
     from aquakin.plant.bsm import bsm1_warm_start, build_bsm1, load_bsm1_influent
@@ -293,11 +298,12 @@ def test_plant_calibrate_bsm1_gradient_matches_fd(monkeypatch):
             params=base.at[gidx].set(true_muH * 0.7),
             y0=y0,
             transforms={"asm1.muH": "positive_log"},
+            use_priors=False,
         )
     value_and_grad = seen["bundle"].value_and_grad
     x = jnp.asarray([np.log(0.7 * true_muH)])
     _, g = value_and_grad(x)
-    h = 1e-3
+    h = 1e-4
     fd = (float(value_and_grad(x + h)[0]) - float(value_and_grad(x - h)[0])) / (2 * h)
     assert fd < 0.0                                   # loss falls toward the true muH
     assert float(g[0]) == pytest.approx(fd, rel=1e-5)
