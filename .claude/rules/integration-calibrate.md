@@ -22,12 +22,12 @@ Split out of `.claude/rules/integration.md`.
 ### Module layout
 
 - `integrate/calibrate.py` holds only `calibrate()`, and its `__all__` lists
-  only non-underscore names (`calibrate`, the configs and results, and the
-  helpers it has always exported). **It is not a re-export facade for private
-  names:** import a private helper
-  from the `integrate/calibration/` module that defines it (or, from
+  only what it provides (`calibrate`, the configs and the results). **It is
+  not a re-export facade, for private names or for public ones defined
+  elsewhere:** import `DifferentiationConfig` and friends from `aquakin`, and a
+  helper from the `integrate/calibration/` module that defines it (or, from
   `aquakin.plant`, from `integrate/seam.py`), never through `calibrate.py`, so
-  no private name is kept alive there for an importer. **New calibration code
+  no name is kept alive there for an importer. **New calibration code
   goes in the `integrate/calibration/` module for its concern** (`config`,
   `observation`, `loss`, `coords`, `result`, `problem`, `objective`,
   `multistart`, `laplace`, `driver`), never back into `calibrate.py`.

@@ -38,17 +38,10 @@ import jax.numpy as jnp
 from aquakin.integrate._common import (
     DifferentiationConfig,
     Reactor,
-    check_finite_gradient,
     forward_adjoint,
-    native_time_factor,
     with_adjoint,
 )
 from aquakin.integrate._config import STABLE_REVERSE_DIFF
-from aquakin.integrate._transforms import (
-    dphysical_dunconstrained,
-    from_unconstrained,
-    to_unconstrained,
-)
 from aquakin.integrate.calibration.config import (
     _VALID_LOSSES,
     FreeICConfig,
@@ -63,39 +56,21 @@ from aquakin.integrate.calibration.loss import (
     _observation_unit_factors,
 )
 from aquakin.integrate.calibration.objective import _FitConfig
-from aquakin.integrate.calibration.observation import (
-    observation_size,
-    observation_takes_time,
-    observe,
-)
 from aquakin.integrate.calibration.problem import _ReactorForwardModel, _resolve_problem
 from aquakin.integrate.calibration.result import CalibrationResult, PredictiveBand
 
-# ``calibrate`` and the configs and results it takes and returns, plus the
-# non-underscore helpers this module has always exported (whether those stay is
-# a public-API decision, so they are kept). The implementation lives in the
-# ``aquakin.integrate.calibration`` subpackage, whose private helpers are
-# imported from their own modules (or, by the plant layer, from
-# ``aquakin.integrate.seam``), never through here.
+# ``calibrate`` and the configs and results it takes and returns. Names defined
+# elsewhere are not re-exported: the public ones are imported from ``aquakin``,
+# and the implementation lives in the ``aquakin.integrate.calibration``
+# subpackage, whose private helpers are imported from their own modules (or, by
+# the plant layer, from ``aquakin.integrate.seam``), never through here.
 __all__ = [
     "CalibrationResult",
-    "DifferentiationConfig",
     "FreeICConfig",
     "LaplaceConfig",
     "OptimizerConfig",
     "PredictiveBand",
-    "Reactor",
     "calibrate",
-    "check_finite_gradient",
-    "dphysical_dunconstrained",
-    "forward_adjoint",
-    "from_unconstrained",
-    "native_time_factor",
-    "observation_size",
-    "observation_takes_time",
-    "observe",
-    "to_unconstrained",
-    "with_adjoint",
 ]
 
 
