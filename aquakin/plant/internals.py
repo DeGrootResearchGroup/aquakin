@@ -23,14 +23,19 @@ Renaming or changing one of these is a change to the modules listed with it.
 
 SHARED_INTERNALS: dict[str, frozenset[str]] = {
     # Audits: the mass balance and the units check walk units in order and
-    # read their layouts and parameter slices.
+    # read their layouts and parameter slices; the balance's reaction integral
+    # rebuilds each unit's RHS inputs and signals at the saved states.
     "plant/balance.py": frozenset(
         {
             "_build_parameter_layout",
             "_build_state_layout",
+            "_coerce_params",
             "_params_for_unit",
             "_parse_endpoint",
+            "_recycle",
+            "_split_state",
             "_state_layout",
+            "_unit_inputs_and_signals",
             "_unit_order",
         }
     ),

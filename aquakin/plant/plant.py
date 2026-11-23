@@ -2443,19 +2443,53 @@ class Plant:
         recycle_map: list | None = None,
         flow_map: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
-        # Step 1: split state by unit.
         states = self._split_state(state_full)
+        inputs_by_unit, signals_by_unit, temp_by_unit = self._unit_inputs_and_signals(
+            t, states, params_full, design=design, recycle_map=recycle_map, flow_map=flow_map
+        )
+        # Every unit's rhs has the same signature; an uncontrolled unit ignores
+        # its signals. Under a heat-balance temperature model the flow-weighted
+        # inlet (Q, T) of each tracked unit drives the temperature-state derivative.
+        inlet_by_unit: dict = {}
+        dstates: list[jnp.ndarray] = []
+        for name in self._unit_order:
+            inputs = inputs_by_unit[name]
+            if name in temp_by_unit:
+                inlet_by_unit[name] = self._inlet_flow_temperature(inputs)
+            params_unit = self._params_for_unit(name, params_full)
+            unit_signals = signals_by_unit[name]
+            dstates.append(self.units[name].rhs(t, states[name], inputs, params_unit, unit_signals))
+        if self._temperature_block[1]:
+            dstates.append(
+                self.temperature_model.state_rhs(self, states[_TEMPERATURE_KEY], inlet_by_unit)
+            )
+        return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
 
-        # Step 2: control signals, computed from the reactor states BEFORE the
-        # sweep (see :meth:`_compute_signals`) so a feedback-dosing unit can read
-        # its dose-flow signal while its output stream is being computed.
+    def _unit_inputs_and_signals(
+        self, t, states, params_full, design=None, recycle_map=None, flow_map=None
+    ) -> tuple[dict, dict, dict]:
+        """What each unit's ``rhs`` reads at one instant, besides its own state.
+
+        Computes the control-signal bus from the states (before the sweep, so a
+        feedback-dosing unit reads its dose flow while its output is computed),
+        resolves the influent + recycle streams and the output sweep, and
+        collects each unit's converged input streams. Under a heat-balance
+        temperature model a reactor's operating temperature (its lagged tank
+        state) joins its signals under the reserved ``OPERATING_T_SIGNAL`` key.
+        The RHS and the mass balance's reaction integral both read this, so the
+        balance evaluates the kinetics at the conditions the solve used.
+
+        Returns
+        -------
+        inputs_by_unit : dict
+            ``{unit: {port: Stream}}``.
+        signals_by_unit : dict
+            ``{unit: signals}`` -- the signal bus each unit's ``rhs`` receives.
+        temp_by_unit : dict
+            ``{unit: temperature}`` for the heat-balance-tracked units (empty
+            otherwise; see :meth:`_temperatures_by_unit`).
+        """
         signals = self._compute_signals(t, states, params_full)
-
-        # Step 3: resolve influent + recycle streams and run the output sweep,
-        # threading the signal bus into every unit's ``compute_outputs`` (a
-        # dosing unit reads its dose flow there). ``design`` (optional) carries
-        # differentiable design-variable overrides -- currently the influent
-        # streams -- so a steady-state / sweep can take gradients w.r.t. them.
         all_outputs, streams = self._resolve_streams(
             t,
             states,
@@ -2465,44 +2499,20 @@ class Plant:
             recycle_map=recycle_map,
             flow_map=flow_map,
         )
-
-        # Collect each unit's converged input streams ONCE for the dstate pass.
-        # The streams are fixed after the sweep, so re-collecting per unit would
-        # repeat the translator calls and Stream allocations on every RHS step --
-        # and on the differentiated tape. Same values, so the result is
-        # unchanged. (The signal bus is computed up front from the states, above,
-        # so it does not reuse this map.)
         inputs_by_unit = {
             name: self._collect_inputs(name, all_outputs, streams, states, params_full)
             for name in self._unit_order
         }
-
-        # Step 4: compute dstates from final input streams and the (always
-        # passed) control-signal bus. Every unit's rhs has the same signature;
-        # an uncontrolled unit ignores ``signals``. Under a heat-balance
-        # temperature model, a reactor's operating temperature (its lagged tank
-        # state) is threaded in through a reserved signal key, and the flow-
-        # weighted inlet (Q, T) of each tracked unit is captured for the
-        # temperature-state derivative.
         temp_by_unit = self._temperatures_by_unit(states)
-        inlet_by_unit: dict = {}
-        dstates: list[jnp.ndarray] = []
-        for name in self._unit_order:
-            unit = self.units[name]
-            inputs = inputs_by_unit[name]
-            params_unit = self._params_for_unit(name, params_full)
-            unit_signals = signals
-            if temp_by_unit:
-                unit_signals = {**signals, _OPERATING_T_SIGNAL: temp_by_unit.get(name)}
-                if name in temp_by_unit:
-                    inlet_by_unit[name] = self._inlet_flow_temperature(inputs)
-            dstate = unit.rhs(t, states[name], inputs, params_unit, unit_signals)
-            dstates.append(dstate)
-        if self._temperature_block[1]:
-            dstates.append(
-                self.temperature_model.state_rhs(self, states[_TEMPERATURE_KEY], inlet_by_unit)
+        signals_by_unit = {
+            name: (
+                {**signals, _OPERATING_T_SIGNAL: temp_by_unit.get(name)}
+                if temp_by_unit
+                else signals
             )
-        return jnp.concatenate(dstates) if dstates else jnp.zeros((0,))
+            for name in self._unit_order
+        }
+        return inputs_by_unit, signals_by_unit, temp_by_unit
 
     @staticmethod
     def _inlet_flow_temperature(inputs: dict[str, Stream]):

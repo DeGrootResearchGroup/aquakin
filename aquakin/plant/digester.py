@@ -235,6 +235,11 @@ class ADM1DigesterUnit(KineticUnit, CouplingAware):
             params = params.at[self._v_liq_idx].set(float(self.volume))
         return super()._reaction(C, params, conditions)
 
+    def _reaction_conditions(self, inputs: dict[str, Stream], signals: dict | None) -> dict:
+        """The static conditions: the heated digester runs at its fixed
+        temperature, never a plant temperature."""
+        return self._condition_arrays
+
     def rhs(
         self,
         t: jnp.ndarray,
@@ -246,8 +251,7 @@ class ADM1DigesterUnit(KineticUnit, CouplingAware):
         # Mix inflows (Q-weighted) into one feed composition.
         Q_total, C_in = mixed_feed(inputs, self.input_port_names)
 
-        # Reactions, gas transfer and gas outflow, per the plant's time unit. The
-        # heated digester runs at its fixed conditions, never a plant temperature.
-        reaction = self._reaction(state, params, self._condition_arrays)
+        # Reactions, gas transfer and gas outflow, per the plant's time unit.
+        reaction = self._reaction(state, params, self._reaction_conditions(inputs, signals))
         dilution = (Q_total / self.volume) * (C_in - state) * self._liquid_mask
         return reaction + dilution

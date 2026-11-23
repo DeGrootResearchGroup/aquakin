@@ -305,7 +305,7 @@ def test_digester_reaction_term_follows_the_clock():
     # per day; on an hour clock both its rhs and the mass balance's reaction
     # term are per hour.
     from aquakin.plant import ADM1DigesterUnit
-    from aquakin.plant.balance import _reaction_term
+    from aquakin.plant.balance import _reaction_terms_at
 
     adm1 = aquakin.load_model("adm1")
 
@@ -330,7 +330,7 @@ def test_digester_reaction_term_follows_the_clock():
         np.asarray(hours.derivative(y0)), np.asarray(days.derivative(y0)) / 24.0, rtol=1e-12
     )
     params = days.default_parameters()
-    term_d = np.asarray(_reaction_term(days, "digester", y0, params))
-    term_h = np.asarray(_reaction_term(hours, "digester", y0, params))
+    term_d = np.asarray(_reaction_terms_at(days, 0.0, y0, params, ["digester"])["digester"])
+    term_h = np.asarray(_reaction_terms_at(hours, 0.0, y0, params, ["digester"])["digester"])
     assert np.any(term_d != 0.0)
     np.testing.assert_allclose(term_h, term_d / 24.0, rtol=1e-12)
