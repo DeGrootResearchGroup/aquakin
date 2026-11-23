@@ -16,8 +16,10 @@ from aquakin.integrate.calibration.laplace import (
     _laplace_posterior,
     _LaplaceOut,
 )
+from aquakin.integrate.calibration.loss import _objective_scale
 from aquakin.integrate.calibration.multistart import (
     _clip_start,
+    _is_solve_failure,
     _optimizer_bounds,
     _resolve_starts,
     _run_multistart,
@@ -109,10 +111,29 @@ def _run_fit(
 
     if cfg.check_finite:
         _check_start_gradient(cfg, bundle, theta0)
+    _scale_objective(problem, bundle, theta0)
 
     extra = {} if progress is None else {"progress": progress}
     result = run_multistart(cfg, bundle, theta0, opt_bounds, starts=starts, **extra)
     return _fit_result(problem, fm, cfg, bundle, result, opt_bounds)
+
+
+def _scale_objective(problem: _CalibrationProblem, bundle, theta0) -> None:
+    """Set the factor the optimiser's objective is divided by from its value
+    at the start (see :func:`_objective_scale`; only ``loss="mse"`` is scaled).
+
+    Every start of a multistart shares the one scale, so their losses stay
+    comparable. A start whose solve fails is left unscaled: the multistart
+    runner reports that failure."""
+    if problem.data_mean_square is None:
+        return
+    try:
+        start_loss = float(bundle.value_and_grad(jnp.asarray(theta0))[0])
+    except Exception as exc:
+        if not _is_solve_failure(exc):
+            raise
+        return
+    bundle.scale_box[0] = _objective_scale(problem.data_mean_square, start_loss)
 
 
 def _initial_point(problem: _CalibrationProblem, starts, ic_theta0):
@@ -212,8 +233,9 @@ def _fit_result(problem: _CalibrationProblem, fm, cfg: _FitConfig, bundle, resul
 
     # Report the loss as the full scalar objective at the optimum, identical
     # across optimizers (the Gauss-Newton path's ``r.cost`` drops the nll
-    # sum(log(sigma)) normaliser; evaluating the objective puts both on scale).
-    reported_loss = float(bundle.value_and_grad(theta_opt)[0])
+    # sum(log(sigma)) normaliser; evaluating the objective puts both on scale),
+    # and in the loss's own units (the optimiser saw it divided by loss_scale).
+    reported_loss = float(bundle.value_and_grad(theta_opt)[0]) * bundle.loss_scale
 
     return CalibrationResult(
         params=full_params,

@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate._common import DifferentiationConfig, is_forward_mode_ad_error
+from aquakin.integrate._config import FORWARD_DIFF, FORWARD_REACTOR_REMEDY
 from aquakin.integrate._qmc import _sobol_sample
 
 
@@ -82,10 +83,11 @@ class DGSMResult:
 # Guidance raised when a forward-mode screen hits the default reactor adjoint's
 # custom_vjp (which rejects jvp). Shared by the batched and per-sample paths.
 _DGSM_FORWARD_HINT = (
-    "ad_mode='forward' requires forward-mode autodiff through the solve. Build "
-    "the reactor inside fn with adjoint=aquakin.forward_adjoint() (dgsm cannot "
-    "set the adjoint for you -- your fn constructs the reactor); the default "
-    "RecursiveCheckpointAdjoint registers a custom_vjp that rejects forward mode."
+    f"dgsm with {FORWARD_DIFF} requires forward-mode autodiff through the solve: "
+    f"inside fn, {FORWARD_REACTOR_REMEDY} (dgsm cannot do this for you -- your fn "
+    "constructs the reactor). A reactor built with the default diff= is "
+    "reverse-mode only: its RecursiveCheckpointAdjoint registers a custom_vjp "
+    "that rejects forward mode."
 )
 
 
@@ -250,25 +252,26 @@ def dgsm(
 
     The derivatives are exact (no finite-difference truncation) and reuse the
     differentiable model, so the same machinery serves the calibration and
-    identifiability analyses. The cost depends on ``ad_mode`` and on the number
-    of outputs ``m`` and inputs ``d``:
+    identifiability analyses. The cost depends on ``diff.mode`` and on the
+    number of outputs ``m`` and inputs ``d``:
 
-    - ``ad_mode="reverse"`` (default) forms the per-sample sensitivities with
+    - ``diff=aquakin.DifferentiationConfig(mode="reverse")`` (default) forms the per-sample sensitivities with
       ``m`` reverse-mode passes (one per output), each independent of ``d``.
       Best when there are few outputs relative to inputs **and** the adjoint is
       cheap. Works with any reactor adjoint.
-    - ``ad_mode="forward"`` forms them with ``d`` forward-mode tangents pushed
+    - ``diff=aquakin.DifferentiationConfig(mode="forward")`` forms them with ``d`` forward-mode tangents pushed
       through a single solve, independent of ``m``. Best when there are many
       outputs, or when the reverse adjoint is expensive -- e.g. a stiff solve
       whose differentiated step must be capped (``dtmax``), which inflates the
       reverse pass. **The reactor inside ``fn`` must then be built with**
-      ``adjoint=aquakin.forward_adjoint()`` (``dgsm`` cannot set the adjoint
-      for you, because ``fn`` constructs the reactor): the default
-      ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp`` that rejects
-      forward-mode autodiff.
+      ``diff=aquakin.DifferentiationConfig(mode="forward",
+      method="through_solve")`` (``dgsm`` cannot set the adjoint for you,
+      because ``fn`` constructs the reactor): a reactor built with the default
+      ``diff`` carries ``RecursiveCheckpointAdjoint``, which registers a
+      ``custom_vjp`` that rejects forward-mode autodiff.
 
     Both modes return identical sensitivities (to machine precision);
-    ``ad_mode`` is purely a performance choice. For a single scalar output
+    ``diff.mode`` is purely a performance choice. For a single scalar output
     ``reverse`` is
     almost always cheaper; the ``forward`` advantage appears for multi-output
     screening of a stiff model.

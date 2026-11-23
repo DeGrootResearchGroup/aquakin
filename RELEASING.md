@@ -40,24 +40,26 @@ On a release-prep branch:
 
 - [ ] **Version** — set `__version__ = "X.Y.Z"` in `aquakin/__init__.py` (already
       `0.1.0` for the first release; bump for later ones).
-- [ ] **CHANGELOG.md** — rename the running `## [Unreleased]` heading to
-      `## [X.Y.Z] - YYYY-MM-DD` (today's date, ISO). Open a fresh empty
-      `## [Unreleased]` section above it, and update the link references at the
+- [ ] **CHANGELOG.md** — the unreleased changes are the fragments in
+      `changelog.d/` (one file per entry; see `changelog.d/README.md`). Build
+      them into the release's section with towncrier, from the `release` extra:
+
+      ```bash
+      pip install -e ".[release]"
+      towncrier build --draft --version X.Y.Z     # preview; nothing written
+      towncrier build --yes --version X.Y.Z --date YYYY-MM-DD
+      ```
+
+      The second command writes `## [X.Y.Z] - YYYY-MM-DD` below the marker in
+      `CHANGELOG.md`, grouped Added / Changed / Deprecated / Removed / Fixed /
+      Security, and deletes the fragments (`git rm`). Read the section as a
+      user deciding whether to upgrade: merge entries that describe one change,
+      and trim any that are too detailed. Then add the link reference at the
       bottom of the file:
 
       ```markdown
-      ## [Unreleased]
-
-      ## [X.Y.Z] - YYYY-MM-DD
-      ... (the curated notes) ...
-
-      [Unreleased]: https://github.com/DeGrootResearchGroup/aquakin/compare/vX.Y.Z...HEAD
-      [X.Y.Z]: https://github.com/DeGrootResearchGroup/aquakin/releases/tag/vX.Y.Z
+      [X.Y.Z]: https://github.com/DeGrootResearchGroup/aquakin/compare/vPREVIOUS...vX.Y.Z
       ```
-
-      (For `0.1.0`, the notes are the curated initial-release feature summary;
-      granular per-change logging under `[Unreleased]` begins for the *next*
-      release.)
 - [ ] **CITATION.cff** — add `version: X.Y.Z` and `date-released: "YYYY-MM-DD"`
       (the file has a comment marking where).
 - [ ] Open the PR, get it green, merge to `main`.

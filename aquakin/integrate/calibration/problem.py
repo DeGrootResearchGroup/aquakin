@@ -21,6 +21,7 @@ from aquakin.integrate.calibration.loss import (
     _build_loss,
     _build_residual,
     _coerce_sigma,
+    _data_mean_square,
     _is_sigma_estimate,
     _n_obs_per_output,
     _observed_counts,
@@ -182,6 +183,10 @@ class _CalibrationProblem:
     # FreeICConfig(fixed_total=True): the pools of each dataset sum to their
     # total in its C0, fitted as m_ic - 1 log-ratio coordinates per dataset.
     ic_fixed_total: bool = False
+    # The observations' mean square for loss="mse" (None otherwise), which
+    # bounds how far the optimiser's objective is scaled up (see
+    # :func:`_objective_scale`).
+    data_mean_square: float | None = None
 
     @property
     def m_ic_theta(self) -> int:
@@ -368,6 +373,7 @@ class _ResolvedDatasets(NamedTuple):
     n_seen_per_output: np.ndarray
     obs_species_indices: jnp.ndarray
     n_observed: int
+    data_mean_square: float | None
 
 
 def _resolve_datasets(
@@ -404,6 +410,7 @@ def _resolve_datasets(
     datasets = []
     tobs_user = []
     digest_parts = []
+    obs_seen = []
     n_seen_per_output = np.zeros(n_observed, dtype=int)  # observed (non-NaN) entries
     for ds, (C0_i, obs_i, tobs_i, sig_i) in enumerate(
         zip(C0_list, obs_list, tobs_list, sigma_list)
@@ -438,6 +445,7 @@ def _resolve_datasets(
                 f"dataset {ds}: observations has {obs_i.shape[1]} columns but {n_observed} {what}."
             )
         n_seen_per_output += seen_i
+        obs_seen.append(obs_i)
         sig_arr = _coerce_sigma(sig_i)
         digest_parts += [obs_i, sig_arr, tobs_i, tobs_user[-1]]
         datasets.append(
@@ -456,6 +464,7 @@ def _resolve_datasets(
         n_seen_per_output,
         obs_species_indices,
         n_observed,
+        _data_mean_square(loss, obs_seen),
     )
 
 
@@ -592,6 +601,7 @@ def _resolve_problem(
         ic_fixed_total=ic_fixed_total,
         data_key=(loss, _array_digest(*data.digest_parts)),
         rate_bounds=rate_bounds,
+        data_mean_square=data.data_mean_square,
     )
 
 

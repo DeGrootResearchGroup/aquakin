@@ -202,6 +202,75 @@ def _build_masked_residual(loss_type, observations, sigma, missing):
     return lambda pred: (gap(pred) / sig).reshape(-1)
 
 
+# A start whose ``"mse"`` misfit is below this fraction of the data's mean
+# square (an RMS misfit 1e-8 of the data's RMS, below any integrator tolerance)
+# already fits the data to the solver's precision: the objective is not scaled
+# up past it, so round-off is not mistaken for misfit.
+_SCALE_FLOOR = 1e-16
+
+
+def _data_mean_square(loss_type: str, observations) -> float | None:
+    """The mean square of the observed entries over every dataset, for the
+    ``"mse"`` loss (``None`` for another loss); see :func:`_objective_scale`.
+
+    Parameters
+    ----------
+    loss_type : str
+        The loss.
+    observations : list of array-like
+        The observations of each dataset (``NaN`` marks a missing entry).
+
+    Returns
+    -------
+    float or None
+    """
+    if loss_type != "mse":
+        return None
+    values = np.concatenate([np.asarray(o, dtype=float).reshape(-1) for o in observations])
+    values = values[~np.isnan(values)]
+    return float(np.mean(values**2)) if values.size else 0.0
+
+
+def _objective_scale(data_mean_square: float | None, start_loss: float) -> float:
+    """The fixed factor the optimizer's objective is divided by.
+
+    SciPy's stopping tests are absolute once the objective is below 1: L-BFGS-B
+    stops when a step lowers it by less than ``ftol * max(|f|, 1)`` or when the
+    largest projected gradient entry is below ``tol``, and least squares has an
+    absolute gradient test too. The ``"mse"`` loss carries the square of the
+    data's unit, so on data of order 1e-6 (concentrations in mol/L) the loss and
+    its gradient are below those thresholds at any start, and the optimizer
+    returns the start unchanged while reporting convergence. Dividing the
+    objective by its value at the start makes the tests relative to the
+    starting misfit, whatever the unit. A loss of 1 or more is already in
+    SciPy's relative regime and is left unscaled, and the scale is never below
+    ``_SCALE_FLOOR`` times the data's mean square, so a start that already fits
+    to round-off is not scaled up to it.
+
+    A constant factor does not move the minimum. It is applied only to what the
+    optimizer sees: the reported loss and the Laplace posterior use the
+    unscaled objective. ``"wmse"`` and ``"nll"`` are in units of ``sigma``
+    (and the concentrated likelihood in log units), so they are not scaled.
+
+    Parameters
+    ----------
+    data_mean_square : float or None
+        :func:`_data_mean_square` of the problem (``None``: do not scale).
+    start_loss : float
+        The objective at the optimizer's (first) start.
+
+    Returns
+    -------
+    float
+        ``min(1, max(start_loss, _SCALE_FLOOR * data_mean_square))``, or 1 when
+        the loss is not scaled or that is not positive and finite.
+    """
+    if data_mean_square is None:
+        return 1.0
+    scale = min(1.0, max(float(start_loss), _SCALE_FLOOR * data_mean_square))
+    return scale if np.isfinite(scale) and scale > 0.0 else 1.0
+
+
 def _is_sigma_estimate(sigma) -> bool:
     """Whether ``sigma`` asks for the concentrated likelihood."""
     return isinstance(sigma, str) and sigma == "estimate"

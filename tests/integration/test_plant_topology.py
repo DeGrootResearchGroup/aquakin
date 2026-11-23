@@ -1,4 +1,5 @@
-"""Topological sort of plant units + plant.check() wiring validation."""
+"""Topological sort of plant units, plant.check() wiring validation, and
+editing a plant's structure after a solve."""
 
 import random
 
@@ -7,7 +8,7 @@ import numpy as np
 import pytest
 
 import aquakin
-from aquakin.plant import Plant, PlantCheck
+from aquakin.plant import Aeration, Plant, PlantCheck
 from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
 from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
 from aquakin.plant.cstr import CSTRUnit
@@ -171,3 +172,63 @@ def test_scrambled_add_order_same_steady_state(asm1):
         for name, d in d_warm_ref.items():
             np.testing.assert_allclose(np.asarray(d_warm[name]), np.asarray(d),
                                        rtol=1e-8, atol=1e-8, err_msg=f"{seed} {name}")
+
+
+# ----- editing a plant after a solve (fast) --------------------------------
+
+def _add_second_tank(plant, model, **kwargs):
+    """Wire a second CSTR after the plant's ``tank``."""
+    plant.add_unit(CSTRUnit(name="tank2", model=model, volume=50.0,
+                            input_port_names=["inlet"], conditions={"T": 293.15}, **kwargs))
+    plant.connect("tank", "tank2")
+
+
+def test_units_added_after_a_solve_match_a_fresh_plant(make_cstr_plant, simple_model):
+    """A unit and a connection added after a solve are used by the next solve
+    and by ``plant.stream``, exactly as on a plant built with them from the
+    start (issue #749: the stream read raised ``KeyError: 'tank2'`` from the
+    per-unit parameter cache of the first structure)."""
+    t_eval = jnp.linspace(0.0, 20.0, 5)
+    edited = make_cstr_plant()
+    edited.solve(t_span=(0.0, 20.0), t_eval=t_eval)
+    _add_second_tank(edited, simple_model)
+    sol = edited.solve(t_span=(0.0, 20.0), t_eval=t_eval)
+
+    fresh = make_cstr_plant()
+    _add_second_tank(fresh, simple_model)
+    ref = fresh.solve(t_span=(0.0, 20.0), t_eval=t_eval)
+
+    np.testing.assert_allclose(np.asarray(sol.state), np.asarray(ref.state), rtol=1e-12)
+    out = edited.stream(sol, "tank2.out")
+    # A CSTR's outlet is its well-mixed state, at the flow it receives.
+    np.testing.assert_allclose(np.asarray(out.C), np.asarray(sol.unit_state("tank2")),
+                               rtol=1e-12)
+    np.testing.assert_allclose(np.asarray(out.Q), 10.0, rtol=1e-12)
+    np.testing.assert_allclose(np.asarray(out.C),
+                               np.asarray(fresh.stream(ref, "tank2.out").C), rtol=1e-12)
+
+
+def test_closed_loop_tank_added_after_a_solve_gets_its_controller(asm1):
+    """A closed-loop aerated tank added after a solve gets the DO controller the
+    plant derives for it, as it would before the first solve (the one-time
+    controller set-up had already run, so the solve refused the tank's
+    unpublished kLa signal)."""
+    def first(plant):
+        plant.add_unit(CSTRUnit(name="tank", model=asm1, volume=1000.0,
+                                input_port_names=["inlet"], conditions={"T": 293.15}))
+        plant.add_influent("feed", asm1.influent(_INF, Q=1000.0), to="tank.inlet")
+
+    t_eval = jnp.linspace(0.0, 0.1, 3)
+    edited = Plant("edited", time_unit="d")
+    first(edited)
+    edited.solve(t_span=(0.0, 0.1), t_eval=t_eval)
+    _add_second_tank(edited, asm1, aeration=Aeration(do_setpoint=2.0))
+    sol = edited.solve(t_span=(0.0, 0.1), t_eval=t_eval)
+
+    fresh = Plant("fresh", time_unit="d")
+    first(fresh)
+    _add_second_tank(fresh, asm1, aeration=Aeration(do_setpoint=2.0))
+    ref = fresh.solve(t_span=(0.0, 0.1), t_eval=t_eval)
+    assert "tank2_aeration" in edited.list_units()
+    assert edited.list_units() == fresh.list_units()
+    np.testing.assert_allclose(np.asarray(sol.state), np.asarray(ref.state), rtol=1e-12)

@@ -360,6 +360,7 @@ aquakin/
 │   └── pull_request_template.md     # the PR description's sections
 │
 ├── conftest.py                      # runs the README / user-guide examples as tests (Sybil)
+├── changelog.d/                     # one changelog fragment per change; towncrier builds CHANGELOG.md at release
 ├── pyproject.toml
 ├── README.md
 ├── CLAUDE.md                        # this file
