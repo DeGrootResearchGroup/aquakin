@@ -1,8 +1,10 @@
 # A unified plant-wide model: design proposal (2026-11-23)
 
-Status: **draft for the owner's review.** Nothing here is implemented. The
-decisions listed under *Open decisions* are the owner's; everything else is a
-proposal that stays reversible until the first level is merged.
+Status: **in progress.** The owner's decisions so far are under *Decisions
+made*; the core level is drafted as
+`examples/plantwide/models/plantwide_core.yaml` (tested in
+`tests/integration/test_plantwide_core.py`). The other levels are proposals, and
+the questions under *Open decisions* are the owner's.
 
 ## Purpose
 
@@ -51,6 +53,38 @@ against.
    colloidal fractions, algae, dewatering water content, temperature as a
    state) are out of the first version, and are added later as further levels
    if a use case needs them.
+6. **No unit-type switches.** Which organism groups are active in a unit
+   follows from its conditions (oxygen, nitrate, temperature) alone; no process
+   or parameter depends on whether the unit is a digester. BNRM1 (Seco et al.,
+   2004) is the published precedent. The UCT plant-wide model (Ikumi, 2011)
+   instead runs only the activated-sludge processes in activated-sludge units
+   and only the digestion processes in the digester, and commercial models
+   switch some parameter values in digesters.
+
+## Decisions made (owner, 2026-11-23)
+
+1. **Keep propionate** (`SPRO`, propionate oxidizers `XPRO`): propionate and
+   acetate degraders set digester stability (Siegrist et al., 2002), and all
+   three digestion sources keep it.
+2. **Methanogen and propionate-oxidizer kinetics from ADM1** (BSM2 values at
+   35 C, converted from kg to g), with the temperature dependence of Siegrist
+   et al. (2002), so the BSM2 digester comparison stays clean.
+3. **A separate group of fermenting organisms** (acidogens, `XFE`), not the
+   heterotrophs with a reduced anaerobic decay.
+4. **The BNRM1 structure for fermentation and hydrolysis** (Seco et al., 2004;
+   Barat et al., 2013): acidogens do all the fermentation, in every unit, and
+   ASM2d's heterotrophic fermentation is removed; heterotrophs hydrolyze under
+   every condition (ASM2d), and without oxygen and nitrate the acidogens
+   hydrolyze as well (Contois, Sötemann et al., 2005). Two findings led here.
+   Hydrolysis catalyzed by heterotrophs and acidogens together, with ASM2d's
+   half-saturation, ran about ten times too fast in a seeded batch digester.
+   And keeping ASM2d's heterotrophic fermentation (half-saturation 4 g/m³)
+   beside acidogens (500 g/m³) starved the acidogens out of a continuous
+   digester (20 d, 35 C), taking the hydrogen and propionate pathways with
+   them. With the BNRM1 structure every anaerobic group persists and 83% of the
+   biodegradable COD fed leaves as methane.
+5. **Branching:** model work continues on the session branch after the design
+   note's PR merged.
 
 ## Structure: a linear `extends:` chain
 
@@ -110,11 +144,10 @@ anyone who knows the IWA family.
 
 | Group | Species |
 |---|---|
-| Organics | `SF` fermentable substrate, `SA` fermentation products (as acetate), `SI` soluble inert, `XS` slowly biodegradable, `XI` particulate inert |
-| Biomass | `XH` heterotrophs (including fermentation), `XAUT` nitrifiers, `XAC` acetoclastic methanogens, `XH2M` hydrogenotrophic methanogens |
-| Dissolved | `SO2`, `SNH4`, `SNO3`, `SN2`, `SH2`, `SCH4`, `SIC` (total inorganic carbon) |
-| Solids | `XISS` inorganic suspended solids (for TSS) |
-| Gas phase | `G_CH4`, `G_CO2`, `G_H2` (headspace; see *Engine work*) |
+| Organics | `SF` fermentable substrate, `SA` acetate, `SPRO` propionate, `SI` soluble inert, `XS` slowly biodegradable, `XI` particulate inert |
+| Biomass | `XH` heterotrophs, `XAUT` nitrifiers, `XFE` acidogens, `XPRO` propionate oxidizers, `XAC` acetoclastic methanogens, `XH2M` hydrogenotrophic methanogens |
+| Dissolved | `SO2`, `SNH4`, `SNO3`, `SN2`, `SH2`, `SCH4`, `SIC` (total inorganic carbon, g C/m³) |
+| Not yet | inorganic suspended solids (for TSS) and the gas phase (see *Engine work*) |
 
 **`plantwide_bio_p` adds** `SPO4`, `XPAO`, `XPP`, `XPHA` (and `XGAO`, `XGLY` if
 GAOs are included, see *Open decisions*).
@@ -132,19 +165,27 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
 
 | Processes | Primary source |
 |---|---|
-| Hydrolysis of `XS` (aerobic, anoxic, anaerobic), heterotroph growth on `SF` and `SA` (O₂, NO₃), fermentation of `SF` to `SA`, nitrification, decay | ASM2d (Henze et al., 1999) |
-| Decay as endogenous respiration with reduced anoxic / anaerobic rates (instead of lysis) | Barker & Dold (1997) |
-| Acetoclastic and hydrogenotrophic methanogenesis, their NH₃ and H₂ inhibition | ADM1 (Batstone et al., 2002) |
-| Hydrogen as a fermentation product | ADM1 acidogenesis product yields, lumped (our derivation, documented) |
-| Simplified digestion on an activated-sludge state set | Siegrist et al. (2002); Sötemann et al. (2005) |
+| Hydrolysis of `XS` by heterotrophs (aerobic, anoxic, anaerobic), heterotroph growth on `SF` and `SA` (O₂, NO₃), nitrification | ASM2d (Henze et al., 1999) |
+| Decay of every group by death-regeneration, at the same rate in every zone (heterotrophs and nitrifiers with ASM2d's `fXI` = 0.1) | ASM2d; Barker & Dold (1997) use the same form with 0.08, the value Ikumi et al. (2014) found consistent with digestion |
+| Fermentation by acidogens only, in every unit; hydrolysis by acidogens without O₂ and NO₃ | BNRM1 structure (Seco et al., 2004; Barat et al., 2013); Contois hydrolysis constants of Sötemann et al. (2005) |
+| Fermentation products: acetate, propionate, hydrogen | split of Siegrist et al. (2002), Table 2 |
+| Propionate oxidation, acetoclastic and hydrogenotrophic methanogenesis, their H₂ and NH₃ inhibition | ADM1 (Batstone et al., 2002; BSM2 values), temperature dependence of Siegrist et al. (2002) |
+| Carbon contents of the organic components | Siegrist et al. (2002), Table 2 |
 
-**Reconciliation choices this level makes, each to be documented:**
-- ADM1's separate carbohydrate, protein and lipid pools and its sugar, amino
-  acid, LCFA, propionate and butyrate degraders collapse into
-  `XS` → `SF` → `SA` + `SH2`. Whether to keep propionate is an open decision:
-  it is the intermediate that accumulates first when a digester is overloaded.
-- Methanogen inhibition by O₂ and nitrate is not in ADM1. The form and its
-  constants need a source, or are stated as our choice.
+**Reconciliation choices this level makes:**
+- ADM1's carbohydrate, protein and lipid pools and its sugar, amino acid, LCFA,
+  butyrate and valerate degraders collapse into `XS` → `SF` →
+  `SA` + `SPRO` + `SH2`; butyrate and valerate are dropped as minor (Siegrist et
+  al., 2002; Sötemann et al., 2005).
+- Anaerobic growth stops under oxygen and nitrate through inhibition terms with
+  ASM2d's anaerobic-switch constants. No source gives these for this kind of
+  model, so the parameters carry wide priors and say so.
+- Without ASM2d's heterotrophic fermentation, anaerobic zones differ from
+  `asm2d`; the equivalence with `asm2d` holds under aerobic and anoxic
+  conditions (and against `asm2d` with its fermentation switched off).
+- The acidogen kinetics are ADM1's sugar degraders (half-saturation 500 g/m³)
+  for now, provisional until a source tested in activated sludge is found
+  (see *Open decisions*).
 - Particulate organics the activated-sludge models treat as unbiodegradable
   stay largely unbiodegradable in a digester (Ikumi et al., 2014), so `XI` is
   inert in every unit and the first version has no anaerobic conversion of
@@ -180,11 +221,12 @@ process is the same.
 
 ## Engine and plant work the model needs
 
-1. **Gas-phase species declared by the model.** The digester unit hard-codes
-   ADM1's headspace species (`ADM1_GAS_SPECIES` in `plant/digester.py`). A
-   model should declare which of its species are gas phase, so the digester
-   works with any model. This is a model-format change (owner's decision); it is
-   worth doing independently of this model.
+1. **Gas-phase species.** The digester unit defaults to ADM1's headspace
+   species (`ADM1_GAS_SPECIES` in `plant/digester.py`) but takes them as its
+   `gas_species` argument, so a model with its own headspace states can run in
+   it. Whether a model should declare its gas-phase species itself is a
+   model-format question (owner's decision). The core level has no gas phase:
+   methane, hydrogen and CO₂ stay dissolved.
 2. **Gas transfer in aerated units** for species other than O₂ (CO₂ and N₂
    stripping, NH₃ at the chemistry level): to check what the aeration units
    support today.
@@ -200,8 +242,8 @@ process is the same.
 - **Per reaction:** `check_conservation()` for COD, N and P (and charge at the
   chemistry level) passes on every reaction, as a unit test.
 - **Per level, against its sources:**
-  - core aerobic / anoxic behaviour against `asm2d` with bio-P inactive, on a
-    BSM1-type flowsheet;
+  - core aerobic / anoxic reaction terms against `asm2d` with fermentation
+    switched off (done: equal to 1e-6), then on a BSM1-type flowsheet;
   - core digestion against `adm1` on the BSM2 digester feed: methane
     production, VS destruction, effluent ammonium;
   - bio-P against `asm2d` / `asm2d_tud` on an A2O flowsheet;
@@ -222,16 +264,26 @@ process is the same.
    population whose metabolism switches with conditions (Varga et al., 2018).
    Recommendation: separate PAOs and GAOs, the more established and more easily
    benchmarked form; read Varga et al. before deciding.
-2. **Digestion detail.** Methanogens on `SA` and `SH2` only, or also carry
-   propionate. Recommendation: include propionate if the core's digester
-   comparison against ADM1 shows it is needed for overload behaviour.
-3. **Iron chemistry.** Saturation-index precipitation (already in the
+2. **Acidogen kinetics.** BNRM2's parameter sources (Barat et al., 2013,
+   appendix p. x) name none for the anaerobic groups; Ribes et al. (2002, primary
+   settler fermentation) is the likeliest source for acidogens tested in
+   activated sludge. Candidates meanwhile: ADM1's sugar degraders (in use) or
+   Siegrist et al.'s fermenters (half-saturation 50 g/m³). Both sustain the
+   continuous digester; they differ in the VFA an anaerobic zone produces,
+   which matters at the bio-P level.
+3. **Heterotroph anaerobic hydrolysis factor.** ASM2d's `etafe` is 0.4. Fits of
+   heterotroph-catalyzed hydrolysis to full-scale digesters give 0.11-0.30
+   (Ozyildiz et al., 2023, seven plants; Insel et al., 2022, 0.15), and the
+   UCT model uses 0.1 in activated sludge. With acidogens also hydrolyzing, the
+   core may hydrolyze a digester too completely (96% of the particulates fed at
+   20 d); settle in the ADM1 digester comparison.
+4. **Iron chemistry.** Saturation-index precipitation (already in the
    repository) or surface complexation. Recommendation: start with the
    existing approach; add surface complexation as its own level if aged-iron
    and P-desorption behaviour is needed.
-4. **Gas-phase species in the model format** (*Engine work* item 1).
-5. **The closure declaration**, after `plantwide_bio_p` is written.
-6. **Shipped or example.** Recommendation: keep the levels out of the shipped
+5. **Gas-phase species in the model format** (*Engine work* item 1).
+6. **The closure declaration**, after `plantwide_bio_p` is written.
+7. **Shipped or example.** Recommendation: keep the levels out of the shipped
    catalogue until the plant-wide study is done, then ship them with a catalogue
    entry.
 
@@ -241,6 +293,9 @@ DOIs were found from publisher, PubMed and repository records; three entries
 have no DOI that could be confirmed and are marked. Check each against the
 paper itself before citing it in a model file.
 
+- Barat, R. et al. (2013). Biological Nutrient Removal Model No. 2 (BNRM2): a
+  general model for wastewater treatment plants. *Water Sci. Technol.* 67(7).
+  https://doi.org/10.2166/wst.2013.004
 - Barker, P.S. & Dold, P.L. (1997). General model for biological nutrient
   removal activated-sludge systems: model presentation. *Water Environ. Res.*
   69(5), 969–984. DOI not confirmed; the companion paper (model application,
@@ -263,9 +318,15 @@ paper itself before citing it in a model file.
 - Hiatt, W.C. & Grady, C.P.L. (2008). An updated process model for carbon
   oxidation, nitrification, and denitrification. *Water Environ. Res.* 80(11),
   2145–2156. https://doi.org/10.2175/106143008X304776
+- Ikumi, D.S. (2011). *The development of a three phase plant-wide
+  mathematical model for sewage treatment.* PhD thesis, University of Cape
+  Town.
 - Ikumi, D.S., Harding, T.H. & Ekama, G.A. (2014). Biodegradability of
   wastewater and activated sludge organics in anaerobic digestion. *Water Res.*
   56, 267–279. https://doi.org/10.1016/j.watres.2014.02.008
+- Insel, G. et al. (2022). A comprehensive evaluation of process kinetics: a
+  plant-wide approach for nutrient removal and biogas production. *Water Res.*
+  118410. https://doi.org/10.1016/j.watres.2022.118410
 - Kaelin, D. et al. (2009). Extension of ASM3 for two-step nitrification and
   denitrification and its calibration and validation with batch tests and
   pilot scale data. *Water Res.* 43(6), 1680–1692.
@@ -288,6 +349,12 @@ paper itself before citing it in a model file.
 - Nopens, I. et al. (2009). An ASM/ADM model interface for dynamic plant-wide
   simulation. *Water Res.* 43(7), 1913–1923.
   https://doi.org/10.1016/j.watres.2009.01.012
+- Ozyildiz, G. et al. (2023). Restructuring anaerobic hydrolysis kinetics in
+  plant-wide models for accurate prediction of biogas production. *Water Res.*
+  120620. https://doi.org/10.1016/j.watres.2023.120620
+- Seco, A., Ribes, J., Serralta, J. & Ferrer, J. (2004). Biological nutrient
+  removal model No.1 (BNRM1). *Water Sci. Technol.* 50(6), 69–78.
+  https://doi.org/10.2166/wst.2004.0361
 - Siegrist, H. et al. (2002). Mathematical model for meso- and thermophilic
   anaerobic sewage sludge digestion. *Environ. Sci. Technol.* 36(5), 1113–1123.
   https://doi.org/10.1021/es010139p

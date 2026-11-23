@@ -7,14 +7,17 @@ model:
     so no state is converted between units. Activated-sludge processes follow
     ASM2d (hydrolysis, heterotrophic growth on fermentable substrate and
     fermentation products with oxygen or nitrate, fermentation, one-step
-    nitrification, death-regeneration decay). Digestion is added on the same
-    state set with a separate group of fermenting organisms (acidogens) that
-    produce acetate, propionate and hydrogen, propionate-oxidizing organisms,
-    and acetoclastic and hydrogenotrophic methanogens, with ADM1 kinetics and
-    temperature dependence after Siegrist et al. Hydrolysis is one Contois
-    expression catalysed by the heterotrophs and the acidogens together, so it
-    follows ASM2d where acidogens are absent and is acidogen-driven in a
-    digester. COD, nitrogen and carbon are balanced in every process through
+    nitrification, death-regeneration decay), except that fermentation is
+    done by a separate group of fermenting organisms (acidogens) in every
+    unit, as in BNRM1 (Seco et al.), rather than by the heterotrophs.
+    Acidogens produce acetate, propionate and hydrogen; propionate-oxidizing
+    organisms and acetoclastic and hydrogenotrophic methanogens complete the
+    digestion, with ADM1 kinetics and temperature dependence after Siegrist et
+    al. Slowly biodegradable organics are hydrolyzed by the heterotrophs (ASM2d,
+    under every electron-acceptor condition) and, without oxygen or nitrate,
+    also by the acidogens (Contois kinetics, Sotemann et al.). Which groups are
+    active in a unit follows from its conditions alone; no process or parameter
+    depends on the unit type. COD, nitrogen and carbon are balanced in every process through
     declared compositions and solved coefficients. pH enters as a condition at
     this level; there is no phosphorus, alkalinity or gas phase.
   references:
@@ -24,6 +27,7 @@ model:
     - "Siegrist, Vogt, Garcia-Heras & Gujer (2002). Mathematical model for meso- and thermophilic anaerobic sewage sludge digestion. Environ. Sci. Technol. 36(5), 1113-1123. doi:10.1021/es010139p"
     - "Sotemann, Ristow, Wentzel & Ekama (2005). Integrated chemical, physical and biological processes modelling Part 2 - Anaerobic digestion of sewage sludges. Water SA 31(4), 545-568."
     - "Ikumi, Harding & Ekama (2014). Biodegradability of wastewater and activated sludge organics in anaerobic digestion. Water Res. 56, 267-279. doi:10.1016/j.watres.2014.02.008"
+    - "Seco, Ribes, Serralta & Ferrer (2004). Biological nutrient removal model No.1 (BNRM1). Water Sci. Technol. 50(6), 69-78. doi:10.2166/wst.2004.0361"
     - "Barker & Dold (1997). General model for biological nutrient removal activated-sludge systems: model presentation. Water Environ. Res. 69(5), 969-984."
 
 # Compositions: COD is the electron-equivalent content (oxygen and nitrate are
@@ -66,7 +70,6 @@ parameters:
   # temperature coefficients follow from the ASM2d 20 C / 10 C value pairs,
   # e.g. muH: (6.0/3.0)**(1/10).
   muH:        {value: 6.0,   units: "1/d", bounds: [1.0, 12.0], transform: positive_log, temperature: {theta: 1.0717735, ref_T: 293.15}}
-  qfe:        {value: 3.0,   units: "1/d", bounds: [0.3, 10.0], transform: positive_log, temperature: {theta: 1.0717735, ref_T: 293.15}}
   bH:         {value: 0.4,   units: "1/d", bounds: [0.05, 2.0], transform: positive_log, temperature: {theta: 1.0717735, ref_T: 293.15}}
   Kh:         {value: 3.0,   units: "1/d", bounds: [0.3, 10.0], transform: positive_log, temperature: {theta: 1.0413797, ref_T: 293.15}}
   muAUT:      {value: 1.0,   units: "1/d", bounds: [0.1, 2.0],  transform: positive_log, temperature: {theta: 1.1106677, ref_T: 293.15}}
@@ -75,7 +78,6 @@ parameters:
   KNO3_H:     {value: 0.5,   units: "g_N/m3",   bounds: [0.05, 5.0],  transform: positive_log}
   KF:         {value: 4.0,   units: "g_COD/m3", bounds: [0.4, 40.0],  transform: positive_log}
   KA_H:       {value: 4.0,   units: "g_COD/m3", bounds: [0.4, 40.0],  transform: positive_log}
-  Kfe:        {value: 4.0,   units: "g_COD/m3", bounds: [0.4, 40.0],  transform: positive_log}
   KNH4_H:     {value: 0.05,  units: "g_N/m3",   bounds: [0.005, 0.5], transform: positive_log}
   KX:         {value: 0.1,   units: "g_COD/g_COD", bounds: [0.01, 1.0], transform: positive_log}
   KO2_AUT:    {value: 0.5,   units: "g_O2/m3",  bounds: [0.05, 5.0],  transform: positive_log}
@@ -130,6 +132,14 @@ parameters:
   # Fraction of decayed anaerobic biomass that is unbiodegradable (Siegrist et
   # al. 2002 Table 2; ADM1 reaches 0.2 through its composite particulates).
   fXI_AN:     {value: 0.2,   units: "g_COD/g_COD", bounds: [0.05, 0.4], transform: logit}
+  # Hydrolysis by acidogens: Contois kinetics on slowly biodegradable organics
+  # per unit acidogen biomass, as fitted by Sotemann et al. (2005) at 37 C
+  # (6.797 mol per mol acidogens per day and a half-saturation of 10.829 mol
+  # per mol, converted with 131.3 g COD/mol sludge and 160 g COD/mol biomass).
+  # Temperature dependence after Siegrist et al. (2002) for hydrolysis
+  # (exp(0.024 (T - 35))).
+  k_hyd_AN:   {value: 5.578, units: "1/d", bounds: [0.5, 20.0], transform: positive_log, temperature: {theta: 1.0242903, ref_T: 310.15}}
+  K_hyd_AN:   {value: 8.887, units: "g_COD/g_COD", bounds: [0.5, 50.0], transform: positive_log}
   # Switches that stop anaerobic growth under oxygen or nitrate. No source gives
   # values for this in a model of this kind; the ASM2d half-saturation
   # constants for its anaerobic (fermentation) switch are used, with wide
@@ -157,18 +167,16 @@ expressions:
   # Heterotroph substrate terms (ASM2d): SF and SA compete in proportion.
   on_SF: "safe_div(monod([SF], KF) * [SF], [SA] + [SF])"
   on_SA: "safe_div(monod([SA], KA_H) * [SA], [SA] + [SF])"
-  # Hydrolysis catalysts: heterotrophs and acidogens together.
-  X_HYD: "[XH] + [XFE]"
 
 reactions:
   # --- Hydrolysis ---------------------------------------------------------
   - name: hydrolysis
     description: >
-      Hydrolysis of slowly biodegradable organics, catalysed by heterotrophs
-      and acidogens together (Contois, ASM2d form and values), at the full
-      rate with oxygen, reduced with nitrate and further reduced without
-      either.
-    rate: "Kh * monod_ratio([XS], X_HYD, KX) * X_HYD * (aerobic + etaNO3_HYD * anoxic + etafe * anaerobic)"
+      Hydrolysis of slowly biodegradable organics. Heterotrophs hydrolyze
+      under every condition (ASM2d: full rate with oxygen, reduced with
+      nitrate and further reduced without either); without oxygen and nitrate
+      the acidogens hydrolyze as well (Contois, Sotemann et al.).
+    rate: "Kh * monod_ratio([XS], [XH], KX) * [XH] * (aerobic + etaNO3_HYD * anoxic + etafe * anaerobic) + k_hyd_AN * monod_ratio([XS], [XFE], K_hyd_AN) * [XFE] * anaerobic"
     stoichiometry: {XS: -1.0, SF: 1.0, SNH4: auto, SIC: auto}
 
   # --- Heterotrophs (ASM2d) -----------------------------------------------
@@ -184,10 +192,6 @@ reactions:
   - name: anoxic_growth_on_SA
     rate: "muH * etaNO3_H * anoxic * on_SA * nutrient_limit * [XH]"
     stoichiometry: {SA: "-1 / YH", XH: 1.0, SNO3: "-(1 - YH) / (40 / 14 * YH)", SN2: auto, SNH4: auto, SIC: auto}
-  - name: fermentation_by_heterotrophs
-    description: "ASM2d fermentation: heterotrophs convert SF to acetate without growth when neither oxygen nor nitrate is present."
-    rate: "qfe * anaerobic * monod([SF], Kfe) * [XH]"
-    stoichiometry: {SF: -1.0, SA: 1.0, SNH4: auto, SIC: auto}
   - name: decay_of_heterotrophs
     description: "Death-regeneration decay, at the same rate in every zone."
     rate: "bH * [XH]"
@@ -205,7 +209,7 @@ reactions:
 
   # --- Anaerobic groups (ADM1 kinetics; substrate coefficient -1) -----------
   - name: fermentation_by_acidogens
-    description: "Acidogen growth on SF, producing acetate, propionate and hydrogen."
+    description: "Acidogen growth on SF, producing acetate, propionate and hydrogen. The only fermentation process, in every unit (BNRM1)."
     rate: "k_m_su * monod([SF], K_S_su) * [XFE] * anaerobic_only * nutrient_limit_AN * ph_inhibition_su"
     stoichiometry:
       SF: -1.0
