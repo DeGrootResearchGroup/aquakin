@@ -1,5 +1,7 @@
 """Sensitivity and fit smoke tests."""
 
+from types import SimpleNamespace
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -62,7 +64,7 @@ def test_sensitivity_requires_output_fn(simple_model):
 
 
 def test_sensitivity_forward_matches_reverse(simple_model):
-    """ad_mode='forward' builds the forward-capable adjoint internally and gives
+    """diff.mode='forward' builds the forward-capable adjoint internally and gives
     the same sensitivities as the default reverse mode."""
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(T=293.15))
     C0 = jnp.asarray([1.0, 0.0])
@@ -93,6 +95,56 @@ def test_sensitivity_rejects_bad_ad_mode(simple_model):
             t_span=(0.0, 1.0),
             diff=aquakin.DifferentiationConfig(mode="sideways"),
         )
+
+
+class _DecayReverseNaN:
+    """A reactor (the duck-typed ``ConditionedReactor`` contract) whose solve is
+    closed-form first-order decay ``A -> B``, with a reverse-only non-finite
+    gradient: the rate passes through a ``jnp.where`` whose unselected branch is
+    NaN. The value and the forward-mode tangent are the plain decay's, but the
+    reverse cotangent is ``0 * NaN`` -- the same reverse-only failure as a stiff
+    solve's overflowing adjoint, without a minutes-long stiff solve."""
+
+    def __init__(self, model):
+        self.model = model
+        self.conditions = aquakin.SpatialConditions(fields={})
+        self.adjoint = None
+
+    def solve(self, C0, params, t_span, **_):
+        k = params[0] + jnp.where(params[0] > 1e9, jnp.sqrt(params[0] - 1e9), 0.0)
+        a = C0[0] * jnp.exp(-k * t_span[1])
+        return SimpleNamespace(C=jnp.stack([a, C0[1] + C0[0] - a])[None, :])
+
+
+def test_sensitivity_non_finite_error_names_the_real_api(simple_model):
+    """A non-finite reverse-mode sensitivity raises with a remedy written in the
+    arguments ``sensitivity`` takes (``diff=aquakin.DifferentiationConfig(
+    mode="forward")``), not the removed ``ad_mode=``; following it gives the
+    closed-form sensitivity ``dB(t)/dk = A0 t exp(-k t)``."""
+    reactor = _DecayReverseNaN(simple_model)
+    C0 = jnp.asarray([1.0, 0.0])
+    params = simple_model.default_parameters()
+    t_end = 10.0
+
+    def out(s):
+        return s.C[-1, 1]
+
+    with pytest.raises(RuntimeError, match="sensitivity is non-finite") as exc:
+        aquakin.sensitivity(reactor, C0, params=params, output_fn=out, t_span=(0.0, t_end))
+    msg = str(exc.value)
+    assert 'diff=aquakin.DifferentiationConfig(mode="forward")' in msg
+    assert "ad_mode" not in msg
+
+    fwd = aquakin.sensitivity(
+        reactor,
+        C0,
+        params=params,
+        output_fn=out,
+        t_span=(0.0, t_end),
+        diff=aquakin.DifferentiationConfig(mode="forward"),
+    )
+    k = float(params[0])
+    assert float(fwd.doutput_dparams[0]) == pytest.approx(t_end * np.exp(-k * t_end), rel=1e-12)
 
 
 def test_ranked_params(simple_model):
@@ -464,7 +516,7 @@ def test_dgsm_mode_alias_is_deprecated():
 
 
 def test_dgsm_forward_matches_reverse():
-    """Forward and reverse modes give identical sensitivities (ad_mode is only a
+    """Forward and reverse modes give identical sensitivities (diff.mode is only a
     performance choice)."""
     fn = lambda z: jnp.sin(z[0]) * z[1] ** 2 + 0.3 * z[0] * z[1]
     rng = [(0.2, 1.5), (0.2, 1.5)]
@@ -571,8 +623,9 @@ def test_dgsm_zero_variance_warns_and_reports_zero_bound():
 
 def test_dgsm_forward_through_reactor_matches_reverse(simple_model):
     """Forward mode through a reactor solve agrees with the reverse-mode result
-    to machine precision. The forward-capable adjoint is built with the
-    ``aquakin.forward_adjoint()`` helper (no direct ``diffrax`` import)."""
+    to machine precision. The reactor is built with
+    ``diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")``,
+    the remedy the forward-mode error names (no direct ``diffrax`` import)."""
     conds = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0 = jnp.asarray([1.0, 0.0])
     p_def = simple_model.default_parameters()
@@ -609,26 +662,6 @@ def test_dgsm_forward_through_reactor_matches_reverse(simple_model):
     )
 
 
-def test_dgsm_forward_through_default_adjoint_errors(simple_model):
-    """Forward mode through the default RecursiveCheckpointAdjoint raises a
-    helpful error pointing to aquakin.forward_adjoint()."""
-    net = simple_model
-    conds = aquakin.SpatialConditions.uniform(1, T=293.15)
-    reactor = aquakin.BatchReactor(net, conds)  # default reverse-only adjoint
-    C0 = jnp.asarray([1.0, 0.0])
-    p_def = net.default_parameters()
-
-    def fn(z):
-        p = p_def.at[0].set(z[0])
-        sol = reactor.solve(C0, params=p, t_span=(0.0, 10.0))
-        return sol.C[-1, 1]
-
-    with pytest.raises(RuntimeError, match="forward_adjoint"):
-        aquakin.dgsm(
-            fn, [(0.1, 0.5)], n_samples=8, diff=aquakin.DifferentiationConfig(mode="forward")
-        )
-
-
 def test_dgsm_batched_matches_unbatched():
     """The vmapped (batched=True) and per-sample (batched=False) paths give
     bit-identical results -- batched is purely a dispatch/memory choice."""
@@ -653,33 +686,41 @@ def test_dgsm_batched_matches_unbatched_vector():
         )
 
 
-def test_dgsm_unbatched_forward_default_adjoint_errors(simple_model):
-    """The per-sample fallback also raises the forward-adjoint guidance when a
-    forward-mode screen hits the default reactor adjoint."""
-    net = simple_model
+@pytest.mark.parametrize("batched", [True, False])
+def test_dgsm_forward_default_adjoint_error_names_the_real_api(simple_model, batched):
+    """A forward-mode screen through a reactor built with the default (reverse-only)
+    differentiation raises, on the batched and the per-sample path, with a remedy
+    written in the real API: ``dgsm(diff=aquakin.DifferentiationConfig(
+    mode="forward"))`` with the reactor inside ``fn`` built with
+    ``diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")``
+    -- not the removed ``ad_mode=`` or the nonexistent reactor ``adjoint=``.
+    Following that remedy is ``test_dgsm_forward_through_reactor_matches_reverse``."""
     conds = aquakin.SpatialConditions.uniform(1, T=293.15)
-    reactor = aquakin.BatchReactor(net, conds)  # default reverse-only adjoint
+    reactor = aquakin.BatchReactor(simple_model, conds)  # default reverse-only adjoint
     C0 = jnp.asarray([1.0, 0.0])
-    p_def = net.default_parameters()
+    p_def = simple_model.default_parameters()
 
     def fn(z):
         p = p_def.at[0].set(z[0])
         return reactor.solve(C0, params=p, t_span=(0.0, 10.0)).C[-1, 1]
 
-    with pytest.raises(RuntimeError, match="forward_adjoint"):
+    with pytest.raises(RuntimeError, match="forward-mode autodiff through the solve") as exc:
         aquakin.dgsm(
             fn,
             [(0.1, 0.5)],
             n_samples=8,
             diff=aquakin.DifferentiationConfig(mode="forward"),
-            batched=False,
+            batched=batched,
         )
+    msg = str(exc.value)
+    assert 'diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")' in msg
+    assert "ad_mode" not in msg and "adjoint=" not in msg
 
 
 @pytest.mark.parametrize("batched", [True, False])
 def test_dgsm_forward_does_not_mask_unrelated_error(batched):
     """A forward-mode screen only converts JAX's custom_vjp forward-mode
-    rejection into the forward_adjoint() hint. A genuine error inside ``fn``
+    rejection into the forward-mode hint. A genuine error inside ``fn``
     (a bug, a bad shape) must propagate unchanged, not be relabelled as the
     guidance error -- otherwise the real cause is hidden."""
 

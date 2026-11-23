@@ -58,6 +58,17 @@ class RecycleResolver:
         self._recycle_T_map_constant: bool | None = None
         self._flow_map_constant: bool | None = None
 
+    def reset(self) -> None:
+        """Forget the map-constancy verdicts, so the next solve checks them again.
+
+        Whether ``M``, ``MT`` and ``A`` are state-invariant is a property of the
+        recycle topology, so a verdict reached on one flowsheet does not hold
+        after a unit or connection is added.
+        """
+        self._recycle_map_constant = None
+        self._recycle_T_map_constant = None
+        self._flow_map_constant = None
+
     def _resolve_recycle_concentrations(
         self,
         t: jnp.ndarray,

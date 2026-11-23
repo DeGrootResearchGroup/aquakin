@@ -176,9 +176,10 @@ print("converged:", root.converged, "by", root.method, "in", root.iterations, "i
 Use `steady_state()` for sweeps and gradients, and `run_to_steady_state()` when
 you also want the path to steady state (`ss.solution`). `root.method` says how
 the state was found: `"ptc"`, or `"ptc->forward"` when PTC did not converge and
-`steady_state()` fell back to integrating forward. After a fallback, check
-`root.residual`: the fallback stops on the forward run's own test, so the
-residual can be larger than the `tol` you asked for.
+`steady_state()` fell back to integrating forward. The fallback stops on the
+same scaled-residual test, with the `tol` and `scale_floor` you passed, and
+reports `converged` only when `root.residual` meets that `tol`; options for
+the forward run go in `fallback_kwargs`.
 
 Both methods report `residual`, the scaled residual
 `max_i |dy_i/dt| / max(|y_i|, scale_floor)` of the state they return. By
@@ -293,8 +294,10 @@ print("effluent SNH:", round(float(plant.stream(sol, "aerobic.out").C_named("SNH
 With no clarifier to hold the sludge, the biomass washes out of these two
 tanks, so there is no nitrification and the effluent ammonia ends up above the
 feed's (organic nitrogen is still released). The benchmark builders show a
-full activated-sludge line. Add every unit before the first solve of a plant;
-to try a variant, build a new plant, as the sections below do.
+full activated-sludge line. A plant can still be extended after it has been
+solved: units, connections and influents added later are used by the next
+solve and by `plant.stream`. A solution from before the change keeps the old
+layout, so solve again before reading streams from the extended plant.
 
 ### The plant's time unit
 

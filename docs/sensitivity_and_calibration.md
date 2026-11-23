@@ -292,17 +292,20 @@ of several batches.
 
 `loss=` chooses what is minimized:
 
-- `"mse"` (the default): the mean squared error, unscaled.
+- `"mse"` (the default): the mean squared error.
 - `"wmse"`: the mean squared error weighted by `1 / sigma²`; needs `sigma`.
 - `"nll"`: the Gaussian negative log-likelihood with noise `sigma` (one value,
   or one per observed output). This is the one to use: with it, the Laplace
   standard deviations and profile-likelihood intervals have their proper scale.
 
 ```{note}
-`"mse"` is not scaled by the size of the data. On small values, such as
-concentrations near 1e-6 mol/L, the loss and its gradient are so small that
-the optimizer can stop at its starting point and still report
-`converged=True`. Use `"nll"` (or `"wmse"`) with a `sigma`, or
+`"mse"` is in the square of the data's unit, so on concentrations near
+1e-6 mol/L it is of order 1e-12. The optimizer's stopping tolerance
+(`OptimizerConfig(tol=)`) is therefore applied relative to the misfit at the
+start, which gives the same fit whatever unit the data are in; the reported
+`loss` and the Laplace posterior are of the `"mse"` itself. That posterior
+assumes a unit noise level on the data's own scale, so its standard deviations
+are only meaningful with `"nll"` (or `"wmse"`) and a `sigma`, or
 `sigma="estimate"` below.
 ```
 
