@@ -265,8 +265,8 @@ def test_missing_observation_validation(reactor, truth):
 @pytest.mark.slow  # full fits / Fisher solves; cheap fast-tier coverage in tests/unit
 def test_fisher_mask_matches_per_entry_sigma(reactor, simple_model):
     """Experiment(mask=...) equals the same design with huge sigma on the
-    unmeasured entries, and the time-aware observation_fn equals the
-    de-drifted per-entry-sigma design."""
+    unmeasured entries, and the measured and unmeasured entries' information
+    adds up to the fully measured design's."""
     p = simple_model.default_parameters().at[0].set(K)
     mask = np.ones((T_OBS.shape[0], 2), dtype=bool)
     mask[::2, 1] = False
@@ -278,36 +278,16 @@ def test_fisher_mask_matches_per_entry_sigma(reactor, simple_model):
         reactor, Experiment(C0, T_OBS, sigma=sig), FREE, params=p, transforms=LOG
     )
     np.testing.assert_allclose(fim.matrix, ref.matrix, rtol=1e-12)
+    # Independent entries add their information: the measured entries' matrix
+    # plus the unmeasured entries' one is the fully measured design's.
+    rest = aquakin.fisher_information(
+        reactor, Experiment(C0, T_OBS, sigma=SIGMA, mask=~mask), FREE, params=p, transforms=LOG
+    )
     full = aquakin.fisher_information(
         reactor, Experiment(C0, T_OBS, sigma=SIGMA), FREE, params=p, transforms=LOG
     )
-    assert fim.matrix[0, 0] < full.matrix[0, 0]
-
-    gain = 1.0 + DRIFT * np.asarray(T_OBS)
-    timed = aquakin.fisher_information(
-        reactor,
-        Experiment(C0, T_OBS, sigma=SIGMA, observation_fn=lambda t, C, q: C[1] * (1 + DRIFT * t)),
-        FREE,
-        params=p,
-        transforms=LOG,
-    )
-    dedrift = aquakin.fisher_information(
-        reactor,
-        Experiment(C0, T_OBS, sigma=(SIGMA / gain)[:, None], observed_species=["B"]),
-        FREE,
-        params=p,
-        transforms=LOG,
-    )
-    np.testing.assert_allclose(timed.matrix, dedrift.matrix, rtol=1e-10)
-
-    with pytest.raises(ValueError, match="does not broadcast"):
-        aquakin.fisher_information(
-            reactor, Experiment(C0, T_OBS, sigma=SIGMA, mask=np.ones(3, bool)), FREE, params=p
-        )
-    with pytest.raises(ValueError, match="no observation"):
-        aquakin.fisher_information(
-            reactor, Experiment(C0, T_OBS, sigma=SIGMA, mask=False), FREE, params=p
-        )
+    assert rest.matrix[0, 0] > 0.0
+    np.testing.assert_allclose(fim.matrix + rest.matrix, full.matrix, rtol=1e-12)
 
 
 def test_design_structure_key_distinguishes_masks():

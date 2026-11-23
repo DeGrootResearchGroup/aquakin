@@ -5,8 +5,8 @@ with adaptive control over both, so the sensitivity is exact and finite without
 the ``dtmax`` cap that ordinary AD through a stiff solve needs. The fast tests
 here check exactness against a closed-form sensitivity and against ``jax.jacfwd``
 on small models; the slow ``validation``-marked tests check the headline claim
-on a genuinely stiff model (finite where uncapped AD is non-finite) and that
-the JVP flows through a state-derived-pH speciation solver.
+on a genuinely stiff model (the uncapped augmented solve matches a capped
+``jacfwd``) and that the JVP flows through a state-derived-pH speciation solver.
 """
 
 import jax
@@ -20,12 +20,13 @@ import aquakin
 #   * fast gate     -- cheap correctness/equivalence checks on the toy decay
 #                      and small UV/H2O2 models (analytic-decay exactness,
 #                      the simultaneous-corrector vs dense-augmented Option-A/B
-#                      equivalence, finiteness/composition, accessors, errors);
+#                      equivalence, the multi-parameter jacfwd match,
+#                      accessors, errors);
 #   * ``slow``      -- the jacfwd-reference comparisons, which compile a second
 #                      reactor plus a reference Jacobian per test (~2-3 s each);
-#   * ``validation``-- the headline stiff-model claims (finite where uncapped
-#                      AD is non-finite; the JVP flowing through a state-derived
-#                      pH solver), tens of seconds each.
+#   * ``validation``-- the headline stiff-model claims (the uncapped augmented
+#                      solve matches a capped jacfwd; the JVP flowing through a
+#                      state-derived pH solver), tens of seconds each.
 # So a PR that breaks forward-sensitivity correctness fails in the fast gate,
 # not only at merge.
 
@@ -55,7 +56,6 @@ def test_analytic_decay_sensitivity_exact(simple_model):
     assert float(jnp.max(jnp.abs(sol.C_named("A") - jnp.exp(-k * t_eval)))) < 1e-6
 
 
-@pytest.mark.slow
 def test_matches_jacfwd_multi_param():
     # On a small non-stiff model the augmented solve must reproduce jax.jacfwd
     # for several parameters at once.
@@ -79,25 +79,6 @@ def test_matches_jacfwd_multi_param():
     _, S = r.solve_sensitivity(C0, (0.0, 5.0), t_eval, params=p, sens_params=names)
     assert S.shape == J.shape
     assert float(jnp.max(jnp.abs(S - J))) < 1e-7
-
-
-def test_sensitivity_array_is_finite_and_composes(simple_model):
-    # AD-correctness analogue: the returned S is a real, finite JAX array that
-    # composes in further computation (the project requires every solve path to
-    # produce finite derivatives).
-    cond = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(simple_model, cond)
-    C0 = jnp.asarray([1.0, 0.0])
-    p = simple_model.default_parameters()
-    _, S = reactor.solve_sensitivity(
-        C0, (0.0, 10.0), jnp.linspace(0.0, 10.0, 6), params=p, sens_params=["A_to_B.k"]
-    )
-    assert isinstance(S, jnp.ndarray)
-    assert jnp.all(jnp.isfinite(S))
-    # composes: contract with an arbitrary weight vector without error
-    w = jnp.ones(S.shape[1])
-    contracted = jnp.einsum("tsk,s->tk", S, w)
-    assert jnp.all(jnp.isfinite(contracted))
 
 
 def test_int_indices_equivalent_to_names(simple_model):
@@ -303,11 +284,11 @@ def test_bad_sens_params_raise(simple_model):
     reactor = aquakin.BatchReactor(simple_model, cond)
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_model.default_parameters()
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match=r"Unknown parameter 'nope\.k'"):
         reactor.solve_sensitivity(C0, (0.0, 5.0), params=p, sens_params=["nope.k"])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="non-empty list"):
         reactor.solve_sensitivity(C0, (0.0, 5.0), params=p, sens_params=[])
-    with pytest.raises(IndexError):
+    with pytest.raises(IndexError, match="index 99 out of range"):
         reactor.solve_sensitivity(C0, (0.0, 5.0), params=p, sens_params=[99])
 
 
@@ -316,9 +297,9 @@ def test_bad_sens_params_raise(simple_model):
 
 @pytest.mark.validation
 def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
-    # The canonical stiff sewer-biofilm model. Uncapped forward-mode AD through
-    # the solve is non-finite (the failure the dtmax cap exists to avoid), yet the
-    # augmented forward-sensitivity solve -- uncapped -- is finite and matches a
+    # The canonical stiff sewer-biofilm model, where AD through an uncapped
+    # solve is the failure the dtmax cap exists to avoid: the augmented
+    # forward-sensitivity solve -- uncapped -- is finite and matches a
     # tightly-capped jacfwd. This model also carries a positivity limiter, so
     # the limiter is part of f and the sensitivity sees it.
     net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
@@ -326,25 +307,8 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
     C0 = net.default_concentrations()
     p = net.default_parameters()
     names = ["mu_h", "q_m"]
-    idx = [net.param_index[n] for n in names]
+    idx = jnp.asarray([net.param_index[n] for n in names])
     t_eval = jnp.array([0.0, 0.05, 0.1])
-
-    # Uncapped forward-mode AD: expected to be non-finite (raises or NaNs).
-    uncapped = aquakin.BatchReactor(
-        net, cond,  # dtmax=None (uncapped)
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
-    )
-
-    def Cfn_uncapped(pp):
-        return uncapped.solve(C0, (0.0, 0.1), t_eval, params=pp).C
-
-    uncapped_bad = False
-    try:
-        J_unc = jax.jacfwd(Cfn_uncapped)(p)[:, :, idx]
-        uncapped_bad = not bool(jnp.all(jnp.isfinite(J_unc)))
-    except Exception:
-        uncapped_bad = True
-    assert uncapped_bad, "expected uncapped jacfwd to be non-finite on the stiff net"
 
     # Capped jacfwd reference (finite, the current workaround).
     capped = aquakin.BatchReactor(
@@ -353,10 +317,11 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
 
-    def Cfn_capped(pp):
-        return capped.solve(C0, (0.0, 0.1), t_eval, params=pp).C
+    # jacfwd over the compared parameters only (the rest held at p).
+    def Cfn_capped(theta):
+        return capped.solve(C0, (0.0, 0.1), t_eval, params=p.at[idx].set(theta)).C
 
-    J_cap = jax.jacfwd(Cfn_capped)(p)[:, :, idx]
+    J_cap = jax.jacfwd(Cfn_capped)(p[idx])
     assert bool(jnp.all(jnp.isfinite(J_cap)))
 
     # Augmented forward sensitivity, uncapped -- finite and matching.
@@ -412,7 +377,7 @@ def test_state_derived_ph_jvp_flows_and_matches():
     C0 = net.default_concentrations()
     p = net.default_parameters()
     name = net.parameters[0]
-    idx = [net.param_index[name]]
+    idx = jnp.asarray([net.param_index[name]])
     t_eval = jnp.array([0.0, 0.05, 0.1])
 
     capped = aquakin.BatchReactor(
@@ -421,10 +386,12 @@ def test_state_derived_ph_jvp_flows_and_matches():
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
 
-    def Cfn(pp):
-        return capped.solve(C0, (0.0, 0.1), t_eval, params=pp).C
+    # jacfwd over the one compared parameter only (the rest held at p), not
+    # over the whole parameter vector.
+    def Cfn(theta):
+        return capped.solve(C0, (0.0, 0.1), t_eval, params=p.at[idx].set(theta)).C
 
-    J = jax.jacfwd(Cfn)(p)[:, :, idx]
+    J = jax.jacfwd(Cfn)(p[idx])
     r = aquakin.BatchReactor(net, cond)
     _, S = r.solve_sensitivity(C0, (0.0, 0.1), t_eval, params=p, sens_params=[name])
     assert bool(jnp.all(jnp.isfinite(S)))

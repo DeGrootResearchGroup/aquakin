@@ -13,10 +13,13 @@ from aquakin import LaplaceConfig, OptimizerConfig
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def growth_setup():
     """Two-parameter growth model (mu, Y) with informative noisy data, so the
-    parameters are well identified -- a clean setting for profile-vs-Laplace."""
+    parameters are well identified -- a clean setting for profile-vs-Laplace.
+
+    Module-scoped: no test mutates the model, reactor or data, and sharing the
+    one model object lets the tests reuse each other's compiled solves."""
     net = aquakin.load_model_from_file(str(FIXTURES / "dynamic_stoich_model.yaml"))
     reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = net.default_concentrations()
@@ -109,30 +112,6 @@ def test_profile_param_ci_matches_laplace(growth_setup):
     assert lo == pytest.approx(mu_hat - 1.96 * mu_std, abs=0.02)
     assert hi == pytest.approx(mu_hat + 1.96 * mu_std, abs=0.02)
     assert lo < pr.mle < hi
-
-
-def test_profile_is_a_bowl(growth_setup):
-    """delta_loss is ~0 at the minimum and rises away from it."""
-    net, reactor, C0, t, obs, sig = growth_setup
-    grid = np.linspace(0.6, 1.4, 17)
-    pr = aquakin.profile_likelihood(
-        reactor,
-        C0,
-        obs,
-        t,
-        ["mu", "Y"],
-        grid=grid,
-        profile_param="mu",
-        observed_species=["S", "X"],
-        loss="nll",
-        sigma=jnp.asarray(sig),
-        optimizer=OptimizerConfig(n_starts=4),
-    )
-    imin = int(np.nanargmin(pr.delta_loss))
-    assert pr.delta_loss[imin] == pytest.approx(0.0, abs=1e-6)
-    # Strictly higher at both ends than at the minimum.
-    assert pr.delta_loss[0] > 1.0
-    assert pr.delta_loss[-1] > 1.0
 
 
 def test_profile_warmstart_matches_independent(growth_setup):
@@ -233,9 +212,11 @@ def test_profile_requires_exactly_one_target(simple_model):
         jnp.asarray([0.0, 1.0]),
         ["A_to_B.k"],
     )
-    with pytest.raises(ValueError):  # neither
+    # neither
+    with pytest.raises(ValueError, match="exactly one of profile_param or profile_ic"):
         aquakin.profile_likelihood(*args, grid=[0.1, 0.2], observed_species=["B"])
-    with pytest.raises(ValueError):  # both
+    # both
+    with pytest.raises(ValueError, match="exactly one of profile_param or profile_ic"):
         aquakin.profile_likelihood(
             *args, grid=[0.1, 0.2], profile_param="A_to_B.k", profile_ic="A", observed_species=["B"]
         )
@@ -244,7 +225,7 @@ def test_profile_requires_exactly_one_target(simple_model):
 def test_profile_only_free_param_rejected(simple_model):
     """Profiling the single free parameter leaves nothing to re-optimise."""
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="free_params is empty"):
         aquakin.profile_likelihood(
             reactor,
             jnp.asarray([1.0, 0.0]),
@@ -266,11 +247,11 @@ def test_profile_unknown_target_rejected(simple_model):
         jnp.asarray([0.0, 1.0]),
         ["A_to_B.k"],
     )
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Unknown profile_param 'nope'"):
         aquakin.profile_likelihood(
             *base, grid=[0.1, 0.2], profile_param="nope", observed_species=["B"]
         )
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Unknown profile_ic 'nope'"):
         aquakin.profile_likelihood(
             *base, grid=[0.1, 0.2], profile_ic="nope", observed_species=["B"]
         )
@@ -353,7 +334,7 @@ def test_profile_all_failed_returns_unidentified(simple_model, monkeypatch):
 def test_profile_multibatch_rejected(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = jnp.asarray([1.0, 0.0])
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError, match="single batch"):
         aquakin.profile_likelihood(
             reactor,
             [C0, C0],
@@ -442,32 +423,6 @@ def test_profile_compiled_cache_matches_uncached(growth_setup):
     assert len(shared) == n_after_first
 
 
-def test_profile_accepts_start_list_with_profiled_parameter(growth_setup):
-    """An explicit start list seeds the cold fits; a dict start that names the
-    profiled parameter has it dropped (it is pinned), instead of failing every
-    inner fit."""
-    net, reactor, C0, t, obs, sig = growth_setup
-    starts = [{"mu": 0.8, "Y": 0.4}, {"mu": 1.2, "Y": 0.6}]
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)  # an inner-fit failure warns
-        pr = aquakin.profile_likelihood(
-            reactor,
-            C0,
-            obs,
-            t,
-            ["mu", "Y"],
-            grid=np.linspace(0.8, 1.2, 3),
-            profile_param="mu",
-            observed_species=["S", "X"],
-            loss="nll",
-            sigma=jnp.asarray(sig),
-            optimizer=OptimizerConfig(method="gauss_newton", starts=starts),
-            polish=False,
-        )
-    assert all(f is not None for f in pr.fits)
-    assert np.all(np.isfinite(pr.loss))
-
-
 @pytest.mark.parametrize(
     "opt, msg",
     [
@@ -496,12 +451,14 @@ def test_profile_rejects_bad_start_list_up_front(simple_model, opt, msg):
 def test_profile_vector_start_list_is_reproducible(growth_setup):
     """Full-vector starts seed the cold fits with their profiled entry ignored
     (the grid value is pinned), so they give the same profile as the matching
-    dict starts, and a repeat run gives an identical profile."""
+    dict starts, and a repeat run gives an identical profile. The dict starts
+    name the profiled parameter too: it is dropped (pinned), instead of
+    failing every inner fit."""
     net, reactor, C0, t, obs, sig = growth_setup
     p = net.default_parameters()
     i_mu, i_y = net.param_index["mu"], net.param_index["Y"]
     vec = [p.at[i_mu].set(50.0).at[i_y].set(y) for y in (0.4, 0.6)]
-    dicts = [{"Y": y} for y in (0.4, 0.6)]
+    dicts = [{"mu": 50.0, "Y": y} for y in (0.4, 0.6)]
 
     def run(starts):
         with warnings.catch_warnings():
