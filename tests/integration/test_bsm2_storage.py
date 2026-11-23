@@ -164,11 +164,12 @@ def test_storage_fills_and_bypasses_all_reject(storage_run):
     assert float(bypass.Q[-1]) == pytest.approx(float(reject_in.Q[-1]), rel=1e-6)
 
 
-def test_grad_through_storage_plant_is_finite(asm1):
+def test_grad_through_storage_plant_matches_finite_difference(asm1):
     """jax.grad flows through a StorageTank solve. The tank rhs divides by the
     liquid volume (1/V) -- exactly the kind of reverse-mode division where a NaN
     gradient could hide -- so differentiate a short solve w.r.t. the initial state
-    (which includes V) and check it stays finite."""
+    (which includes V) and check it is finite and matches a central finite
+    difference."""
     import jax
 
     from aquakin.plant import Plant
@@ -189,3 +190,10 @@ def test_grad_through_storage_plant_is_finite(asm1):
 
     g = jax.grad(loss)(y0)
     assert jnp.all(jnp.isfinite(g))
+    # Central finite difference of the same loss along the volume alone (the 1/V
+    # division) and along the whole initial state, with a step of 1e-4 of the
+    # state's norm; the two agree to about 1e-6.
+    for v in (jnp.zeros_like(y0).at[-1].set(1.0), y0):
+        h = 1e-4 * float(jnp.linalg.norm(y0)) / float(jnp.linalg.norm(v))
+        fd = (loss(y0 + h * v) - loss(y0 - h * v)) / (2.0 * h)
+        assert float(jnp.dot(g, v)) == pytest.approx(float(fd), rel=1e-5)

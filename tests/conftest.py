@@ -106,6 +106,7 @@ def cstr_plant(make_cstr_plant):
 # ``@pytest.mark.slow`` in its own file instead.
 _SLOW_PLANT_FIXTURES = frozenset({
     "steady",        # test_bsm2: open-loop steady-state solve
+    "bsm2_open_loop_10d",  # integration/conftest: shared 10-day open-loop BSM2 solve
     "evaluated",     # test_bsm2_evaluation: EQI/OCI on a solved plant
     "storage_run",   # test_bsm2_storage
     "closed_sol",    # test_bsm2_control: DO closed-loop solve

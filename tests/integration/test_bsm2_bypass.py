@@ -106,14 +106,10 @@ def bypass_run(asm1, adm1):
     return plant, sol, params, Q_in
 
 
-def test_bypass_plant_is_finite(bypass_run):
-    _, sol, _, _ = bypass_run
-    assert jnp.all(jnp.isfinite(sol.state))
-
-
 def test_bypass_flow_split(bypass_run):
     """The diverted flow is max(Q_in - threshold, 0); the plant gets the rest."""
     plant, sol, params, Q_in = bypass_run
+    assert jnp.all(jnp.isfinite(sol.state))
     bp = plant.stream(sol, "bypass_split.bypass", params)
     pl = plant.stream(sol, "bypass_split.to_plant", params)
     assert float(bp.Q[-1]) == pytest.approx(Q_in - BSM2_BYPASS_Q, rel=1e-6)
