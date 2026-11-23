@@ -1870,3 +1870,29 @@ is unchanged (≤0.06%); the digester's remaining ~1.3% is the headspace CO₂
 
 ---
 
+
+## Moved from the plant-solve rule (2026-11-23)
+
+Dynamic-solve performance numbers formerly in `.claude/rules/plant-solve.md`
+(the accuracy measurements went to `.claude/notes/plant-solve-log.md`).
+
+- **Cached recycle concentration map `M`.** Profiling put ~88% of the per-RHS
+  cost in recycle resolution, and the per-step cost as RHS-evaluation-bound
+  (~17 RHS calls per implicit step), so caching `M` once per solve is a real
+  dynamic-solve win. Dynamic BSM2 (algebraic temperature, `MT` re-probed every
+  RHS): recycle resolution ~2.4× faster, ~1.18× wall. Heat-balance and
+  no-temperature plants (`MT` cached too): ~5.6× on recycle resolution.
+- **Whole-trajectory stream reconstruction** (`plant.stream`, the BSM evaluation
+  path) with the cached map: ~1.16×, bit-identical; its per-time cost was also
+  recycle-resolution-dominated.
+- **`stable_adjoint` with the cached map** (clean serial min-of-8 timing): BSM2
+  `value+grad` ~1.15× (14.7 → 12.8 s, the ASM↔ADM-interface probe hoisted out of
+  the backward); neutral on BSM1, whose probe is cheap. The one-time map build
+  makes the forward marginally slower (BSM2 ~0.95 → 1.09 s). When this was
+  measured the backward was dominated by the per-step `n ≈ 167` dense stage
+  Jacobian builds (~82% of the backward) because it recomputed every ESDIRK stage
+  by Newton; the saved-stage backward later cut those builds to ~7 per step
+  (~24%), so this ratio is proportionally different now (see the stage-saving and
+  coloured-backward entries above for the re-measured numbers).
+- **Cached recycle flow map `A`:** 1.076× (7.6%) on the 60-day dynamic BSM2
+  forward solve.
