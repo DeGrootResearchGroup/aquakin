@@ -172,10 +172,13 @@ nor concentrating it in a few files makes the whole suite fast.
   runs with the weekly slow/validation refresh (`refresh-durations`, Mondays,
   or a manual `workflow_dispatch`). It uses the same
   selection and `-n 2` as the fast jobs, and its results are merged into the
-  same `.test_durations` by `commit-durations`. The refresh PR is where
-  `tests/unit/test_fast_tier_budget.py` first sees a new fast-tier test's time:
-  it fails one recorded over 30 s that is not in its `RECORDED` list, so a slow
-  test added to the fast tier surfaces there. A PR labelled
+  same `.test_durations` by `commit-durations`. That job then runs
+  `scripts/check_fast_tier_budget.py` on the fresh times: it fails (after the
+  refresh PR is opened, so the refresh is never held up) on a fast-tier test
+  recorded over 30 s that is not in the script's `RECORDED` list. It runs there,
+  not in the fast gate, because a recorded time belongs to the code that
+  produced it: a test moved from `slow` keeps its slow time until the next
+  refresh. A PR labelled
   **`refresh-durations`** also runs it, on the `labeled` action only. That is
   the bootstrap path for a branch that changes the workflow, because
   `workflow_dispatch` only runs the default branch's workflow: download the

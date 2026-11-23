@@ -1263,6 +1263,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test dependencies
+        # The budget check below collects the fast tier, which imports the tests.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" -c constraints.txt
+
       - name: Download all shard durations
         uses: actions/download-artifact@v4
         with:
@@ -1355,3 +1368,11 @@ jobs:
               "approve pull requests' (Settings -> Actions -> General), or open a "\
               "PR from '$branch' by hand once -- later runs reuse it."
           fi
+
+      - name: Check the fast-tier time budget
+        # Last, so a test over budget never holds up the refresh PR: the job
+        # fails afterwards with the offenders listed. It runs here because these
+        # durations were just measured on this commit; on an ordinary PR a
+        # recorded time can be stale (a test moved from `slow` keeps its slow
+        # time until the next refresh). See scripts/check_fast_tier_budget.py.
+        run: python scripts/check_fast_tier_budget.py
