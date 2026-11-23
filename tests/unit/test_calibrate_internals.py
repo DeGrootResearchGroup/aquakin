@@ -151,7 +151,7 @@ def test_resolve_problem_free_ic_centers_at_log_initial(base):
     assert prob.free_ic == [sp]
     # The ic-prior centre is log of the (clipped) initial pool.
     expected = np.log(np.clip(float(C0[m.species_index[sp]]), 1e-3, 1e4))
-    assert float(prob.ic_center_full[0]) == pytest.approx(expected)
+    assert float(prob.ic_center_full[0]) == pytest.approx(expected, rel=1e-6, abs=0)
 
 
 # ---------- _resolve_problem: validation ----------
@@ -365,7 +365,7 @@ def test_optimizer_bounds_logit_and_identity_mapping(base):
     )
     _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
     assert lb[0] == pytest.approx(np.log(0.05 / 0.95))
-    assert ub[0] == pytest.approx(0.0)
+    assert ub[0] == pytest.approx(0.0, abs=0)
     prob = _resolve(
         m, C0, obs, t_obs, free, transforms={free[0]: "none"}, bounds={free[0]: (0.05, 0.5)}
     )
@@ -659,7 +659,7 @@ def test_data_mean_square_pools_observed_entries_of_every_dataset():
     ],
 )
 def test_objective_scale(mean_square, start_loss, expected):
-    assert _objective_scale(mean_square, start_loss) == pytest.approx(expected, rel=1e-15)
+    assert _objective_scale(mean_square, start_loss) == pytest.approx(expected, rel=1e-15, abs=0)
 
 
 def test_resolve_problem_records_the_data_mean_square(base):
@@ -689,10 +689,10 @@ def test_scale_objective_uses_the_starting_loss():
     previous start left, and a bundle without a data mean square is unscaled."""
     bundle = _loss_bundle(lambda x: 3e-12)
     _scale_objective(bundle, jnp.zeros(1))
-    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15)
+    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15, abs=0)
     bundle.scale_box[0] = 0.5  # left by an earlier start
     _scale_objective(bundle, jnp.zeros(1))
-    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15)
+    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15, abs=0)
     unscaled = _loss_bundle(lambda x: 3e-12, data_mean_square=None)
     _scale_objective(unscaled, jnp.zeros(1))
     assert unscaled.loss_scale == 1.0
