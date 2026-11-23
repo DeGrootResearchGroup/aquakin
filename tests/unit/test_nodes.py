@@ -56,7 +56,7 @@ def test_species_lookup():
 
 
 def test_species_unknown_raises():
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Species 'X' is referenced in a rate expression but not declared"):
         SpeciesNode("X").compile(_ctx())
 
 
@@ -65,7 +65,7 @@ def test_param_lookup_namespaces():
 
 
 def test_param_unknown_raises():
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Parameter 'missing' is referenced in a rate expression but not declared"):
         ParamNode("missing").compile(_ctx())
 
 
@@ -75,7 +75,7 @@ def test_condition_lookup():
 
 
 def test_condition_unknown_raises():
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Condition field 'salinity' is referenced in a rate expression but not declared"):
         ConditionNode("salinity").compile(_ctx())
 
 
@@ -110,7 +110,7 @@ def test_pH_switch():
 
 def test_arrhenius_requires_T():
     ctx = _ctx(condition_fields=frozenset({"pH"}))
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="ArrheniusNode requires a condition field named 'T'"):
         ArrheniusNode(ParamNode("A"), ParamNode("Ea")).compile(ctx)
 
 
@@ -164,7 +164,7 @@ def test_monod_ratio_handles_zero_denominator():
     from aquakin.core.nodes import MonodRatioNode
 
     node = MonodRatioNode(ConstantNode(0.0), ConstantNode(1.0), ConstantNode(0.5))
-    assert _eval(node) == pytest.approx(0.0)
+    assert _eval(node) == pytest.approx(0.0, abs=0)
 
 
 def test_monod_nodes_safe_at_full_depletion():
@@ -181,12 +181,12 @@ def test_monod_nodes_safe_at_full_depletion():
 
     zero = ConstantNode(0.0)
     # Monod x/(K+x) and MonodRatio a/(K*b+a) -> 0 at X=K=0 / A=K=0.
-    assert _eval(MonodNode(zero, zero)) == pytest.approx(0.0)
-    assert _eval(MonodRatioNode(zero, zero, zero)) == pytest.approx(0.0)
+    assert _eval(MonodNode(zero, zero)) == pytest.approx(0.0, abs=0)
+    assert _eval(MonodRatioNode(zero, zero, zero)) == pytest.approx(0.0, abs=0)
     # Inhibition K/(K+x) and K/(K+a/b) -> 0 at K=0 (full, un-relievable
     # inhibition) rather than 0/0 = NaN.
-    assert _eval(MonodInhibitionNode(zero, zero)) == pytest.approx(0.0)
-    assert _eval(MonodInhibitionRatioNode(zero, zero, zero)) == pytest.approx(0.0)
+    assert _eval(MonodInhibitionNode(zero, zero)) == pytest.approx(0.0, abs=0)
+    assert _eval(MonodInhibitionRatioNode(zero, zero, zero)) == pytest.approx(0.0, abs=0)
 
 
 def test_monod_gradient_finite_at_full_depletion():
@@ -204,7 +204,7 @@ def test_monod_gradient_finite_at_full_depletion():
         return fn(C, params, {"pH": jnp.asarray([7.5]), "T": jnp.asarray([293.15])}, 0)
 
     val, (ga, gk) = jax.value_and_grad(f, argnums=(0, 1))(0.0, 0.0)
-    assert float(val) == pytest.approx(0.0)
+    assert float(val) == pytest.approx(0.0, abs=0)
     assert jnp.isfinite(ga) and jnp.isfinite(gk)
 
 
@@ -231,7 +231,7 @@ def test_safe_divide_evaluates_and_is_safe_at_zero():
     assert _eval(node) == pytest.approx(1.0 / 3.0)
     # denom = 0 -> 0 (both A and B depleted).
     zero = ConstantNode(0.0)
-    assert _eval(SafeDivideNode(zero, zero)) == pytest.approx(0.0)
+    assert _eval(SafeDivideNode(zero, zero)) == pytest.approx(0.0, abs=0)
 
 
 def test_safe_divide_gradient_finite_at_zero():
@@ -245,7 +245,7 @@ def test_safe_divide_gradient_finite_at_zero():
                   {"pH": jnp.asarray([7.5]), "T": jnp.asarray([293.15])}, 0)
 
     val, g = jax.value_and_grad(f)(jnp.asarray([0.0, 0.0]))
-    assert float(val) == pytest.approx(0.0)
+    assert float(val) == pytest.approx(0.0, abs=0)
     assert jnp.all(jnp.isfinite(g))
 
 
@@ -308,7 +308,7 @@ def test_ph_inhibit_grad_matches_fd():
 def test_ph_switch_requires_pH():
     """pH_switch needs a 'pH' condition field, like arrhenius needs 'T'."""
     ctx = _ctx(condition_fields=frozenset({"T"}))
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="pHSwitchNode requires a condition field named 'pH'"):
         pHSwitchNode(ConstantNode(7.0)).compile(ctx)
 
 
@@ -316,7 +316,7 @@ def test_ph_inhibit_requires_pH():
     from aquakin.core.nodes import pHInhibitNode
 
     ctx = _ctx(condition_fields=frozenset({"T"}))
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="pHInhibitNode requires a condition field named 'pH'"):
         pHInhibitNode(ConstantNode(4.0), ConstantNode(5.5)).compile(ctx)
 
 

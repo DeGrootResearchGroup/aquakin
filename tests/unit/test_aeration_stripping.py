@@ -268,7 +268,7 @@ def test_mass_balance_without_any_composition_raises(tmp_path):
     )
     plant.add_influent("feed", influent, to="tank.in")
     sol = _solve(plant, t_end=0.1, n=3)
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="No shipped composition table for model 'no_composition_toy'"):
         plant.mass_balance(sol, components=("COD",), effluent_ports=["tank.out"])
 
 

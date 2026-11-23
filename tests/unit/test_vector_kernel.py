@@ -246,7 +246,7 @@ def test_unsupported_node_falls_back_to_scalar():
             raise NotImplementedError
 
     net = aquakin.load_model("asm1")
-    with pytest.raises(UnsupportedNode):
+    with pytest.raises(UnsupportedNode, match="_UnknownNode"):
         build_vectorized_rates(
             [_UnknownNode()], ["r"], net.species_index, net.param_index
         )

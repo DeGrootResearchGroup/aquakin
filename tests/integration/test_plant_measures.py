@@ -56,7 +56,8 @@ def test_channels_of_every_model_family(name):
     table = composition_table(m)
     for channel, expected in FAMILIES[name].items():
         if expected is None:
-            with pytest.raises(KeyError):
+            with pytest.raises(KeyError, match=(f"model '{name}' (carries nothing measured as "
+                                                f"{channel}|has no {channel} species)")):
                 measure_map(m, (channel,))
         else:
             assert _species(m, channel) == expected, channel

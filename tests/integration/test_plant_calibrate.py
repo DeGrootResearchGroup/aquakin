@@ -843,7 +843,7 @@ def test_plant_calibrate_records_the_data_mean_square(decay_plant, monkeypatch):
     _net, plant = decay_plant
     obs = jnp.array([[1e-6], [3e-6], [np.nan]])
     problem = _capture_problem(monkeypatch, **_fit_args(plant, observations=obs))
-    assert problem.data_mean_square == pytest.approx(5e-12, rel=1e-12)
+    assert problem.data_mean_square == pytest.approx(5e-12, rel=1e-12, abs=0)
     nll = _capture_problem(monkeypatch, **_fit_args(plant, loss="nll", sigma=0.1))
     assert nll.data_mean_square is None
 
@@ -1058,7 +1058,7 @@ def test_plant_calibrate_ic_start_seeds_the_pool_coordinates(decay_plant, monkey
     kw = dict(free_ic=FreeICConfig(["tank.A"], bounds=(1e-3, 10.0)), y0=y0)
     cold = _capture_start(monkeypatch, **_fit_args(plant, **kw))
     seeded = _capture_start(monkeypatch, **_fit_args(plant, _ic_start=[warm], **kw))
-    assert cold["theta0"][-1] == pytest.approx(np.log(1.0))
+    assert cold["theta0"][-1] == pytest.approx(np.log(1.0), rel=1e-6, abs=0)
     assert seeded["theta0"][-1] == pytest.approx(np.log(0.25))
     assert seeded["theta0"][0] == pytest.approx(cold["theta0"][0])
 

@@ -160,7 +160,7 @@ def test_strict_raises_on_excess_acceptor_demand(nets):
     # Nitrate far exceeding the degradable COD: the surplus is dropped -> raise.
     C_bad = _asm_vec(asm1, SI=28.0, XI=95.0, XP=0.7, SS=10.0, XS=20.0, XB_H=5.0,
                      SNH=35.0, SND=5.0, XND=16.0, SALK=7.0, SNO=100.0)
-    with pytest.raises(Exception, match="over-conserved"):
+    with pytest.raises(RuntimeError, match="over-conserved"):
         strict.translate(C_bad)
 
 

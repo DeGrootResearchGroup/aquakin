@@ -76,7 +76,7 @@ def test_the_arithmetic(text, t, expected):
     ],
 )
 def test_the_functions(text, t, expected):
-    assert value(text, t) == pytest.approx(expected)
+    assert value(text, t) == pytest.approx(expected, rel=1e-6, abs=0)
 
 
 def test_every_declared_function_and_constant_can_be_called():

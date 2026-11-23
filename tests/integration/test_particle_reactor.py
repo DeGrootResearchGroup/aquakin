@@ -54,7 +54,7 @@ def test_grad_through_particle_solve(simple_model):
 
 
 def test_track_validates_ascending_time(simple_model):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"Track\.t must be strictly ascending"):
         aquakin.Track(
             t=jnp.asarray([0.0, 5.0, 3.0]),
             fields={"T": jnp.asarray([293.15, 293.15, 293.15])},
@@ -62,7 +62,7 @@ def test_track_validates_ascending_time(simple_model):
 
 
 def test_track_validates_field_length(simple_model):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"Track field 'T' has shape \(3,\), expected \(2,\)"):
         aquakin.Track(
             t=jnp.asarray([0.0, 5.0]),
             fields={"T": jnp.asarray([293.15, 293.15, 293.15])},
@@ -72,7 +72,7 @@ def test_track_validates_field_length(simple_model):
 def test_missing_condition_rejected(simple_model):
     # simple_model requires 'T'; provide nothing.
     track = aquakin.Track(t=jnp.asarray([0.0, 1.0]), fields={})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"missing required condition fields: \['T'\]"):
         aquakin.ParticleTrackReactor(simple_model, track)
 
 
@@ -122,7 +122,7 @@ def test_track_reactor_n_save_minimum(simple_model):
         t=jnp.asarray([0.0, 1.0]),
         fields={"T": jnp.asarray([293.15, 293.15])},
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="n_save must be >= 2"):
         aquakin.ParticleTrackReactor(simple_model, track, n_save=1)
 
 

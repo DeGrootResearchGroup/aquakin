@@ -124,7 +124,7 @@ def test_read_influent_csv_matches_text(asm1, tmp_path):
 
 
 def test_read_influent_csv_missing_file(asm1, tmp_path):
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundError, match="Influent file not found"):
         read_influent_csv(tmp_path / "nope.csv", asm1)
 
 

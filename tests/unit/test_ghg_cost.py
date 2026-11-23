@@ -82,7 +82,7 @@ def test_carbon_footprint_report_and_kpis():
     kpis = fp.kpis()
     assert kpis["GHG total (kgCO2e/d)"] == pytest.approx(fp.total_co2e)
     # The biogas KPI is reported as a (negative) credit.
-    assert kpis["Biogas credit (kgCO2e/d)"] == pytest.approx(-fp.biogas_credit_co2e)
+    assert kpis["Biogas credit (kgCO2e/d)"] == pytest.approx(-fp.biogas_credit_co2e, rel=1e-6, abs=0)
 
 
 # --- Cost kernels ------------------------------------------------------------
@@ -166,5 +166,5 @@ def test_kpi_comparison_table_renders():
 
 
 def test_kpi_comparison_rejects_bad_report():
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match=r"a KPI report must be a dict or expose a kpis\(\) method"):
         ak.kpi_comparison({"bad": object()})

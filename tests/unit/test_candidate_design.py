@@ -259,7 +259,7 @@ def test_pool_from_fisher_information_from_fn_groups():
     # For exponential decay the information about k peaks at t = 1/k, so the
     # choice must include an early sample (for a) and one near 1/k.
     assert "t0" in r.selected
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Unknown required candidate 't9'"):
         design_from_candidates(per_time, budget=3, required=["t9"])
 
 

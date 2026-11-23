@@ -214,7 +214,7 @@ def test_splitter_flow_mode_conserves_under_low_feed(simple_model):
     # remainder (no flow created)...
     co = material(150.0)
     assert co["a"] == pytest.approx(75.0) and co["b"] == pytest.approx(75.0)
-    assert co["r"] == pytest.approx(0.0)
+    assert co["r"] == pytest.approx(0.0, abs=0)
     # ...while flow_outputs stays affine (exact, may be negative -- harmless for
     # the linear recycle solve, which is what kept it from breaking _resolve_flows).
     assert flow(150.0)["r"] == pytest.approx(-50.0)
@@ -830,7 +830,7 @@ def test_run_to_steady_state_scaled_residual_criterion(simple_model, make_cstr_p
     # The reported residual is the scaled residual of the returned state.
     F = plant.derivative(ss.state, t=ss.time)
     expected = float(jnp.max(jnp.abs(F) / jnp.maximum(jnp.abs(ss.state), 1e-6)))
-    assert ss.residual == pytest.approx(expected, rel=1e-12)
+    assert ss.residual == pytest.approx(expected, rel=1e-12, abs=0)
     tank = plant.states_by_unit(ss.state)["tank"]
     # |dA/dt| / A <= 1e-9 with relaxation rate 0.2/s bounds |A - 0.5| by ~2.5e-9.
     assert float(tank[simple_model.species_index["A"]]) == pytest.approx(0.5, abs=1e-8)
@@ -1006,7 +1006,7 @@ def test_plant_parameter_values_unknown_name_raises_with_hint():
         plant.parameter_values({"asm1.muh": 6.0})  # wrong case
     with pytest.raises(KeyError, match="Unknown plant parameter"):
         plant.parameter_index("adm1.nope")
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="overrides must be a dict"):
         plant.parameter_values([("asm1.muH", 6.0)])  # not a dict
 
 
@@ -1195,18 +1195,18 @@ def test_endpoint_error_taxonomy(make_cstr_plant):
     plant = make_cstr_plant()  # unit 'tank' (input 'inlet'), influent 'feed'
 
     # Unknown unit -> UnknownUnitError, still catchable as KeyError.
-    with pytest.raises(aquakin.UnknownUnitError) as exc_info:
+    with pytest.raises(aquakin.UnknownUnitError, match="Unknown unit 'ghost'") as exc_info:
         plant._parse_endpoint("ghost", role="source")
     assert isinstance(exc_info.value, KeyError)
 
     # Unknown port on a known unit -> UnknownPortError (KeyError family).
-    with pytest.raises(aquakin.UnknownPortError) as exc_info:
+    with pytest.raises(aquakin.UnknownPortError, match="has no destination port 'nope'") as exc_info:
         plant._parse_endpoint("tank.nope", role="destination")
     assert isinstance(exc_info.value, KeyError)
 
     # An influent used as a connect source is a wiring error (ValueError family),
     # not an unknown name -- the name exists, its use is wrong.
-    with pytest.raises(aquakin.WiringError) as exc_info:
+    with pytest.raises(aquakin.WiringError, match="'feed' is an influent, not a unit") as exc_info:
         plant._parse_endpoint("feed", role="source")
     assert isinstance(exc_info.value, ValueError)
     assert not isinstance(exc_info.value, KeyError)

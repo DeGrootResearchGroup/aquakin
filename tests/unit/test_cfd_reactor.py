@@ -62,46 +62,46 @@ def test_step_default_params_uses_model_defaults(reactor, simple_state):
 
 def test_step_rejects_wrong_C_shape(reactor):
     bad = np.zeros((3, 5))  # 5 species columns; model has 2
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="C has 5 species columns but model has 2"):
         reactor.step(bad, {"T": np.full(3, 293.15)}, dt=1.0)
 
 
 def test_step_rejects_1d_C(reactor):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="C must be 2-D"):
         reactor.step(np.zeros(2), {"T": np.full(2, 293.15)}, dt=1.0)
 
 
 def test_step_rejects_missing_condition(reactor):
     C = np.zeros((3, 2))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"missing required field\(s\): \['T'\]"):
         reactor.step(C, {}, dt=1.0)
 
 
 def test_step_rejects_wrong_condition_shape(reactor, simple_state):
     C, _ = simple_state
     bad_conds = {"T": np.full(C.shape[0] + 1, 293.15)}  # wrong cell count
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"conditions\['T'\] has shape \(5,\), expected \(4,\)"):
         reactor.step(C, bad_conds, dt=1.0)
 
 
 def test_step_rejects_non_positive_dt(reactor, simple_state):
     C, conds = simple_state
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="dt must be positive"):
         reactor.step(C, conds, dt=0.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="dt must be positive"):
         reactor.step(C, conds, dt=-1.0)
 
 
 def test_step_rejects_wrong_params_shape(reactor, simple_state):
     C, conds = simple_state
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"params has shape \(99,\), expected \(1,\)"):
         reactor.step(C, conds, dt=1.0, params=np.zeros(99))
 
 
 def test_step_rejects_zero_cells(reactor):
     C = np.zeros((0, 2))
     conds = {"T": np.zeros(0)}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="C must have at least 1 row"):
         reactor.step(C, conds, dt=1.0)
 
 
@@ -144,7 +144,7 @@ def test_step_raises_on_pathological_inputs(fresh_reactor, simple_state):
 
 
 def test_invalid_on_nan_rejected(simple_model):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="on_nan must be 'raise' or 'ignore'"):
         aquakin.CFDReactor(simple_model, on_nan="explode")
 
 

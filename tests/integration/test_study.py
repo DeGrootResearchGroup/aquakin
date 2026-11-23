@@ -140,7 +140,7 @@ def test_edited_results_and_a_failed_run_are_reported(project):
     with pytest.raises(StudyError, match="already has results"):
         run_study(folder)
     bad = _study(project, "bad", {**DYNAMIC, "parameters": {"asm1_local.nope": 1.0}})
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match=r"Unknown plant parameter 'asm1_local\.nope'"):
         run_study(bad)
     status = check_study(bad)
     assert status.state == "failed" and "asm1_local.nope" in status.reasons[0]
@@ -434,7 +434,7 @@ def test_a_rank_study(project):
     run_study(folder)
     ranking = read_table(folder / "results" / "ranking.csv")
     assert ranking["candidate"] == ["ammonia", "flow"] and ranking["rank"] == [1.0, 2.0]
-    assert ranking["improvement"][0] > 0.0 and ranking["improvement"][1] == pytest.approx(0.0)
+    assert ranking["improvement"][0] > 0.0 and ranking["improvement"][1] == pytest.approx(0.0, abs=0)
 
 
 def test_a_steady_state_simulation_saves_measured_channels(project):

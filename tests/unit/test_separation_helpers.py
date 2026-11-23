@@ -58,7 +58,7 @@ def test_species_mask_default_weight_is_one():
 def test_species_mask_raises_on_missing():
     # The policy: a missing species is a loud construction-time error, not a
     # silent drop (which under-settles / under-counts without warning).
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"species \['nope'\] not in model species"):
         species_mask(_model("A", "B"), ["A", "nope"])
 
 

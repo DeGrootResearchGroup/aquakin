@@ -147,7 +147,7 @@ def test_tss_is_weighed_like_any_other_keyword_in_a_custom_channel():
     scaled = measure_map(model, ("x = 0.75*TSS",)).W[:, 0]
     plain = measure_map(model, ("TSS",)).W[:, 0]
     assert scaled.any()
-    assert scaled == pytest.approx(0.75 * plain)
+    assert scaled == pytest.approx(0.75 * plain, rel=1e-6, abs=0)
 
 
 def test_a_keyword_the_model_cannot_give_names_the_measure():
