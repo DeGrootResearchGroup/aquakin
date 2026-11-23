@@ -36,6 +36,7 @@ from aquakin.integrate._common import (
     native_time_factor,
     with_adjoint,
 )
+from aquakin.integrate._linalg import _NULL_RTOL
 from aquakin.integrate._transforms import (
     dphysical_dunconstrained,
     from_unconstrained,
@@ -147,12 +148,33 @@ class FisherInformation:
     def covariance(self) -> np.ndarray:
         """The Cramer-Rao covariance bound ``F^{-1}`` in unconstrained coordinates.
 
+        ``F`` counts as singular when its smallest eigenvalue is at most
+        ``_NULL_RTOL`` (1e-10) times its largest, the null test of
+        :func:`aquakin.identifiability`. ``np.linalg.inv`` alone is not enough:
+        it raises only on an exactly zero LU pivot, and a matrix singular up to
+        round-off usually has a tiny nonzero one, so it would return a huge,
+        meaningless inverse (or raise, depending on the LAPACK build).
+
+        Returns
+        -------
+        np.ndarray
+            ``(n, n)`` inverse of :attr:`matrix`, ordered as :attr:`names`.
+
         Raises
         ------
         np.linalg.LinAlgError
-            If ``F`` is singular: some parameter combination is not identifiable
-            from this design.
+            If ``F`` is singular (or not finite): some parameter combination is
+            not identifiable from this design.
         """
+        F = 0.5 * (self.matrix + self.matrix.T)
+        w = np.linalg.eigvalsh(F) if np.all(np.isfinite(F)) else np.asarray([np.nan])
+        if not w[0] > _NULL_RTOL * w[-1]:
+            raise np.linalg.LinAlgError(
+                "The Fisher information is singular: its smallest eigenvalue is at "
+                f"most {_NULL_RTOL:g} of its largest, so some combination of "
+                f"{self.names} is not identifiable from this design. "
+                "aquakin.identifiability() on this result names it."
+            )
         return np.linalg.inv(self.matrix)
 
     def std(self) -> dict[str, float]:
