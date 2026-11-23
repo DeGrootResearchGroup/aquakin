@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
@@ -249,7 +250,8 @@ def test_batch_step_ceiling_gives_friendly_error():
 
 def test_forward_mode_through_default_adjoint_gives_friendly_error(simple_model):
     """A direct jax.jacfwd / jax.jvp through a default reactor re-raises with a
-    domain-level remedy naming aquakin.forward_adjoint(), not JAX's raw
+    domain-level remedy naming the reactor's forward-mode ``diff=`` config (the
+    real constructor argument, not a nonexistent ``adjoint=``), not JAX's raw
     "custom_vjp function" message -- the default RecursiveCheckpointAdjoint is
     reverse-only, and the cure is otherwise undiscoverable from the error."""
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
@@ -260,19 +262,20 @@ def test_forward_mode_through_default_adjoint_gives_friendly_error(simple_model)
     def out(z):
         return reactor.solve(C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1]
 
-    with pytest.raises(RuntimeError, match="forward_adjoint"):
+    with pytest.raises(RuntimeError, match="cannot flow through") as exc:
         jax.jacfwd(out)(jnp.asarray([0.3]))
+    msg = str(exc.value)
+    assert 'diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")' in msg
+    assert "ad_mode" not in msg and "adjoint=" not in msg
     # The raw JAX message must not leak through.
-    try:
-        jax.jacfwd(out)(jnp.asarray([0.3]))
-    except RuntimeError as exc:
-        assert "custom_vjp function." not in str(exc)
+    assert "custom_vjp function." not in msg
 
 
 def test_forward_adjoint_enables_forward_mode_through_batch(simple_model):
-    """Building the reactor with aquakin.forward_adjoint() makes the same
+    """Building the reactor with a forward-mode ``diff=`` config makes the same
     forward-mode solve differentiable (the cure the friendly error points to),
-    while reverse mode through the default adjoint is unaffected.
+    while reverse mode through the default adjoint is unaffected, and the two
+    routes agree.
 
     Both derivatives are checked against the closed form: with
     ``B(t) = 1 - exp(-k t)``, ``dB(10)/dk = 10 exp(-10 k) = 10 exp(-3)`` at
@@ -299,6 +302,8 @@ def test_forward_adjoint_enables_forward_mode_through_batch(simple_model):
     g = jax.grad(lambda z: rev.solve(
         C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1])(jnp.asarray([0.3]))
     assert float(g[0]) == pytest.approx(expected, rel=1e-3)
+    # The two AD routes through the same solve agree.
+    np.testing.assert_allclose(np.asarray(J), np.asarray(g), rtol=1e-8)
 
 
 def test_dtmax_native_time_unit_warns_when_time_unit_rescales(simple_model):

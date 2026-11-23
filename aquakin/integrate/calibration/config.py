@@ -52,7 +52,9 @@ class OptimizerConfig:
     max_iter : int
         Maximum optimiser iterations per start.
     tol : float
-        Optimiser convergence tolerance.
+        Optimiser convergence tolerance. With ``loss="mse"`` it is relative to
+        the loss at the start when that is below 1, so it does not depend on
+        the unit of the observations.
     bounds : dict[str, tuple[float | None, float | None]], optional
         Absolute bounds on free rate parameters in physical units, as
         ``{name: (lo, hi)}`` (``None`` on a side leaves it open). An entry

@@ -795,6 +795,18 @@ def test_plant_param_namespace_reads_model_bounds(decay_plant, monkeypatch):
     assert PARAM not in _PlantParamNamespace(plant).parameter_bounds
 
 
+def test_plant_calibrate_records_the_data_mean_square(decay_plant, monkeypatch):
+    """The plant problem carries the observations' mean square for the default
+    mse loss, which the shared driver scales the optimizer's objective by (so a
+    fit on data of order 1e-6 is not stopped at its start), and none for nll."""
+    _net, plant = decay_plant
+    obs = jnp.array([[1e-6], [3e-6], [np.nan]])
+    problem = _capture_problem(monkeypatch, **_fit_args(plant, observations=obs))
+    assert problem.data_mean_square == pytest.approx(5e-12, rel=1e-12)
+    nll = _capture_problem(monkeypatch, **_fit_args(plant, loss="nll", sigma=0.1))
+    assert nll.data_mean_square is None
+
+
 def test_plant_calibrate_applies_model_and_explicit_bounds(decay_plant, monkeypatch):
     """The plant fit honours the model-declared bounds by default,
     OptimizerConfig(bounds=) overrides them, use_model_bounds=False drops them,
