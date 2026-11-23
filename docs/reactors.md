@@ -181,7 +181,8 @@ handled with **located events**, which `BatchReactor.solve` and the plant's
 reset:
 
 - `at_times=[...]` fires at known times. This is **AD-safe**: the segment
-  boundaries are static, so `jax.grad` stays finite through the solve.
+  boundaries are static, so `jax.grad` stays finite through the solve, and the
+  whole solve can be wrapped in `jax.jit`.
 - `cond_fn=lambda t, C, p: ...` fires when the scalar condition crosses zero (in
   an optional `direction`: `-1` for downward only, `+1` for upward only). This
   is located by a root find, so it is forward-simulation only.
@@ -190,7 +191,9 @@ Set `terminal=True` to stop the solve when the event fires, and `apply=...` to
 reset the state. Event times (`at_times`, the `t` passed to `cond_fn` and
 `apply`, and the times in `events_log`) use the same unit as `t_span`, so they
 follow `time_unit=` when you pass it. An output time that coincides with an
-event reports the state just before the reset.
+event reports the state just before the reset. The solve between events is
+compiled once and reused, so solving again with the same settings (new
+parameters or output times) does not compile anything.
 
 This example doses external carbon into an anoxic ASM1 batch and stops once the
 nitrate is used up:

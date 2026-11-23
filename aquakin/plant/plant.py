@@ -2795,6 +2795,7 @@ class Plant:
     _solve_forward_fast = _dynamic._solve_forward_fast
     _solve_jax_adjoint = _dynamic._solve_jax_adjoint
     _solve_with_events = _dynamic._solve_with_events
+    _event_segment_solver = _dynamic._event_segment_solver
     _build_jitted_solve = _dynamic._build_jitted_solve
     _build_jitted_forward_fast = _dynamic._build_jitted_forward_fast
     _esdirk_stable_adjoint = _dynamic._esdirk_stable_adjoint

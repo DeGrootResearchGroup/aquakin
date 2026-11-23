@@ -31,7 +31,15 @@ from aquakin.integrate._common import (
     validate_C0_params,
     validate_t_eval,
 )
-from aquakin.integrate.events import Event, events_to_native_time, solve_with_events
+from aquakin.integrate.events import (
+    Event,
+    SegmentSettings,
+    build_segment_solver,
+    events_to_native_time,
+    root_events_of,
+    run_segmented,
+    segment_signature,
+)
 from aquakin.integrate.forward_sensitivity import prepare_sensitivity, run_forward_sensitivity
 
 
@@ -204,7 +212,8 @@ class BatchReactor(GradientCheckMixin):
             and may reset the state (``apply=``) or terminate the solve
             (``terminal=``). The solve is split into segments at the firings; the
             returned ``solution.events_log`` records them. Time-only events keep
-            ``jax.grad`` finite (static segment boundaries); a state event makes
+            ``jax.grad`` finite and the solve traceable under ``jax.jit``
+            (static segment boundaries); a state event makes
             the solve a forward simulation (the firing count is data-dependent).
             Event times (``at_times``, the ``t`` passed to ``cond_fn`` /
             ``apply``, and the ``events_log`` times) are in the same unit as
@@ -287,14 +296,15 @@ class BatchReactor(GradientCheckMixin):
 
         Builds the same constant-condition RHS the plain batch solve uses --
         through the shared :func:`make_chemistry_rhs` factory, so the event path
-        and ``solve_chemistry`` cannot drift -- and hands it to
-        :func:`solve_with_events`, which locates the events and applies their
-        resets between segments. Not routed through the jit cache: the driver is
-        an eager Python loop over segments (a state event's count is
-        data-dependent), and time-only events still differentiate because each
-        segment is a plain differentiable sub-solve.
+        and ``solve_chemistry`` cannot drift -- and hands it to the segmented
+        driver, which locates the events and applies their resets between
+        segments. Every segment runs one compiled solve (parameters, conditions,
+        segment bounds and save grid are runtime arguments), shared across
+        reactor instances like the plain solve: the cache key is the model, the
+        solver settings, whether a grid is reported and the state events
+        located in-solve (:func:`~aquakin.integrate.events.segment_signature`).
+        A traced settings key (a solve under an outer trace) builds it uncached.
         """
-        rhs = make_chemistry_rhs(self.model, params, cond_fn=lambda t: condition_arrays)
         # t0/t1/t_eval are already native; the events are still in the requested
         # unit, so convert copies of them (the caller's Events are not mutated).
         events = events_to_native_time(events, time_factor)
@@ -302,23 +312,47 @@ class BatchReactor(GradientCheckMixin):
         t_eval_arr = None if t_eval is None else jnp.asarray(t_eval)
         if t_eval_arr is not None:
             self._validate_t_eval(t_eval_arr, t0, t1)
+        has_t_eval = t_eval_arr is not None
+        settings = reactor_settings_key(self)
+        cache_key = (
+            None
+            if settings is None
+            else ("batch_events", id(self.model), settings, has_t_eval, segment_signature(events))
+        )
+        model = self.model
+
+        def make_rhs(ctx):
+            ctx_params, ctx_conditions = ctx
+            return make_chemistry_rhs(model, ctx_params, cond_fn=lambda t: ctx_conditions)
+
+        segment_settings = SegmentSettings(
+            rtol=self.rtol,
+            atol=self.atol,
+            max_steps=self.max_steps,
+            dtmax=self.dtmax,
+            adjoint=self.adjoint,
+            order=self.order,
+            factormax=self.factormax,
+            solver=self.solver,
+        )
+        solve_segment = cached_jitted_solver(
+            cache_key,
+            lambda: build_segment_solver(
+                make_rhs, segment_settings, root_events_of(events), has_t_eval=has_t_eval
+            ),
+            self.model,
+            self.adjoint,
+        )
         with friendly_solve_errors(self.max_steps, what="batch reactor solve"):
-            res = solve_with_events(
-                rhs,
+            res = run_segmented(
+                solve_segment,
+                (params, condition_arrays),
                 C0,
                 params,
-                t0=t0,
-                t1=t1,
+                t_span=(t0, t1),
                 t_eval=t_eval_arr,
                 events=events,
-                rtol=self.rtol,
-                atol=self.atol,
-                dtmax=self.dtmax,
-                adjoint=self.adjoint,
-                max_steps=self.max_steps,
-                order=self.order,
-                factormax=self.factormax,
-                solver=self.solver,
+                settings=segment_settings,
             )
         ts = res.ts
         log = res.log
