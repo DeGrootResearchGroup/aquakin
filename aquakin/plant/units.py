@@ -95,6 +95,9 @@ class Unit(Protocol):
       results-level mass balance and the per-species readers.
     - :class:`ComponentInventoryUnit` (``component_inventory``) -- owns its
       COD/N/P inventory for a non-concentration-vector state layout.
+    - :class:`ApproximateInventoryUnit` (``inventory_caveats``) -- names the
+      components its inventory only approximates, with why, for the mass
+      balance to report.
     - :class:`CycleEventSource` (``cycle_events``) -- schedules located phase
       events (an SBR's fill/react/settle/decant boundaries).
     - :class:`TemperatureSettable` (``set_temperature``) -- its operating
@@ -210,6 +213,17 @@ class ComponentInventoryUnit(Protocol):
     def component_inventory(
         self, state: jnp.ndarray, content: dict, params: jnp.ndarray
     ) -> dict: ...
+
+
+@runtime_checkable
+class ApproximateInventoryUnit(Protocol):
+    """A unit whose ``component_inventory`` is exact for some components only (the
+    Takacs settler in ``lumped_tss`` mode values its blanket's N and P with an
+    assumed solids composition). The mass balance attaches each returned note to
+    that component's closure, so a user knows the closure there is approximate
+    rather than exact to the ``t_eval`` sampling."""
+
+    def inventory_caveats(self) -> dict: ...
 
 
 @runtime_checkable

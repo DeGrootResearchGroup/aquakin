@@ -2335,7 +2335,10 @@ class Plant:
         solution : PlantSolution
             A solved trajectory (the closure is over ``solution.t[0]..t[-1]``).
             The gas integrals are exact at steady state and otherwise accurate to
-            the ``t_eval`` sampling.
+            the ``t_eval`` sampling. A Takács settler with ``composition_mode=
+            "lumped_tss"`` estimates its blanket's N and P, so off steady state
+            those close only to ~1e-3 (2.2e-3 in N on BSM1, days 1-3 from the
+            warm start), whatever the sampling; ``mb[q].notes`` then says so.
         components : tuple of str, optional
             Which components to balance (default ``("COD", "N", "P")``); a model
             that does not carry one contributes nothing to it.

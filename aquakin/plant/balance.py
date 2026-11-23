@@ -33,6 +33,14 @@ The gas integrals are evaluated from the saved trajectory, so they are exact at
 steady state (constant rates) and otherwise accurate to the ``t_eval`` sampling;
 the reaction integral evaluates each unit's kinetics at the conditions its
 ``rhs`` used in the solve (its operating temperature).
+
+One exception does not shrink with the sampling: a unit whose inventory only
+approximates a component (:class:`~aquakin.plant.units.ApproximateInventoryUnit`;
+the Takács settler with ``composition_mode="lumped_tss"`` values its blanket's N
+and P at the model-default solids composition) leaves a closure error in that
+component whenever its inventory changes -- about 2e-3 relative in N on BSM1
+over days 1-3 from the warm start -- and none at steady state. The affected
+components carry the unit's explanation in :attr:`ComponentBalance.notes`.
 """
 
 from __future__ import annotations
@@ -41,7 +49,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from aquakin.plant.units import ComponentInventoryUnit, LiquidVolumeUnit
+from aquakin.plant.units import (
+    ApproximateInventoryUnit,
+    ComponentInventoryUnit,
+    LiquidVolumeUnit,
+)
 from aquakin.utils.composition import canonical_content
 
 # CH4 / H2 oxygen demand (g COD per g gas): CH4 + 2 O2 -> CO2 + 2 H2O = 64/16.
@@ -69,6 +81,11 @@ class ComponentBalance:
         Change in the component's plant inventory, ``inventory(t1) − inventory(t0)`` (g).
     imbalance : float
         ``inflow − outflow − gas − accumulation`` (g); zero when closed.
+    notes : list of str
+        Why this closure is approximate beyond the ``t_eval`` sampling, one note
+        per unit whose inventory of this component is an estimate (a
+        ``lumped_tss`` Takács settler for N and P). Empty when every inventory
+        is exact.
     """
 
     component: str
@@ -77,6 +94,7 @@ class ComponentBalance:
     gas: float
     accumulation: float
     imbalance: float
+    notes: list[str] = field(default_factory=list)
 
     @property
     def relative_imbalance(self) -> float:
@@ -125,6 +143,8 @@ class MassBalance:
                 f"{c.relative_imbalance:10.2e}"
             )
         lines.append(f"  closed (rtol=1e-2): {self.closed()}")
+        for name, c in self.components.items():
+            lines.extend(f"  note ({name}): {note}" for note in c.notes)
         return "\n".join(lines)
 
 
@@ -176,6 +196,18 @@ def _unit_inventory(plant, unit_name, state_vec, content_by_model, params):
     if volume <= 0.0:
         return {}
     return {comp: volume * float(np.dot(sv, vec)) for comp, vec in content.items()}
+
+
+def _inventory_notes(plant, comps):
+    """``{component: [note, ...]}``: why each component's closure is approximate,
+    from every unit declaring :class:`ApproximateInventoryUnit` (in plant order)."""
+    notes = {q: [] for q in comps}
+    for unit in plant.units.values():
+        if isinstance(unit, ApproximateInventoryUnit):
+            for q, note in unit.inventory_caveats().items():
+                if q in notes:
+                    notes[q].append(note)
+    return notes
 
 
 def _flux(Q, C, content_vec):
@@ -380,6 +412,7 @@ def mass_balance(
     accumulation = _accumulation_terms(plant, solution, comps, content_by_model, params)
     gas, gas_detail = _gas_terms(plant, solution, comps, content_by_model, params)
 
+    notes = _inventory_notes(plant, comps)
     out = {}
     for q in comps:
         imb = inflow[q] - outflow[q] - gas[q] - accumulation[q]
@@ -390,6 +423,7 @@ def mass_balance(
             gas=gas[q],
             accumulation=accumulation[q],
             imbalance=imb,
+            notes=notes[q],
         )
     return MassBalance(
         components=out,
