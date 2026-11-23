@@ -182,7 +182,7 @@ def test_saturation_model_selects_correction_curve(asm1):
     """``saturation_model='bsm2'`` uses the benchmark curve for the correction
     ratio; an unknown model is rejected at construction."""
     from aquakin.plant.cstr import aeration_transfer, build_aeration_vectors, oxygen_saturation_bsm2
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Unknown saturation_model 'nope'"):
         Aeration(kla=120.0, saturation_model="nope")
     aer = Aeration(kla=120.0, do_sat=8.0, temperature_correction=True,
                    ref_T=288.15, kla_theta=1.024, saturation_model="bsm2")

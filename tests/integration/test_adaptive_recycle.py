@@ -114,11 +114,11 @@ def test_recycle_tol_construction_validation():
     assert Plant("a", time_unit="d").recycle_tol == 1e-8            # adaptive on by default
     assert Plant("b", time_unit="d", recycle_tol=1e-9).recycle_tol == 1e-9
     assert Plant("f", time_unit="d", recycle_tol=None).recycle_tol is None  # opt out -> fixed-pass
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="recycle_tol must be > 0"):
         Plant("c", time_unit="d", recycle_tol=0.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="recycle_tol must be > 0"):
         Plant("d", time_unit="d", recycle_tol=-1e-3)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="recycle_max_passes must be >= 1"):
         Plant("e", time_unit="d", recycle_max_passes=0)
 
 

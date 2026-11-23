@@ -13,6 +13,7 @@ import textwrap
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pydantic
 import pytest
 
 import aquakin
@@ -199,7 +200,7 @@ def test_schema_rejects_unknown_fraction():
         - {name: m, pKsp: 8.0, order: 2, ions: [
             {species: S_Ca, molar_mass: 1000, count: 1, charge: 2, fraction: bogus}]}
     """)
-    with pytest.raises(Exception, match="fraction"):
+    with pytest.raises(ValueError, match="ion fraction 'bogus' is invalid"):
         _load_bad(block)
 
 
@@ -210,7 +211,7 @@ def test_schema_rejects_undeclared_species():
         - {name: m, pKsp: 8.0, order: 2, ions: [
             {species: S_ghost, molar_mass: 1000, count: 1, charge: 2}]}
     """)
-    with pytest.raises(Exception, match=r"ghost|undeclared"):
+    with pytest.raises(KeyError, match="undeclared species 'S_ghost'"):
         _load_bad(block)
 
 
@@ -456,7 +457,7 @@ def test_autoderived_stoichiometry_follows_ion_counts():
 
 
 def test_schema_solid_requires_rate_constant():
-    with pytest.raises(Exception, match="rate_constant"):
+    with pytest.raises(ValueError, match="'solid' and 'rate_constant' must be set together"):
         _load_bad(textwrap.dedent("""
         precipitation:
           minerals:
@@ -466,7 +467,7 @@ def test_schema_solid_requires_rate_constant():
 
 
 def test_schema_autoderived_solid_must_be_declared():
-    with pytest.raises(Exception, match=r"X_ghost|declared"):
+    with pytest.raises(ValueError, match="solid 'X_ghost' is not a declared species"):
         _load_bad(textwrap.dedent("""
         precipitation:
           minerals:
@@ -605,7 +606,7 @@ def test_power_order_below_one_rejected_at_load():
     ion = MineralIonSpec(species="S_Ca", molar_mass=1000, count=1, charge=2)
     kw = dict(name="x", pKsp=8.0, ions=[ion], solid="X",
               rate_constant={"value": 1.0})
-    with pytest.raises(Exception, match="order"):
+    with pytest.raises(pydantic.ValidationError, match=r"order=0\.5 < 1 with the 'power' supersaturation form"):
         MineralSpec(order=0.5, **kw)                       # power form (default)
     MineralSpec(order=0.5, supersaturation_form="bounded", **kw)  # OK
     MineralSpec(order=1.0, **kw)                                  # OK

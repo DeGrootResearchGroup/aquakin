@@ -71,21 +71,25 @@ def test_sizing_summary_is_a_string():
 
 
 @pytest.mark.parametrize(
-    "kwargs",
+    ("kwargs", "message"),
     [
-        dict(SRT=-1.0, HRT_h=8.0, Q=18446.0),
-        dict(SRT=10.0, HRT_h=8.0, Q=-1.0),
-        dict(SRT=10.0, HRT=0.0, Q=18446.0),  # HRT not > 0
-        dict(SRT=10.0, Q=18446.0),  # no HRT
-        dict(SRT=10.0, HRT=0.3, HRT_h=8.0, Q=18446.0),  # both HRT
-        dict(SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="bogus"),
-        dict(SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="underflow", thickening_ratio=0.0),
-        dict(SRT=10.0, HRT_h=8.0, Q=18446.0, volume_fractions=[0.5, 0.4]),  # !=1
-        dict(SRT=10.0, HRT_h=8.0, Q=18446.0, volume_fractions=[0.5, -0.5, 1.0]),
+        (dict(SRT=-1.0, HRT_h=8.0, Q=18446.0), "SRT must be > 0"),
+        (dict(SRT=10.0, HRT_h=8.0, Q=-1.0), "Q must be > 0"),
+        (dict(SRT=10.0, HRT=0.0, Q=18446.0), "HRT must be > 0"),  # HRT not > 0
+        (dict(SRT=10.0, Q=18446.0), "Supply exactly one of HRT"),  # no HRT
+        (dict(SRT=10.0, HRT=0.3, HRT_h=8.0, Q=18446.0), "Supply exactly one of HRT"),  # both HRT
+        (dict(SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="bogus"),
+         "wastage_from must be 'mixed_liquor' or 'underflow'"),
+        (dict(SRT=10.0, HRT_h=8.0, Q=18446.0, wastage_from="underflow", thickening_ratio=0.0),
+         "thickening_ratio must be > 0"),
+        (dict(SRT=10.0, HRT_h=8.0, Q=18446.0, volume_fractions=[0.5, 0.4]),  # !=1
+         "volume_fractions must sum to 1"),
+        (dict(SRT=10.0, HRT_h=8.0, Q=18446.0, volume_fractions=[0.5, -0.5, 1.0]),
+         "volume_fractions must all be > 0"),
     ],
 )
-def test_sizing_validation_errors(kwargs):
-    with pytest.raises(ValueError):
+def test_sizing_validation_errors(kwargs, message):
+    with pytest.raises(ValueError, match=message):
         size_activated_sludge(**kwargs)
 
 

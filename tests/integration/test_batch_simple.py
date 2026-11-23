@@ -102,7 +102,7 @@ def test_solve_positional_tuple_is_t_span_not_params(simple_model):
     assert sol.t.shape == (5,)
     # A 4th positional argument (where params used to sit) is now a TypeError --
     # params can only arrive by keyword, so it can never swallow a t_span tuple.
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="takes from 3 to 4 positional arguments"):
         reactor.solve(jnp.asarray([1.0, 0.0]), (0.0, 20.0),
                       jnp.linspace(0.0, 20.0, 5),
                       simple_model.default_parameters())
@@ -137,33 +137,33 @@ def test_grad_through_solve_matches_closed_form(simple_model):
 
 def test_C0_shape_validated(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"C0 has shape \(1,\), expected \(2,\)"):
         reactor.solve(jnp.asarray([1.0]), (0.0, 1.0))
 
 
 def test_t_span_must_be_ascending(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="t_span end must exceed start"):
         reactor.solve(jnp.asarray([1.0, 0.0]), (1.0, 1.0))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="t_span end must exceed start"):
         reactor.solve(jnp.asarray([1.0, 0.0]), (2.0, 1.0))
 
 
 def test_t_eval_out_of_span_rejected(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0, p = jnp.asarray([1.0, 0.0]), simple_model.default_parameters()
-    with pytest.raises(ValueError):   # below t0
+    with pytest.raises(ValueError, match="t_eval must lie within t_span"):   # below t0
         reactor.solve(C0, (0.0, 10.0), params=p, t_eval=jnp.asarray([-1.0, 5.0]))
-    with pytest.raises(ValueError):   # above t1
+    with pytest.raises(ValueError, match="t_eval must lie within t_span"):   # above t1
         reactor.solve(C0, (0.0, 10.0), params=p, t_eval=jnp.asarray([5.0, 11.0]))
 
 
 def test_t_eval_must_be_ascending(simple_model):
     reactor = aquakin.BatchReactor(simple_model, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0, p = jnp.asarray([1.0, 0.0]), simple_model.default_parameters()
-    with pytest.raises(ValueError):   # not ascending
+    with pytest.raises(ValueError, match="t_eval must be strictly ascending"):   # not ascending
         reactor.solve(C0, (0.0, 10.0), params=p, t_eval=jnp.asarray([5.0, 2.0, 8.0]))
-    with pytest.raises(ValueError):   # repeated (not strictly ascending)
+    with pytest.raises(ValueError, match="t_eval must be strictly ascending"):   # repeated (not strictly ascending)
         reactor.solve(C0, (0.0, 10.0), params=p, t_eval=jnp.asarray([2.0, 2.0]))
 
 
@@ -175,13 +175,13 @@ def test_t_eval_valid_accepted(simple_model):
 
 
 def test_uniform_rejects_zero_locations():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="n_locations must be >= 1"):
         aquakin.SpatialConditions.uniform(0, T=293.15)
 
 
 def test_missing_required_condition_rejected(simple_model):
     # simple_model requires 'T'; passing nothing must fail.
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"missing required fields: \['T'\]"):
         aquakin.BatchReactor(simple_model, aquakin.SpatialConditions(fields={}))
 
 

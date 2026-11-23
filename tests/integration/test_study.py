@@ -140,7 +140,7 @@ def test_edited_results_and_a_failed_run_are_reported(project):
     with pytest.raises(StudyError, match="already has results"):
         run_study(folder)
     bad = _study(project, "bad", {**DYNAMIC, "parameters": {"asm1_local.nope": 1.0}})
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match=r"Unknown plant parameter 'asm1_local\.nope'"):
         run_study(bad)
     status = check_study(bad)
     assert status.state == "failed" and "asm1_local.nope" in status.reasons[0]

@@ -118,7 +118,7 @@ def test_recycle_presolve_makes_mopup_passes_irrelevant(
 def test_recycle_passes_validated_and_configurable(asm1):
     from aquakin.plant import Plant
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="recycle_passes must be >= 1"):
         Plant("p", time_unit="d", recycle_passes=0)
     assert Plant("p", time_unit="d", recycle_passes=5).recycle_passes == 5
     assert Plant("p", time_unit="d").recycle_passes == 3  # default

@@ -1006,7 +1006,7 @@ def test_plant_parameter_values_unknown_name_raises_with_hint():
         plant.parameter_values({"asm1.muh": 6.0})  # wrong case
     with pytest.raises(KeyError, match="Unknown plant parameter"):
         plant.parameter_index("adm1.nope")
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="overrides must be a dict"):
         plant.parameter_values([("asm1.muH", 6.0)])  # not a dict
 
 
@@ -1195,18 +1195,18 @@ def test_endpoint_error_taxonomy(make_cstr_plant):
     plant = make_cstr_plant()  # unit 'tank' (input 'inlet'), influent 'feed'
 
     # Unknown unit -> UnknownUnitError, still catchable as KeyError.
-    with pytest.raises(aquakin.UnknownUnitError) as exc_info:
+    with pytest.raises(aquakin.UnknownUnitError, match="Unknown unit 'ghost'") as exc_info:
         plant._parse_endpoint("ghost", role="source")
     assert isinstance(exc_info.value, KeyError)
 
     # Unknown port on a known unit -> UnknownPortError (KeyError family).
-    with pytest.raises(aquakin.UnknownPortError) as exc_info:
+    with pytest.raises(aquakin.UnknownPortError, match="has no destination port 'nope'") as exc_info:
         plant._parse_endpoint("tank.nope", role="destination")
     assert isinstance(exc_info.value, KeyError)
 
     # An influent used as a connect source is a wiring error (ValueError family),
     # not an unknown name -- the name exists, its use is wrong.
-    with pytest.raises(aquakin.WiringError) as exc_info:
+    with pytest.raises(aquakin.WiringError, match="'feed' is an influent, not a unit") as exc_info:
         plant._parse_endpoint("feed", role="source")
     assert isinstance(exc_info.value, ValueError)
     assert not isinstance(exc_info.value, KeyError)
