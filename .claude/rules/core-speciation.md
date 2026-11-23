@@ -39,7 +39,7 @@ machine precision across pH 5.4–8.8) and is **capped at `n_iter`** for the
 bisection worst case, wrapped in **`jax.lax.custom_root`** so the **pH
 sensitivity is the analytic IFT tangent** (one scalar solve of `df/d[H+]` at the
 root). The iteration count therefore never enters the AD graph: `jax.jvp` /
-`jacfwd` (forward, the per-step Jacobian-materialisation path) and `jax.grad`
+`jacfwd` (forward, the per-step Jacobian-materialization path) and `jax.grad`
 (reverse, the calibration-gradient path) through `solve_ph` are **O(1) in the
 iteration count** instead of differentiating through every Newton step. The root
 is the same one the old fixed scan converged to, so **every steady state is
@@ -49,7 +49,7 @@ bit-for-bit). The convergence criterion is `in_bracket AND |Newton step| ≤ tol
 alone is not a safe criterion, but a tiny in-bracket Newton step `|f/f'|` (with
 `|f'| ≥ 1`) means a tiny residual, i.e. the root. *Why this is the lever:* a
 Step-0 profile of the BSM2 plant found the pH solve was **~35% of the Jacobian
-materialisation** purely because `n_iter` was 40 while it converges in ~6; the
+materialization** purely because `n_iter` was 40 while it converges in ~6; the
 adaptive + IFT rewrite drops the pH share to **~8%** (per-tangent pH cost
 O(40)→O(1)) and the whole 20-day BSM2 transient by **~20–25%** (default solver),
 with bit-identical results. The opt-in **activity-corrected path** uses the same

@@ -212,7 +212,7 @@ compiled solve to avoid it:
 
 **Correctness guarantees.** A cache key never omits anything that changes the
 compiled result, so a hit always returns a solver compiled for the exact same
-computation. The key materialises `atol` values, which is impossible **under
+computation. The key materializes `atol` values, which is impossible **under
 tracing** (a calibration loss differentiating through `solve`); in that case the
 key is `None` and the cache is bypassed (the solve is traced into the outer
 computation, which JAX compiles as a whole, so caching gives nothing there

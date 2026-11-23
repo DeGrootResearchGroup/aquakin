@@ -12,7 +12,7 @@ that it is **stiffness-bound, not wasted-work-bound** — a finding worth not
 re-discovering. The signature: ~750–1000 accepted steps/day, **step count nearly
 invariant to `rtol`** (1e-4 vs 1e-3 → <2%), **~50% step rejection** with the
 default solver, and per-step cost dominated by the **implicit Jacobian
-factorisation of the 167-state plant** across the solver's stages (the raw RHS is
+factorization of the 167-state plant** across the solver's stages (the raw RHS is
 ~4% of per-step cost). It extrapolates to ~38 min run-only for 609 days.
 
 **Levers that do NOT help (measured — do not re-try):** `jump_ts` at the 15-min
@@ -128,18 +128,18 @@ the decoupled Newton; the reactor forward-sensitivity suite passes unchanged at 
 (`order=5` reproduces the previous `diffrax.Kvaerno5(root_finder=rf)`).
 
 **`Plant.solve(colored_jacobian=True)` — sparse (colored-AD) Jacobian
-materialisation ([`integrate/colored_jacobian.py`](aquakin/integrate/colored_jacobian.py)).**
+materialization ([`integrate/colored_jacobian.py`](aquakin/integrate/colored_jacobian.py)).**
 Profiling the per-step *linear algebra* (after the decoupled-Newton + cached-map
-wins) found the dominant cost is **forming the implicit Jacobian, not factorising
-it**: diffrax's `VeryChord` materialises + factorises `I − γ·dt·J` **once per
+wins) found the dominant cost is **forming the implicit Jacobian, not factorizing
+it**: diffrax's `VeryChord` materializes + factorizes `I − γ·dt·J` **once per
 step** (reused across stages/iterations), and for the 167-state plant the dense
-materialisation (`jacfwd`, ~33% of a step-attempt) dwarfs the LU factor (~4%,
+materialization (`jacfwd`, ~33% of a step-attempt) dwarfs the LU factor (~4%,
 `cond ~10³` — well-conditioned, fast). But the plant Jacobian is **5–15%
 nonzero** — dense per-unit kinetic blocks (the model stoichiometry × rate
 dependencies) plus sparse inter-unit flow coupling — so it can be formed by
 **column compression** (Curtis–Powell–Reid 1974): group structurally-orthogonal
 columns (sharing no nonzero row) into *colors*, push one seed per color through a
-single forward linearisation (`jax.linearize` once + `vmap` the tangent — **not**
+single forward linearization (`jax.linearize` once + `vmap` the tangent — **not**
 `jax.jvp` per color, which redoes the expensive nonlinear primal — the recycle +
 pH solves — every color), and scatter each color's JVP back to its columns via
 the pattern. For BSM2 that is **~45 colors vs 167 columns**, set by the widest
@@ -150,7 +150,7 @@ formation cost drops. **Measured ~1.43× on the 14-day BSM2 solve** (trajectory
 within integration tolerance, ~5e-3, the within-tolerance `LU`-vs-`AutoLinearSolver`
 step-path drift; gradient finite and matching the dense path to ~1e-8). It
 **stacks** with `Kvaerno3`/`factormax` (it helps any ESDIRK) and the cached map.
-- `ColoredVeryChord(VeryChord)` overrides only `init` (materialise via colored
+- `ColoredVeryChord(VeryChord)` overrides only `init` (materialize via colored
   forward AD into an `lx.MatrixLinearOperator` with an explicit `lx.LU()`,
   avoiding the `AutoLinearSolver(well_posed=None)` least-squares fallback a bare
   matrix would trigger); `step`/`terminate` are inherited, so the chord is
@@ -188,7 +188,7 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
 - Wired like `solver=`/`factormax=` on the forward `jax_adjoint` path (rejected
   with `events=`), keyed into the compiled-solve cache by a `colored_active` flag
   so it never collides with a plain solve. **Most worthwhile for a large stiff
-  plant (BSM2); on small BSM1 the materialisation is not the bottleneck (≈1×, but
+  plant (BSM2); on small BSM1 the materialization is not the bottleneck (≈1×, but
   still numerically matches to ~3e-13).** Covered by
   `tests/integration/test_colored_jacobian.py` (coloring/reconstruction math,
   positive-probe superset over the trajectory, colored==dense J, full-solve
@@ -562,7 +562,7 @@ is what production simulators use to snap to steady state on any topology.
 - **`plant.steady_state_sensitivity(params, *, output_fn=, wrt=, mode=, elasticity=)`** —
   the exact steady-state output sensitivity `d(output)/dθ` from the IFT, **far
   cheaper than `jacfwd`/`jacrev` through `steady_state`** (which re-solves per
-  call): it solves the steady state once and reuses a single `∂F/∂y` factorisation
+  call): it solves the steady state once and reuses a single `∂F/∂y` factorization
   for every output and parameter. `output_fn` maps the flat plant state to a
   length-`m` output vector (default: the full state, giving `dy*/dθ`). `wrt`
   selects the parameters to differentiate (flat indices or `"<model>.<param>"`
@@ -578,7 +578,7 @@ is what production simulators use to snap to steady state on any topology.
   — **global** sensitivity (DGSM) of the steady state: samples the screened
   parameters over their ranges (scrambled-Sobol QMC), solves the steady state at
   each sample, and reads each output's sensitivity through
-  `steady_state_sensitivity` — reusing **one** `∂F/∂y` factorisation per sample, so
+  `steady_state_sensitivity` — reusing **one** `∂F/∂y` factorization per sample, so
   it is far cheaper than the generic `aquakin.dgsm` over `steady_state` (whose
   `jacfwd`/`jacrev` recompute the steady-state structure per input tangent /
   output). Aggregates to the Sobol total-index upper bound
@@ -975,10 +975,10 @@ steps (Ideal, ~10 s) / ~18k steps (Takács, ~30 s) to a healthy state —
 `test_bsm1_dry_weather_runs` and `test_bsm1_takacs_dry_weather_runs`.
 
 The first plant-wide demonstration target is **BSM1** (Copp 2002 / Alex
-2008) — built by `aquakin.plant.bsm.build_bsm1()`. Three synthesised
+2008) — built by `aquakin.plant.bsm.build_bsm1()`. Three synthesized
 influent CSVs (dry / rain / storm) ship under
 `aquakin/plant/bsm/data/` and load via `load_bsm1_influent()`. The
-synthesised files match BSM1's *statistical* profile but are not the
+synthesized files match BSM1's *statistical* profile but are not the
 canonical IWA files; for quantitative comparison to Alex 2008's
 published EQI / OCI values, users should replace them with the
 official files.
@@ -1006,7 +1006,7 @@ limitation. (Before the `asm2d` heterotroph growth rates were corrected, anoxic
 growth had no nitrate term, so nitrate never reached the selector and the plant
 showed complete P removal.) There are no recirculating
 negative soluble pools (it relies on the `asm2d` `positivity_limiter`, now
-honoured inside `CSTRUnit`). It is **not** a standardised benchmark — the sizing
+honoured inside `CSTRUnit`). It is **not** a standardized benchmark — the sizing
 is a representative municipal design, not a published reference set, so it is a
 worked nutrient-removal flowsheet, not a validation target. Building it is what
 surfaced the `asm2d` process-matrix import errors (see the `asm2d` model note);
@@ -1099,7 +1099,7 @@ suppresses tank-5 growth ~24% and roughly halves XB_H.) ASM1 has no Arrhenius T-
 (the `T` condition is declared but unused), so only the parameter *values*
 matter, not the 15 °C operating temperature.
 
-**Dynamic influent runs too.** Synthesised BSM2 dry / rain / storm influent
+**Dynamic influent runs too.** Synthesized BSM2 dry / rain / storm influent
 files (`scripts/generate_bsm2_influent.py` → `aquakin/plant/bsm/data/BSM2_*.csv`,
 loaded by `load_bsm2_influent()`) drive the plant under diurnal + wet-weather
 forcing. The fixed-flow-pump fix carries straight over to BSM2 scale: warm-started
@@ -1108,7 +1108,7 @@ run **efficiently** (~140 steps/day, not a step-ceiling blow-up) to a finite,
 healthy trajectory, and a rain event doubling the influent stays bounded because
 the recycle pumps hold throughput at `Q_in + Qintr + Qr`
 (`tests/integration/test_bsm2_dynamic.py`). The shipped influent CSVs are
-**synthesised**, not the canonical 609-day IWA series, so the dynamic tests
+**synthesized**, not the canonical 609-day IWA series, so the dynamic tests
 assert qualitative stability, not published dynamic metrics.
 
 **Temperature handling is a selectable `TemperatureModel`
@@ -1184,7 +1184,7 @@ plant is the BSM2 calibration; pass the plain `load_model("asm1")` explicitly to
 get the 20 °C reference. When you build the influent yourself, reuse the **same
 model instance** for both `build_bsm2` and the influent so their identities match
 (a clear error fires otherwise). The
-synthesised BSM2 influent CSVs carry a time-varying temperature column (`T`, in
+synthesized BSM2 influent CSVs carry a time-varying temperature column (`T`, in
 °C; a shoulder-season ~12→18 °C ramp + diurnal ripple), which
 `load_bsm2_influent` returns as `InfluentSeries.T` in **Kelvin** — so a dynamic
 run on `load_bsm2_influent(...)` is seasonally temperature-driven out of the box.
@@ -1213,7 +1213,7 @@ operating point and only a temperature-carrying influent drives it); default off
 reproduces the validated steady state exactly. The saturation curve used for the
 `C_s(T)/C_s(ref_T)` ratio is selectable via `Aeration(saturation_model=...)`:
 `"benson_krause"` (default, the APHA `oxygen_saturation`) or `"bsm2"` (the IWA
-benchmark van't Hoff `oxygen_saturation_bsm2`, normalised to 8.0 mg/L at 15 °C);
+benchmark van't Hoff `oxygen_saturation_bsm2`, normalized to 8.0 mg/L at 15 °C);
 the two differ by ~0.5 % in shape. `build_bsm2(do_temperature_correction=True)`
 uses `"bsm2"` so the seasonal oxygen driving force matches the benchmark exactly.
 
@@ -1349,7 +1349,7 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
   derived deterministically from the controller id.
 - **Auto-wired DO controllers (`Plant._materialize_aeration`).** A closed-loop
   `Aeration` consumes a kLa signal but does not itself add the controller. The
-  plant materialises it: at topology setup (once, before the state layout) it
+  plant materializes it: at topology setup (once, before the state layout) it
   groups the closed-loop tanks by their aeration `controller` id — the shared-
   controller case (BSM2: one sensor on `tank4`, per-tank `gain`s) — or, when no id
   is given, gives each tank its own controller (per-tank DO control, `sensor`
@@ -1435,7 +1435,7 @@ non-ideal-contactor 10th-percentile of a residence-time distribution, reusing
 as zero. The credit physics is exposed as pure, AD-clean functions (`uv_dose`,
 `uv_log_inactivation`, `ct_value`, `ct_log_removal`, `t10_from_baffling`,
 `t10_from_rtd`) for standalone sizing/credit, and `jax.grad` flows through both the
-credit and a plant solve (design optimisation). Covered by
+credit and a plant solve (design optimization). Covered by
 `tests/integration/test_disinfection.py`. **Scope/fidelity notes:** the UVT
 correction is a first-order linear `uvt/uvt_ref` (a full UVDGM dose-distribution is
 future work); chlorine is modelled as a residual-decay + CT credit (no breakpoint
@@ -1523,7 +1523,7 @@ single-MBR plant closes COD/N to a few %). Covered by
 `tests/integration/test_mbr.py`.
 
 **Reject storage tank (`build_bsm2(reject=RejectStorage())`).** A variable-volume
-equalisation tank on the reject-recycle line: a completely-mixed CSTR with **no
+equalization tank on the reject-recycle line: a completely-mixed CSTR with **no
 reactions** (`StorageTank`, [`plant/storage.py`](aquakin/plant/storage.py))
 whose liquid volume `V` is a state (`dV/dt = Q_in_stored − Q_out`,
 `dC_i/dt = Q_in_stored/V·(C_in,i − C_i)`). It releases at a controlled rate
@@ -1542,7 +1542,7 @@ because the tank's *inlet* comes from the fixed-pump sludge line (the wastage
 `Qw` is a constant pump), so at fixed volume its outputs are constant in the
 recycle flows — the state-dependence does not couple to the recycle variables.
 (In this benchmark the reject flow is nearly constant, so a *fixed* release just
-fills or drains the tank; genuine equalisation needs the level-based release
+fills or drains the tank; genuine equalization needs the level-based release
 controller below.) Wired into `build_bsm2` behind `reject_storage`; demonstrated
 in `examples/bsm2_reject_storage.py` (level-gated behaviour by release rate) and
 tested in `tests/integration/test_bsm2_storage.py` (the four regimes + flow/
@@ -1579,7 +1579,7 @@ tank's release runs a **proportional level controller** instead of a fixed
 `0.5·Vmax`, gain 30 m³/d per m³, pump cap `Q_max = 1500` m³/d = the reference
 `Qstorage_max`). The release rises with the level, so the tank self-regulates to
 a steady mid-level and releases the reject *smoothly through the controlled pump
-with no overflow bypass* — a functioning equalisation tank, versus the open-loop
+with no overflow bypass* — a functioning equalization tank, versus the open-loop
 fill-and-bypass. The net reject returned is the same, so the activated-sludge
 steady state is unchanged (XB_H ≈ 2224); only the path differs (controlled
 release vs bypass spill), and under a varying reject load the controlled tank
@@ -1736,7 +1736,7 @@ closed-loop table with the full term breakdown) and tested in
 `tests/integration/test_bsm2_evaluation.py` (plant terms finite/positive,
 aerated-tank detection, AE/ME/carbon match their closed forms, OCI equals the
 full-formula sum; plus fast no-solve kernel tests). Note the shipped influent is
-synthesised, so these are method-validated numbers, not the published EQI/OCI over
+synthesized, so these are method-validated numbers, not the published EQI/OCI over
 the canonical days-245–609 window (that needs the official IWA influent file).
 
 **Single-point (steady-state) evaluation.** Every time-averaged kernel runs

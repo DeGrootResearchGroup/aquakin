@@ -123,7 +123,7 @@ take a shipped model's name (refused on read and write), and
 species match. Parse errors from `load_spec_file` are `SpecError`s. Every
 model is listed under `models:` as `shipped` or a YAML file path relative to the
 spec, with a sha256 of its content (`extends` resolved; a mismatch on read is a
-`SpecWarning`). A model is recognised by the provenance `load_model` /
+`SpecWarning`). A model is recognized by the provenance `load_model` /
 `load_model_from_file` record on it (`_aquakin_source`, a plain attribute, so a
 `dataclasses.replace` copy such as `bsm2_asm1_model()` does not carry it and is
 refused rather than written under the shipped name); this survives

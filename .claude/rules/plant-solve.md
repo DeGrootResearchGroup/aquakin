@@ -130,8 +130,8 @@ not converged — the backstop for the non-affine case.
   `jax.lax.while_loop` that **stops once the actual residual clears** (capped at
   `recycle_max_passes`, default 100), wrapped in `jax.lax.custom_root` so the
   sensitivity is the exact **implicit-function-theorem tangent** — a small dense
-  solve of the linearised recycle-edge operator (the recycle edges are few ×
-  ~tens of channels), the vector generalisation of the pH solver's scalar
+  solve of the linearized recycle-edge operator (the recycle edges are few ×
+  ~tens of channels), the vector generalization of the pH solver's scalar
   `y / g(1)`. AD (forward and reverse) is therefore **O(1) in the iteration
   count** rather than differentiating through every sweep
   (`RecycleResolver._adaptive_recycle_refine`). It converges for any `rho < 1`, stops

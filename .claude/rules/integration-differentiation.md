@@ -93,7 +93,7 @@ and a stock-`Kvaerno5` augmented solve blows up on the 20-day BSM2 window too.
 atol=, sens_rtol=, factormax=, dtmax=, max_steps=, corrector=, return_stats=)`
 integrates `[y; S]` with the controller bounding `S`, on the plant's **cached
 recycle/flow maps** (built once per solve inside the compiled function, from the
-runtime `params`, and closed over — so the linearisation w.r.t. the sensitivity
+runtime `params`, and closed over — so the linearization w.r.t. the sensitivity
 parameters drops `∂M/∂θ`: **exact for kinetic parameters**, `M` depending only on
 the flow setpoints; a flow-setpoint sensitivity needs the per-call map, not
 wired). Returns `(ts, ys, S)`, `S` shape `(n_t, ndof, k)` (plus a `SolveStats` for
@@ -127,7 +127,7 @@ built by the one `_build_sensitivity_solve`:
   `params`/`y0` required (a tracer raises `TypeError` naming
   `corrector="simultaneous"`). Default `atol_S` shared with the augmented path
   (`forward_sensitivity.sensitivity_atol`, CVODES `atol_y/|θ_j|`). Measured on a
-  synthesised-influent BSM2 day (`.claude/notes/plant-sensitivity-log.md`, which
+  synthesized-influent BSM2 day (`.claude/notes/plant-sensitivity-log.md`, which
   carries the configuration and the container's ~2× timing noise): several times
   faster than the simultaneous corrector at `k=16`, but the per-attempt cost is
   **not flat in `k`** (~2.7× from `k=0` to `k=16`: the `k`-column Jacobian-vector
@@ -224,7 +224,7 @@ The per-step implicit solve has two implementations, selected by
 `solve_sensitivity(..., shared_factor=...)`:
 
 - `shared_factor=False` (**Option B**, dense): hand the augmented `[y; S]`
-  system to a stock `Kvaerno5`, which factorises the full
+  system to a stock `Kvaerno5`, which factorizes the full
   `n(1+p)×n(1+p)` implicit operator each step. Exact and cap-free; the right
   choice for **one** sensitivity parameter and for scalar-loss gradients.
 - `shared_factor=True` (**Option A**, CVODES simultaneous corrector): the
@@ -232,7 +232,7 @@ The per-step implicit solve has two implementations, selected by
   block is the same `D = I − γ·dt·J`, each `S_j` column couples only to `y`.
   A custom `lineax` solver
   ([`integrate/_simultaneous_corrector.py`](aquakin/integrate/_simultaneous_corrector.py))
-  injected into the `Kvaerno5` `VeryChord` root-finder **factorises `D` once
+  injected into the `Kvaerno5` `VeryChord` root-finder **factorizes `D` once
   per step (`O(n³)`) and forward-substitutes across the `S` columns**, instead
   of the dense `O((n(1+p))³)`. The Newton step is identical to the dense
   solve, so results are **bit-equivalent** to Option B (verified to ~5e-14) —
@@ -244,7 +244,7 @@ advantage at `p=1`).
 
 **Measured (stiff `wats_sewer_khalil_paper_balanced`, biofilm, jitted, `p=5`):**
 Option A beats Option B by **3.8× at ndof=100 and 6.9× at ndof=180** — the win
-grows with system size, as the `(1+p)³`→`1` factorisation saving predicts.
+grows with system size, as the `(1+p)³`→`1` factorization saving predicts.
 Versus the *capped `jacfwd`* workaround the comparison depends on the
 integration span: the uncapped augmented solve's adaptive sensitivity control
 actually takes **more** steps than a capped primal-only solve over a short
@@ -258,7 +258,7 @@ model, `shared_factor=True` (the default) is the best forward-sensitivity
 option; whether it also beats capped `jacfwd` depends on the span.**
 
 The known cost of the non-invasive design (a custom *solver*, not a custom
-diffrax RK stage): the solver only sees the augmented operator, so materialising
+diffrax RK stage): the solver only sees the augmented operator, so materializing
 `D` and the off-diagonal coupling blocks `L_j` costs `n` probes of the augmented
 `M.mv` — each a JVP of the augmented RHS, i.e. second-order in `f` — the `L_j`
 blocks that an ideal CVODES with direct access to `f` would not form. The plant
@@ -372,7 +372,7 @@ and time-dependent gradients — and the plant BSM1/BSM2 cross-interface, colore
 and flow-setpoint `∂M/∂θ` gradients all match FD / the capped `jax_adjoint` path).
 **`calibrate(gradient="stable_adjoint")` uses this Kvaerno5 ESDIRK adjoint**, so
 its forward matches the reactor exactly and its gradients agree with the capped
-`jax_adjoint` path to the optimiser tolerance (analytic decay `rel ≈ 1e-6`; stiff
+`jax_adjoint` path to the optimizer tolerance (analytic decay `rel ≈ 1e-6`; stiff
 model finite-uncapped, matching capped Kvaerno5 to `rel ≈ 2.5e-5`, the residual
 being the capped-vs-uncapped *forward* difference, FD-confirmed). **Cost note:** the
 backward scan's cost scales with `stable_adjoint_max_steps` (the padded trajectory
