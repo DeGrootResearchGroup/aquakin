@@ -139,6 +139,10 @@ Two paths, one driver (`_drive`), chosen by whether any state event is present:
   differentiable diffrax sub-solves: **`jax.grad` flows through it** (the SBR /
   scheduled-dosing / AD-safe case). It still needs the `dtmax` cap for a stiff
   reverse-mode gradient, exactly like the plain solve.
+  With time events only the drive also traces under `jax.jit`: the `t_eval`
+  points are assigned to segments by mask, never by reading their values, so
+  a traced grid works. Do not add a concrete conversion (`np.asarray`,
+  `float()`, a Python `if`) of `t_eval`, `y` or `args` to that path.
 - **Any state event** — the firing time/count is discovered at runtime (located
   via a terminating `diffrax.Event` whose `event_mask` says which fired), so the
   loop is an **eager forward simulation**, not differentiable through the switch
@@ -196,7 +200,20 @@ compiled solve to avoid it:
   depends on the entire unit-config + connection graph, and a structural key
   complete enough to never false-hit would be fragile — a miss there would
   silently return a solve compiled for a *different* plant. Per-instance keying
-  cannot false-hit.) `Plant.solve_sensitivity` is cached the same way (keyed
+  cannot false-hit.) **Located-event solves** (`events=`) are cached too: every
+  segment runs one jitted program from `events.build_segment_solver` whose
+  segment bounds, save grid, `y0`, `args` and RHS context (the plant's cached
+  recycle maps; the batch reactor's `params` and conditions) are runtime
+  arguments, so all segments of a solve share one compile and a repeat solve
+  compiles nothing. The key is `SegmentSettings.cache_key()` (the settings key
+  plus the root-find tolerances), whether a grid is reported, and
+  `events.segment_signature` (the state events' `cond_fn` / `direction`: time
+  events, resets and names stay in the eager driver and are not compiled);
+  the plant adds its recycle `cache_flags()` and keeps the entry in
+  `_jit_cache` under `"events"`, the batch reactor uses the shared
+  `cached_jitted_solver` keyed on the model. A `cond_fn` keys by its own
+  equality, so `events_to_native_time` wraps it in a value object
+  (`_InRequestedTime`) rather than a lambda. `Plant.solve_sensitivity` is cached the same way (keyed
   by its static structure, everything else a runtime argument — see its bullet
   above). The event path (`run_to_steady_state`) is not cached
   (run-once). The `stable_adjoint` path is **not** cached: `solve` routes to it

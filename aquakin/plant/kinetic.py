@@ -88,6 +88,17 @@ class KineticUnit(ModelTimeScaling):
             return {**self._condition_arrays, "T": jnp.reshape(T_op, (1,))}, T_op
         return self._condition_arrays, T_op
 
+    def _reaction_conditions(self, inputs: dict[str, Stream], signals: dict | None) -> dict:
+        """The conditions this unit's ``rhs`` evaluates its reaction term at.
+
+        The operating conditions (:meth:`_operating_conditions`) by default; a
+        unit held at its static conditions (the heated digester, the SBR)
+        overrides this, and its ``rhs`` reads it too. The mass balance's reaction
+        integral calls it with the inputs and signals the solve's ``rhs`` saw, so
+        it integrates the reaction the unit integrated.
+        """
+        return self._operating_conditions(inputs, signals)[0]
+
     def _reaction(self, C: jnp.ndarray, params: jnp.ndarray, conditions: dict) -> jnp.ndarray:
         """The reaction term ``model.dCdt`` at ``C``, per the plant's time unit."""
         return self._scale_rates(self.model.dCdt(C, params, conditions, 0))

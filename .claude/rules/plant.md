@@ -121,7 +121,7 @@ optional hooks); these are the invariants around it.
   `PlantTimeUnitAware` unit is told the unit, and influents are re-expressed.
 - **Kinetic units scale the model's rates through `ModelTimeScaling`**; a factor
   of exactly 1 must return the term untouched (bit-identical), and
-  `balance._reaction_term` must apply the same factor the unit does.
+  `balance._reaction_terms_at` must apply the same factor the unit does.
 - **A new unit with a built-in time constant implements `set_time_unit`**
   (converting its constant, as UV, the primary clarifier and Takács do), not
   `assumed_units`.
@@ -196,11 +196,16 @@ shared `Kp, Ti, Tt : float` cannot name one unit each).
 evaluates a model in its `rhs` inherits `KineticUnit` and builds its reaction
 term with `_reaction` (the model's `dCdt`, so the clip and positivity limiter
 apply, scaled to the plant clock) and its conditions with `_init_conditions` /
-`_operating_conditions`. Never write `stoich.T @ rates` in a unit or in
-`balance.py`: `_reaction_term` calls `unit._reaction` so the balance integrates
-what the unit integrates. A unit needing extra parameter handling overrides
-`_reaction` (the digester slaves `V_liq`). A unit whose temperature an operator
-sets inherits `AdjustableTemperatureUnit`; the heated digester does not, so
+`_operating_conditions`. **A unit's `rhs` passes `_reaction_conditions(inputs,
+signals)` to `_reaction`** (the operating conditions by default; the heated
+digester and the SBR override it to their static ones), so the mass balance can
+ask for the same conditions. Never write `stoich.T @ rates` in a unit or in
+`balance.py`: `_reaction_terms_at` calls `unit._reaction` at
+`_reaction_conditions`, fed by `Plant._unit_inputs_and_signals` (the RHS's own
+input and signal assembly), so the balance integrates what the unit integrated.
+A unit needing extra parameter handling overrides `_reaction` (the digester
+slaves `V_liq`). A unit whose temperature an operator sets inherits
+`AdjustableTemperatureUnit`; the heated digester does not, so
 `Plant.set_temperature` leaves it alone. Deliberate exceptions, stated in the
 unit: the SBR runs at its static `T`, and IFAS evaluates its reaction per
 compartment inside the biofilm RHS (which also calls `model.dCdt`).

@@ -95,6 +95,12 @@ on a small analogue (the single-CSTR plant in `conftest.py`). Many older suites
 assert finiteness only; when you touch one, upgrade its gradient test rather
 than copying it.
 
+A gradient test through a `calibrate` / `Plant.calibrate` objective must pass
+`use_priors=False` (or subtract the prior's gradient) unless the prior is under
+test: shipped models declare priors, and a prior's closed-form gradient can
+dominate the objective, so a finite-difference match then says nothing about the
+solve's adjoint.
+
 ## Reuse before writing
 
 - **Look in `tests/conftest.py` first.** `simple_model`, `make_cstr_plant` /

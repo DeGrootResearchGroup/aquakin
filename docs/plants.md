@@ -652,6 +652,17 @@ print(mb.closed(rtol=1e-2), round(mb["N"].relative_imbalance, 4))
 The gas terms are integrated over the saved points, so save them finely enough
 to resolve the dynamics (the 15-minute output above is ample).
 
+One closure is approximate however finely you save: a `TakacsClarifier` with
+`composition_mode="lumped_tss"` (the BSM2 default, and BSM1's with
+`use_takacs=True`) tracks only the total solids in each layer, so it values the
+nitrogen and phosphorus held in its sludge blanket at the model's default
+solids composition. COD is exact. While the blanket is filling or emptying,
+nitrogen misses by about 0.2% (on BSM1 over days 1 to 3 from the warm start);
+at steady state it closes. The balance then lists the reason in
+`mb["N"].notes` and `mb["P"].notes`, and `summary()` prints it. Use
+`composition_mode="per_species"` when you need the transient nitrogen and
+phosphorus balance exact.
+
 ## Uncertainty and scenarios
 
 `aquakin.monte_carlo` and `aquakin.compare_scenarios` run a function of a few
