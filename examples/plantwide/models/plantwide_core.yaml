@@ -1,0 +1,252 @@
+model:
+  name: plantwide_core
+  version: "0.1"
+  description: >
+    Core level of a unified plant-wide model: one state set and one process
+    matrix for every unit, from the aerated basins to the anaerobic digester,
+    so no state is converted between units. Activated-sludge processes follow
+    ASM2d (hydrolysis, heterotrophic growth on fermentable substrate and
+    fermentation products with oxygen or nitrate, fermentation, one-step
+    nitrification, death-regeneration decay). Digestion is added on the same
+    state set with a separate group of fermenting organisms (acidogens) that
+    produce acetate, propionate and hydrogen, propionate-oxidizing organisms,
+    and acetoclastic and hydrogenotrophic methanogens, with ADM1 kinetics and
+    temperature dependence after Siegrist et al. Hydrolysis is one Contois
+    expression catalysed by the heterotrophs and the acidogens together, so it
+    follows ASM2d where acidogens are absent and is acidogen-driven in a
+    digester. COD, nitrogen and carbon are balanced in every process through
+    declared compositions and solved coefficients. pH enters as a condition at
+    this level; there is no phosphorus, alkalinity or gas phase.
+  references:
+    - "Henze, Gujer, Mino, Matsuo, Wentzel, Marais & van Loosdrecht (1999). Activated Sludge Model No. 2d, ASM2d. Water Sci. Technol. 39(1), 165-182. doi:10.1016/S0273-1223(98)00829-4"
+    - "Batstone, Keller, Angelidaki, Kalyuzhnyi, Pavlostathis, Rozzi, Sanders, Siegrist & Vavilin (2002). Anaerobic Digestion Model No. 1 (ADM1). IWA Scientific and Technical Report No. 13."
+    - "Rosen & Jeppsson (2006). Aspects on ADM1 Implementation within the BSM2 Framework. Technical report, Lund University."
+    - "Siegrist, Vogt, Garcia-Heras & Gujer (2002). Mathematical model for meso- and thermophilic anaerobic sewage sludge digestion. Environ. Sci. Technol. 36(5), 1113-1123. doi:10.1021/es010139p"
+    - "Sotemann, Ristow, Wentzel & Ekama (2005). Integrated chemical, physical and biological processes modelling Part 2 - Anaerobic digestion of sewage sludges. Water SA 31(4), 545-568."
+    - "Ikumi, Harding & Ekama (2014). Biodegradability of wastewater and activated sludge organics in anaerobic digestion. Water Res. 56, 267-279. doi:10.1016/j.watres.2014.02.008"
+    - "Barker & Dold (1997). General model for biological nutrient removal activated-sludge systems: model presentation. Water Environ. Res. 69(5), 969-984."
+
+# Compositions: COD is the electron-equivalent content (oxygen and nitrate are
+# electron acceptors, so negative); nitrate and dinitrogen carry the COD of
+# their nitrogen relative to ammonium (-64/14 and -24/14 g COD/g N). Nitrogen
+# contents are the ASM2d values. Carbon contents (g C/g COD) are 12 times the
+# mol C/g COD of the corresponding components in Siegrist et al. (2002),
+# Table 2; methane, acetate and propionate are exact from their formulae.
+conserved_for: [COD, N, C]
+
+species:
+  - {name: SO2,  units: "g_O2/m3",  default_concentration: 2.0,  description: "Dissolved oxygen", composition: {COD: -1.0}}
+  - {name: SF,   units: "g_COD/m3", default_concentration: 30.0, description: "Fermentable, readily biodegradable organic matter", composition: {COD: 1.0, N: 0.03, C: 0.36}}
+  - {name: SA,   units: "g_COD/m3", default_concentration: 20.0, description: "Acetate (fermentation product)", composition: {COD: 1.0, C: 0.375}}
+  - {name: SPRO, units: "g_COD/m3", default_concentration: 1.0,  description: "Propionate", composition: {COD: 1.0, C: 0.3214285714285714}}
+  - {name: SH2,  units: "g_COD/m3", default_concentration: 1.0e-4, description: "Dissolved hydrogen", composition: {COD: 1.0}}
+  - {name: SCH4, units: "g_COD/m3", default_concentration: 0.0,  description: "Dissolved methane", composition: {COD: 1.0, C: 0.1875}}
+  - {name: SI,   units: "g_COD/m3", default_concentration: 30.0, description: "Soluble unbiodegradable organic matter", composition: {COD: 1.0, N: 0.01, C: 0.36}}
+  - {name: SNH4, units: "g_N/m3",   default_concentration: 16.0, description: "Ammonium plus ammonia nitrogen", composition: {N: 1.0}}
+  - {name: SNO3, units: "g_N/m3",   default_concentration: 2.0,  description: "Nitrate plus nitrite nitrogen", composition: {COD: -4.571428571428571, N: 1.0}}
+  - {name: SN2,  units: "g_N/m3",   default_concentration: 15.0, description: "Dissolved dinitrogen", composition: {COD: -1.7142857142857142, N: 1.0}}
+  - {name: SIC,  units: "g_C/m3",   default_concentration: 60.0, description: "Total inorganic carbon", composition: {C: 1.0}}
+  - {name: XI,   units: "g_COD/m3", default_concentration: 25.0, description: "Particulate unbiodegradable organic matter", composition: {COD: 1.0, N: 0.02, C: 0.36}}
+  - {name: XS,   units: "g_COD/m3", default_concentration: 125.0, description: "Slowly biodegradable particulate organic matter", composition: {COD: 1.0, N: 0.04, C: 0.312}}
+  - {name: XH,   units: "g_COD/m3", default_concentration: 30.0, description: "Ordinary heterotrophic organisms", composition: {COD: 1.0, N: 0.07, C: 0.36}}
+  - {name: XAUT, units: "g_COD/m3", default_concentration: 1.0,  description: "Nitrifying organisms (ammonium to nitrate)", composition: {COD: 1.0, N: 0.07, C: 0.36}}
+  - {name: XFE,  units: "g_COD/m3", default_concentration: 0.1,  description: "Fermenting organisms (acidogens)", composition: {COD: 1.0, N: 0.07, C: 0.36}}
+  - {name: XPRO, units: "g_COD/m3", default_concentration: 0.1,  description: "Propionate-oxidizing organisms", composition: {COD: 1.0, N: 0.07, C: 0.36}}
+  - {name: XAC,  units: "g_COD/m3", default_concentration: 0.1,  description: "Acetoclastic methanogens", composition: {COD: 1.0, N: 0.07, C: 0.36}}
+  - {name: XH2M, units: "g_COD/m3", default_concentration: 0.1,  description: "Hydrogenotrophic methanogens", composition: {COD: 1.0, N: 0.07, C: 0.36}}
+
+conditions:
+  - {name: T,  units: "K", default: 293.15, description: "Temperature (K)."}
+  - {name: pH, units: "-", default: 7.0,    description: "pH. A condition at this level; the chemistry level computes it from the state."}
+
+clip_negative_states: true
+
+parameters:
+  # --- Heterotrophs, hydrolysis and nitrification (ASM2d, values at 20 C). The
+  # temperature coefficients follow from the ASM2d 20 C / 10 C value pairs,
+  # e.g. muH: (6.0/3.0)**(1/10).
+  muH:        {value: 6.0,   units: "1/d", bounds: [1.0, 12.0], transform: positive_log, temperature: {theta: 1.0717735, ref_T: 293.15}}
+  qfe:        {value: 3.0,   units: "1/d", bounds: [0.3, 10.0], transform: positive_log, temperature: {theta: 1.0717735, ref_T: 293.15}}
+  bH:         {value: 0.4,   units: "1/d", bounds: [0.05, 2.0], transform: positive_log, temperature: {theta: 1.0717735, ref_T: 293.15}}
+  Kh:         {value: 3.0,   units: "1/d", bounds: [0.3, 10.0], transform: positive_log, temperature: {theta: 1.0413797, ref_T: 293.15}}
+  muAUT:      {value: 1.0,   units: "1/d", bounds: [0.1, 2.0],  transform: positive_log, temperature: {theta: 1.1106677, ref_T: 293.15}}
+  bAUT:       {value: 0.15,  units: "1/d", bounds: [0.01, 0.5], transform: positive_log, temperature: {theta: 1.1161232, ref_T: 293.15}}
+  KO2_H:      {value: 0.2,   units: "g_O2/m3",  bounds: [0.01, 2.0],  transform: positive_log}
+  KNO3_H:     {value: 0.5,   units: "g_N/m3",   bounds: [0.05, 5.0],  transform: positive_log}
+  KF:         {value: 4.0,   units: "g_COD/m3", bounds: [0.4, 40.0],  transform: positive_log}
+  KA_H:       {value: 4.0,   units: "g_COD/m3", bounds: [0.4, 40.0],  transform: positive_log}
+  Kfe:        {value: 4.0,   units: "g_COD/m3", bounds: [0.4, 40.0],  transform: positive_log}
+  KNH4_H:     {value: 0.05,  units: "g_N/m3",   bounds: [0.005, 0.5], transform: positive_log}
+  KX:         {value: 0.1,   units: "g_COD/g_COD", bounds: [0.01, 1.0], transform: positive_log}
+  KO2_AUT:    {value: 0.5,   units: "g_O2/m3",  bounds: [0.05, 5.0],  transform: positive_log}
+  KNH4_AUT:   {value: 1.0,   units: "g_N/m3",   bounds: [0.1, 10.0],  transform: positive_log}
+  etaNO3_H:   {value: 0.8,   units: "-", bounds: [0.1, 1.0], transform: logit}
+  etaNO3_HYD: {value: 0.6,   units: "-", bounds: [0.1, 1.0], transform: logit}
+  etafe:      {value: 0.4,   units: "-", bounds: [0.05, 1.0], transform: logit}
+  YH:         {value: 0.625, units: "g_COD/g_COD", bounds: [0.4, 0.8], transform: logit}
+  YAUT:       {value: 0.24,  units: "g_COD/g_N",   bounds: [0.1, 0.4], transform: positive_log}
+  fXI:        {value: 0.1,   units: "g_COD/g_COD", bounds: [0.02, 0.3], transform: logit}
+
+  # --- Anaerobic groups (ADM1, BSM2 values at 35 C converted from kg to g).
+  # Temperature dependence after Siegrist et al. (2002), whose exp(k (T - 35))
+  # is written here as theta = exp(k): k = 0.069 for fermentation and both
+  # methanogen groups, 0.055 for propionate oxidation.
+  k_m_su:     {value: 30.0,  units: "1/d", bounds: [5.0, 70.0],  transform: positive_log, prior: {mean: 30, std: 15},  temperature: {theta: 1.0714361, ref_T: 308.15}}
+  k_m_pro:    {value: 13.0,  units: "1/d", bounds: [3.0, 40.0],  transform: positive_log, prior: {mean: 13, std: 6.5}, temperature: {theta: 1.0565406, ref_T: 308.15}}
+  k_m_ac:     {value: 8.0,   units: "1/d", bounds: [2.0, 25.0],  transform: positive_log, prior: {mean: 8, std: 4},    temperature: {theta: 1.0714361, ref_T: 308.15}}
+  k_m_h2:     {value: 35.0,  units: "1/d", bounds: [10.0, 80.0], transform: positive_log, prior: {mean: 35, std: 17.5}, temperature: {theta: 1.0714361, ref_T: 308.15}}
+  k_dec_su:   {value: 0.02,  units: "1/d", bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}, temperature: {theta: 1.0714361, ref_T: 308.15}}
+  k_dec_pro:  {value: 0.02,  units: "1/d", bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}, temperature: {theta: 1.0565406, ref_T: 308.15}}
+  k_dec_ac:   {value: 0.02,  units: "1/d", bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}, temperature: {theta: 1.0714361, ref_T: 308.15}}
+  k_dec_h2:   {value: 0.02,  units: "1/d", bounds: [0.005, 0.1], transform: positive_log, prior: {mean: 0.02, std: 0.01}, temperature: {theta: 1.0714361, ref_T: 308.15}}
+  K_S_su:     {value: 500.0, units: "g_COD/m3", bounds: [50.0, 5000.0], transform: positive_log, prior: {mean: 500, std: 250}}
+  K_S_pro:    {value: 100.0, units: "g_COD/m3", bounds: [10.0, 1000.0], transform: positive_log, prior: {mean: 100, std: 50}}
+  K_S_ac:     {value: 150.0, units: "g_COD/m3", bounds: [15.0, 1500.0], transform: positive_log, prior: {mean: 150, std: 75}}
+  K_S_h2:     {value: 0.007, units: "g_COD/m3", bounds: [0.0007, 0.07],  transform: positive_log, prior: {mean: 0.007, std: 0.0035}}
+  K_I_h2_pro: {value: 0.0035, units: "g_COD/m3", bounds: [0.00035, 0.035], transform: positive_log, prior: {mean: 0.0035, std: 0.00175}}
+  K_S_IN:     {value: 1.4,   units: "g_N/m3",   bounds: [0.14, 14.0],  transform: positive_log, prior: {mean: 1.4, std: 0.7}}
+  K_I_nh3:    {value: 25.2,  units: "g_N/m3",   bounds: [2.52, 252.0], transform: positive_log, prior: {mean: 25.2, std: 12.6}}
+  pKa_IN:     {value: 8.955, units: "-"}
+  pH_LL_su:   {value: 4.0,   units: "-"}
+  pH_UL_su:   {value: 5.5,   units: "-"}
+  pH_LL_ac:   {value: 6.0,   units: "-"}
+  pH_UL_ac:   {value: 7.0,   units: "-"}
+  pH_LL_h2:   {value: 5.0,   units: "-"}
+  pH_UL_h2:   {value: 6.0,   units: "-"}
+  Y_su:       {value: 0.10,  units: "g_COD/g_COD", bounds: [0.02, 0.2], transform: logit, prior: {mean: 0.1, std: 0.005}}
+  Y_pro:      {value: 0.04,  units: "g_COD/g_COD", bounds: [0.02, 0.2], transform: logit, prior: {mean: 0.04, std: 0.002}}
+  Y_ac:       {value: 0.05,  units: "g_COD/g_COD", bounds: [0.02, 0.2], transform: logit, prior: {mean: 0.05, std: 0.0025}}
+  Y_h2:       {value: 0.06,  units: "g_COD/g_COD", bounds: [0.02, 0.2], transform: logit, prior: {mean: 0.06, std: 0.003}}
+  # Fermentation products as fractions of the fermented COD not built into
+  # biomass. Siegrist et al. (2002) Table 2 gives, per unit of sugar or amino
+  # acid COD at a yield of 0.15, 0.493 to acetate, 0.213 to propionate and
+  # 0.144 to hydrogen; normalized by (1 - 0.15) these are the values below.
+  f_ac_fe:    {value: 0.58,  units: "g_COD/g_COD"}
+  f_pro_fe:   {value: 0.25,  units: "g_COD/g_COD"}
+  f_h2_fe:    {value: 0.17,  units: "g_COD/g_COD"}
+  # Propionate oxidation products (ADM1).
+  f_ac_pro:   {value: 0.57,  units: "g_COD/g_COD"}
+  f_h2_pro:   {value: 0.43,  units: "g_COD/g_COD"}
+  # Fraction of decayed anaerobic biomass that is unbiodegradable (Siegrist et
+  # al. 2002 Table 2; ADM1 reaches 0.2 through its composite particulates).
+  fXI_AN:     {value: 0.2,   units: "g_COD/g_COD", bounds: [0.05, 0.4], transform: logit}
+  # Switches that stop anaerobic growth under oxygen or nitrate. No source gives
+  # values for this in a model of this kind; the ASM2d half-saturation
+  # constants for its anaerobic (fermentation) switch are used, with wide
+  # priors to say so.
+  KI_O2_AN:   {value: 0.2,   units: "g_O2/m3", bounds: [0.01, 2.0], transform: positive_log, prior: {mean: 0.2, std: 0.2}}
+  KI_NO3_AN:  {value: 0.5,   units: "g_N/m3",  bounds: [0.05, 5.0], transform: positive_log, prior: {mean: 0.5, std: 0.5}}
+
+expressions:
+  # Electron-acceptor switches shared by the heterotrophic processes. Later
+  # levels widen these (nitrite) instead of editing every rate.
+  aerobic:   "monod([SO2], KO2_H)"
+  anoxic:    "monod_inh([SO2], KO2_H) * monod([SNO3], KNO3_H)"
+  anaerobic: "monod_inh([SO2], KO2_H) * monod_inh([SNO3], KNO3_H)"
+  # Nutrient limitation. Later levels multiply in phosphate.
+  nutrient_limit:    "monod([SNH4], KNH4_H)"
+  nutrient_limit_AN: "monod([SNH4], K_S_IN)"
+  # Anaerobic organisms grow only without oxygen and nitrate.
+  anaerobic_only: "monod_inh([SO2], KI_O2_AN) * monod_inh([SNO3], KI_NO3_AN)"
+  # pH and free-ammonia inhibition (ADM1). pH is a condition at this level.
+  ph_inhibition_su: "pH_inhibit(pH_LL_su, pH_UL_su)"
+  ph_inhibition_ac: "pH_inhibit(pH_LL_ac, pH_UL_ac)"
+  ph_inhibition_h2: "pH_inhibit(pH_LL_h2, pH_UL_h2)"
+  nh3_inhibition_ac: "monod_inh([SNH4] * (1 - pH_switch(pKa_IN)), K_I_nh3)"
+  h2_inhibition_pro: "monod_inh([SH2], K_I_h2_pro)"
+  # Heterotroph substrate terms (ASM2d): SF and SA compete in proportion.
+  on_SF: "safe_div(monod([SF], KF) * [SF], [SA] + [SF])"
+  on_SA: "safe_div(monod([SA], KA_H) * [SA], [SA] + [SF])"
+  # Hydrolysis catalysts: heterotrophs and acidogens together.
+  X_HYD: "[XH] + [XFE]"
+
+reactions:
+  # --- Hydrolysis ---------------------------------------------------------
+  - name: hydrolysis
+    description: >
+      Hydrolysis of slowly biodegradable organics, catalysed by heterotrophs
+      and acidogens together (Contois, ASM2d form and values), at the full
+      rate with oxygen, reduced with nitrate and further reduced without
+      either.
+    rate: "Kh * monod_ratio([XS], X_HYD, KX) * X_HYD * (aerobic + etaNO3_HYD * anoxic + etafe * anaerobic)"
+    stoichiometry: {XS: -1.0, SF: 1.0, SNH4: auto, SIC: auto}
+
+  # --- Heterotrophs (ASM2d) -----------------------------------------------
+  - name: aerobic_growth_on_SF
+    rate: "muH * aerobic * on_SF * nutrient_limit * [XH]"
+    stoichiometry: {SF: "-1 / YH", XH: 1.0, SO2: auto, SNH4: auto, SIC: auto}
+  - name: aerobic_growth_on_SA
+    rate: "muH * aerobic * on_SA * nutrient_limit * [XH]"
+    stoichiometry: {SA: "-1 / YH", XH: 1.0, SO2: auto, SNH4: auto, SIC: auto}
+  - name: anoxic_growth_on_SF
+    rate: "muH * etaNO3_H * anoxic * on_SF * nutrient_limit * [XH]"
+    stoichiometry: {SF: "-1 / YH", XH: 1.0, SNO3: "-(1 - YH) / (40 / 14 * YH)", SN2: auto, SNH4: auto, SIC: auto}
+  - name: anoxic_growth_on_SA
+    rate: "muH * etaNO3_H * anoxic * on_SA * nutrient_limit * [XH]"
+    stoichiometry: {SA: "-1 / YH", XH: 1.0, SNO3: "-(1 - YH) / (40 / 14 * YH)", SN2: auto, SNH4: auto, SIC: auto}
+  - name: fermentation_by_heterotrophs
+    description: "ASM2d fermentation: heterotrophs convert SF to acetate without growth when neither oxygen nor nitrate is present."
+    rate: "qfe * anaerobic * monod([SF], Kfe) * [XH]"
+    stoichiometry: {SF: -1.0, SA: 1.0, SNH4: auto, SIC: auto}
+  - name: decay_of_heterotrophs
+    description: "Death-regeneration decay, at the same rate in every zone."
+    rate: "bH * [XH]"
+    stoichiometry: {XH: -1.0, XS: "1 - fXI", XI: "fXI", SNH4: auto, SIC: auto}
+    conserved_for: [N, C]
+
+  # --- Nitrification (ASM2d) ------------------------------------------------
+  - name: growth_of_nitrifiers
+    rate: "muAUT * monod([SO2], KO2_AUT) * monod([SNH4], KNH4_AUT) * [XAUT]"
+    stoichiometry: {XAUT: 1.0, SNO3: "1 / YAUT", SO2: auto, SNH4: auto, SIC: auto}
+  - name: decay_of_nitrifiers
+    rate: "bAUT * [XAUT]"
+    stoichiometry: {XAUT: -1.0, XS: "1 - fXI", XI: "fXI", SNH4: auto, SIC: auto}
+    conserved_for: [N, C]
+
+  # --- Anaerobic groups (ADM1 kinetics; substrate coefficient -1) -----------
+  - name: fermentation_by_acidogens
+    description: "Acidogen growth on SF, producing acetate, propionate and hydrogen."
+    rate: "k_m_su * monod([SF], K_S_su) * [XFE] * anaerobic_only * nutrient_limit_AN * ph_inhibition_su"
+    stoichiometry:
+      SF: -1.0
+      XFE: "Y_su"
+      SA: "(1 - Y_su) * f_ac_fe"
+      SPRO: "(1 - Y_su) * f_pro_fe"
+      SH2: "(1 - Y_su) * f_h2_fe"
+      SNH4: auto
+      SIC: auto
+    conserved_for: [N, C]
+  - name: propionate_oxidation
+    rate: "k_m_pro * monod([SPRO], K_S_pro) * [XPRO] * anaerobic_only * nutrient_limit_AN * ph_inhibition_su * h2_inhibition_pro"
+    stoichiometry:
+      SPRO: -1.0
+      XPRO: "Y_pro"
+      SA: "(1 - Y_pro) * f_ac_pro"
+      SH2: "(1 - Y_pro) * f_h2_pro"
+      SNH4: auto
+      SIC: auto
+    conserved_for: [N, C]
+  - name: acetoclastic_methanogenesis
+    rate: "k_m_ac * monod([SA], K_S_ac) * [XAC] * anaerobic_only * nutrient_limit_AN * ph_inhibition_ac * nh3_inhibition_ac"
+    stoichiometry: {SA: -1.0, XAC: "Y_ac", SCH4: "1 - Y_ac", SNH4: auto, SIC: auto}
+    conserved_for: [N, C]
+  - name: hydrogenotrophic_methanogenesis
+    rate: "k_m_h2 * monod([SH2], K_S_h2) * [XH2M] * anaerobic_only * nutrient_limit_AN * ph_inhibition_h2"
+    stoichiometry: {SH2: -1.0, XH2M: "Y_h2", SCH4: "1 - Y_h2", SNH4: auto, SIC: auto}
+    conserved_for: [N, C]
+  - name: decay_of_acidogens
+    rate: "k_dec_su * [XFE]"
+    stoichiometry: {XFE: -1.0, XS: "1 - fXI_AN", XI: "fXI_AN", SNH4: auto, SIC: auto}
+    conserved_for: [N, C]
+  - name: decay_of_propionate_oxidizers
+    rate: "k_dec_pro * [XPRO]"
+    stoichiometry: {XPRO: -1.0, XS: "1 - fXI_AN", XI: "fXI_AN", SNH4: auto, SIC: auto}
+    conserved_for: [N, C]
+  - name: decay_of_acetoclastic_methanogens
+    rate: "k_dec_ac * [XAC]"
+    stoichiometry: {XAC: -1.0, XS: "1 - fXI_AN", XI: "fXI_AN", SNH4: auto, SIC: auto}
+    conserved_for: [N, C]
+  - name: decay_of_hydrogenotrophic_methanogens
+    rate: "k_dec_h2 * [XH2M]"
+    stoichiometry: {XH2M: -1.0, XS: "1 - fXI_AN", XI: "fXI_AN", SNH4: auto, SIC: auto}
+    conserved_for: [N, C]
