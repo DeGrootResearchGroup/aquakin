@@ -207,6 +207,26 @@ def test_batch_reactor_grad_through_event(reactor, simple_model):
     assert g == pytest.approx(np.exp(-0.2), abs=1e-4)
 
 
+def test_batch_reactor_time_event_solve_traces_under_jit(reactor, simple_model):
+    """A time-event batch solve wrapped in ``jax.jit``, with the parameters
+    traced and the save grid built inside the trace, gives the eager result and
+    the closed form ``A = A0 exp(-k t)`` halved at the event."""
+    ev = Event(at_times=[1.0], apply=lambda t, y, a: y.at[0].multiply(0.5), name="half")
+
+    def trajectory(params):
+        return reactor.solve(_A0(simple_model), (0.0, 2.0), jnp.linspace(0.0, 2.0, 5),
+                             params=params, events=[ev]).C
+
+    params = simple_model.default_parameters()
+    eager = np.asarray(trajectory(params))
+    np.testing.assert_allclose(np.asarray(jax.jit(trajectory)(params)), eager,
+                               rtol=1e-12, atol=1e-15)
+    t = np.linspace(0.0, 2.0, 5)
+    expected = np.where(t <= 1.0, np.exp(-0.1 * t), 0.5 * np.exp(-0.1 * t))
+    # The default reactor tolerances: the batch suite's 1e-4.
+    np.testing.assert_allclose(eager[:, 0], expected, atol=1e-4)
+
+
 def test_batch_time_unit_converts_event_times(reactor, simple_model):
     """``at_times`` is in the solve's ``time_unit``, and so is the event log."""
     # Model native unit is seconds (k = 0.1 1/s). Reset A to 1 at t = 1 min.

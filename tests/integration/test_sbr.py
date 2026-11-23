@@ -280,8 +280,7 @@ def test_small_sbr_volume_follows_fill_and_decant(simple_model):
 def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simple_model):
     """d(A + 2B at the end of the decant)/dk from a full tank through the settle
     and decant phases (two located-event segments, the settling state and the
-    clarified draw) matches a central finite difference. The span is the two
-    phases rather than a whole cycle because each event segment recompiles."""
+    clarified draw) matches a central finite difference."""
     p = _small_sbr_plant(simple_model)
     base = p.default_parameters()
     a, b = simple_model.species_index["A"], simple_model.species_index["B"]
@@ -301,6 +300,53 @@ def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simp
     # 1e-10 tolerance over a 1e-4 step, ~1e-6.
     assert g == pytest.approx(fd, rel=1e-5)
     assert g != 0.0
+
+
+def test_small_sbr_solve_traces_under_jit_and_matches_eager(simple_model):
+    """A whole-cycle SBR solve wrapped in ``jax.jit`` -- the default ``y0``,
+    traced parameters and a save grid built inside the trace -- traces and gives
+    the eager solve's trajectory (one computation compiled whole instead of
+    segment by segment, so they agree to rounding)."""
+    p = _small_sbr_plant(simple_model)
+    base = p.default_parameters()
+
+    def trajectory(params):
+        return p.solve(t_span=(0.0, 27.0), t_eval=jnp.linspace(0.0, 27.0, 55),
+                       params=params).state
+
+    eager = trajectory(base)
+    np.testing.assert_allclose(np.asarray(jax.jit(trajectory)(base)), np.asarray(eager),
+                               rtol=1e-10, atol=1e-12)
+    # The jitted cycle is the SBR cycle: the volume follows its closed form
+    # (an adaptive solve at the default rtol = 1e-6: two decades above it).
+    np.testing.assert_allclose(np.asarray(eager[:, simple_model.n_species]),
+                               _volume_closed_form(p.units["sbr"], np.linspace(0.0, 27.0, 55)),
+                               rtol=1e-4)
+
+
+def test_small_sbr_jitted_gradient_matches_finite_difference(simple_model):
+    """``jax.jit(jax.grad(...))`` of the settle + decant loss of the
+    finite-difference test above (a save grid built inside the trace) matches a
+    central finite difference of the eager loss. (About 15 s, like that test:
+    the cost is compiling the reverse pass through the stiff solve, and this is
+    the fast tier's only check that a jitted SBR gradient traces.)"""
+    p = _small_sbr_plant(simple_model)
+    base = p.default_parameters()
+    a, b = simple_model.species_index["A"], simple_model.species_index["B"]
+    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(_SMALL_V_FULL)
+    y0 = p.initial_state(overrides={"sbr": full})
+
+    def loss(k):
+        sol = p.solve(t_span=(15.0, 25.0), t_eval=jnp.array([25.0]),
+                      params=base.at[0].set(k), y0=y0, rtol=1e-10, atol=1e-12)
+        return sol.state[-1, a] + 2.0 * sol.state[-1, b]
+
+    k0 = float(base[0])
+    h = 1e-4 * k0
+    fd = (float(loss(k0 + h)) - float(loss(k0 - h))) / (2.0 * h)
+    # As in the finite-difference test above: O(h^2) truncation plus the
+    # solver's 1e-10 tolerance over a 1e-4 step, ~1e-6.
+    assert float(jax.jit(jax.grad(loss))(k0)) == pytest.approx(fd, rel=1e-5)
 
 
 def test_mass_balance_reads_sbr_inventory(asm1):

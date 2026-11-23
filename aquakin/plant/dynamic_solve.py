@@ -32,7 +32,15 @@ from aquakin.integrate._common import (
 )
 from aquakin.integrate._config import FORWARD_THROUGH_SOLVE_DIFF, STABLE_REVERSE_DIFF
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
-from aquakin.integrate.events import Event, events_to_native_time, solve_with_events
+from aquakin.integrate.events import (
+    Event,
+    SegmentSettings,
+    build_segment_solver,
+    events_to_native_time,
+    root_events_of,
+    run_segmented,
+    segment_signature,
+)
 from aquakin.integrate.seam import _coerce_atol, _run_diffeqsolve
 from aquakin.plant.results import (
     PlantSolution,
@@ -137,8 +145,9 @@ def solve(
         segments at the firings and ``solution.events_log`` records them.
         Event times (``at_times``, the ``t`` passed to ``cond_fn`` /
         ``apply``, and the log times) use the same unit as ``t_span``.
-        Time-only events keep ``jax.grad`` finite; a state event makes the run
-        a forward simulation. Mutually exclusive with ``event=`` and with
+        Time-only events keep ``jax.grad`` finite and the solve traceable
+        under ``jax.jit``; a state event makes the run a forward simulation.
+        The compiled solve between events is kept per plant and reused. Mutually exclusive with ``event=`` and with
         ``diff=DifferentiationConfig(method='stable')`` reverse differentiation.
     progress_meter : diffrax.AbstractProgressMeter, optional
         A diffrax progress meter for a long forward solve.
@@ -788,11 +797,7 @@ def _solve_jax_adjoint(
     # before the first build, so they are constant for a given plant -- keying
     # on them only guards the rare case where the very first solve was traced
     # (flags still None) and a later concrete solve sets them.
-    recycle_key = (
-        self._recycle._recycle_map_constant,
-        self._recycle._recycle_T_map_constant,
-        self._recycle._flow_map_constant,
-    )
+    recycle_key = self._recycle.cache_flags()
     # A progress meter is a one-off diagnostic (and carries host state), so it
     # bypasses the compiled-solve cache rather than being keyed into it.
     cache_key = (
@@ -851,38 +856,45 @@ def _solve_with_events(
     """Run the monolithic plant solve with located events (the ``events=``
     path).
 
-    Hands the assembled plant RHS to :func:`solve_with_events`, which splits
-    the solve at the event times and applies their resets to the flat plant
-    state between segments. Not routed through the per-instance jit cache: the
-    driver is an eager segment loop (a state event's firing count is
-    data-dependent), while time-only events still differentiate because each
-    segment is a plain differentiable plant sub-solve.
+    Hands the assembled plant RHS to the segmented driver
+    (:func:`~aquakin.integrate.events.run_segmented`), which splits the solve
+    at the event times and applies their resets to the flat plant state between
+    segments. Every segment runs one compiled solve whose bounds, save grid,
+    initial state, parameters and recycle maps are runtime arguments; it is kept
+    in the per-instance ``_jit_cache`` (:func:`_event_segment_solver`), so a
+    repeat solve of the same plant and settings compiles nothing. With only time
+    events nothing depends on a concrete value, so the solve differentiates and
+    traces under ``jax.jit``.
 
-    The state-invariant recycle map is precomputed once (from ``params``, so a
-    time-event gradient still flows through it) and reused across every
-    segment's RHS calls -- the same per-RHS saving the forward solve gets;
-    ``None`` (the probe path) when the map is state-coupled or the constancy
-    check has not run.
+    The state-invariant recycle maps are built once per solve (from ``params``,
+    so a time-event gradient still flows through them) at ``(t0, y0)`` and
+    reused by every segment -- the same per-RHS saving the forward solve gets;
+    ``None`` (the probe path) when a map is state-coupled or the constancy check
+    has not run.
     """
-    rhs, _ = self._recycle.cached_rhs(jnp.asarray(t0), self._split_state(y0), params)
+    maps = self._recycle.cached_maps(jnp.asarray(t0), self._split_state(y0), params)
+    settings = SegmentSettings(
+        rtol=rtol,
+        atol=atol,
+        max_steps=max_steps,
+        dtmax=dtmax,
+        adjoint=adjoint,
+        order=order,
+        factormax=factormax,
+        solver=solver,
+    )
+    solve_segment = self._event_segment_solver(settings, events, has_t_eval=t_eval is not None)
 
     with friendly_solve_errors(max_steps, what="plant solve"):
-        res = solve_with_events(
-            rhs,
+        res = run_segmented(
+            solve_segment,
+            maps,
             y0,
             params,
-            t0=t0,
-            t1=t1,
+            t_span=(t0, t1),
             t_eval=t_eval,
             events=events,
-            rtol=rtol,
-            atol=atol,
-            dtmax=dtmax,
-            adjoint=adjoint,
-            max_steps=max_steps,
-            order=order,
-            factormax=factormax,
-            solver=solver,
+            settings=settings,
         )
     log = res.log
     if time_factor != 1.0:  # native -> requested unit
@@ -890,6 +902,60 @@ def _solve_with_events(
     return self._finalize_solution(
         res.ts, res.ys, time_factor=time_factor, time_unit=time_unit, events_log=log
     )
+
+
+def _event_segment_solver(self, settings, events, *, has_t_eval):
+    """The compiled one-segment solve of the ``events=`` path, cached per plant.
+
+    Keyed, in ``_jit_cache``, by everything the compiled program depends on:
+    the solver settings (``rtol``, the ``atol`` values, the adjoint, ``dtmax``,
+    ``max_steps``, ``order``, ``factormax``, the solver class), the root-find
+    tolerances, whether a ``t_eval`` grid is reported, the state events located
+    in-solve (:func:`~aquakin.integrate.events.segment_signature`) and the
+    recycle map-constancy verdicts the RHS is specialised on. The segment
+    bounds, the grid, ``y0``, ``params`` and the maps are runtime arguments, so
+    they are not keyed (JAX's own cache covers their shapes); the plant's units,
+    wiring and conditions are fixed for the life of the cache, which
+    :meth:`_structure_changed` and the condition mutators drop. Under tracing
+    (a traced ``atol``) the key cannot be formed and the solver is built
+    uncached.
+
+    Parameters
+    ----------
+    settings : SegmentSettings
+        The integrator settings of the solve.
+    events : sequence of Event
+        The (native-time) events of the solve.
+    has_t_eval : bool
+        Whether the solve reports a ``t_eval`` grid.
+
+    Returns
+    -------
+    callable
+        The jitted ``solve_segment`` from
+        :func:`~aquakin.integrate.events.build_segment_solver`.
+    """
+    key = settings.cache_key()
+    if key is not None:
+        key = (
+            "events",
+            key,
+            has_t_eval,
+            segment_signature(events),
+            self._recycle.cache_flags(),
+        )
+        cached = self._jit_cache.get(key)
+        if cached is not None:
+            return cached[0]
+    rhs_with_maps = self._recycle.rhs_with_maps
+    solve_segment = build_segment_solver(
+        rhs_with_maps, settings, root_events_of(events), has_t_eval=has_t_eval
+    )
+    if key is not None:
+        # The adjoint is keyed by identity: keep it alive with the entry so its
+        # id cannot be reused by another object while the entry exists.
+        self._jit_cache[key] = (solve_segment, settings.adjoint)
+    return solve_segment
 
 
 def _build_jitted_solve(

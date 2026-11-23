@@ -35,11 +35,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import diffrax
+import jax
 import jax.numpy as jnp
 import numpy as np
 import optimistix as optx
 
-from aquakin.integrate._common import _run_diffeqsolve, friendly_solve_errors
+from aquakin.integrate._common import (
+    _run_diffeqsolve,
+    concrete_settings_key,
+    friendly_solve_errors,
+)
 
 # Relative tolerance (scaled by the span) for deciding a save time coincides with
 # a segment boundary, so it is assigned to the segment ending there (its
@@ -137,37 +142,194 @@ class EventedResult:
     log: list = field(default_factory=list)
 
 
-def _make_segment_solver(
-    rhs, *, rtol, atol, max_steps, dtmax, adjoint, order=5, factormax=None, solver=None
-):
-    """Build a one-segment solver for the event driver.
+@dataclass(frozen=True, eq=False)
+class SegmentSettings:
+    """The integrator settings every segment of an evented solve shares.
 
-    Delegates to the canonical :func:`_run_diffeqsolve` -- the **same**
-    integrator (``build_implicit_solver`` + ``PIDController`` + adjoint) the
-    plain reactor/plant solves use, with the caller's ``order`` / ``factormax``
-    / ``solver`` threaded through -- adding only the per-segment ``saveat`` and
-    terminating ``event``. So the event path's per-step integration matches the
-    plain path's exactly, and the integrator config cannot drift between them.
+    Bundles what :func:`build_segment_solver` bakes into the compiled
+    one-segment solve besides the right-hand side and the state events, so the
+    builder's signature stays short. It holds an array (``atol``), so it is not
+    itself hashable; :meth:`cache_key` gives the hashable key over its values.
+
+    Attributes
+    ----------
+    rtol : float
+        Relative step tolerance.
+    atol : float or jnp.ndarray
+        Absolute step tolerance, scalar or shape ``(n_state,)``.
+    max_steps : int
+        Step budget of each segment.
+    dtmax : float or None
+        Step cap (native time), ``None`` for uncapped.
+    adjoint : diffrax.AbstractAdjoint or None
+        The diffrax adjoint, ``None`` for the default.
+    order : int
+        ESDIRK order of the canonical solver (3 or 5).
+    factormax : float or None
+        Cap on the PID step growth, ``None`` for the diffrax default.
+    solver : diffrax.AbstractSolver or None
+        An explicit solver override, ``None`` for the canonical one.
+    root_rtol, root_atol : float
+        Tolerances of the root find that locates a state event.
+    max_segments : int
+        Safety cap on the number of state-event segments (a runaway-event
+        guard). Read by the eager driver, not compiled.
     """
 
-    def solve_segment(y0, t0, t1, args, saveat, event):
-        return _run_diffeqsolve(
-            rhs,
+    rtol: float
+    atol: object
+    max_steps: int = 100_000
+    dtmax: float | None = None
+    adjoint: diffrax.AbstractAdjoint | None = None
+    order: int = 5
+    factormax: float | None = None
+    solver: object = None
+    root_rtol: float = 1e-6
+    root_atol: float = 1e-9
+    max_segments: int = 10_000
+
+    def cache_key(self):
+        """Hashable key over every setting, or ``None`` when one is traced.
+
+        The solver settings go through
+        :func:`~aquakin.integrate._cache.concrete_settings_key` (the field order
+        every compiled-solve cache shares), followed by the root-find
+        tolerances. ``None`` (a traced ``atol``, under an outer trace) tells the
+        caller to build uncached.
+        """
+        key = concrete_settings_key(
+            self.rtol,
+            self.atol,
+            self.adjoint,
+            self.dtmax,
+            self.max_steps,
+            order=self.order,
+            factormax=self.factormax,
+            solver=self.solver,
+        )
+        return None if key is None else (key, float(self.root_rtol), float(self.root_atol))
+
+
+def root_events_of(events: Sequence[Event]) -> list[Event]:
+    """The state (root-crossing) events of ``events``, in order."""
+    return [ev for ev in events if not ev.is_time_event]
+
+
+def segment_signature(events: Sequence[Event]) -> tuple:
+    """Hashable description of the state events a compiled segment locates.
+
+    The compiled one-segment solve built by :func:`build_segment_solver`
+    depends on the events only through the state events' ``cond_fn`` and
+    ``direction`` (in order: their position indexes the fired mask). Time
+    events, ``apply`` resets, ``terminal`` flags and names are handled by the
+    eager driver between segments and do not enter the compiled program. Each
+    ``cond_fn`` is keyed by its own equality, which for a plain function is its
+    identity, so reusing the same :class:`Event` objects reuses the compile.
+
+    Parameters
+    ----------
+    events : sequence of Event
+        The events of the solve.
+
+    Returns
+    -------
+    tuple
+        ``((cond_fn, direction), ...)`` over the state events; ``()`` when
+        there are only time events.
+    """
+    return tuple((ev.cond_fn, ev.direction) for ev in root_events_of(events))
+
+
+def build_segment_solver(
+    make_rhs: Callable,
+    settings: SegmentSettings,
+    root_events: Sequence[Event],
+    *,
+    has_t_eval: bool,
+):
+    """Build the jit-compiled one-segment solve of the event driver.
+
+    Each segment is integrated by the canonical :func:`_run_diffeqsolve` -- the
+    **same** integrator (``build_implicit_solver`` + ``PIDController`` +
+    adjoint) the plain reactor / plant solves use -- adding only the
+    per-segment ``saveat`` and the terminating ``diffrax.Event`` of the state
+    events. The segment bounds, the save times, the initial state, the
+    parameters and the right-hand-side context are all **runtime arguments**,
+    so one compiled program serves every segment of a solve and every repeat
+    solve: a caller that keeps the returned function (keyed by the settings,
+    ``has_t_eval`` and :func:`segment_signature`) pays the compile once.
+
+    Parameters
+    ----------
+    make_rhs : callable
+        ``make_rhs(ctx) -> rhs`` building ``rhs(t, y, args)`` from the runtime
+        context ``ctx`` (a pytree; e.g. the plant's cached recycle maps). It is
+        called inside the trace, so it must be traceable.
+    settings : SegmentSettings
+        The integrator settings shared by every segment.
+    root_events : sequence of Event
+        The state events, located by a terminating ``diffrax.Event``.
+    has_t_eval : bool
+        Whether the solve reports a ``t_eval`` grid (the segment then keeps its
+        dense output and evaluates it on the grid).
+
+    Returns
+    -------
+    callable
+        ``solve_segment(ctx, y0, t0, t1, args, t_eval, tol)`` returning
+        ``(t_end, y_end, fired, mask, ys)``: where the segment stopped and its
+        state there, whether a state event stopped it, the per-state-event
+        fired flags, and -- with ``has_t_eval`` -- the state at every ``t_eval``
+        point (meaningful for the points in ``(t0, t_end]``; a point within
+        ``tol`` of ``t_end`` reports the exact end state), else ``None``.
+    """
+    diffrax_event = None
+    if root_events:
+        diffrax_event = diffrax.Event(
+            [_wrap_cond(ev) for ev in root_events],
+            root_finder=optx.Newton(rtol=settings.root_rtol, atol=settings.root_atol),
+            direction=[
+                None if ev.direction == 0 else bool(ev.direction == 1) for ev in root_events
+            ],
+        )
+
+    @jax.jit
+    def solve_segment(ctx, y0, t0, t1, args, t_eval, tol):
+        sol = _run_diffeqsolve(
+            make_rhs(ctx),
             t0=t0,
             t1=t1,
             y0=y0,
             args=args,
-            saveat=saveat,
-            rtol=rtol,
-            atol=atol,
-            adjoint=adjoint,
-            max_steps=max_steps,
-            dtmax=dtmax,
-            event=event,
-            order=order,
-            factormax=factormax,
-            solver=solver,
+            saveat=diffrax.SaveAt(t1=True, dense=has_t_eval),
+            rtol=settings.rtol,
+            atol=settings.atol,
+            adjoint=settings.adjoint,
+            max_steps=settings.max_steps,
+            dtmax=settings.dtmax,
+            event=diffrax_event,
+            order=settings.order,
+            factormax=settings.factormax,
+            solver=settings.solver,
         )
+        t_end = sol.ts[-1]
+        y_end = sol.ys[-1]
+        fired = sol.result == diffrax.RESULTS.event_occurred
+        mask = () if diffrax_event is None else tuple(sol.event_mask)
+        ys = None
+        if has_t_eval:
+            # A point at the segment end takes the exact end state rather than
+            # the dense interpolant (evaluating diffrax dense output exactly at
+            # the right boundary is an edge case that can return NaN, and the
+            # end state is the documented pre-reset boundary value). Points
+            # outside the segment are evaluated at its midpoint, a safe interior
+            # time; the driver discards them.
+            at_end = t_eval >= t_end - tol
+            inside = (t_eval > t0) & ~at_end
+            t_safe = jnp.where(inside, t_eval, 0.5 * (t0 + t_end))
+            ys = jax.vmap(sol.evaluate)(t_safe)
+            ys = jnp.where(at_end[:, None], y_end, ys)
+        return t_end, y_end, fired, mask, ys
 
     return solve_segment
 
@@ -209,9 +371,13 @@ def solve_with_events(
     The solve is split into segments at the event times; between segments the
     fired events' ``apply`` resets produce the new state. With **only time
     events** the segment boundaries are static and every sub-solve is
-    differentiable, so ``jax.grad`` flows through the whole call. With any
+    differentiable, so ``jax.grad`` flows through the whole call, and the call
+    can be wrapped in ``jax.jit`` (``t_eval`` may then be traced). With any
     **state event** the driver runs eagerly (the firing times are discovered at
     runtime) and is forward-simulation only.
+
+    Every segment runs one compiled solve, built once per call; the plant and
+    batch-reactor ``events=`` paths keep it across calls as well.
 
     Parameters
     ----------
@@ -240,23 +406,7 @@ def solve_with_events(
     -------
     EventedResult
     """
-    events = list(events)
-    if not events:
-        raise ValueError("solve_with_events needs at least one Event.")
-    # Label unnamed events on copies so the caller's Event objects are untouched.
-    events = [
-        ev if ev.name is not None else dataclasses.replace(ev, name=f"event{i}")
-        for i, ev in enumerate(events)
-    ]
-
-    t0 = float(t0)
-    t1 = float(t1)
-    t_eval_np = None if t_eval is None else np.asarray(t_eval, dtype=float)
-    if t_eval_np is not None and np.any(np.diff(t_eval_np) < 0):
-        raise ValueError("t_eval must be sorted (ascending).")
-
-    solve_segment = _make_segment_solver(
-        rhs,
+    settings = SegmentSettings(
         rtol=rtol,
         atol=atol,
         max_steps=max_steps,
@@ -265,39 +415,99 @@ def solve_with_events(
         order=order,
         factormax=factormax,
         solver=solver,
+        root_rtol=root_rtol,
+        root_atol=root_atol,
+        max_segments=max_segments,
+    )
+    solve_segment = build_segment_solver(
+        lambda ctx: rhs, settings, root_events_of(events), has_t_eval=t_eval is not None
+    )
+    return run_segmented(
+        solve_segment,
+        None,
+        y0,
+        args,
+        t_span=(t0, t1),
+        t_eval=t_eval,
+        events=events,
+        settings=settings,
     )
 
-    has_root = bool([ev for ev in events if not ev.is_time_event])
+
+def run_segmented(
+    solve_segment,
+    ctx,
+    y0,
+    args,
+    *,
+    t_span,
+    t_eval,
+    events,
+    settings,
+) -> EventedResult:
+    """Run the segmented event solve with a (possibly cached) segment solver.
+
+    The shared back half of :func:`solve_with_events` and the plant /
+    batch-reactor ``events=`` paths: it labels unnamed events, checks
+    ``t_eval``, and drives the segments, translating a segment that exhausts
+    its step budget into the friendly remedy message.
+
+    Parameters
+    ----------
+    solve_segment : callable
+        The one-segment solve from :func:`build_segment_solver`, built for the
+        state events of ``events`` and for ``t_eval is not None``.
+    ctx
+        Runtime right-hand-side context passed to ``solve_segment``.
+    y0 : jnp.ndarray
+        Initial state, shape ``(n_state,)``.
+    args
+        Parameter argument threaded to the RHS and the events.
+    t_span : (float, float)
+        Integration interval ``(t0, t1)``.
+    t_eval : jnp.ndarray or None
+        Sorted output times, or ``None`` for the final state only. May be traced.
+    events : sequence of Event
+        The events to locate.
+    settings : SegmentSettings
+        The settings ``solve_segment`` was built with; the driver reads its
+        ``max_steps`` (named in the remedy message) and ``max_segments``.
+
+    Returns
+    -------
+    EventedResult
+    """
+    events = list(events)
+    if not events:
+        raise ValueError("solve_with_events needs at least one Event.")
+    # Label unnamed events on copies so the caller's Event objects are untouched.
+    events = [
+        ev if ev.name is not None else dataclasses.replace(ev, name=f"event{i}")
+        for i, ev in enumerate(events)
+    ]
+    if t_eval is not None:
+        t_eval = jnp.asarray(t_eval, dtype=float)
+        # A traced grid (the solve under an outer jit) cannot be inspected.
+        if not isinstance(t_eval, jax.core.Tracer) and np.any(np.diff(np.asarray(t_eval)) < 0):
+            raise ValueError("t_eval must be sorted (ascending).")
+
     # Wrap the segmented drive so a segment exhausting the integrator step budget
     # re-raises the friendly remedy message instead of the raw equinox
-    # MaxStepsReached chatter (the per-segment solves execute eagerly here).
-    with friendly_solve_errors(max_steps, what="event solve"):
-        return _drive(
-            solve_segment,
-            y0,
-            args,
-            t0,
-            t1,
-            t_eval_np,
-            events,
-            has_root,
-            root_rtol,
-            root_atol,
-            max_segments,
-        )
+    # MaxStepsReached chatter.
+    t0, t1 = float(t_span[0]), float(t_span[1])
+    with friendly_solve_errors(settings.max_steps, what="event solve"):
+        return _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, settings.max_segments)
 
 
-def _drive(
-    solve_segment, y0, args, t0, t1, t_eval_np, events, has_root, root_rtol, root_atol, max_segments
-):
+def _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, max_segments):
     """Segmented event driver, shared by the time- and state-event cases.
 
-    With **no** state event (``has_root=False``) the segment boundaries are the
-    static time-event schedule, no terminating ``diffrax.Event`` is used, and
-    nothing branches on traced state -- so the whole drive is a fixed sequence of
-    differentiable sub-solves and ``jax.grad`` flows through it. With a state
-    event the firing time is located by a root find and discovered at runtime, so
-    the loop is eager (forward simulation).
+    With **no** state event the segment boundaries are the static time-event
+    schedule, no terminating ``diffrax.Event`` is used, and nothing branches on
+    traced state -- so the whole drive is a fixed sequence of differentiable
+    sub-solves: ``jax.grad`` flows through it and it traces under ``jax.jit``.
+    With a state event the firing time is located by a root find and discovered
+    at runtime, so the loop is eager (forward simulation).
 
     Output convention: a ``t_eval`` point that coincides with an event time is
     emitted with its **pre-reset** (left-limit) value -- it belongs to the
@@ -310,31 +520,24 @@ def _drive(
     ``t_eval=[t_end]`` agree. A time event at exactly ``t0`` is applied to the
     initial state before the first segment (a ``t_eval`` point at ``t0`` still
     reports the pre-reset initial state).
+
+    The ``t_eval`` points are assigned to segments by mask (each point to the
+    first segment whose end it does not exceed, by more than the tolerance), so
+    the grid need not be concrete.
     """
-    root_events = [ev for ev in events if not ev.is_time_event]
+    root_events = root_events_of(events)
+    has_root = bool(root_events)
     tol = _BOUNDARY_ASSIGN_RTOL * max(1.0, abs(t1 - t0))
     time_times = sorted({t for ev in events for t in (ev.at_times or []) if t0 + tol < t < t1})
-    diffrax_event = None
-    if has_root:
-        root = optx.Newton(rtol=root_rtol, atol=root_atol)
-        diffrax_event = diffrax.Event(
-            [_wrap_cond(ev) for ev in root_events],
-            root_finder=root,
-            direction=[
-                None if ev.direction == 0 else bool(ev.direction == 1) for ev in root_events
-            ],
-        )
 
     log = []
-    out_y = []
-    idx = 0  # cursor into t_eval
-    n_eval = 0 if t_eval_np is None else t_eval_np.shape[0]
     y = jnp.asarray(y0)
+    out = claimed = None
+    if t_eval is not None:
+        # Points at the very start (t == t0) take the initial state.
+        claimed = t_eval <= t0 + tol
+        out = jnp.where(claimed[:, None], y, jnp.zeros((t_eval.shape[0], y.shape[0]), y.dtype))
     seg_t0 = t0
-    # Emit any t_eval points at the very start (t == t0) with the initial state.
-    while idx < n_eval and t_eval_np[idx] <= t0 + tol:
-        out_y.append(y)
-        idx += 1
     # The reported final time/state when t_eval is None: the end of the last
     # segment, before any reset applied there (the pre-reset convention).
     t_report, y_report = t0, y
@@ -345,7 +548,7 @@ def _drive(
     for ev in firing:
         log.append((t0, ev.name))
     if terminal:
-        return _assemble(out_y, t_eval_np, y, t_report, y_report, log)
+        return _assemble(out, claimed, t_eval, y, t_report, y_report, log)
 
     n_iter = max_segments if has_root else len(time_times) + 1
     for _ in range(n_iter):
@@ -356,31 +559,25 @@ def _drive(
         if seg_t1 <= seg_t0:
             seg_t0 = seg_t1
             continue
-        saveat = diffrax.SaveAt(t1=True, dense=(n_eval > 0))
-        sol = solve_segment(y, seg_t0, seg_t1, args, saveat, diffrax_event)
+        t_seg_end, y_end, fired, mask, ys = solve_segment(ctx, y, seg_t0, seg_t1, args, t_eval, tol)
         if has_root:
-            fired_root = bool(sol.result == diffrax.RESULTS.event_occurred)
-            t_end = float(sol.ts[-1])
+            fired_root = bool(fired)
+            t_end = float(t_seg_end)
         else:
             fired_root = False
             t_end = seg_t1
-        y_end = sol.ys[-1]
         t_report, y_report = t_end, y_end
 
-        # Emit t_eval points in (seg_t0, t_end] (pre-reset). A point coinciding
-        # with the segment end uses the exact endpoint state ``y_end`` rather than
-        # the dense interpolant: evaluating diffrax dense output exactly at the
-        # right boundary t1 is an edge case that can return NaN, and the endpoint
-        # is the value we want anyway (the documented pre-reset boundary value).
-        while idx < n_eval and t_eval_np[idx] <= t_end + tol:
-            te = float(t_eval_np[idx])
-            out_y.append(y_end if te >= t_end - tol else sol.evaluate(te))
-            idx += 1
+        # Emit the t_eval points in (previous end, t_end] (pre-reset).
+        if t_eval is not None:
+            own = ~claimed & (t_eval <= t_end + tol)
+            out = jnp.where(own[:, None], ys, out)
+            claimed = claimed | own
 
         # Determine which events fire at the segment end and apply their resets.
         if fired_root:
-            mask = [bool(m) for m in sol.event_mask]
-            firing = [root_events[i] for i in range(len(root_events)) if mask[i]]
+            fired_mask = [bool(m) for m in mask]
+            firing = [root_events[i] for i in range(len(root_events)) if fired_mask[i]]
         elif not has_root or t_end >= seg_t1 - tol:
             firing = [
                 ev
@@ -403,7 +600,24 @@ def _drive(
                 f"apply reset moves the state off the threshold)."
             )
 
-    return _assemble(out_y, t_eval_np, y, t_report, y_report, log)
+    return _assemble(out, claimed, t_eval, y, t_report, y_report, log)
+
+
+@dataclass(frozen=True)
+class _InRequestedTime:
+    """An event callable that receives ``t`` in the solve's requested unit.
+
+    ``fn(t / factor, y, args)`` for a native-time ``t``. A value object rather
+    than a lambda so two conversions of the same ``fn`` compare equal, which
+    lets a compiled segment keyed on a state event's ``cond_fn``
+    (:func:`segment_signature`) be reused across solves.
+    """
+
+    fn: Callable
+    factor: float
+
+    def __call__(self, t, y, args):
+        return self.fn(t / self.factor, y, args)
 
 
 def events_to_native_time(events: Sequence[Event], time_factor: float) -> list[Event]:
@@ -430,9 +644,7 @@ def events_to_native_time(events: Sequence[Event], time_factor: float) -> list[E
         return list(events)
 
     def rescale(fn):
-        if fn is None:
-            return None
-        return lambda t, y, args: fn(t / time_factor, y, args)
+        return None if fn is None else _InRequestedTime(fn, float(time_factor))
 
     return [
         dataclasses.replace(
@@ -451,19 +663,18 @@ def _wrap_cond(ev: Event):
     return lambda t, y, args, **kwargs: fn(t, y, args)
 
 
-def _assemble(out_y, t_eval_np, y_final, t_end, y_end, log):
+def _assemble(out, claimed, t_eval, y_final, t_end, y_end, log):
     """Build the final EventedResult on the requested ``t_eval`` grid.
 
-    ``out_y`` holds the states emitted on ``t_eval`` so far (in grid order). A
-    terminal event that stopped the solve early leaves the unreached ``t_eval``
-    points unfilled: pad them with the final post-event state ``y_final`` (the
-    solve holds there after terminating), so ``ys`` always matches the
-    ``t_eval`` shape. With ``t_eval`` None the result is the single point
-    ``(t_end, y_end)``: the time the solve actually stopped and its pre-reset
-    state there.
+    ``out`` holds the states emitted on ``t_eval`` so far, ``claimed`` which of
+    its rows are filled. A terminal event that stopped the solve early leaves
+    the unreached ``t_eval`` points unfilled: they take the final post-event
+    state ``y_final`` (the solve holds there after terminating), so ``ys``
+    always matches the ``t_eval`` shape. With ``t_eval`` None the result is the
+    single point ``(t_end, y_end)``: the time the solve actually stopped and its
+    pre-reset state there.
     """
-    if t_eval_np is None:
+    if t_eval is None:
         return EventedResult(ts=jnp.asarray([t_end]), ys=y_end[None, :], log=log)
-    while len(out_y) < t_eval_np.shape[0]:
-        out_y.append(y_final)
-    return EventedResult(ts=jnp.asarray(t_eval_np), ys=jnp.stack(out_y, axis=0), log=log)
+    ys = jnp.where(claimed[:, None], out, y_final)
+    return EventedResult(ts=t_eval, ys=ys, log=log)

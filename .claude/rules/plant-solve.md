@@ -60,8 +60,11 @@ docstrings of `aquakin/plant/colored.py`, `aquakin/plant/solve_cache.py` and
 - **All solver-run memoization that bakes in reactor conditions lives in
   `SolveCache`** (`plant._solve_cache`: the jitted forward and
   `solve_sensitivity` solves, the PTC steady solves, the continuation and
-  arclength kernels). A new compiled artefact of that kind is stored there, so
-  one `invalidate()` drops it.
+  arclength kernels, the located-event segment solves under an `"events"` key).
+  A new compiled artefact of that kind is stored there, so one `invalidate()`
+  drops it.
+- **A compiled-solve key includes `RecycleResolver.cache_flags()`**: the
+  map-constancy verdicts select the cached-map code traced into the RHS.
 - **A condition mutator calls `plant._solve_cache.invalidate()`**, never
   hand-clears named dicts: clearing some caches and not others silently reuses
   stale conditions. A mutator that also changes the state length
@@ -133,7 +136,9 @@ docstrings of `aquakin/plant/colored.py`, `aquakin/plant/solve_cache.py` and
   (the maps alone, for a path that calls `_resolve_streams` directly). Do not
   call `_maybe_recycle_map` / `_maybe_flow_map` and close over `_rhs` by hand:
   the cached maps are the exactness-critical surface, so one helper wires them.
-  A new solve or reconstruction path uses one of these two.
+  A new solve or reconstruction path uses one of these two; a compiled solve
+  that takes the maps as a runtime argument (the event segments) closes over
+  them with `RecycleResolver.rhs_with_maps`, the closure `cached_rhs` returns.
 - **Pass `stop_gradient=True` only where the maps are closed over inside a
   custom VJP that accounts for their parameter dependence itself** — the
   discrete-adjoint primal in `Plant._esdirk_stable_adjoint` (the internal

@@ -798,6 +798,28 @@ class RecycleResolver:
             the resolver probes ``M`` on every call).
         """
         maps = self.cached_maps(t, states, params_full, stop_gradient=stop_gradient)
+        return self.rhs_with_maps(maps), maps
+
+    def rhs_with_maps(self, maps):
+        """The plant RHS closed over already-built recycle and flow maps.
+
+        The closure :meth:`cached_rhs` returns, for a caller that builds the
+        maps with :meth:`cached_maps` itself and passes them into compiled code
+        as a runtime argument (the located-event segment solve, whose compiled
+        program is reused across solves while the maps are rebuilt from each
+        solve's ``params``).
+
+        Parameters
+        ----------
+        maps : tuple
+            ``(recycle_map, flow_map)`` from :meth:`cached_maps`; either may be
+            ``None`` (the resolver then probes that map on every call).
+
+        Returns
+        -------
+        callable
+            ``rhs(t, y, params, design=None)``.
+        """
         recycle_map, flow_map = maps
         plant = self.plant
 
@@ -806,7 +828,22 @@ class RecycleResolver:
                 t, y, params, design=design, recycle_map=recycle_map, flow_map=flow_map
             )
 
-        return rhs, maps
+        return rhs
+
+    def cache_flags(self) -> tuple:
+        """The map-constancy verdicts a compiled solve is specialised on.
+
+        ``(recycle M constant, temperature MT constant, flow A constant)``, each
+        ``True`` / ``False`` / ``None`` (not yet checked). They select the
+        cached-map code paths traced into the plant RHS, so every compiled-solve
+        cache key includes them.
+
+        Returns
+        -------
+        tuple
+            The three verdicts.
+        """
+        return (self._recycle_map_constant, self._recycle_T_map_constant, self._flow_map_constant)
 
     def _check_flow_map_constant(self, t, y0, params_full, *, rtol: float = 1e-9):
         """Set ``_flow_map_constant`` -- is the recycle flow map ``A``
