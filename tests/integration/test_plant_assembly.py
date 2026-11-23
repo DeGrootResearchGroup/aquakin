@@ -214,7 +214,7 @@ def test_splitter_flow_mode_conserves_under_low_feed(simple_model):
     # remainder (no flow created)...
     co = material(150.0)
     assert co["a"] == pytest.approx(75.0) and co["b"] == pytest.approx(75.0)
-    assert co["r"] == pytest.approx(0.0)
+    assert co["r"] == pytest.approx(0.0, abs=0)
     # ...while flow_outputs stays affine (exact, may be negative -- harmless for
     # the linear recycle solve, which is what kept it from breaking _resolve_flows).
     assert flow(150.0)["r"] == pytest.approx(-50.0)
@@ -830,7 +830,7 @@ def test_run_to_steady_state_scaled_residual_criterion(simple_model, make_cstr_p
     # The reported residual is the scaled residual of the returned state.
     F = plant.derivative(ss.state, t=ss.time)
     expected = float(jnp.max(jnp.abs(F) / jnp.maximum(jnp.abs(ss.state), 1e-6)))
-    assert ss.residual == pytest.approx(expected, rel=1e-12)
+    assert ss.residual == pytest.approx(expected, rel=1e-12, abs=0)
     tank = plant.states_by_unit(ss.state)["tank"]
     # |dA/dt| / A <= 1e-9 with relaxation rate 0.2/s bounds |A - 0.5| by ~2.5e-9.
     assert float(tank[simple_model.species_index["A"]]) == pytest.approx(0.5, abs=1e-8)

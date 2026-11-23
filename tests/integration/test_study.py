@@ -434,7 +434,7 @@ def test_a_rank_study(project):
     run_study(folder)
     ranking = read_table(folder / "results" / "ranking.csv")
     assert ranking["candidate"] == ["ammonia", "flow"] and ranking["rank"] == [1.0, 2.0]
-    assert ranking["improvement"][0] > 0.0 and ranking["improvement"][1] == pytest.approx(0.0)
+    assert ranking["improvement"][0] > 0.0 and ranking["improvement"][1] == pytest.approx(0.0, abs=0)
 
 
 def test_a_steady_state_simulation_saves_measured_channels(project):

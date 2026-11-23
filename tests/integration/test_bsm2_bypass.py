@@ -47,7 +47,7 @@ def test_threshold_split_below_limit_is_inactive(asm1):
     """Below the limit nothing is diverted."""
     split = _threshold_splitter(asm1)
     flows = split.flow_outputs({"in": jnp.asarray(40000.0)}, None)
-    assert float(flows["bypass"]) == pytest.approx(0.0)
+    assert float(flows["bypass"]) == pytest.approx(0.0, abs=0)
     assert float(flows["to_plant"]) == pytest.approx(40000.0)
 
 

@@ -213,7 +213,7 @@ def test_mse_fit_and_posterior_do_not_depend_on_the_data_unit(setup, method):
     assert micro.params_named_std["A_to_B.k"] == pytest.approx(
         1e6 * unit.params_named_std["A_to_B.k"], rel=1e-5
     )
-    assert micro.loss == pytest.approx(1e-12 * unit.loss, rel=1e-5)
+    assert micro.loss == pytest.approx(1e-12 * unit.loss, rel=1e-5, abs=0)
 
 
 def test_ad_mode_forward_matches_reverse(setup):

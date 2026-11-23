@@ -119,7 +119,7 @@ def test_mass_balance_closes_with_time_unit_override():
                         time_unit="h")
     mb_d = plant.mass_balance(sol_d, components=("COD", "N"))
     mb_h = plant.mass_balance(sol_h, components=("COD", "N"))
-    assert mb_h.window == pytest.approx((0.0, 24.0))
+    assert mb_h.window == pytest.approx((0.0, 24.0), rel=1e-6, abs=0)
     assert mb_h.closed(rtol=1e-2)
     for q in ("COD", "N"):
         assert mb_h[q].inflow == pytest.approx(mb_d[q].inflow, rel=1e-6)

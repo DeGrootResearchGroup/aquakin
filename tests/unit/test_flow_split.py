@@ -90,13 +90,13 @@ def test_clamp_keeps_flows_physical():
     setpoint never produces a negative-flow stream."""
     Q_over, Q_under = split_controlled_flows(
         overflow_Q=None, underflow_Q=120.0, Q_in=jnp.asarray(100.0), clamp=True)
-    assert float(Q_over) == pytest.approx(0.0)        # clipped up to 0
+    assert float(Q_over) == pytest.approx(0.0, abs=0)        # clipped up to 0
     assert float(Q_under) == pytest.approx(100.0)
     # And the upper clip: a zero underflow setpoint cannot make overflow exceed Q_in.
     Q_over2, Q_under2 = split_controlled_flows(
         overflow_Q=None, underflow_Q=0.0, Q_in=jnp.asarray(100.0), clamp=True)
     assert float(Q_over2) == pytest.approx(100.0)
-    assert float(Q_under2) == pytest.approx(0.0)
+    assert float(Q_under2) == pytest.approx(0.0, abs=0)
 
 
 def test_overflow_controlled_remainder_tracks_feed():

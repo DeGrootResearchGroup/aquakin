@@ -34,6 +34,11 @@ hides the gap from the coverage number.
   step supports. Anything looser than `1e-2` needs a comment giving the reason.
   Never loosen a tolerance, widen a bound, or add `abs=` to make a failing test
   pass: find out why it moved. If the new value is right, say why in the commit.
+- **Pass `abs=` explicitly to `pytest.approx` when the expected value can be
+  ≲1e-10** (a sensitivity, a small loss, a rate near depletion, an exact zero):
+  its default `abs=1e-12` otherwise passes any answer that size, whatever `rel`
+  says. Use `abs=0`, or an absolute tolerance with its reason.
+  `np.testing.assert_allclose` defaults to `atol=0` and has no such trap.
 - **Do not weaken, skip, `xfail` or delete a failing test to get green.** An
   `xfail` is only for a documented open defect, is `strict=True`, and names the
   defect. A `skip` needs a condition that is actually about the environment.

@@ -322,7 +322,7 @@ def test_mass_balance_reads_sbr_inventory(asm1):
     inv = _unit_inventory(p, "sbr", state, {asm1.name: content}, params)
     for q in ("COD", "N", "P"):
         expected = 700.0 * float(np.dot(np.asarray(C), np.asarray(content[q])))
-        assert inv[q] == pytest.approx(expected, rel=1e-9)
+        assert inv[q] == pytest.approx(expected, rel=1e-9, abs=0)
     assert inv["COD"] > 0.0                                   # unit is not dropped
     # the dimensionless settling state carries no mass
     inv2 = _unit_inventory(p, "sbr", state.at[n + 1].set(0.1),
@@ -362,7 +362,7 @@ def test_interface_settling_clarifies_particulates_only(asm1):
     C = asm1.default_concentrations()
     # fully clarified (c=1): particulates -> 0, solubles unchanged
     mult = m.decant_multiplier(C, jnp.asarray(1000.0), jnp.asarray([1.0]))
-    assert float(mult[asm1.species_index["XB_H"]]) == pytest.approx(0.0)
+    assert float(mult[asm1.species_index["XB_H"]]) == pytest.approx(0.0, abs=0)
     assert float(mult[asm1.species_index["SS"]]) == pytest.approx(1.0)
     # mixed (c=0): no clarification
     mult0 = m.decant_multiplier(C, jnp.asarray(1000.0), jnp.asarray([0.0]))
@@ -383,7 +383,7 @@ def test_interface_settling_grows_settles_mixes_and_holds(asm1):
     dc_hold = m.extra_rhs(C, V, jnp.asarray([0.5]), quiescent, quiescent)
     assert float(dc_settle[0]) > 0.0
     assert float(dc_mix[0]) < 0.0
-    assert float(dc_hold[0]) == pytest.approx(0.0)
+    assert float(dc_hold[0]) == pytest.approx(0.0, abs=0)
 
 
 def test_layered_settling_average_ratio_conserved(asm1):
@@ -400,4 +400,4 @@ def test_layered_settling_average_ratio_conserved(asm1):
     dr_hold = m.extra_rhs(C, jnp.asarray(1000.0),
                           jnp.asarray([0.2, 0.6, 1.0, 1.4, 1.8]),
                           jnp.asarray(0.0), jnp.asarray(0.0))
-    assert float(jnp.max(jnp.abs(dr_hold))) == pytest.approx(0.0)
+    assert float(jnp.max(jnp.abs(dr_hold))) == pytest.approx(0.0, abs=0)

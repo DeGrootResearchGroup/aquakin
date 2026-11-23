@@ -50,7 +50,7 @@ def _stream(asm1, Q):
 def test_release_proportional_to_level(asm1):
     """Above the setpoint the release rises with the level (P control)."""
     tank = _controlled_tank(asm1, setpoint=80.0, gain=30.0)
-    assert float(tank._release_request(jnp.asarray(80.0))) == pytest.approx(0.0)
+    assert float(tank._release_request(jnp.asarray(80.0))) == pytest.approx(0.0, abs=0)
     assert float(tank._release_request(jnp.asarray(90.0))) == pytest.approx(300.0)
     assert float(tank._release_request(jnp.asarray(100.0))) == pytest.approx(600.0)
 
@@ -59,7 +59,7 @@ def test_release_clamped_to_pump_capacity(asm1):
     """The release saturates at the pump capacity and never goes negative."""
     tank = _controlled_tank(asm1, setpoint=80.0, gain=30.0, qmax=1500.0)
     assert float(tank._release_request(jnp.asarray(200.0))) == pytest.approx(1500.0)
-    assert float(tank._release_request(jnp.asarray(40.0))) == pytest.approx(0.0)
+    assert float(tank._release_request(jnp.asarray(40.0))) == pytest.approx(0.0, abs=0)
 
 
 def test_controlled_release_appears_at_outlet(asm1):
@@ -69,7 +69,7 @@ def test_controlled_release_appears_at_outlet(asm1):
     state = _state(asm1, V=100.0)            # release request = 600
     outs = tank.compute_outputs(0.0, state, _stream(asm1, 438.0), None)
     assert float(outs["out"].Q) == pytest.approx(600.0)
-    assert float(outs["bypass"].Q) == pytest.approx(0.0)
+    assert float(outs["bypass"].Q) == pytest.approx(0.0, abs=0)
 
 
 def test_controlled_flow_volume_conservation(asm1):
@@ -89,7 +89,7 @@ def test_flow_outputs_match_compute_outputs(asm1):
     flows = tank.flow_outputs({"in": jnp.asarray(438.0)}, None, FlowContext(state=state))
     outs = tank.compute_outputs(0.0, state, _stream(asm1, 438.0), None)
     assert float(flows["out"]) == pytest.approx(float(outs["out"].Q))
-    assert float(flows["bypass"]) == pytest.approx(float(outs["bypass"].Q))
+    assert float(flows["bypass"]) == pytest.approx(float(outs["bypass"].Q), rel=1e-6, abs=0)
 
 
 # ----- Wired BSM2 plant with closed-loop reject control -------------------
