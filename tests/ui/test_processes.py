@@ -19,7 +19,7 @@ from typing import ClassVar
 
 import pytest
 
-from aquakin_ui import process, worker
+from aquakin_ui import jobs, process, worker
 from aquakin_ui.jobs import StudyRun
 from aquakin_ui.worker import AquakinWorker, WorkerError
 
@@ -133,9 +133,10 @@ def test_a_worker_that_stopped_reading_is_replaced_and_the_request_resent(tmp_pa
         w.stop()
 
 
-def test_stop_kills_a_worker_that_does_not_end_when_its_input_closes():
+def test_stop_kills_a_worker_that_does_not_end_when_its_input_closes(monkeypatch):
     """A stand-in that answers and then never reads again outlives the closed
-    input; stop waits its few seconds, then kills it."""
+    input; stop waits its few seconds (shortened here), then kills it."""
+    monkeypatch.setattr(worker, "STOP_GRACE", 0.5)
     w = AquakinWorker(
         command=_script(
             """
@@ -232,24 +233,31 @@ def test_a_runs_events_are_passed_on_and_the_last_kept(tmp_path):
     assert _discarded(run._proc) and run._proc.proc.returncode == 0
 
 
-def test_a_run_is_started_with_its_folder_and_replace_flag(tmp_path):
+def test_a_run_is_started_with_its_folder_and_replace_flag(tmp_path, monkeypatch):
+    """The command a run starts; the default one is recorded as started, and a
+    stand-in runs in its place (a real run would import JAX)."""
     run = StudyRun(tmp_path, lambda e: None, replace=True, command=_script(_EVENTS))
     assert run.command[-2:] == ["--replace", str(tmp_path)]
     run.wait(30)
+    commands = []
+
+    def stand_in(command, *args):
+        commands.append(command)
+        return process.start_piped(_script(_EVENTS), *args)
+
+    monkeypatch.setattr(jobs, "start_piped", stand_in)
     default = StudyRun(tmp_path, lambda e: None)
-    try:
-        assert default.command == [
-            sys.executable,
-            "-m",
-            "aquakin",
-            "study",
-            "run",
-            "--json",
-            str(tmp_path),
-        ]
-    finally:
-        default.cancel()
-        default.wait(60)
+    assert default.wait(30)["event"] == "done"
+    assert commands == [default.command]
+    assert default.command == [
+        sys.executable,
+        "-m",
+        "aquakin",
+        "study",
+        "run",
+        "--json",
+        str(tmp_path),
+    ]
 
 
 @pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning")
