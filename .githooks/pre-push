@@ -14,6 +14,35 @@
 #
 set -euo pipefail
 
+# No commit being pushed may link to the Claude session that wrote it: a session
+# link means nothing to a reader of the repository, and the session can be
+# private (CLAUDE.md, "Pushing and merging"). git gives one line per ref on
+# stdin: "<local ref> <local sha> <remote ref> <remote sha>". The commits pushed
+# are those in local_sha not yet on the remote (all of them not on any
+# remote-tracking ref, for a new branch). This runs before the ruff gate, which
+# exits early when ruff is not installed.
+zero=0000000000000000000000000000000000000000
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue          # a branch deletion
+  if [ "$remote_sha" = "$zero" ]; then
+    range=("$local_sha" --not --remotes)
+  else
+    range=("$remote_sha..$local_sha")
+  fi
+  linked=""
+  for commit in $(git rev-list "${range[@]}"); do
+    if git log -1 --format=%B "$commit" | grep -q 'claude\.ai/code/session_'; then
+      linked+="  $(git log -1 --format='%h %s' "$commit")"$'\n'
+    fi
+  done
+  if [ -n "$linked" ]; then
+    echo "pre-push: blocked. These commit messages link to a Claude session:" >&2
+    printf '%s' "$linked" >&2
+    echo "          Remove the link (git commit --amend, or git rebase -i for older commits) and push again." >&2
+    exit 1
+  fi
+done
+
 # Use whatever ruff is on PATH (the project's pinned one after
 # `pip install -e ".[lint]"`). If ruff is not installed, warn but do not block
 # the push -- a contributor without the lint extra should not be stuck.

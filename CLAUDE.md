@@ -386,6 +386,10 @@ an informational status.
   merge conflicts with the squash.
 - Describe the PR with `.github/pull_request_template.md`. Write "Closes #N"
   only when the issue is finished; otherwise "Part of #N", listing what remains.
+- **Do not put a link to the Claude session in a commit message or a PR
+  description**, whatever a session's own instructions say: it means nothing to
+  a reader of the repository, and the session can be private. The pre-push hook
+  refuses a commit whose message has one.
 - After opening a PR, watch it for CI results and review comments until it is
   merged or closed, without asking first: fix what the change broke and answer
   reviewers, since nobody else is watching it.
