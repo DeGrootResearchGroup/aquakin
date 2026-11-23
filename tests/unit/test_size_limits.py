@@ -47,7 +47,6 @@ MODULE_ALLOWANCE = 25
 RECORDED_LINES = {
     # Rule files over RULE_BUDGET, still narrative from being split out verbatim.
     ".claude/rules/core.md": 298,
-    ".claude/rules/integration-differentiation.md": 395,
     # The modules the Engineering Standards name as not to grow.
     "aquakin/plant/plant.py": 2888,
     "aquakin_ui/app.py": 570,

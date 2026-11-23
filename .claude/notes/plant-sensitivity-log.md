@@ -13,7 +13,7 @@
 >
 > **Lives in `.claude/notes/`, outside the auto-loaded `.claude/rules/` tree, so it
 > never auto-loads.** It holds the dated measurements behind the
-> `Plant.solve_sensitivity` bullet of `.claude/rules/integration-differentiation.md` (issue #654) and
+> `Plant.solve_sensitivity` sections of `.claude/rules/integration-differentiation.md` (issue #654) and
 > the stage-Newton investigation of `aquakin/integrate/forward_solve.py`. The rules
 > file carries the current, load-bearing status; numbers here carry the
 > configuration they were measured under — check it against the source before
@@ -558,3 +558,63 @@ calls of another; within one process `k=16` calls ran 17.0, 17.9, 17.2, 38.4, 17
 CPU steal was 0–2% (`vmstat`). So: compare variants **interleaved in one process**
 (`profile_plant_sensitivity.py --variants`) and report the best call; step counts are
 deterministic and need no repetition.
+
+## Moved from the differentiation rule (2026-11-23)
+
+The measurements and findings the `Plant.solve_sensitivity` section of
+`.claude/rules/integration-differentiation.md` carried until the #824 condensing,
+kept here as they stood there (most are also in the dated sections above, with
+their full configuration). All on the synthesized-influent BSM2 day unless stated.
+
+- **`jacfwd` through `plant.solve` fails numerically, not because the tangent
+  diverges.** It is finite per step but non-finite over a long horizon, while the
+  true sensitivity stays bounded: `‖S‖` oscillates with the diurnal load over 17
+  days (45 → 196) rather than growing. A stock-`Kvaerno5` augmented solve also
+  blows up on the 20-day BSM2 window.
+- **Staggered vs simultaneous:** the staggered corrector is several times faster
+  at `k = 16`; its per-attempt cost is not flat in `k` (~2.7× from `k = 0` to
+  `k = 16`: the `k`-column Jacobian-vector products, ~10 per accepted step).
+- **Newton failures:** before Anderson acceleration ~20% of attempts failed
+  Newton — the step-start `J` is wrong in one or two directions at those stages
+  (mostly the Takács settler), not grown into divergence; a dense `J` fails the
+  same. With the shipped defaults (Anderson, the stage-value test, the hold rule)
+  ~9% at `k = 0` and ~3% at `k = 16`.
+- **Anderson (depth 2):** `k = 0` ~30% faster, `k = 16` ~5%; Newton failures
+  −50% / −67%, but the freed step growth becomes error-test rejections. Stages
+  whose plain iteration diverges at once are out of its reach. Testing the
+  accelerated (non-monotone) update instead of the plain step stopped converging
+  solves as "diverged". Newton-Krylov (GMRES) stage updates removed more failures
+  but were slower than Anderson at both `k`, and were deleted.
+- **`_KAPPA` and the stage test:** until 2026-11-01 the test read the slope
+  increment `Δk` against the state tolerance — `1/(γh)` (~2000× at BSM2 steps)
+  stricter and unit-dependent — at `_KAPPA = 0.1`. κ = 0.01 on the stage value is
+  set by an 8-day BSM2 check (worst-layer error 3.3e-2 of its peak at 0.1, 4.9e-3
+  at 0.01, the old loop's 5.4e-3, at 0.5-d saves), not a 1-day window: the stage
+  error shows on the Takács blanket layers, whose min-flux rule switches branch
+  every few steps and makes fast pulses whose timing the stage error shifts.
+- **First correction accepted on its size (η = 1, rate reported 0):** without it a
+  solve started at a steady state stalled — the corrections after an
+  already-converged guess are round-off, their ratio read as divergence and fed
+  the growth limiter (BSM1, constant influent, 40 days of operating sensitivity
+  from the steady state: over 200 000 steps without it, 357 with it; pinned by
+  `test_a_solve_started_at_its_steady_state_takes_long_steps`). It rarely fires
+  elsewhere.
+- **Net against the 7de1fbe defaults:** `k = 0` 8677 vs 10695 right-hand-side
+  evaluations (−19%); `k = 16` 1967 vs 2135 attempts (−8%).
+- **`sens_error_control=False` at `k = 16`** (shipped configuration): 1156
+  attempts, 9.3 s against 16.7 s, `S` error 4.1e-4 of a column peak (controlled
+  2.5e-4); not bounded — across earlier settings it ranged 2.8e-4 to 2.4e-3.
+- **Lean loop vs diffrax on the Takács settler blanket:** at equal `rtol` the lean
+  loop trails diffrax (pulse-timing errors up to 5.6% of a layer's peak at 1e-4,
+  diffrax 0.4%) because diffrax takes twice the steps: 6852 of its 6857 rejections
+  are failed root finds on the same switching, which set its step size whatever its
+  `rtol`; the lean loop (no root-find failures) takes the error test's steps, and
+  at `rtol = 1e-5` matches diffrax-at-1e-4 there with fewer attempts. The outputs
+  do not see the pulses. The Godunov settler flux (default since 2026-11-02)
+  removes the switching: lean attempts 8901 → 3177, diffrax 17249 → 3653.
+- **Error-test rejections** are not influent breakpoints; at `k = 16` most are
+  driven by the sensitivity error estimate jumping ("Where the error-test
+  rejections come from", above).
+- **Simultaneous corrector cost:** its block-arrow root finder needs `n·k`
+  second-order probes per Jacobian; it is much slower than the staggered one
+  (first section above).

@@ -75,6 +75,7 @@ task needs the detail):**
 | `.claude/notes/plant-solve-log.md` | accuracy and validation measurements behind the recycle-resolution rules (affine residuals, `rho`, fixed-pass errors, IFT gradient checks) |
 | `.claude/notes/schema-log.md` | the shipped models' temperature-correction and prior-width figures, and the `extends:` size saving, behind the schema rules |
 | `.claude/notes/plant-log.md` | plant measurements moved out of `plant.md`: the vectorized stream reconstruction and the primary-clarifier inflow filter against the BSM2 benchmark |
+| `.claude/notes/differentiation-log.md` | the reverse-mode overflow investigation, per-model `dtmax` thresholds, the reactor forward-sensitivity and `shared_factor` measurements, the discrete-adjoint accuracy figures |
 | `.claude/notes/plant-sensitivity-log.md` | `Plant.solve_sensitivity` corrector measurements (#654), the lean loop's stage-Newton drift diagnostic and its Anderson acceleration |
 
 **Published documentation site** (Sphinx/MyST → Read the Docs; built from
