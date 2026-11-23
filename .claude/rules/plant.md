@@ -25,15 +25,17 @@ it on demand when a change elsewhere touches the topic):
 | `plant-settling.md` | `takacs.py`, `settling.py`, the clarifier / separator modules | the Takács clarifier (soluble holdup, composition mode, interface flux), shared separator helpers |
 | `plant-spec.md` | `spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | time expressions, influent records / patterns, the unit catalogue, the flowsheet spec |
 
-## Importing `integrate` internals
+## Private names shared across modules
 
-- **Take every private (`_`-prefixed) name of `aquakin.integrate` from
-  `integrate/seam.py`**, never from its defining module, including inside a
-  function body. The seam lists the internals the plant reuses, so a rename in
-  `integrate` shows up as a change to one list. `tests/unit/test_integrate_seam.py`
-  fails on a bypassing import and on a seam name with no caller: add a name to
-  the seam in the same change as its first plant use, and remove it with its
-  last. Public names still come from their own modules.
+Each list is a contract, so a rename shows every module it touches. Add a name
+with its first use and remove it with its last.
+
+- **Take every private name of `aquakin.integrate` from `integrate/seam.py`**,
+  never its defining module, even inside a function body
+  (`tests/unit/test_integrate_seam.py`). Public names come from their own modules.
+- **List each private `Plant` member another module reaches (`plant._x`,
+  `self.plant._x`) under that module in `plant/internals.py`**
+  (`tests/unit/test_plant_internals.py`); bound modules' `self._x` are exempt.
 
 ## Plant-Wide Simulation
 

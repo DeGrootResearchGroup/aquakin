@@ -160,6 +160,7 @@ aquakin/
 │   │   ├── recycle.py               # RecycleResolver: recycle flows / concentrations
 │   │   ├── colored.py               # ColoredJacobianManager: sparse plant Jacobians
 │   │   ├── solve_cache.py           # SolveCache: the compiled-solve caches
+│   │   ├── internals.py             # the private Plant members other modules may use
 │   │   └── steady.py                # re-exports integrate/steady.py's PTC kernels
 │   │
 │   ├── transport/

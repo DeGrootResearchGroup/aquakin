@@ -230,7 +230,8 @@ codebase something; the examples are real.
   capability Protocols), `core/lexer.py` and `core/precedence.py` (the one
   tokenizer and precedence table for every expression language),
   `core/kernels.py` (guarded numerics), `integrate/seam.py` (the private
-  `integrate` internals the plant layer reuses) and `tests/conftest.py`.
+  `integrate` internals the plant layer reuses), `plant/internals.py` (the
+  private `Plant` members other modules may use) and `tests/conftest.py`.
 - **A second caller means a shared function, in the same change.** Do not copy
   a block and adapt it. If the two callers live in different packages, put the
   shared piece in the lower one (`core` < `schema` < `integrate` < `plant` <
