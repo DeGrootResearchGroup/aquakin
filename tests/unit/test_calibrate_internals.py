@@ -151,7 +151,7 @@ def test_resolve_problem_free_ic_centers_at_log_initial(base):
     assert prob.free_ic == [sp]
     # The ic-prior centre is log of the (clipped) initial pool.
     expected = np.log(np.clip(float(C0[m.species_index[sp]]), 1e-3, 1e4))
-    assert float(prob.ic_center_full[0]) == pytest.approx(expected)
+    assert float(prob.ic_center_full[0]) == pytest.approx(expected, rel=1e-6, abs=0)
 
 
 # ---------- _resolve_problem: validation ----------
@@ -365,7 +365,7 @@ def test_optimizer_bounds_logit_and_identity_mapping(base):
     )
     _b, lb, ub, _ls, _has = _optimizer_bounds(prob, prob.rate_theta0())
     assert lb[0] == pytest.approx(np.log(0.05 / 0.95))
-    assert ub[0] == pytest.approx(0.0)
+    assert ub[0] == pytest.approx(0.0, abs=0)
     prob = _resolve(
         m, C0, obs, t_obs, free, transforms={free[0]: "none"}, bounds={free[0]: (0.05, 0.5)}
     )
@@ -659,7 +659,7 @@ def test_data_mean_square_pools_observed_entries_of_every_dataset():
     ],
 )
 def test_objective_scale(mean_square, start_loss, expected):
-    assert _objective_scale(mean_square, start_loss) == pytest.approx(expected, rel=1e-15)
+    assert _objective_scale(mean_square, start_loss) == pytest.approx(expected, rel=1e-15, abs=0)
 
 
 def test_resolve_problem_records_the_data_mean_square(base):
@@ -689,10 +689,10 @@ def test_scale_objective_uses_the_starting_loss():
     previous start left, and a bundle without a data mean square is unscaled."""
     bundle = _loss_bundle(lambda x: 3e-12)
     _scale_objective(bundle, jnp.zeros(1))
-    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15)
+    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15, abs=0)
     bundle.scale_box[0] = 0.5  # left by an earlier start
     _scale_objective(bundle, jnp.zeros(1))
-    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15)
+    assert bundle.loss_scale == pytest.approx(3e-12, rel=1e-15, abs=0)
     unscaled = _loss_bundle(lambda x: 3e-12, data_mean_square=None)
     _scale_objective(unscaled, jnp.zeros(1))
     assert unscaled.loss_scale == 1.0
@@ -1002,23 +1002,31 @@ def test_check_start_gradient_propagates_non_solve_errors():
 
 
 def test_laplace_posterior_at_bound_mask(simple_model):
-    """No mask (Plant.calibrate's call) and an all-False mask give the same
-    posterior; masking the only rate holds it fixed: nan std, zero covariance."""
+    """Unmasked, the Laplace std of the one rate is the closed form; masking it
+    holds it fixed: nan std, zero covariance.
+
+    For A -> B with A(0) = 1, both species observed with a known sigma and the
+    data exact, the Hessian of the negative log-likelihood in k is
+    ``sum_i 2 (t_i exp(-k t_i))^2 / sigma^2`` (dA/dk = -t exp(-kt), dB/dk the
+    negative of it), so the std is ``sigma / sqrt(2 sum (t exp(-kt))^2)``. The
+    finite-difference Hessian (step 1e-3) matches it to 7e-6 (measured)."""
     m = simple_model
     reactor = _batch_reactor(m)
     C0 = jnp.array([1.0, 0.0])
     t_obs = jnp.array([1.0, 2.0, 4.0])
+    sigma = 0.05
     obs = reactor.solve(C0, params=m.default_parameters(), t_span=(0.0, 4.0), t_eval=t_obs).C
-    prob = _resolve(m, C0, obs, t_obs, [m.parameters[0]], use_model_bounds=False)
+    prob = _resolve(
+        m, C0, obs, t_obs, [m.parameters[0]], use_model_bounds=False, loss="nll", sigma=sigma
+    )
     cfg = dataclasses.replace(_cfg("auto", "jax_adjoint"), laplace=True)
     fm = _ReactorForwardModel(reactor, "jax_adjoint", 1, False)
     theta = prob.rate_theta0()
-    no_mask = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0))
-    all_free = _laplace_posterior(
-        prob, fm, cfg, theta, jnp.zeros(0), at_bound_mask=np.array([False])
-    )
-    assert np.isfinite(no_mask.posterior_std_unconstrained[0])
-    np.testing.assert_array_equal(no_mask.posterior_cov, all_free.posterior_cov)
+    k = float(m.default_parameters()[0])
+    t = np.asarray(t_obs)
+    expected_std = sigma / np.sqrt(2.0 * np.sum((t * np.exp(-k * t)) ** 2))
+    free = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0))
+    assert float(free.posterior_std_unconstrained[0]) == pytest.approx(expected_std, rel=1e-4)
     held = _laplace_posterior(prob, fm, cfg, theta, jnp.zeros(0), at_bound_mask=np.array([True]))
     assert np.isnan(held.posterior_std_unconstrained[0])
     assert np.all(np.asarray(held.posterior_cov) == 0.0)

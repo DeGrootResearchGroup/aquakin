@@ -42,28 +42,28 @@ def test_round_trip(tmp_path):
 def test_missing_particle_id_column_rejected(tmp_path):
     p = tmp_path / "tracks.csv"
     p.write_text("t,pH\n0.0,7.5\n1.0,7.5\n")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="missing required column 'particle_id'"):
         read_tracks_csv(p)
 
 
 def test_non_ascending_t_rejected(tmp_path):
     p = tmp_path / "tracks.csv"
     p.write_text("particle_id,t,pH\n0,0.0,7.5\n0,2.0,7.5\n0,1.0,7.5\n")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="particle_id 0 samples are not strictly ascending in t"):
         read_tracks_csv(p)
 
 
 def test_non_integer_particle_id_rejected(tmp_path):
     p = tmp_path / "tracks.csv"
     p.write_text("particle_id,t,pH\nfoo,0.0,7.5\n")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="particle_id must be integer, got 'foo'"):
         read_tracks_csv(p)
 
 
 def test_row_length_mismatch_rejected(tmp_path):
     p = tmp_path / "tracks.csv"
     p.write_text("particle_id,t,pH,T\n0,0.0,7.5\n")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="row 2 has 3 columns, expected 4"):
         read_tracks_csv(p)
 
 
@@ -72,12 +72,12 @@ def test_inconsistent_field_names_rejected_on_write(tmp_path):
         0: aquakin.Track(t=jnp.asarray([0.0, 1.0]), fields={"pH": jnp.asarray([7.0, 7.0])}),
         1: aquakin.Track(t=jnp.asarray([0.0, 1.0]), fields={"T": jnp.asarray([293.15, 293.15])}),
     }
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="All tracks must share the same field names"):
         write_tracks_csv(tmp_path / "out.csv", tracks)
 
 
 def test_missing_file():
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundError, match="Track file not found"):
         read_tracks_csv("/no/such/file.csv")
 
 

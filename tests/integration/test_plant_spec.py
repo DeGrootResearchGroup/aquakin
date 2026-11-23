@@ -286,14 +286,17 @@ def test_yaml_is_read_with_yaml_1_2_scalars(tmp_path):
 def test_unit_names_the_plant_cannot_address_are_refused():
     from aquakin.plant import SetpointSplitter, WiringError
 
-    for unit in (
-        SetpointSplitter("asm1", _asm1(), {"muH": 1.0}, "rest"),  # would shadow asm1.muH
-        CSTRUnit("tank.1", _asm1(), 1.0, ["in"], conditions={"T": 293.15}),
-        CSTRUnit("tank", _asm1(), 1.0, ["in put"], conditions={"T": 293.15}),
+    for unit, message in (
+        (SetpointSplitter("asm1", _asm1(), {"muH": 1.0}, "rest"),  # would shadow asm1.muH
+         "unit name 'asm1' is the name of a model in this plant"),
+        (CSTRUnit("tank.1", _asm1(), 1.0, ["in"], conditions={"T": 293.15}),
+         r"unit name 'tank\.1' must start with a letter"),
+        (CSTRUnit("tank", _asm1(), 1.0, ["in put"], conditions={"T": 293.15}),
+         "port name 'in put' must start with a letter"),
     ):
-        with pytest.raises(WiringError):
+        with pytest.raises(WiringError, match=message):
             Plant("x").add_unit(unit)
-    with pytest.raises(WiringError):
+    with pytest.raises(WiringError, match=r"influent name 'feed\.1' must start with a letter"):
         Plant("x").add_influent("feed.1", InfluentSeries.constant(_asm1(), Q=1.0))
 
 

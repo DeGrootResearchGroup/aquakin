@@ -383,7 +383,7 @@ def test_fit_is_independent_of_the_data_unit(simple_model):
     assert base.loss > 0.0
     assert small.converged
     assert small.params_named["A_to_B.k"] == pytest.approx(base.params_named["A_to_B.k"], rel=1e-5)
-    assert small.loss == pytest.approx(1e-12 * base.loss, rel=1e-4)
+    assert small.loss == pytest.approx(1e-12 * base.loss, rel=1e-4, abs=0)
 
 
 _PARTIAL_BOUNDS_YAML = """

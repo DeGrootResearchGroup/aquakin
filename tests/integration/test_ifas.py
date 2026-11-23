@@ -222,7 +222,7 @@ def test_layer_resolution_reports_the_worst_single_layer_drop(asm1):
     ss, so = asm1.species_index["SS"], asm1.species_index["SO"]
 
     flat = jnp.zeros((5, asm1.n_species)).at[:, ss].set(10.0).at[:, so].set(2.0)
-    assert u.layer_resolution(flat)["SS"] == pytest.approx(0.0)
+    assert u.layer_resolution(flat)["SS"] == pytest.approx(0.0, abs=0)
 
     # All of SS consumed between the bulk and the first layer.
     collapsed = jnp.zeros((5, asm1.n_species)).at[0, ss].set(10.0)
@@ -234,7 +234,7 @@ def test_layer_resolution_reports_the_worst_single_layer_drop(asm1):
     gradual = gradual.at[:, so].set(2.0)
     report = u.layer_resolution(gradual)
     assert report["SS"] == pytest.approx(0.1)
-    assert report["SO"] == pytest.approx(0.0)
+    assert report["SO"] == pytest.approx(0.0, abs=0)
     # Particulates are not reported -- they never diffuse.
     assert "XB_H" not in report
 

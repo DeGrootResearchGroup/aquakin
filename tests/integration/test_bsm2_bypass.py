@@ -47,7 +47,7 @@ def test_threshold_split_below_limit_is_inactive(asm1):
     """Below the limit nothing is diverted."""
     split = _threshold_splitter(asm1)
     flows = split.flow_outputs({"in": jnp.asarray(40000.0)}, None)
-    assert float(flows["bypass"]) == pytest.approx(0.0)
+    assert float(flows["bypass"]) == pytest.approx(0.0, abs=0)
     assert float(flows["to_plant"]) == pytest.approx(40000.0)
 
 
@@ -68,7 +68,7 @@ def test_splitter_validation(asm1):
     # required field is a construction TypeError -- not a runtime "supply exactly
     # one" guard, and a mode can no longer be mixed (the wrong kwarg would be an
     # unexpected argument).
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="missing 1 required positional argument: 'remainder_port'"):
         ThresholdSplitter(name="b", model=asm1, threshold=1.0, threshold_port="x")  # no remainder
     # threshold_port and remainder_port must differ
     with pytest.raises(ValueError, match="must differ"):

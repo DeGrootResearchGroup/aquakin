@@ -130,17 +130,20 @@ def test_solve_rejects_out_of_span_t_eval(tiny):
         r.solve(jnp.array([1.0, 0.0]), t_span=(0.0, 1.0), t_eval=jnp.array([0.0, 2.0]))
 
 
+_POSITIVE = "thickness, boundary_layer and area_per_volume must be positive"
+
+
 @pytest.mark.parametrize(
-    "kw",
+    ("kw", "message"),
     [
-        dict(n_layers=0),
-        dict(thickness=-1.0),
-        dict(area_per_volume=0.0),
-        dict(boundary_layer=0.0),
+        (dict(n_layers=0), "n_layers must be >= 1"),
+        (dict(thickness=-1.0), _POSITIVE),
+        (dict(area_per_volume=0.0), _POSITIVE),
+        (dict(boundary_layer=0.0), _POSITIVE),
     ],
 )
-def test_constructor_rejects_bad_geometry(net, cond, kw):
-    with pytest.raises(ValueError):
+def test_constructor_rejects_bad_geometry(net, cond, kw, message):
+    with pytest.raises(ValueError, match=message):
         _tiny(net, cond, **kw)
 
 
@@ -206,7 +209,7 @@ def test_well_mixed_limit_matches_batch(net, cond, tiny):
 
 def test_profile_named_unknown_species_raises(tiny_sol):
     sol = tiny_sol
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Unknown species 'ZZZ'"):
         sol.profile_named("ZZZ")
 
 

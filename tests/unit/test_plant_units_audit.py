@@ -133,7 +133,7 @@ def test_models_on_different_time_units_without_a_clock_is_an_error(asm1, ozone)
     chk = plant.check()
     assert not chk.ok and chk.unit_errors
     assert "units (error): [plant]" in chk.summary()
-    with pytest.raises(UnitsError):
+    with pytest.raises(UnitsError, match="the kinetic models disagree on the time unit"):
         plant.check(raise_on_error=True)
     # Solving is refused outright: no result from a mixed clock is meaningful.
     with pytest.raises(UnitsError, match="disagree on the time unit"):

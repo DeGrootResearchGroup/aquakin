@@ -46,7 +46,7 @@ def test_reference_raises_the_floor():
     atol = default_atol(jnp.zeros(2), reference=jnp.asarray([10.0, 0.0]))
     # char = 10; species 0 floored at 10, species 1 at floor_frac*char = 1e-5.
     assert atol[0] == pytest.approx(1e-6 * 10.0)
-    assert atol[1] == pytest.approx(1e-6 * 1e-5)
+    assert atol[1] == pytest.approx(1e-6 * 1e-5, rel=1e-6, abs=0)
 
 
 def test_atol_is_gradient_detached():
@@ -158,7 +158,7 @@ def test_model_atol_default_is_per_component():
 def test_model_atol_named_override_on_per_component_base():
     net = aquakin.load_model("asm1")
     got = net.atol({"SNH": 1e-15})
-    assert float(got[net.species_index["SNH"]]) == pytest.approx(1e-15)
+    assert float(got[net.species_index["SNH"]]) == pytest.approx(1e-15, rel=1e-6, abs=0)
     # the rest keep the per-component floor
     base = default_atol(net.default_concentrations())
     keep = [i for s, i in net.species_index.items() if s != "SNH"]

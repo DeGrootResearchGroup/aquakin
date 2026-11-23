@@ -204,5 +204,5 @@ reactions:
       B: 1.0
 """
     )
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="references identifier 'nonexistent'"):
         aquakin.load_model_from_file(bad)

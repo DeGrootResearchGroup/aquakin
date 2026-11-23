@@ -1112,7 +1112,7 @@ def test_steady_state_dgsm_normal_input(bsm1):
                        np.asarray(res.sobol_total_bound), rtol=1e-6, equal_nan=True)
 
     # input_dist="normal" requires transforms aligned with the screened parameters
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="input_dist='normal' requires input_transforms"):
         plant.steady_state_dgsm(ranges, output_fn=out_fn, wrt=screen,
                                 n_samples=8, seed=0, y0=y0, input_dist="normal")
 

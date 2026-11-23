@@ -61,9 +61,9 @@ def test_species_units_and_descriptions(simple_model):
     assert simple_model.units_of("A") == "mol/L"
     assert simple_model.description_of("B") == "Product"
 
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Unknown species 'nope'"):
         simple_model.units_of("nope")
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Unknown species 'nope'"):
         simple_model.description_of("nope")
 
 

@@ -62,7 +62,7 @@ def test_a_value_of_the_wrong_type_is_refused(bsm1):
     for r in rows:
         if r["key"] == "volume":
             r["value"] = "large"
-    with pytest.raises(ValueError):
+    with pytest.raises(forms.FieldError, match="volume: 'large' is not a number"):
         forms.read_rows(bsm1, "tank3", rows)
 
 
@@ -167,7 +167,7 @@ def test_help_text_is_plain_and_names_the_unit(bsm1):
 def test_a_bad_value_names_its_row(bsm1):
     rows = forms.rows_for(bsm1, "tank3", _info)
     next(r for r in rows if r["key"] == "volume")["value"] = "big"
-    with pytest.raises(forms.FieldError) as caught:
+    with pytest.raises(forms.FieldError, match="'big' is not a number") as caught:
         forms.read_rows(bsm1, "tank3", rows)
     assert caught.value.key == "volume"
 

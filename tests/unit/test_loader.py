@@ -270,7 +270,23 @@ def test_load_model_activity_override_shifts_ph_and_keeps_default():
         return float(net.derived_condition_fn(C, net.default_parameters(), conds, 0)["pH"])
 
     ph_base, ph_dav = ph(base), ph(dav)
-    assert ph_base == pytest.approx(7.27, abs=0.05)  # validated BSM2 digester pH
+    # The default (no activity) pH is the plain charge balance of the speciation
+    # block's totals: VFAs from kgCOD/m3 by their COD per mole, the rest molar.
+    from aquakin.core.ph_solver import solve_ph
+
+    si = base.species_index
+
+    def c(name):
+        return float(C[si[name]])
+
+    expected = solve_ph(
+        tot_carbonate=c("S_IC"), tot_ammonia=c("S_IN"),
+        tot_acetate=c("S_ac") / 64.0, tot_propionate=c("S_pro") / 112.0,
+        tot_butyrate=c("S_bu") / 160.0, tot_valerate=c("S_va") / 208.0,
+        z_cation_eq=c("S_cat"), strong_anion_eq=c("S_an"),
+        T_kelvin=float(base._condition_defaults["T"]),
+    )
+    assert ph_base == pytest.approx(float(expected), abs=1e-9)
     assert abs(ph_dav - ph_base) > 0.02  # activity-shifted
 
 

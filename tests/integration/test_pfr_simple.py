@@ -73,11 +73,11 @@ def test_pfr_grad_through_solve_matches_closed_form(simple_model):
 
 def test_pfr_rejects_invalid_geometry(simple_model):
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="n_points must be >= 2"):
         aquakin.PlugFlowReactor(simple_model, conditions, n_points=1, length=1.0, velocity=1.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="length must be positive"):
         aquakin.PlugFlowReactor(simple_model, conditions, n_points=5, length=-1.0, velocity=1.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="velocity must be positive"):
         aquakin.PlugFlowReactor(simple_model, conditions, n_points=5, length=1.0, velocity=0.0)
 
 
@@ -88,7 +88,7 @@ def test_pfr_conditions_override_shape_mismatch_rejected(simple_model):
         simple_model, conditions, n_points=5, length=2.0, velocity=1.0
     )
     overlay = aquakin.SpatialConditions.uniform(3, T=293.15)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="conditions override must have n_locations=1"):
         reactor.solve(
             jnp.asarray([1.0, 0.0]),
             params=simple_model.default_parameters(),

@@ -200,6 +200,22 @@ def test_precipitation_equilibrium_with_speciation_ph(tmp_path):
 # --- speciation without an activity model exports the real ionic strength ------
 
 
+def _carbonate_ionic_strength(pH, tot_carbonate, strong_cation):
+    """``I = 1/2 sum c z^2`` of a carbonate solution at a given pH and 25 degC.
+
+    Built from the textbook 25 degC constants (pKa1 = 6.35, pKa2 = 10.33,
+    pKw = 14), independent of the solver, so the exported ionic strength is
+    checked against the speciation it was solved at.
+    """
+    h = 10.0**-pH
+    k1, k2, kw = 10.0**-6.35, 10.0**-10.33, 1e-14
+    denom = h * h + k1 * h + k1 * k2
+    hco3 = tot_carbonate * k1 * h / denom
+    co3 = tot_carbonate * k1 * k2 / denom
+    return 0.5 * (strong_cation + h + kw / h + hco3 + 4.0 * co3)
+
+
+
 def test_speciation_without_activity_exports_ionic_strength():
     # 50 mM NaHCO3: I ~ 1/2 (Na+ + HCO3- + 4 CO3--) ~ 0.05 mol/L, not 0.
     cfg = {
@@ -214,7 +230,9 @@ def test_speciation_without_activity_exports_ionic_strength():
     fn, produced, _ = build_ph_derived_fn(cfg, {"A": 0, "B": 1})
     assert produced == ["pH", "I_aq"]
     out = fn(jnp.array([0.05, 0.05]), None, {"T": jnp.array([298.15])}, 0)
-    assert float(out["I_aq"]) == pytest.approx(0.0505, rel=0.01)
+    assert float(out["I_aq"]) == pytest.approx(
+        _carbonate_ionic_strength(float(out["pH"]), 0.05, 0.05), rel=1e-9
+    )
     # The pH itself is unchanged by exporting I.
     ph_only, _, _ = build_ph_derived_fn(
         {k: v for k, v in cfg.items() if k != "ionic_strength_field"}, {"A": 0, "B": 1}
@@ -224,7 +242,10 @@ def test_speciation_without_activity_exports_ionic_strength():
 
 
 def test_solve_ph_without_activity_returns_solution_ionic_strength():
-    pH, I = solve_ph(tot_carbonate=0.05, z_cation_eq=0.05, return_ionic_strength=True)
-    assert float(pH) == float(solve_ph(tot_carbonate=0.05, z_cation_eq=0.05))
-    # Weak-acid ions + water contribute even with no strong-ion term supplied.
-    assert float(I) == pytest.approx(0.025, rel=0.02)
+    pH, I = solve_ph(
+        tot_carbonate=0.05, z_cation_eq=0.05, T_kelvin=298.15, return_ionic_strength=True
+    )
+    assert float(pH) == float(solve_ph(tot_carbonate=0.05, z_cation_eq=0.05, T_kelvin=298.15))
+    # Weak-acid ions + water contribute even with no strong-ion term supplied
+    # (``ionic_strength_strong`` defaults to 0, so Na+ is not counted).
+    assert float(I) == pytest.approx(_carbonate_ionic_strength(float(pH), 0.05, 0.0), rel=1e-9)

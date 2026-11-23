@@ -370,7 +370,7 @@ def test_upstream_max_steps_message_still_matches():
     import diffrax
 
     term = diffrax.ODETerm(lambda t, y, args: -y)
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(RuntimeError) as excinfo:
         diffrax.diffeqsolve(
             term,
             diffrax.Tsit5(),
@@ -398,7 +398,7 @@ def test_upstream_forward_mode_custom_vjp_message_still_matches():
 
     f.defvjp(lambda x: (x, None), lambda _res, g: (g,))
 
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(TypeError) as excinfo:
         jax.jvp(f, (1.0,), (1.0,))
     assert is_forward_mode_ad_error(excinfo.value)
     lowered = str(excinfo.value).lower()

@@ -151,7 +151,10 @@ NumPy on the matrix (no solves); it reads `joint_hessian` / `joint_names` from a
 identifiability's null convention (`_NULL_RTOL`, `_NULL_LOADING_TOL`, which both
 import from `integrate/_linalg.py`): an exactly null direction is left out of
 `posterior_cov` and its involved parameters get an infinite std plus a
-`RuntimeWarning`. (`LaplaceConfig.eig_keep` once dropped every direction below
+`RuntimeWarning`. `FisherInformation.covariance` (behind `std()`) uses the
+same `_NULL_RTOL` to raise `LinAlgError` on a singular matrix; do not rely on
+`np.linalg.inv` raising, which it does only on an exactly zero LU pivot and not
+on every LAPACK build. (`LaplaceConfig.eig_keep` once dropped every direction below
 1e-2 of the largest with zero variance, understating weakly identified stds by
 up to ~100×; it is now deprecated and ignored.) A quantity counts as
 "involved" in an exactly-null direction (rel. eigenvalue ≤ 1e-10) only if its

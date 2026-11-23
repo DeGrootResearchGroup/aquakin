@@ -41,7 +41,7 @@ from aquakin.plant import sensitivity as _sensitivity
 from aquakin.plant import spec as _spec
 from aquakin.plant import steady_solve as _steady
 from aquakin.plant.colored import ColoredJacobianManager
-from aquakin.plant.dynamic_solve import _concrete_teval_key
+from aquakin.plant.dynamic_solve import _auto_colored_backward, _concrete_teval_key
 from aquakin.plant.errors import (
     UnitsError,
     UnknownPortError,
@@ -2645,8 +2645,7 @@ class Plant:
             n = int(self.initial_state().shape[0])
         except Exception:
             return None
-        choice = "colored" if n >= self._COLORED_BACKWARD_MIN_STATES else "dense"
-        return (choice, n)
+        return (_auto_colored_backward(n, self._COLORED_BACKWARD_MIN_STATES), n)
 
     def _sweep_outputs(
         self,

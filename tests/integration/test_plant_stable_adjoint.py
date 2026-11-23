@@ -162,6 +162,66 @@ def test_stable_adjoint_plant_gradient_matches_jax_adjoint_and_fd(integrator, ma
     assert g_stable == pytest.approx(fd, rel=1e-3)
 
 
+@pytest.mark.parametrize(
+    ("integrator", "solver_cls", "factormax"),
+    [
+        (None, diffrax.Kvaerno3, 3.0),                                     # the defaults
+        (aquakin.IntegratorConfig(order=5, factormax=None), diffrax.Kvaerno5,
+         diffrax.PIDController(rtol=1e-3, atol=1e-6).factormax),          # diffrax's own
+        (aquakin.IntegratorConfig(solver=diffrax.Kvaerno5(), factormax=7.0),
+         diffrax.Kvaerno5, 7.0),                                           # solver= beats order=3
+    ],
+    ids=["default", "order5_no_factormax", "explicit_kvaerno5_factormax7"],
+)
+def test_stable_adjoint_runs_the_requested_solver_and_factormax(
+        integrator, solver_cls, factormax, make_cstr_plant, monkeypatch):
+    """The stable adjoint's forward and backward are built from the ``order=`` /
+    ``solver=`` / ``factormax=`` the caller asked for: the ESDIRK the discrete
+    adjoint builds (whose tableau its backward reads) and the PID step
+    controller it wraps are recorded as they are built.
+
+    A gradient comparison cannot see these settings on a small plant: every
+    choice gives the exact gradient of its own forward solve, and those agree to
+    far inside any finite-difference tolerance, so a stable path that ignored
+    them would still pass the gradient tests. The ``solver=`` case asks for
+    Kvaerno5 while ``order`` stays at its default of 3, so it fails if
+    ``solver=`` is dropped in favour of ``order``."""
+    from aquakin.integrate import discrete_adjoint as da
+
+    built_solvers, built_controllers = [], []
+    real_solver, real_controller = da.build_implicit_solver, da.build_step_controller
+
+    def recording_solver(*a, **k):
+        built_solvers.append(real_solver(*a, **k))
+        return built_solvers[-1]
+
+    def recording_controller(*a, **k):
+        built_controllers.append(real_controller(*a, **k))
+        return built_controllers[-1]
+
+    monkeypatch.setattr(da, "build_implicit_solver", recording_solver)
+    monkeypatch.setattr(da, "build_step_controller", recording_controller)
+
+    plant = make_cstr_plant()
+    base = plant.default_parameters()
+    gidx = plant.parameter_index("simple_decay.A_to_B.k")
+    T = 10.0
+    integrator_kw = {} if integrator is None else {"integrator": integrator}
+
+    def final_b(theta):
+        sol = plant.solve(t_span=(0.0, T), t_eval=jnp.array([T]),
+                          params=base.at[gidx].set(theta),
+                          diff=aquakin.DifferentiationConfig(method="stable"),
+                          **integrator_kw)
+        return sol.C_named("tank", "B")[-1]
+
+    assert float(jax.grad(final_b)(float(base[gidx]))) != 0.0
+    assert len(built_solvers) == 1 and len(built_controllers) == 1
+    solver, controller = built_solvers[0], built_controllers[0]
+    assert type(solver) is solver_cls
+    assert controller.factormax == factormax
+
+
 def test_stable_adjoint_endpoint_gradient_matches_closed_form(make_cstr_plant):
     """With ``t_eval=None`` the stable adjoint returns only the endpoint, and its
     gradient there matches the analytic transient of the single-CSTR plant:

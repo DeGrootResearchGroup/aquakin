@@ -59,7 +59,7 @@ def test_normal_regime_releases_requested_flow(asm1):
     state = _state(tank, asm1, V=80.0)        # mid (0.1*160 < 80 < 0.9*160)
     outs = tank.compute_outputs(0.0, state, _stream(asm1, 500.0), None)
     assert float(outs["out"].Q) == pytest.approx(200.0)
-    assert float(outs["bypass"].Q) == pytest.approx(0.0)
+    assert float(outs["bypass"].Q) == pytest.approx(0.0, abs=0)
     dV = float(tank.rhs(0.0, state, _stream(asm1, 500.0), None)[-1])
     assert dV == pytest.approx(500.0 - 200.0)  # filling
 
@@ -71,8 +71,8 @@ def test_full_and_filling_bypasses(asm1):
     s = _stream(asm1, 438.0)
     outs = tank.compute_outputs(0.0, state, s, None)
     assert float(outs["bypass"].Q) == pytest.approx(438.0)
-    assert float(outs["out"].Q) == pytest.approx(0.0)
-    assert float(tank.rhs(0.0, state, s, None)[-1]) == pytest.approx(0.0)
+    assert float(outs["out"].Q) == pytest.approx(0.0, abs=0)
+    assert float(tank.rhs(0.0, state, s, None)[-1]) == pytest.approx(0.0, abs=0)
 
 
 def test_full_and_draining_is_normal(asm1):
@@ -82,7 +82,7 @@ def test_full_and_draining_is_normal(asm1):
     s = _stream(asm1, 400.0)
     outs = tank.compute_outputs(0.0, state, s, None)
     assert float(outs["out"].Q) == pytest.approx(600.0)
-    assert float(outs["bypass"].Q) == pytest.approx(0.0)
+    assert float(outs["bypass"].Q) == pytest.approx(0.0, abs=0)
     assert float(tank.rhs(0.0, state, s, None)[-1]) == pytest.approx(400.0 - 600.0)
 
 
@@ -92,8 +92,8 @@ def test_empty_regime_stops_releasing(asm1):
     state = _state(tank, asm1, V=0.1 * 160.0)
     s = _stream(asm1, 400.0)
     outs = tank.compute_outputs(0.0, state, s, None)
-    assert float(outs["out"].Q) == pytest.approx(0.0)
-    assert float(outs["bypass"].Q) == pytest.approx(0.0)
+    assert float(outs["out"].Q) == pytest.approx(0.0, abs=0)
+    assert float(outs["bypass"].Q) == pytest.approx(0.0, abs=0)
     assert float(tank.rhs(0.0, state, s, None)[-1]) == pytest.approx(400.0)  # fills
 
 
@@ -118,7 +118,7 @@ def test_flow_outputs_match_compute_outputs(asm1):
     flows = tank.flow_outputs({"in": jnp.asarray(500.0)}, None, FlowContext(state=state))
     outs = tank.compute_outputs(0.0, state, _stream(asm1, 500.0), None)
     assert float(flows["out"]) == pytest.approx(float(outs["out"].Q))
-    assert float(flows["bypass"]) == pytest.approx(float(outs["bypass"].Q))
+    assert float(flows["bypass"]) == pytest.approx(float(outs["bypass"].Q), rel=1e-6, abs=0)
 
 
 # ----- Wired BSM2 plant with reject storage -------------------------------

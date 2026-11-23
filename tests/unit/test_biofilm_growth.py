@@ -52,7 +52,7 @@ def test_velocity_is_zero_at_the_wall_and_integrates_production_outward():
 
     faces = advection_velocity(production, RHO, dz)
     assert faces.shape == (N + 1,)
-    assert float(faces[-1]) == pytest.approx(0.0)  # wall: impermeable
+    assert float(faces[-1]) == pytest.approx(0.0, abs=0)  # wall: impermeable
     assert float(faces[0]) == pytest.approx(growth * thickness)  # surface
 
     # Linear in depth: face f (surface-first) sits at depth (N - f) * dz.

@@ -16,6 +16,7 @@ import pytest
 
 import aquakin
 from aquakin.core.nodes import ASTNode
+from aquakin.core.parser import ParseError
 from aquakin.core.registry import register_rate_function, unregister_rate_function
 from aquakin.schema.loader import clear_model_cache
 from aquakin.utils.units import DIMENSIONLESS
@@ -56,7 +57,7 @@ def registered():
 def test_model_naming_an_unregistered_function_fails_clearly():
     """Before registration the file does not load, and the error says what to do."""
     clear_model_cache()
-    with pytest.raises(Exception, match="hill"):
+    with pytest.raises(ParseError, match="Unknown function 'hill'"):
         aquakin.load_model_from_file(FIXTURE)
 
 

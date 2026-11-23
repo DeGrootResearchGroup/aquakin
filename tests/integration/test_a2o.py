@@ -249,7 +249,7 @@ def test_ferric_dose_defaults_and_frozen():
 
     fd = FerricDose(flow=5.0)
     assert fd.xmeoh_conc == pytest.approx(1.0e5)
-    with pytest.raises(dataclasses.FrozenInstanceError):
+    with pytest.raises(dataclasses.FrozenInstanceError, match="cannot assign to field 'flow'"):
         fd.flow = 1.0
 
 

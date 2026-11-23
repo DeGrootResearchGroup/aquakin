@@ -73,7 +73,7 @@ def test_local_param_shadowing_global_rejected(tmp_path):
               k: {value: 1.0}
             stoichiometry: {A: -1}
     """)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="declares local parameter"):
         aquakin.load_model_from_file(p)
 
 
@@ -192,7 +192,7 @@ def test_expression_self_reference_rejected(tmp_path):
             rate: "rho"
             stoichiometry: {A: -1}
     """)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Named expression 'rho' references itself"):
         aquakin.load_model_from_file(p)
 
 
@@ -242,5 +242,5 @@ def test_unknown_identifier_after_resolution_errors(tmp_path):
             rate: "undefined_thing * [A]"
             stoichiometry: {A: -1}
     """)
-    with pytest.raises((KeyError, ValueError)):
+    with pytest.raises(KeyError, match="references identifier 'undefined_thing'"):
         aquakin.load_model_from_file(p)

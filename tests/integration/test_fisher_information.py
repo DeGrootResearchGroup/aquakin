@@ -150,7 +150,7 @@ def test_singular_design_raises_on_covariance(reactor, params):
         free_ic=FreeICConfig(["A"]),
     )
     assert np.linalg.matrix_rank(fim.matrix) == 1
-    with pytest.raises(np.linalg.LinAlgError, match=r"Singular matrix"):
+    with pytest.raises(np.linalg.LinAlgError, match=r"Fisher information is singular"):
         fim.std()
 
 

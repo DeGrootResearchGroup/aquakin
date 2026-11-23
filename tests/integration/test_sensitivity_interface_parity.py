@@ -77,9 +77,9 @@ def test_operating_specs_parse_identically():
     ok = [{"kind": "influent_flow", "port": "feed"},
           {"kind": "influent_concentration", "port": "feed", "species": "SNH"}]
     assert len(p._parse_operating(ok)) == 2
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="influent port 'nope' is not an influent"):
         p._parse_operating([{"kind": "influent_flow", "port": "nope"}])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="operating spec 'kind' must be"):
         p._parse_operating([{"kind": "bogus", "port": "feed"}])
 
 

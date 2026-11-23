@@ -116,7 +116,7 @@ def test_hook_noop_when_reading_unavailable(monkeypatch):
 def test_hook_fires_only_once_per_worker(monkeypatch):
     monkeypatch.setenv("AQUAKIN_TEST_MEM_WATCHDOG", "1")
     monkeypatch.setattr(mem_watchdog, "mem_available_mb", lambda: 100.0)
-    with pytest.raises(pytest.fail.Exception):
+    with pytest.raises(pytest.fail.Exception, match=r"\[memory watchdog\] system MemAvailable fell to"):
         conftest.pytest_runtest_teardown(_FakeItem("tests/x.py::test_first"), None)
     # Latch set: a second low reading does not raise again (no per-test flood).
     conftest.pytest_runtest_teardown(_FakeItem("tests/x.py::test_second"), None)
