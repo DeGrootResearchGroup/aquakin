@@ -55,7 +55,7 @@ rate in a multi-model plant (BSM2's ASM1 water line + ADM1 digester) without
 hand-computing the block offset. `parameter_names()` lists the valid keys;
 `parameter_index(name)` returns the flat index (the companion for `jax.grad`
 w.r.t. one parameter, which can't go through `parameter_values` — that
-materialises concrete values). All three reuse the existing
+materializes concrete values). All three reuse the existing
 `model_param_blocks` layout. Unknown names raise a `KeyError` with a
 close-match hint.
 
@@ -264,7 +264,7 @@ Key types:
     vector via `_concrete_teval_key`; skipped under tracing), so a sequence of
     `stream` calls for different ports — or `evaluate_bsm*` reading ~8 streams —
     costs one reconstruction, not one per stream. The reconstruction is
-    **vectorised**: each saved time's `_resolve_streams` sweep (a recycle-flow +
+    **vectorized**: each saved time's `_resolve_streams` sweep (a recycle-flow +
     concentration solve) is batched by `vmap` into a single XLA program rather
     than a Python loop of per-step sweeps — turning a long dynamic run's
     evaluation from minutes into seconds (a 609-day hourly evaluation drops from
@@ -407,5 +407,5 @@ time-unit factors (aeration, disinfection, clarifier, metrics). Use these instea
 of an inline literal. Note the boundary: a *physically meaningful* small-quantity
 floor — a minimum settler depth (`settling.py`), a minimum flow that sets a
 maximum HRT and a `log`-domain floor (`PrimaryClarifier._removal_fraction`), or a
-data-prep floor on a linearisation probe (`ifas`/`takacs`) — is a modelling choice
+data-prep floor on a linearization probe (`ifas`/`takacs`) — is a modelling choice
 with its own magnitude and is deliberately **not** folded into `EPS_Q`.

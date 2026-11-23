@@ -80,7 +80,7 @@ them through each transform into `_CalibrationProblem.rate_bounds`, and
 compiled objective, so they are not in `struct_key`),
 `laplace=` (a `bool` **or** a `LaplaceConfig(...)`), and
 `free_ic=FreeICConfig(species=..., bounds=..., prior_log_std=..., fixed_total=...)`
-(`bounds` one pair or a per-species dict, normalised by `_per_species_ic_bounds`
+(`bounds` one pair or a per-species dict, normalized by `_per_species_ic_bounds`
 into per-pool arrays in `_CalibrationProblem.ic_bounds`; `fixed_total` fits
 `m_ic - 1` log-ratio coordinates per dataset, `problem.m_ic_theta`, mapped to
 pools by `problem.ic_pools` / `_simplex_pools` with the total read from the
@@ -160,7 +160,7 @@ only accurate to the sensitivities' round-off, and a 1e-6 cut marked
 well-determined pools infinite.
 `fisher.py`'s `_FisherSetup` holds the static part (validation, reactors,
 observed columns, noise, priors) and exposes `jacobian` / `information` as pure
-JAX functions of `(p, tobs_list, C0_list)`; pools are linearised at each
+JAX functions of `(p, tobs_list, C0_list)`; pools are linearized at each
 `C0`. The sigma/mask resolution (`_observation_noise`), the active
 priors (`_active_priors`) and `_resolve_transforms` are free helpers that
 `plant/identifiability.py`'s `plant_fisher_information` shares, so the reactor
@@ -168,7 +168,7 @@ and plant matrices cannot drift. Likewise `profile.py`'s sweep is factored into
 `_check_profile_args` / `_cold_starts` / `_point_optimizer` / `_guarded` /
 `_profile_sweep` / `_profile_result`, which `plant_profile_likelihood` reuses
 with `Plant.calibrate` as the inner fit; change them, not a copy. `experiment_design.py` builds on it: `optimize_experiment` passes a fixed
-`t_end` per optimised experiment so sampling times can be traced, jits
+`t_end` per optimized experiment so sampling times can be traced, jits
 `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector, and runs
 SLSQP with linear spacing constraints; `param_draws` are `vmap`ped.
 `fisher_information_from_fn` (in `fisher.py`) is the matrix-only path for a
@@ -221,7 +221,7 @@ of the decomposition to the old monolith is pinned by the full-fit suite
 (`tests/integration/test_calibrate.py`, `test_profile.py`); the plant path by
 `test_plant_calibrate.py`. **Solve failures
 mid-fit:** `_run_multistart` treats a start whose forward solve raises at runtime
-as a failed start. `_is_solve_failure` recognises these: equinox's runtime error,
+as a failed start. `_is_solve_failure` recognizes these: equinox's runtime error,
 or a JAX runtime / `ValueError` carrying the host-callback failure that
 `equinox.error_if` raises from compiled code. Such a start is skipped with one
 `RuntimeWarning` and the best remaining start is kept. If no start survives, a

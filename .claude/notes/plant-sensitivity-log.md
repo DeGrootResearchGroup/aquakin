@@ -38,7 +38,7 @@ became the **staggered corrector** on the lean Kvaerno3 loop
 *Configuration of every number in this section:* `build_bsm2` defaults (BSM2-configured ASM1 +
 ADM1, 188 states, colored Jacobian 66 colors), started from the constant-influent
 steady state (150 d from `bsm2_warm_start`, `rtol=1e-5`, `atol=1e-3`), driven by the
-**synthesised** dry-weather influent (`load_bsm2_influent("dry")` — 15-min samples
+**synthesized** dry-weather influent (`load_bsm2_influent("dry")` — 15-min samples
 with ±20% flow noise, far rougher than the IWA 609-day file, so step counts are much
 higher than on the JRN-056 case of the issue), `rtol=1e-4`, `atol=1e-3`, the `k`
 sensitivity parameters the first `k` `asm1.*` names, daily `t_eval`, default

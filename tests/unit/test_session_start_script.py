@@ -125,7 +125,7 @@ def test_plan_installs_the_pinned_extras_when_there_is_no_marker(ss):
         "off",
         "--quiet",
         "--editable",
-        ".[test,lint,typecheck]",
+        ".[test,lint,typecheck,docs]",
         "--constraint",
         "constraints.txt",
     ]
@@ -226,7 +226,7 @@ def test_execute_successful_install_records_the_fingerprint(ss, tmp_path):
     assert run.calls == [(todo.install, ss.INSTALL_TIMEOUT_S, {"PIP_NO_CACHE_DIR": "1"})]
     assert marker.read_text() == "abc\n"
     assert out == {
-        "systemMessage": "session start: Installed aquakin[test,lint,typecheck] "
+        "systemMessage": "session start: Installed aquakin[test,lint,typecheck,docs] "
         "pinned by constraints.txt in 12 s."
     }
 
@@ -250,7 +250,7 @@ def test_execute_failed_install_reports_and_retries_next_time(ss, tmp_path, resu
     assert "Installing aquakin failed" in out["systemMessage"]
     context = out["hookSpecificOutput"]["additionalContext"]
     assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert "/py/python3 -m pip install -e '.[test,lint,typecheck]' -c constraints.txt" in context
+    assert "/py/python3 -m pip install -e '.[test,lint,typecheck,docs]' -c constraints.txt" in context
     assert detail in context
 
 

@@ -66,11 +66,11 @@ is the denser (`F` at its peak, located by `_flux_peak`'s ternary search, when t
 straddle it). In BSM2's blanket, layers 2–5 sit within ~1% of each other on the
 rising branch of `F` and swap order hundreds of times a day; the Takács rule
 switches flux at every swap (kinks, pulses ±10–15%, solver failures), the Godunov
-flux is the upper layer's either way. Measured (`scripts/probe_settler_accuracy.py`,
-8-day dynamic BSM2, `rtol = 1e-4`, 2026-11-02): lean-loop attempts 8901 → 3177,
-cached forward wall 27.6 → 9.6 s, diffrax attempts 17249 → 3653; dynamic effluent
-means within 0.07% of Takács, the constant-influent steady state identical (layers
-2–5 equal there, where the rules agree).
+flux is the upper layer's either way. That is why `"godunov"` is the default:
+it cuts the solver's attempts several-fold on dynamic BSM2 while the effluent
+means stay within 0.07% of Takács and the constant-influent steady state is
+identical (layers 2–5 are equal there, where the rules agree). Measurements:
+`.claude/notes/plant-sensitivity-log.md` and `scripts/probe_settler_accuracy.py`.
 
 **Shared separator/clarifier helpers.** The separator/clarifier family resolves
 its settling / particulate / TSS species lists through the shared

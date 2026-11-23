@@ -14,7 +14,7 @@ Split out of `.claude/rules/core.md`. Reuses the pH solver's constants and activ
 struvite, calcite, the calcium phosphates — driven by the aqueous
 supersaturation. Like pH, the saturation state is not an independent state: it
 is computed from the instantaneous composition and exposed to rate expressions
-as ordinary condition fields. The framework is the generalised
+as ordinary condition fields. The framework is the generalized
 precipitation approach of Kazadi Mbamba et al. (2015).
 
 ### The rate law (`core/precipitation.py`)

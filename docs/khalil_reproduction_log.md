@@ -177,7 +177,7 @@ second-order precipitation constant `kPRE` is `m3/(g_TSS*d)`), species the
 parseable `g_<currency>/m3` form (oxygen → `g_O2/m3` per the `asm1` convention),
 and the stoichiometry-only yields / composition / charge constants best-effort
 advisory units. All four resolve `model.time_unit` to `"d"` and are
-`check_units`-clean **except** the two ASM2d-TUD biomass-normalised PP-storage
+`check_units`-clean **except** the two ASM2d-TUD biomass-normalized PP-storage
 rates (`qPP·XPAO²/XPP·…`), whose root is irreducibly cross-currency (`COD²/P`) —
 a documented property of that model's rate form, surfaced (not fixed) by the root
 check. *(Superseded in #671: those findings were mislabelled units, not a property

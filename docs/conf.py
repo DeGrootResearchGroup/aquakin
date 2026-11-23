@@ -8,6 +8,7 @@ in lock-step with the curated public surface without a hand-maintained list.
 from __future__ import annotations
 
 import inspect
+import os
 from importlib.metadata import version as _dist_version
 from pathlib import Path
 
@@ -103,6 +104,12 @@ intersphinx_mapping = {
 }
 # Missing cross-refs into third-party APIs should not fail the -W build.
 intersphinx_disabled_reftypes = ["*"]
+# A sandbox without network access (a Claude Code cloud session) cannot fetch
+# the inventories, and each failed fetch is a warning that -W turns into an
+# error. AQUAKIN_DOCS_OFFLINE=1 skips them; with the reftypes above disabled,
+# no page depends on them to build.
+if os.environ.get("AQUAKIN_DOCS_OFFLINE") == "1":
+    intersphinx_mapping = {}
 
 # -- HTML output --------------------------------------------------------------
 
