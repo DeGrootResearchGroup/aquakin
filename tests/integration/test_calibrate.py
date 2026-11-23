@@ -250,6 +250,64 @@ def test_ad_mode_forward_matches_reverse(setup):
     assert fwd.params_named["A_to_B.k"] == pytest.approx(rev.params_named["A_to_B.k"], rel=1e-4)
 
 
+def _reverse_nan_observation(C, params):
+    """Observe B, plus a ``jnp.where`` on the parameters whose unselected branch
+    is NaN. The value and the forward-mode tangent are B's own, but the
+    reverse-mode cotangent of the unselected branch is ``0 * NaN``, so a reverse
+    gradient is non-finite and a forward one is not: the same split as a stiff
+    solve's overflowing adjoint, without a stiff solve. The NaN enters after the
+    solve, so the solve's own adjoint stays finite."""
+    k = params[0]
+    return C[1] + jnp.where(k > 1e9, jnp.sqrt(k - 1e9), 0.0)
+
+
+_REVERSE_NAN_FIT = dict(
+    free_params=["A_to_B.k"],
+    transforms={"A_to_B.k": "positive_log"},
+    observation_fn=_reverse_nan_observation,
+    laplace=False,
+)
+
+
+@pytest.mark.parametrize("optimizer", [OptimizerConfig(), OptimizerConfig(method="gauss_newton")])
+def test_non_finite_gradient_error_names_the_real_api(setup, optimizer):
+    """A non-finite start gradient raises, for both optimisers, with a remedy
+    written in the arguments ``calibrate`` takes
+    (``diff=aquakin.DifferentiationConfig(...)``), not the removed ``ad_mode=`` /
+    ``gradient=`` keywords."""
+    reactor, C0, t_obs, obs_clean, _true_k = setup
+    with pytest.raises(RuntimeError, match="calibration gradient is non-finite") as exc:
+        aquakin.calibrate(
+            reactor,
+            C0,
+            observations=obs_clean[:, None],
+            t_obs=t_obs,
+            optimizer=optimizer,
+            **_REVERSE_NAN_FIT,
+        )
+    msg = str(exc.value)
+    assert 'diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")' in msg
+    assert 'diff=aquakin.DifferentiationConfig(method="stable")' in msg
+    assert "ad_mode" not in msg and "gradient=" not in msg
+
+
+def test_non_finite_gradient_forward_remedy_fits(setup):
+    """Following the forward-mode remedy the non-finite-gradient error names
+    (Gauss-Newton with ``mode="forward", method="through_solve"``) fits the true
+    rate on the same reverse-only-NaN observation."""
+    reactor, C0, t_obs, obs_clean, true_k = setup
+    fwd = aquakin.calibrate(
+        reactor,
+        C0,
+        observations=obs_clean[:, None],
+        t_obs=t_obs,
+        optimizer=OptimizerConfig(method="gauss_newton"),
+        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        **_REVERSE_NAN_FIT,
+    )
+    assert fwd.params_named["A_to_B.k"] == pytest.approx(true_k, rel=1e-3)
+
+
 def test_ad_mode_rejects_bad_value(setup):
     reactor, C0, t_obs, obs_clean, _ = setup
     with pytest.raises(ValueError, match="mode"):

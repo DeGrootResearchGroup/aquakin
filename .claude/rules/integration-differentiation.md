@@ -60,7 +60,7 @@ Khalil Monod biofilm, ~10× tighter (~5e-4 d) for the half-order variants whose
 the stiffer balanced base) — inside both. Because calibration needs the reverse
 adjoint (one pass for the whole parameter gradient), the cap matters there; a
 forward-mode sensitivity screen is unaffected, and is also faster (see
-`dgsm(ad_mode="forward")`). A future alternative is a quasi-steady-state (QSS)
+`dgsm(diff=DifferentiationConfig(mode="forward"))`). A future alternative is a quasi-steady-state (QSS)
 reduction of the near-instantaneous fast reactions, which would remove the
 stiff modes entirely and avoid needing the cap.
 

@@ -18,6 +18,7 @@ import numpy as np
 
 from aquakin.core.model import CompiledModel
 from aquakin.core.tolerance import default_atol
+from aquakin.integrate._config import FORWARD_DIFF, FORWARD_REACTOR_REMEDY
 
 
 def validate_t_eval(t_eval_arr: jnp.ndarray, t0: float, t1: float) -> None:
@@ -111,7 +112,7 @@ def is_forward_mode_ad_error(exc: BaseException) -> bool:
     ``jax.jvp`` / ``jax.jacfwd`` through the solve fails with *"can't apply
     forward-mode autodiff (jvp) to a custom_vjp function"*. This is the one
     specific failure the forward-mode sensitivity / DGSM paths convert into
-    ``forward_adjoint()`` guidance; matching it narrowly keeps unrelated errors
+    forward-mode ``diff=`` guidance; matching it narrowly keeps unrelated errors
     (bad shapes, OOM, a bug in the user's ``fn``) from being masked by that hint.
     """
     msg = str(exc).lower()
@@ -138,8 +139,9 @@ def friendly_solve_errors(max_steps, *, what: str = "solve"):
        ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp``, so a
        ``jax.jacfwd`` / ``jax.jvp`` through the solve fails with JAX's
        "can't apply forward-mode autodiff (jvp) to a custom_vjp function" --
-       which never mentions the cure. Re-raised naming
-       ``aquakin.forward_adjoint()``.
+       which never mentions the cure. Re-raised naming the forward-mode
+       ``diff=aquakin.DifferentiationConfig(...)`` the reactor should be built
+       with.
 
     Parameters
     ----------
@@ -168,10 +170,10 @@ def friendly_solve_errors(max_steps, *, what: str = "solve"):
                 f"Forward-mode autodiff (jax.jacfwd / jax.jvp) cannot flow through "
                 f"the {what}: the default adjoint (RecursiveCheckpointAdjoint) is "
                 "reverse-mode only -- it registers a custom_vjp that rejects forward "
-                "mode. Build the reactor with adjoint=aquakin.forward_adjoint() to "
-                "use a forward-mode-capable solve, or take a reverse-mode gradient "
-                "(jax.grad / jax.jacrev) instead. (aquakin.sensitivity and "
-                "aquakin.dgsm accept ad_mode='forward' and set this adjoint for you.)"
+                f"mode. To differentiate in forward mode, {FORWARD_REACTOR_REMEDY}; "
+                "or take a reverse-mode gradient (jax.grad / jax.jacrev) instead. "
+                f"(aquakin.sensitivity with {FORWARD_DIFF} sets this adjoint for "
+                "you.)"
             ) from None
         raise
 
