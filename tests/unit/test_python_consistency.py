@@ -181,7 +181,7 @@ def test_a_leading_zero_is_read_as_a_number_where_python_refuses_it():
     writing it in a model file means anything but seven, so it is read as seven
     rather than inheriting a restriction whose reason does not apply here.
     """
-    with pytest.raises(SyntaxError):
+    with pytest.raises(SyntaxError, match="leading zeros in decimal integer literals"):
         eval("007")
     assert _aquakin("007") == 7.0
 

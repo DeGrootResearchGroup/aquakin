@@ -166,5 +166,5 @@ def test_kpi_comparison_table_renders():
 
 
 def test_kpi_comparison_rejects_bad_report():
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match=r"a KPI report must be a dict or expose a kpis\(\) method"):
         ak.kpi_comparison({"bad": object()})

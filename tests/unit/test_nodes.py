@@ -56,7 +56,7 @@ def test_species_lookup():
 
 
 def test_species_unknown_raises():
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Species 'X' is referenced in a rate expression but not declared"):
         SpeciesNode("X").compile(_ctx())
 
 
@@ -65,7 +65,7 @@ def test_param_lookup_namespaces():
 
 
 def test_param_unknown_raises():
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Parameter 'missing' is referenced in a rate expression but not declared"):
         ParamNode("missing").compile(_ctx())
 
 
@@ -75,7 +75,7 @@ def test_condition_lookup():
 
 
 def test_condition_unknown_raises():
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Condition field 'salinity' is referenced in a rate expression but not declared"):
         ConditionNode("salinity").compile(_ctx())
 
 
@@ -110,7 +110,7 @@ def test_pH_switch():
 
 def test_arrhenius_requires_T():
     ctx = _ctx(condition_fields=frozenset({"pH"}))
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="ArrheniusNode requires a condition field named 'T'"):
         ArrheniusNode(ParamNode("A"), ParamNode("Ea")).compile(ctx)
 
 
@@ -308,7 +308,7 @@ def test_ph_inhibit_grad_matches_fd():
 def test_ph_switch_requires_pH():
     """pH_switch needs a 'pH' condition field, like arrhenius needs 'T'."""
     ctx = _ctx(condition_fields=frozenset({"T"}))
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="pHSwitchNode requires a condition field named 'pH'"):
         pHSwitchNode(ConstantNode(7.0)).compile(ctx)
 
 
@@ -316,7 +316,7 @@ def test_ph_inhibit_requires_pH():
     from aquakin.core.nodes import pHInhibitNode
 
     ctx = _ctx(condition_fields=frozenset({"T"}))
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="pHInhibitNode requires a condition field named 'pH'"):
         pHInhibitNode(ConstantNode(4.0), ConstantNode(5.5)).compile(ctx)
 
 

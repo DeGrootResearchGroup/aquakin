@@ -173,5 +173,5 @@ def test_plant_to_dataframe_passive_unit(net):
 def test_plant_to_dataframe_unknown_unit(net):
     sol = PlantSolution(t=jnp.array([0.0]), state=jnp.zeros((1, 3)),
                         plant=_fake_plant(net))
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Unknown unit 'nope'"):
         sol.to_dataframe("nope")

@@ -143,7 +143,7 @@ def test_unknown_node_raises():
     class _Bogus:
         pass
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="No LaTeX renderer for node type _Bogus"):
         to_latex(_Bogus())
 
 
