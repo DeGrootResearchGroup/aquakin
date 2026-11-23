@@ -16,6 +16,7 @@ import aquakin
 from aquakin import FreeICConfig, OptimizerConfig
 from aquakin.plant import CSTRUnit, Plant
 from aquakin.plant.influent import InfluentSeries
+from tests.conftest import FIXTURES
 
 
 def _single_cstr_plant(net):
@@ -68,16 +69,17 @@ def _two_cstr_plant(net):
     return plant
 
 
-@pytest.fixture
-def decay_plant():
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    return net, _single_cstr_plant(net)
+@pytest.fixture(scope="module")
+def decay_plant(simple_model):
+    """The single-CSTR plant on the session decay model, shared by the module: no
+    test mutates it, so its compiled solves are reused across the fits."""
+    return simple_model, _single_cstr_plant(simple_model)
 
 
 @pytest.fixture
-def two_tank_plant():
-    net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
-    return net, _two_cstr_plant(net)
+def two_tank_plant(simple_model):
+    """A fresh two-tank plant per test (one test adds a unit to it)."""
+    return simple_model, _two_cstr_plant(simple_model)
 
 
 PARAM = "simple_decay.A_to_B.k"
@@ -119,15 +121,29 @@ def test_plant_calibrate_recovers_synthetic_parameter(decay_plant):
     assert float(result.params[gidx]) == pytest.approx(true_k, rel=5e-2)
 
 
-def test_plant_calibrate_gradient_is_finite_through_the_plant(decay_plant):
-    """check_finite=True must pass: the reverse stable-adjoint gradient of the
-    plant-stream loss is finite (the whole point of routing through plant.solve's
-    discrete adjoint)."""
+def test_plant_calibrate_gradient_matches_fd_through_the_plant(decay_plant, monkeypatch):
+    """The objective gradient a plant fit hands the optimizer -- the reverse
+    stable adjoint through the whole plant solve -- equals a central finite
+    difference of the same objective, and check_finite=True passes. The
+    objective is captured from the multistart runner (which then runs as usual)
+    and evaluated at half the true rate, away from the optimum. The step is
+    1e-4 in log k, whose truncation error is far below ``rel=1e-6``."""
+    import aquakin.plant.calibrate as plant_cal
+
     net, plant = decay_plant
     base = plant.default_parameters()
+    gidx = plant.parameter_index(PARAM)
     t_obs = jnp.linspace(1.0, 20.0, 5)
     sol = plant.solve(t_span=(0.0, 20.0), t_eval=t_obs, params=base)
     obs_B = plant.stream(sol, "tank", base).C_named("B")
+    seen = {}
+    real = plant_cal._run_multistart
+
+    def capture(cfg, bundle, theta0, opt_bounds, starts=None, **kw):
+        seen["bundle"] = bundle
+        return real(cfg, bundle, theta0, opt_bounds, starts=starts, **kw)
+
+    monkeypatch.setattr(plant_cal, "_run_multistart", capture)
     # A single L-BFGS-B step from the truth; check_finite would raise on a NaN.
     result = plant.calibrate(
         obs_B,
@@ -141,6 +157,14 @@ def test_plant_calibrate_gradient_is_finite_through_the_plant(decay_plant):
         check_finite=True,
     )
     assert np.isfinite(result.loss)
+
+    value_and_grad = seen["bundle"].value_and_grad
+    x = jnp.asarray([np.log(0.5 * float(base[gidx]))])
+    _, g = value_and_grad(x)
+    h = 1e-4
+    fd = (float(value_and_grad(x + h)[0]) - float(value_and_grad(x - h)[0])) / (2 * h)
+    assert fd < 0.0                                   # loss falls toward the true k
+    assert float(g[0]) == pytest.approx(fd, rel=1e-6)
 
 
 @pytest.mark.slow  # a plant solve inside an optimizer loop
@@ -215,15 +239,19 @@ def test_plant_calibrate_multi_stream_shape_mismatch(two_tank_plant):
         )
 
 
-@pytest.mark.slow  # a full BSM1 (multi-unit, recycled, stiff) fit
-def test_plant_calibrate_recovers_bsm1_muH():
-    """The real test: recover a kinetic parameter (heterotroph max growth rate
-    muH) of the full BSM1 plant -- five aerated reactors, a settler, and the
-    internal + RAS recycles -- from its effluent nitrogen, with the reverse
-    gradient flowing through the whole stiff monolithic solve."""
+@pytest.mark.slow  # value and gradient through the full BSM1 solve
+def test_plant_calibrate_bsm1_gradient_matches_fd(monkeypatch):
+    """The objective gradient of a BSM1 fit -- five aerated reactors, a settler
+    and the internal + RAS recycles, from the effluent nitrogen -- matches a
+    central finite difference of the same objective, with the reverse stable
+    adjoint flowing through the whole stiff monolithic solve. The objective is
+    captured from the multistart runner (the fit itself is not run: the
+    single-CSTR fits above check the optimizer end) and evaluated at 0.7 muH.
+    The step is 1e-3 in log muH; steps of 1e-2, 1e-3 and 1e-4 agree with the
+    gradient to 1e-4, 1e-6 and 1e-8, so ``rel=1e-5``."""
+    import aquakin.plant.calibrate as plant_cal
     from aquakin import load_model
     from aquakin.plant.bsm import bsm1_warm_start, build_bsm1, load_bsm1_influent
-    from aquakin.plant.influent import InfluentSeries
 
     asm1 = load_model("asm1")
     plant = build_bsm1(asm1)
@@ -244,24 +272,35 @@ def test_plant_calibrate_recovers_bsm1_muH():
     true_muH = float(base[gidx])
 
     t_obs = jnp.linspace(0.5, 8.0, 6)
-    truth = base.at[gidx].set(true_muH)
-    sol = plant.solve(t_span=(0.0, 8.0), t_eval=t_obs, params=truth, y0=y0)
-    eff = plant.stream(sol, "effluent", truth)
+    sol = plant.solve(t_span=(0.0, 8.0), t_eval=t_obs, params=base, y0=y0)
+    eff = plant.stream(sol, "effluent", base)
     obs = jnp.stack([eff.C_named("SNH"), eff.C_named("SNO")], axis=1)
 
-    result = plant.calibrate(
-        obs,
-        t_obs,
-        ["asm1.muH"],
-        target="effluent",
-        observed_channels=["SNH", "SNO"],
-        params=base.at[gidx].set(true_muH * 0.7),
-        y0=y0,
-        transforms={"asm1.muH": "positive_log"},
-        optimizer=OptimizerConfig(max_iter=25),
-    )
-    assert result.converged
-    assert result.params_named["asm1.muH"] == pytest.approx(true_muH, rel=2e-2)
+    seen = {}
+
+    def capture(cfg, bundle, theta0, opt_bounds, starts=None, **kw):
+        seen["bundle"] = bundle
+        raise _Stop
+
+    monkeypatch.setattr(plant_cal, "_run_multistart", capture)
+    with pytest.raises(_Stop):
+        plant.calibrate(
+            obs,
+            t_obs,
+            ["asm1.muH"],
+            target="effluent",
+            observed_channels=["SNH", "SNO"],
+            params=base.at[gidx].set(true_muH * 0.7),
+            y0=y0,
+            transforms={"asm1.muH": "positive_log"},
+        )
+    value_and_grad = seen["bundle"].value_and_grad
+    x = jnp.asarray([np.log(0.7 * true_muH)])
+    _, g = value_and_grad(x)
+    h = 1e-3
+    fd = (float(value_and_grad(x + h)[0]) - float(value_and_grad(x - h)[0])) / (2 * h)
+    assert fd < 0.0                                   # loss falls toward the true muH
+    assert float(g[0]) == pytest.approx(fd, rel=1e-5)
 
 
 @pytest.mark.slow  # a plant solve inside an optimizer loop
@@ -783,12 +822,14 @@ def _fit_args(plant, **kw):
     return out
 
 
-def test_plant_param_namespace_reads_model_bounds(decay_plant, monkeypatch):
+def test_plant_param_namespace_reads_model_bounds(monkeypatch):
     """The model-declared bounds of each plant parameter are exposed by name;
-    a parameter its model leaves unbounded has no entry."""
+    a parameter its model leaves unbounded has no entry. The test removes a bound
+    from its model, so it loads its own copy rather than the shared one."""
     from aquakin.plant.calibrate import _PlantParamNamespace
 
-    net, plant = decay_plant
+    net = aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
+    plant = _single_cstr_plant(net)
     ns = _PlantParamNamespace(plant)
     assert ns.parameter_bounds[PARAM] == tuple(net.parameter_bounds["A_to_B.k"])
     monkeypatch.delitem(net.parameter_bounds, "A_to_B.k")
