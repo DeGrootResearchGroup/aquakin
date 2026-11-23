@@ -9,293 +9,147 @@ paths:
 
 # Rules — YAML model schema (`aquakin/schema/`, model `*.yaml`)
 
-The YAML model format and the Pydantic schema rules. Loaded automatically
-when editing the schema package or any `*.yaml` model file. For the catalog
-of what each shipped model is, see `docs/model_catalog.md`.
+What an author of a model YAML, or an editor of the schema code, must not get
+wrong. The format itself (every key, its default, the expression grammar, the
+`extends:` merge semantics, `composition:` / `auto`, `speciation:` /
+`precipitation:`, `check_units`) is documented for users in
+`docs/model_format.md`; read it there rather than restating it here. What each
+shipped model is: `docs/model_catalog.md`.
 
-## YAML Model Schema
+## Loading
 
-### Top-Level Structure
+- Load YAML with `yaml.safe_load()` only, everywhere.
+- Quote a species name YAML could read as a non-string (`"NO"`, `"ON"`).
+- `default_concentration` is a reference value, not an initial condition; do
+  not tune it to make a particular experiment work (users pass `C0`).
 
-```yaml
-model:
-  name: ozone_bromate
-  version: "1.0"
-  description: "..."
-  references:
-    - "Acero & von Gunten (2001), Environ. Sci. Technol. 35(3), 590-599"
+## Units
 
-species:
-  - name: O3
-    description: "Ozone"
-    units: mol/L
-    default_concentration: 1.0e-4
+- **Every shipped model must pass `check_units()` and declare a determinable
+  `time_unit`** (enforced by
+  `test_units_check.py::test_shipped_models_are_unit_clean`), because the
+  plant unit audit relies on both.
+- **Do not reach for `units_acknowledged:` first.** Check the parameter units
+  against the model's source: a finding is usually a mislabelled unit, not a
+  property of the rate (the ASM2d-TUD findings were: `qPP` / `mAN` are
+  g_P/(g_COD·d), the `iCharge_*` factors kmol/g). Acknowledge only a knowingly
+  unconventional published form, with a written reason; the acknowledged set
+  is pinned in `test_units_check.py::test_acknowledged_reactions_are_pinned`,
+  so adding one means updating that pin as a reviewed change.
+- **Label a rate constant from the stoichiometry**, not from a source table
+  that writes it per unit biomass in its own currency: a species with a fixed
+  `+1` / `-1` coefficient changes by exactly the rate, so the rate must match
+  at least one such species (`_stoichiometry_issue` in `utils/units.py`). This
+  is what catches a specific rate (g X/(g biomass·d)) mislabelled `1/d`.
+- **In a SUMO-derived model put `units_acknowledged:` before
+  `stoichiometry:`**: `scripts/verify_sumo_asm.py` reads every indented line
+  after `stoichiometry:` as a species key.
 
-conditions:
-  - name: pH
-    description: "Solution pH"
-    default: 7.5
-  - name: T
-    description: "Temperature (K)"
-    default: 293.15
+## `molar_mass` in `speciation:` / `precipitation:`
 
-reactions:
-  - name: O3_Br_direct
-    description: "Direct ozone oxidation of bromide"
-    reference: "Acero & von Gunten (2001)"
-    rate: "k1 * [O3] * [Br-]"
-    parameters:
-      k1:
-        value: 160.0
-        units: M-1 s-1
-        bounds: [10.0, 1000.0]
-    stoichiometry:
-      O3: -1
-      Br-: -1
-      HOBr: +1
-```
+- `molar_mass` converts the species' state to mol/L
+  (`mol/L = state / molar_mass`), so it must be a power of ten for a molar
+  species and a molecular weight (> 1, never a clean power of ten) for a mass
+  species. **When you change a species' `units`, update every `molar_mass`
+  that refers to it**; otherwise pH and saturation indices shift silently.
+- The load-time audit (`_audit_speciation_molar_mass` in
+  `schema/model_spec.py`) only warns (`SpeciationUnitsWarning`), skips blank,
+  unparseable and non-mass / non-molar units, and must keep **zero false
+  positives on every shipped model**
+  (`test_speciation_units_audit.py::test_shipped_models_do_not_warn`). Do not
+  make it an error or widen it without re-checking every shipped model.
 
-### Schema Rules
+## Parameters and priors
 
-- `default_concentration` is a reference value for the species, not an
-  experimental initial condition. Users override it at runtime.
-- `conditions` block declares all fields the model requires. The loader
-  validates that any `SpatialConditions` object passed at runtime provides
-  all declared fields. Each condition may carry an optional `units:` string
-  (default `""`), advisory metadata used only by `check_units` (e.g. `pH: "-"`).
-- `units` on species (default `"mol/L"`), parameters (default `""`), and
-  conditions (default `""`) are advisory unit strings. Species/parameter units
-  feed result labelling and the opt-in `check_units` dimensional check; they are
-  not otherwise used at runtime. `check_units` treats a blank/unparseable unit
-  as unknown (skipped). **Every shipped model must pass `check_units()`** (the
-  CI gate `test_shipped_models_are_unit_clean`, which also requires a
-  determinable `time_unit` for the plant audit). A reaction whose units are
-  knowingly unconventional (a bare-number molar mass, a published rate form)
-  declares `units_acknowledged: "<reason>"`; its findings then leave the
-  default result (`check_units(include_acknowledged=True)` shows them) and the
-  acknowledged set is pinned in `test_acknowledged_reactions_are_pinned`
-  (today: the three ADM1 `gas_outflow_*` reactions). Before acknowledging,
-  check the parameter units against the model's source: the ASM2d-TUD findings
-  were mislabelled units (`qPP`/`mAN` are g_P/(g_COD·d), the `iCharge_*` factors
-  kmol/g), not a property of the rates. In a SUMO-derived model put `units_acknowledged:` *before*
-  `stoichiometry:` — `scripts/verify_sumo_asm.py` reads indented lines after
-  `stoichiometry:` as species keys. The checker reads an inline `c / (c + X)`
-  (same literal, as its own subexpression) as a dimensionless inhibition term.
-  It also checks each rate against the species with a fixed `+1`/`-1`
-  stoichiometric coefficient (`check_stoichiometry=True`, `_stoichiometry_issue`
-  in `utils/units.py`): the rate must match at least one of them, since such a
-  species changes by exactly the rate. That is what catches a specific rate
-  (g X/(g biomass·d)) mislabelled `1/d`; label it from the stoichiometry, not
-  from a source table that writes it per unit biomass in its own currency.
-- Species units are **also** cross-checked against each `speciation:` /
-  `precipitation:` `molar_mass` at load time (`_audit_speciation_molar_mass` in
-  `schema/model_spec.py`). `molar_mass` converts the species state value to mol/L
-  (`mol/L = state / molar_mass`), so it must be a pure unit-conversion factor (a
-  power of ten) for an already-molar species and a molecular weight (never a
-  clean power of ten, always > 1) for a mass species. A value on the wrong side
-  of that split emits an advisory `aquakin.SpeciationUnitsWarning` (a warning,
-  not an error — it catches a silent pH / saturation-index shift from a hand-edit
-  that changes a species' `units` without updating `molar_mass`). It is
-  calibrated to zero false positives on every shipped model; a blank/unparseable
-  or non-mass/non-molar unit is skipped.
-- `reference` on reactions is optional but strongly encouraged — it makes
-  the YAML file a self-documenting scientific artifact.
-- `bounds` on parameters are optional, used by `fit()` as box constraints.
-- `transform` on parameters is optional (default `"none"`); valid values
-  are `"none"`, `"positive_log"` (for `p > 0`), and `"logit"` (for
-  `0 < p < 1`). Used by `calibrate()` to optimize in unconstrained space.
-- `prior` on parameters is optional — a Gaussian prior in physical space
-  declared either as `prior: {mean: m, std: s}` (a measured value with
-  reported uncertainty) or `prior: {range: [lo, hi]}` (a literature range,
-  converted to a Gaussian centred on the midpoint with `std = (hi-lo)/4`,
-  i.e. the range ≈ ±2σ). `calibrate()` adds `0.5·((p-mean)/std)²` to its
-  objective for any free parameter carrying a prior (default
-  `use_priors=True`; override per-parameter via the `priors=` argument).
-  Priors regularize otherwise non-identifiable parameter combinations toward
-  literature values; for a proper Bayesian MAP/posterior pair them with
-  `loss="nll"` and a measurement `sigma` so the data term is a true negative
-  log-likelihood and the prior curvature enters the Laplace covariance.
-  The shipped `asm1` and `adm1` models **declare literature-grounded priors**
-  on every calibration parameter (the bounded, non-fraction targets), each a
-  physical-space Gaussian **centred on the parameter's nominal** with relative
-  `std` set to a literature coefficient of variation:
-  - **ASM1** — from the activated-sludge parameter database (Hauduc 2011 PhD
-    thesis, Table 3-1): the per-parameter reported `V%` (wastewater-specific by
-    construction). Most are narrow (`muH` 6%, `bH` 2%); the substrate/nitrate
-    half-saturations `KS`/`KNO` and autotroph decay `bA` the widest (50–80%).
-  - **ADM1** — **Brun et al. 2002 uncertainty classes around the BSM2 municipal-
-    sludge nominal** (kinetics / half-saturations / inhibition / decay = class 3,
-    50%; yields = class 1, 5%). It deliberately does **not** use the reported
-    ranges of the Mo et al. 2023 ADM1 review (Table 3): those aggregate across
-    digester *types* — grass silage, food/agricultural/industrial waste, dry AD —
-    so a span like `k_hyd_pr ∈ [0.0014, 10]` or `K_I_h2_c4` down to `5e-8` (grass
-    silage, Koch 2010) measures *substrate* variation, not the parameter
-    uncertainty of a mesophilic municipal-sludge digester. The within-context
-    Brun CV is the right model, and Mo's own "hydrolysis varies considerably with
-    the substrate" is the justification for it. (When a municipal-sludge-specific
-    ADM1 range source becomes available, replace the Brun CV with it.)
+- **`bounds` are the hard feasibility fence; a `prior` is the plausible-
+  uncertainty belief.** Keep both: priors are far tighter than the ±decade
+  bounds, and a global-sensitivity screen or Bayesian calibration must sample
+  the prior, not the bounds.
+- The shipped `asm1` and `adm1` priors are physical-space Gaussians **centred
+  on the parameter's nominal**, with `std` = nominal × a literature
+  coefficient of variation, on every bounded, non-fraction calibration
+  parameter (`asm1_ammonia_limitation` inherits them through `extends:`):
+  - `asm1`: the per-parameter reported CV of the activated-sludge parameter
+    database (Hauduc 2011 PhD thesis, Table 3-1).
+  - `adm1`: the Brun et al. 2002 uncertainty classes around the BSM2
+    municipal-sludge nominal (kinetics / half-saturations / inhibition / decay
+    class 3, 50%; yields class 1, 5%).
+  - **Do not replace the `adm1` CVs with the ranges of the Mo et al. 2023 ADM1
+    review (Table 3)**: they aggregate across digester types and substrates, so
+    they measure substrate variation, not the parameter uncertainty of a
+    mesophilic municipal-sludge digester. Replace the Brun CVs only with a
+    municipal-sludge-specific range source.
 
-  Priors are far tighter / more defensible than the parameters' mechanical
-  ±decade `bounds` (which stay as the hard feasibility limits), and are what a
-  global-sensitivity screen or Bayesian calibration should sample — the prior is
-  the plausible-uncertainty *belief*, the bounds are the hard *fence*.
-  `asm1_ammonia_limitation` inherits them through `extends: asm1`.
-- `temperature` on parameters is optional — an Arrhenius-style temperature
-  correction `temperature: {theta: t, ref_T: T0, condition: "T"}`. When present,
-  the rate constant is multiplied by `theta**(T - ref_T)` during rate
-  evaluation, where `T` is read from the named condition field (default `"T"`).
-  The parameter `value` is the value **at** `ref_T`, so the correction is unity
-  there — a model whose conditions sit at the reference temperature behaves
-  exactly as if uncorrected (backward-compatible). `ref_T` is in the condition's
-  units (Kelvin for the ASM/ADM models); a difference is used, so Kelvin and
-  Celsius give the same `theta`. `theta` is the per-degree factor; from a
-  parameter measured `p_hi` at `T_hi` and `p_lo` at `T_lo` it is
-  `(p_hi/p_lo)**(1/(T_hi - T_lo))`. The correction is applied to **rate
-  constants only** — it is confined to `CompiledModel.rates` (which multiplies
-  the corrected param indices by their factor before evaluating the rate
-  callables); `compute_stoich` always uses the raw parameters, so stoichiometric
-  (yield / composition) coefficients are never temperature-scaled. Stored as
-  `CompiledModel.temperature_corrections` (a list of
-  `(param_idx, ln_theta, ref_T, condition_field)`); AD-clean. `asm1` ships with
-  the six BSM temperature-dependent rate constants corrected (`muH`, `muA`,
-  `bH`, `bA`, `ka`, `kh`, `ref_T = 293.15 K`, slopes from the standard BSM
-  15 °C/10 °C pairs in `asm1_bsm2.c`), so it slows correctly in the cold
-  (nitrification — the most temperature-sensitive — drops to ~36% at 10 °C) while
-  staying identical to the old behaviour at the default 20 °C.
-  `theta` may also be a **parameter name** (`temperature: {theta: theta_A, ...}`,
-  issue #662): resolved at compile time by `_resolve_theta_params` in
-  `core/model.py` (reaction-local `<rxn>.<name>` first, then model-level), which
-  validates it exists, is positive (with a positive lower bound if bounded) and
-  is not itself temperature-corrected, and defaults its bounds to `[1.0, 1.3]`
-  (when the value lies inside) and units to `"-"`. The mapping is stored as
-  `CompiledModel.temperature_theta_params = {corrected_idx: theta_idx}`; the
-  `ln_theta` slot of the 4-tuple holds `log` of the theta default, so every
-  consumer that reads/rewrites the tuples (`bsm2_asm1_model`'s ref_T shift,
-  `_warn_if_influent_T_inconsistent`) is unchanged. `_temp_groups` entries carry
-  `(theta_pos, theta_idx)` (both `None` for an all-numeric group, keeping the
-  float path identical), and `_apply_temperature` gathers `log(params[theta_idx])`
-  into those positions before the unique-index scatter-multiply, so theta is
-  calibratable, differentiable and visible to Fisher/identifiability/DGSM.
-  Several rate constants may share one theta (e.g. `muA`/`bA`).
-- Parameters can live at the model level (a single shared slot used by
-  any reaction that references them by bare name) or inside a reaction's
-  `parameters:` block (namespaced as `<reaction>.<name>`). Model-level
-  parameters and reaction-local parameters with the same name are
-  rejected as shadowing.
-- Stoichiometric coefficients can be **numeric literals** or **string
-  expressions** in model-level / reaction-local parameters. String
-  entries may use only constants, parameters, and arithmetic — no
-  species, conditions, named expressions, or domain functions. Evaluated
-  once per `solve()` call so yield / N-content / fraction parameters can
-  be calibrated alongside kinetic constants. See `asm1.yaml` for a worked
-  example.
-- Optional per-species **`composition:`** block declares the species' content of
-  the conserved quantities in its own measure — `composition: {COD: 1.0}` for an
-  organic (1 g COD per g COD), `{COD: -1.0}` for dissolved oxygen (an electron
-  acceptor), `{COD: -2.86, N: 1.0}` for nitrate-N, `{COD: 2.0, S: 1.0}` for
-  sulfide. Quantity names are free-form (`COD` / `N` / `P` / `S` / `Fe` / `charge`
-  / …). It is **first-class conservation metadata**: a model carries its own
-  table instead of one hand-maintained in a test, read back via
-  `model.composition()` and dotted against the stoichiometry by
-  `model.check_conservation()` / `model.check_nitrogen()` (the
-  advisory/opt-in conservation analogue of `check_units`; it never runs at load
-  and never raises on a violation — it returns the list). A model that declares
-  no `composition:` falls back to the shipped role-based table
-  (`aquakin.composition_table`, the ASM/ADM families) so the check API is uniform;
-  a model with neither raises a clear error. Values are literal floats (a
-  yield-dependent *derived* coefficient stays in the stoichiometry, not here).
-  The WATS sewer family (`wats_sewer`, `wats_sewer_extended` and everything the
-  `_make_khalil_*` generators splice from them) ships `composition:` per species,
-  so the conservation suite checks each model against its own declared table
-  (`tests/integration/test_mass_balance.py`); inherited through `extends:` (a
-  derived species keeps the base's composition unless it overrides it).
-- A stoichiometric coefficient written **`auto`** (or **`?`**) is left unknown and
-  **solved from the declared conservation laws** at compile time, so a
-  conservation-determined coefficient *cannot be written wrong* — the failure mode
-  behind almost every stoichiometry bug here (a hand-typed electron-acceptor
-  demand, an elemental-S reduction donor, a product split). The quantities to
-  solve from are the reaction's **`conserved_for: [COD, N, …]`** (or a model-level
-  `conserved_for:` default); for each, the stoichiometry-weighted species
-  `composition` content must sum to zero, giving one small linear system
-  (`core/stoich_resolve.py`, `numpy.linalg.lstsq`) solved before the stoichiometry
-  is read. Example: `stoichiometry: {SS: "-1/Y_H", X_BH: 1, SO: auto}` with
-  `conserved_for: [COD]` solves the O₂ demand from the COD balance. The compiled
-  model then conserves by construction (`check_conservation` is a tautology on
-  that reaction — the point). Clear errors for an `auto` with no `conserved_for`,
-  an under-determined system (an auto species carrying no content in the conserved
-  quantities), or inconsistent balances. Two cases (issue #291 Phases 2–3):
-  - **numeric** — every other coefficient is a numeric literal, so the solve is
-    purely numeric (`lstsq`, tolerating an over-determined-but-consistent system)
-    and the resolved value is a constant baked into the static stoichiometry matrix.
-  - **parameter-expression (yield-dependent)** — a neighbour is a string expression
-    (e.g. `-1/Y_H`, as in the example above). Conservation is *linear* in the
-    coefficients, so each `auto` coefficient is a numeric-weighted linear
-    combination of the known coefficient expressions (`x = M⁻¹b`, `M` from the
-    composition); the resolver emits that as a *derived* expression string, which
-    the normal stoichiometry-expression machinery compiles into a
-    parameter-dependent (`stoich_dynamic`) coefficient. So calibrating a yield
-    flows through to the derived coefficient — the reaction conserves for **every**
-    parameter value, and `jax.grad` flows through it. This path needs a **square**
-    system (`#auto == #conserved_for`); an over-determined symbolic system's
-    consistency would be parameter-dependent and is rejected.
+## Temperature corrections
 
-  `auto` requires declared `composition:` (the resolver does not use the role-based
-  fallback). Shipped models keep their published rounded literals; `auto` is
-  opt-in.
-- Optional `expressions:` block at the model level lets you give a name
-  to an intermediate rate expression and reference it from a reaction's
-  `rate:` or from another expression. References are inlined into the
-  consuming AST at compile time. Cycles among expressions are rejected.
-- Optional **`model.extends:`** declares a base model to **inherit** instead
-  of copying — a variant that differs by one parameter and a rate is a few lines,
-  and a fix to the base reaches every variant. The base is a shipped model
-  *name* (or a path relative to the extending file if it contains `/` or ends
-  `.yaml`); the derived mapping is **merged onto the (recursively resolved) base
-  before Pydantic validation** (so the merged whole is schema-checked).
-  ([`schema/inheritance.py`](aquakin/schema/inheritance.py), wired in
-  [`schema/loader.py`](aquakin/schema/loader.py).) Merge semantics: the named-list
-  blocks (`species`/`conditions`/`reactions`) match by `name` and **field-merge**
-  a derived entry onto the base (override just a reaction's `rate`, keep its
-  `stoichiometry`; a new name is appended); every other block (`parameters`,
-  `expressions`, `speciation`, ...) deep-merges (nested maps key-wise, scalars/
-  lists replace). A `remove:` block (`{reactions: [...], parameters: [...],
-  species/conditions/expressions: [...]}`) then drops entries; removing a
-  not-present name, a cyclic `extends`, an unknown base, or declaring `extends`
-  in both `model:` and top-level all error clearly. New parameters append after
-  the base's, so the flat parameter *vector order* differs from a hand-written
-  full copy (the name→value mapping and the compiled stoichiometry/rates are
-  identical). A YAML with no `extends` is byte-for-byte unaffected. Shipped users:
-  `asm1_ammonia_limitation` (= `asm1` + the `KNH_H` nutrient switch, ~30 lines vs
-  a 200-line copy) and the Khalil `*_halforder` sewer variants (the generator
-  [`models/_make_khalil_variants.py`](aquakin/models/_make_khalil_variants.py)
-  emits the pure-override `halforder` variant as a thin `extends` file; the
-  variants whose stoichiometry is *computed from the base* stay full copies).
-- Optional `speciation:` block declares a **state-derived pH** (see below).
-- Optional `positivity_limiter:` block (`threshold`, default `1e-3`) throttles
-  each species' *net reaction* term as its concentration approaches zero,
-  preventing negative states and the stiffness they cause. Reproduces the
-  reference WATS S-function scheme
-  `R_lim = max(R,0) + min(R,0) * C / max(C, threshold)`. Applied inside
-  `CompiledModel.dCdt` to the reaction term only (reactors add transport
-  afterwards), so every reactor benefits. Opt-in; off when the block is
-  absent. Stored as `CompiledModel.positivity_threshold`.
-- Optional `clip_negative_states: true` (default `false`) clamps the
-  concentration vector to `>= 0` *when evaluating the reaction rates* (and any
-  state-derived condition such as pH), leaving the raw state for the reactor's
-  transport term and the unit outputs. This protects nonlinear kinetics (Monod /
-  ratio terms) from a transiently-negative state — where they produce
-  large/garbage rates and a stiff blow-up — and is exactly the reference
-  IWA/BSM S-function convention (`xtemp = max(x, 0)` before the process rates).
-  It is **distinct** from `positivity_limiter`: the limiter throttles the *net
-  reaction* near zero (output side), while this clamps the rate *inputs* — so it
-  prevents the Monod-at-negative-`C` blow-up that the limiter does not. Identity
-  at feasible states (does not change the physical solution); leaving transport
-  on the raw state keeps the linear washout self-correcting and the inter-unit
-  mass balance exact. Enabled on `asm1` (needed once the BSM1 settler recycles
-  concentrated solids into a small reactor). Stored as
-  `CompiledModel.clip_negative_states`.
-- YAML is loaded with `yaml.safe_load()` throughout. Species names that
-  could be misread as non-string types (e.g. `NO`) must be quoted in YAML.
+- **Temperature-correct rate constants only.** The correction is confined to
+  `CompiledModel.rates` (via `_apply_temperature`); `compute_stoich` uses the
+  raw parameters, so a yield or composition coefficient is never scaled. Do
+  not apply it anywhere else.
+- A `temperature:` parameter's `value` is the value at `ref_T` (the shipped
+  `asm1` and `asm3_2step*` models use Kelvin, `ref_T = 293.15`), so a model run at
+  `ref_T` is unchanged by the correction. Keep it that way when adding one.
+- **A `theta` given as a parameter name is resolved at compile time**
+  (`_resolve_theta_params` in `core/model.py`). The `ln_theta` slot of its
+  `temperature_corrections` entry holds only the log of the theta default; the
+  live value comes from the parameter vector through
+  `temperature_theta_params`. A new consumer that reads or rewrites
+  `temperature_corrections` (as `bsm2_asm1_model` and
+  `_warn_if_influent_T_inconsistent` do) must honour
+  `temperature_theta_params`, or it silently uses the default theta.
 
----
+## Stoichiometry, `composition:` and `auto`
 
+- **Stoichiometry must stay state-independent**: a string coefficient may use
+  only numbers, parameters and arithmetic (no species, conditions, named
+  expressions or functions), because it is evaluated once per `solve()`, not
+  per RHS call.
+- **`composition:` values are literal floats.** A yield-dependent derived
+  coefficient belongs in the stoichiometry, not in `composition:`.
+- **The conservation checks are advisory**: `check_conservation()` /
+  `check_nitrogen()` never run at load and return the violations rather than
+  raising. A model with no `composition:` falls back to the role-based
+  `aquakin.composition_table` (the ASM / ADM families) so the API is uniform;
+  `auto` does **not** use that fallback and requires declared `composition:`.
+- **`auto` is resolved before the stoichiometry is read**
+  (`core/stoich_resolve.py`). With all-numeric neighbours it is a numeric
+  least-squares solve (an over-determined but consistent system is accepted);
+  with an expression neighbour it emits a derived expression, which needs a
+  square system (`#auto == #conserved_for`). Keep the expression path
+  symbolic: baking a resolved value would break conservation and the gradient
+  once a yield is calibrated.
+- **Shipped models keep their published rounded literals**; `auto` is opt-in.
+  Do not convert a shipped model to `auto` (its numbers would change).
+- The WATS sewer family (`wats_sewer`, `wats_sewer_extended` and everything the
+  `_make_khalil_*` generators splice from them) declares `composition:` on
+  every species, and the conservation suite checks each model against its own
+  table. A generator or a new variant must carry `composition:` through.
+
+## `extends:`
+
+- **Write a variant as `extends:` rather than a copy** when it differs from a
+  shipped model by overrides alone, so a fix to the base reaches it. A variant
+  whose stoichiometry is computed from the base stays a full copy
+  (`models/_make_khalil_variants.py` emits the pure-override `halforder`
+  variant as an `extends` file and the rest as copies).
+- The merge happens **before Pydantic validation**
+  (`schema/inheritance.py`, wired in `schema/loader.py`), so the merged whole
+  is schema-checked; do not validate the derived fragment on its own.
+- New parameters append after the base's, so the flat parameter vector order
+  differs from a hand-written copy: refer to parameters by name, never by
+  index. A YAML without `extends` must load exactly as before.
+
+## Non-negative states
+
+- `positivity_limiter:` (throttles the *net reaction* output near zero) and
+  `clip_negative_states:` (clamps the rate *inputs*, and a state-derived pH, to
+  `>= 0`) are distinct and both act inside `CompiledModel.dCdt` on the
+  reaction term only. **Never apply either to transport**: transport on the raw
+  state keeps washout self-correcting and the inter-unit mass balance exact.
+  This is why a unit's reaction term must be `model.dCdt(...)`, not
+  `stoich.T @ rates`.
+- Both are identity at feasible states; do not change either in a way that
+  alters a solution where every concentration is non-negative. The clip is
+  what stops the Monod-at-negative-`C` blow-up, which the limiter does not
+  (`asm1` needs it once a settler recycles concentrated solids into a small
+  reactor).

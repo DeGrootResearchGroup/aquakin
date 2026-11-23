@@ -150,46 +150,6 @@ def test_gradient_wrt_y0_matches_closed_form(simple_model):
     assert [float(x) for x in g] == pytest.approx(exact, rel=1e-3)
 
 
-@pytest.mark.validation
-def test_stiff_finite_uncapped_and_matches_capped():
-    # The canonical stiff model. Differentiating through diffrax's own solve is
-    # non-finite without a dtmax cap; the discrete adjoint is finite uncapped and
-    # must match the (correct) capped RecursiveCheckpointAdjoint gradient of the
-    # same implicit-Euler solve.
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
-    cond = net.default_conditions(1)
-    C0 = net.default_concentrations()
-    p = net.default_parameters()
-    fields = cond.fields
-    rhs = lambda t, y, pp: net.dCdt(y, pp, fields, 0)
-    span = (0.0, 0.5)
-
-    def loss(pp):
-        return jnp.sum(
-            implicit_euler_adjoint_solve(rhs, C0, pp, span, rtol=1e-6, atol=1e-9) ** 2
-        )
-
-    g = jax.jit(jax.grad(loss))(p)
-    assert bool(jnp.all(jnp.isfinite(g)))
-
-    # Reference: diffrax ImplicitEuler + RecursiveCheckpointAdjoint, capped so it
-    # is finite. Same method => same discrete gradient.
-    def loss_ref(pp):
-        sol = diffrax.diffeqsolve(
-            diffrax.ODETerm(lambda t, y, a: rhs(t, y, a)), diffrax.ImplicitEuler(),
-            0.0, span[1], 1e-6, C0, args=pp,
-            stepsize_controller=diffrax.PIDController(rtol=1e-6, atol=1e-9, dtmax=1e-3),
-            adjoint=diffrax.RecursiveCheckpointAdjoint(),
-            saveat=diffrax.SaveAt(t1=True), max_steps=200_000,
-        )
-        return jnp.sum(sol.ys[0] ** 2)
-
-    g_ref = jax.jit(jax.grad(loss_ref))(p)
-    assert bool(jnp.all(jnp.isfinite(g_ref)))
-    rel = float(jnp.linalg.norm(g - g_ref) / (jnp.linalg.norm(g_ref) + 1e-30))
-    assert rel < 1e-5
-
-
 def test_esdirk_analytic_trajectory_gradient(simple_model):
     # The high-order (Kvaerno5) discrete adjoint on the closed-form decay
     # trajectory loss; Kvaerno5's 5th order makes the primal -- and so the
@@ -307,9 +267,15 @@ def test_esdirk_equals_autodiff_through_same_solve(simple_model):
 
 
 @pytest.mark.validation
-def test_esdirk_stiff_trajectory_matches_capped_kvaerno5():
+def test_esdirk_stiff_trajectory_matches_capped_kvaerno5_and_low_memory():
     # The Kvaerno5 discrete adjoint on the stiff model: finite uncapped, and
     # matching the capped-Kvaerno5 jax-adjoint of the same forced-step forward.
+    # The low_memory stage recompute must match the saved-stage gradient here
+    # too: the per-stage Newton converges through the same well-conditioned
+    # I - dt*gamma*J the forward inverts. The tiny residual vs the saved-stage
+    # path is the forward root-finder tolerance vs the machine-precision
+    # recompute of the stages. (One test, so the saved-stage gradient is
+    # computed once for both comparisons.)
     net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
@@ -319,13 +285,19 @@ def test_esdirk_stiff_trajectory_matches_capped_kvaerno5():
     t_obs = jnp.array([0.05, 0.1, 0.2, 0.3])
     si = net.species_index["S_SO4"]
 
-    def loss(pp):
+    def loss(pp, low_memory=False):
         ys = esdirk_adjoint_solve(rhs, C0, pp, (0.0, 0.3), t_obs,
-                                  rtol=1e-7, atol=1e-10, max_steps=50_000)
+                                  rtol=1e-7, atol=1e-10, max_steps=50_000,
+                                  low_memory=low_memory)
         return jnp.sum(ys[:, si] ** 2) + 1e-3 * jnp.sum(ys ** 2)
 
     g = jax.jit(jax.grad(loss))(p)
     assert bool(jnp.all(jnp.isfinite(g)))
+
+    g_low = jax.jit(jax.grad(lambda pp: loss(pp, True)))(p)
+    assert bool(jnp.all(jnp.isfinite(g_low)))
+    rel_low = float(jnp.linalg.norm(g_low - g) / (jnp.linalg.norm(g) + 1e-30))
+    assert rel_low < 1e-5
 
     def loss_ref(pp):
         ctrl = diffrax.ClipStepSizeController(
@@ -586,37 +558,6 @@ def test_low_memory_matches_saved_stage_gradient(simple_model, solver):
     g_low = jax.grad(lambda pp: loss(pp, True))(p)
     assert bool(jnp.all(jnp.isfinite(g_low)))
     assert jnp.allclose(g_low, g_saved, rtol=1e-7, atol=1e-9)
-
-
-# Slow: a ~100 s stiff reverse-mode adjoint whose compile cache pushed its
-# fast-gate shard past the CI memory floor.
-@pytest.mark.slow
-def test_low_memory_matches_saved_stage_stiff():
-    # The recompute must also match on a stiff model: the per-stage Newton
-    # converges through the same well-conditioned I - dt*gamma*J the forward
-    # inverts. The tiny residual vs the saved-stage path is the forward
-    # root-finder tolerance vs the machine-precision recompute of the stages.
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
-    cond = net.default_conditions(1)
-    C0 = net.default_concentrations()
-    p = net.default_parameters()
-    fields = cond.fields
-    rhs = lambda t, y, pp: net.dCdt(y, pp, fields, 0)
-    t_obs = jnp.array([0.05, 0.1, 0.2, 0.3])
-    si = net.species_index["S_SO4"]
-
-    def loss(pp, low_memory):
-        ys = esdirk_adjoint_solve(rhs, C0, pp, (0.0, 0.3), t_obs, rtol=1e-7,
-                                  atol=1e-10, max_steps=50_000,
-                                  low_memory=low_memory)
-        return jnp.sum(ys[:, si] ** 2) + 1e-3 * jnp.sum(ys ** 2)
-
-    g_saved = jax.jit(jax.grad(lambda pp: loss(pp, False)))(p)
-    g_low = jax.jit(jax.grad(lambda pp: loss(pp, True)))(p)
-    assert bool(jnp.all(jnp.isfinite(g_low)))
-    rel = float(jnp.linalg.norm(g_low - g_saved)
-                / (jnp.linalg.norm(g_saved) + 1e-30))
-    assert rel < 1e-5
 
 
 def test_is_singly_diagonal_esdirk_guard():

@@ -30,12 +30,9 @@ BROAD = {"Exception", "BaseException"}
 # Pre-existing debt: test file -> number of message-less or broad raises.
 # Lower an entry when you fix some; delete it at 0. Never raise one.
 RECORDED = {
-    "tests/integration/test_coupling_pattern.py": 1,
-    "tests/integration/test_forward_sensitivity.py": 3,
     "tests/integration/test_observation_units.py": 2,
     "tests/integration/test_plant_calibrate.py": 5,
     "tests/integration/test_plant_identifiability.py": 2,
-    "tests/integration/test_profile.py": 6,
     "tests/integration/test_study.py": 2,
     "tests/ui/test_main.py": 1,
     "tests/unit/test_conditions.py": 1,
