@@ -55,7 +55,6 @@ def test_analytic_decay_sensitivity_exact(simple_model):
     assert float(jnp.max(jnp.abs(sol.C_named("A") - jnp.exp(-k * t_eval)))) < 1e-6
 
 
-@pytest.mark.slow
 def test_matches_jacfwd_multi_param():
     # On a small non-stiff model the augmented solve must reproduce jax.jacfwd
     # for several parameters at once.
@@ -326,7 +325,7 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
     C0 = net.default_concentrations()
     p = net.default_parameters()
     names = ["mu_h", "q_m"]
-    idx = [net.param_index[n] for n in names]
+    idx = jnp.asarray([net.param_index[n] for n in names])
     t_eval = jnp.array([0.0, 0.05, 0.1])
 
     # Uncapped forward-mode AD: expected to be non-finite (raises or NaNs).
@@ -353,10 +352,11 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
 
-    def Cfn_capped(pp):
-        return capped.solve(C0, (0.0, 0.1), t_eval, params=pp).C
+    # jacfwd over the compared parameters only (the rest held at p).
+    def Cfn_capped(theta):
+        return capped.solve(C0, (0.0, 0.1), t_eval, params=p.at[idx].set(theta)).C
 
-    J_cap = jax.jacfwd(Cfn_capped)(p)[:, :, idx]
+    J_cap = jax.jacfwd(Cfn_capped)(p[idx])
     assert bool(jnp.all(jnp.isfinite(J_cap)))
 
     # Augmented forward sensitivity, uncapped -- finite and matching.
@@ -412,7 +412,7 @@ def test_state_derived_ph_jvp_flows_and_matches():
     C0 = net.default_concentrations()
     p = net.default_parameters()
     name = net.parameters[0]
-    idx = [net.param_index[name]]
+    idx = jnp.asarray([net.param_index[name]])
     t_eval = jnp.array([0.0, 0.05, 0.1])
 
     capped = aquakin.BatchReactor(
@@ -421,10 +421,12 @@ def test_state_derived_ph_jvp_flows_and_matches():
         diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
     )
 
-    def Cfn(pp):
-        return capped.solve(C0, (0.0, 0.1), t_eval, params=pp).C
+    # jacfwd over the one compared parameter only (the rest held at p), not
+    # over the whole parameter vector.
+    def Cfn(theta):
+        return capped.solve(C0, (0.0, 0.1), t_eval, params=p.at[idx].set(theta)).C
 
-    J = jax.jacfwd(Cfn)(p)[:, :, idx]
+    J = jax.jacfwd(Cfn)(p[idx])
     r = aquakin.BatchReactor(net, cond)
     _, S = r.solve_sensitivity(C0, (0.0, 0.1), t_eval, params=p, sens_params=[name])
     assert bool(jnp.all(jnp.isfinite(S)))

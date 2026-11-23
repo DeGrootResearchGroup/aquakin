@@ -240,7 +240,7 @@ def test_couplingaware_abc_requires_coupling_pattern():
     class Incomplete(CouplingAware):
         pass
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="abstract.*coupling_pattern"):
         Incomplete()
 
     class Complete(CouplingAware):
@@ -300,9 +300,13 @@ def test_plant_structural_pattern_superset_over_trajectory_bsm1():
     p.add_influent("feed", inf, to="inlet_mix.fresh")
     y0 = bsm1_warm_start(p)
     params = p.default_parameters()
-    p.solve(t_span=(0.0, 0.02), t_eval=jnp.array([0.02]), params=params, y0=y0,
-            rtol=1e-3, atol=1e-2,
-            integrator=aquakin.IntegratorConfig(max_steps=100_000))
+    # The trajectory solve also finalizes the state layout the pattern reads.
+    te = jnp.linspace(0.0, 5.0, 11)
+    atol = default_atol(y0, p.initial_state())
+    ys = np.asarray(p.solve(
+        t_span=(0.0, 5.0), t_eval=te, params=params, y0=y0,
+        rtol=1e-4, atol=atol,
+        integrator=aquakin.IntegratorConfig(max_steps=2_000_000)).state)
 
     t0 = jnp.asarray(0.0)
     rmap = p._recycle._maybe_recycle_map(t0, p._split_state(y0), params)
@@ -316,12 +320,6 @@ def test_plant_structural_pattern_superset_over_trajectory_bsm1():
     for k, (_, (off, size)) in enumerate(p._state_layout.items()):
         unit_of[off:off + size] = k
 
-    te = jnp.linspace(0.0, 5.0, 11)
-    atol = default_atol(y0, p.initial_state())
-    ys = np.asarray(p.solve(
-        t_span=(0.0, 5.0), t_eval=te, params=params, y0=y0,
-        rtol=1e-4, atol=atol,
-        integrator=aquakin.IntegratorConfig(max_steps=2_000_000)).state)
     denseJ = jax.jit(lambda tt, y: jax.jacfwd(lambda z: p._rhs(
         tt, z, params, recycle_map=p._recycle._maybe_recycle_map(
             jnp.asarray(tt), p._split_state(z), params)))(y))

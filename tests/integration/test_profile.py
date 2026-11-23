@@ -13,10 +13,13 @@ from aquakin import LaplaceConfig, OptimizerConfig
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def growth_setup():
     """Two-parameter growth model (mu, Y) with informative noisy data, so the
-    parameters are well identified -- a clean setting for profile-vs-Laplace."""
+    parameters are well identified -- a clean setting for profile-vs-Laplace.
+
+    Module-scoped: no test mutates the model, reactor or data, and sharing the
+    one model object lets the tests reuse each other's compiled solves."""
     net = aquakin.load_model_from_file(str(FIXTURES / "dynamic_stoich_model.yaml"))
     reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
     C0 = net.default_concentrations()
