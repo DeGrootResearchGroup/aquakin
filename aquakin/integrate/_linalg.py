@@ -2,7 +2,9 @@
 
 The Laplace covariance of a calibration and the identifiability report both
 decide which eigen-directions of a Hessian / Fisher matrix are exactly null and
-which parameters load on them; they must agree, so the thresholds live here.
+which parameters load on them, and ``FisherInformation.covariance`` and the
+design criteria decide whether a Fisher matrix is singular; they must agree, so
+the thresholds live here.
 """
 
 # Eigenvalues at or below this fraction of the largest are treated as exactly
