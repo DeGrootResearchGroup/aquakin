@@ -299,6 +299,8 @@ codebase something; the examples are real.
   Their line ceilings are checked by `tests/unit/test_size_limits.py`.
 - A function past about 100 lines of body, or with more than about eight
   parameters, gets split or takes a config dataclass before it gets longer.
+  `tests/unit/test_function_size.py` fails on a new one and on a recorded one
+  that grows.
 
 ### Behaviour-preserving refactors
 
