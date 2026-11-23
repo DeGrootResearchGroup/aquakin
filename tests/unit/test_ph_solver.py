@@ -7,6 +7,7 @@ import pytest
 
 import aquakin  # noqa: F401  (enables x64)
 from aquakin.core.ph_solver import (
+    T_REF_20C,
     _adaptive_root_log_h,
     charge_balance_residual,
     charge_balance_residual_deriv,
@@ -176,15 +177,14 @@ def test_pH_independent_of_iteration_cap():
     ref = float(solve_ph(**kw, n_iter=200))
     for cap in (8, 12, 40, 200):
         assert float(solve_ph(**kw, n_iter=cap)) == pytest.approx(ref, abs=1e-12)
-    # A hard, weakly-buffered state far from the pH-7 start is bisection-dominated
-    # and genuinely needs the worst-case count, so a tiny cap (12) legitimately
-    # under-converges -- only the default cap (40, the validated production count)
-    # agrees with the fully-converged reference. This also confirms the loop does
-    # NOT falsely declare convergence on a bisection step.
+    # A hard, weakly-buffered state far from the pH-7 start needs bisection steps
+    # before Newton takes over (9 steps in all), so a cap of 6 under-converges
+    # while the default agrees with the fully-converged reference. This also
+    # confirms the loop does NOT falsely declare convergence on a bisection step.
     hard = dict(tot_carbonate=1e-2, strong_anion_eq=0.3)
     ref_h = float(solve_ph(**hard, n_iter=200))
-    assert float(solve_ph(**hard, n_iter=40)) == pytest.approx(ref_h, abs=1e-9)
-    assert float(solve_ph(**hard, n_iter=12)) != pytest.approx(ref_h, abs=1e-6)
+    assert float(solve_ph(**hard, n_iter=40)) == pytest.approx(ref_h, rel=1e-6, abs=1e-9)
+    assert float(solve_ph(**hard, n_iter=6)) != pytest.approx(ref_h, rel=1e-6, abs=1e-6)
 
 
 def test_forward_and_reverse_ad_agree_and_match_fd():
@@ -266,6 +266,33 @@ def test_no_nan_over_extreme_inputs():
     )(cases["tot_carbonate"], cases["tot_ammonia"], cases["tot_sulfide"],
       cases["strong_anion_eq"], cases["z_cation_eq"])
     assert bool(jnp.all(jnp.isfinite(pH)))
+
+
+def test_extreme_inputs_converge_within_default_cap():
+    """At strong-ion imbalances near 1 M the default cap must still reach the
+    root, not just a finite number.
+
+    A Newton step from the wrong side of such a root used to overshoot to the
+    bracket edge and crawl back one unit of ln[H+] per step, so 7 of these 400
+    cases returned a finite pH up to 7.5 units off at the 40-step cap. The
+    step-halving test in ``_safeguarded_newton_step`` bisects instead."""
+    rng = np.random.default_rng(0)
+    n = 400
+    totals = dict(
+        tot_carbonate=jnp.asarray(10.0 ** rng.uniform(-6, 0, n)),
+        tot_ammonia=jnp.asarray(10.0 ** rng.uniform(-6, 0, n)),
+        tot_sulfide=jnp.asarray(10.0 ** rng.uniform(-6, -1, n)),
+    )
+    charges = dict(
+        strong_anion_eq=jnp.asarray(rng.uniform(-1.0, 1.0, n)),
+        z_cation_eq=jnp.asarray(rng.uniform(-1.0, 1.0, n)),
+    )
+    pH = solve_ph(**totals, **charges)
+    K = equilibrium_constants(jnp.asarray(T_REF_20C))
+    f = charge_balance_residual(10.0 ** (-pH), K=K, **totals, **charges)
+    # Relative to the charges in play; a converged root leaves rounding only.
+    scale = sum(totals.values()) + jnp.abs(charges["strong_anion_eq"]) + jnp.abs(charges["z_cation_eq"])
+    assert float(jnp.max(jnp.abs(f) / scale)) < 1e-10
 
 
 def test_gradient_correct_in_weak_buffer_regime():

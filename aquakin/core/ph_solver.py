@@ -408,7 +408,7 @@ def charge_balance_residual_deriv(
     return df
 
 
-def _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu):
+def _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu, du_prev=None):
     """One safeguarded Newton-bisection step in ``u = ln[H+]`` space.
 
     Tightens the root bracket by the sign of the (strictly decreasing) residual,
@@ -420,9 +420,23 @@ def _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu):
     in-bracket (so the iteration is pure Newton there and AD yields the exact
     implicit-function-theorem sensitivity).
 
-    Returns ``(u_lo, u_hi, u_next, u_newton, in_bracket)``: the tightened bracket,
-    the accepted next point, the raw Newton candidate, and whether it was
-    in-bracket. A tiny *in-bracket* Newton step (``u_newton - u``, which vanishes
+    Given ``du_prev``, an in-bracket Newton step is also refused when it is not
+    converging: when it is longer than half the step taken two iterations before
+    (the progress test of ``rtsafe``), the iteration bisects instead. Without it,
+    a Newton step from the wrong side of a strongly unbuffered root overshoots to
+    the bracket edge and crawls back about one unit of ``u`` per step, since
+    there ``f`` is nearly exponential in ``u``; at a 1 M strong-ion imbalance
+    that took about 60 steps, past the 40-step cap. With it the bracket at least
+    halves every two steps. Far from such a root the test seldom fires; near
+    machine precision it can refuse a last, rounding-sized Newton step and bisect
+    the remaining bracket instead, which moves the result by about 1e-14 in pH.
+    The test assumes one fixed residual from step to step, so the coupled
+    ``(h, I)`` loop, whose residual changes with ``I``, omits ``du_prev``.
+
+    Returns ``(u_lo, u_hi, u_next, u_newton, newton, du)``: the tightened
+    bracket, the accepted next point, the raw Newton candidate, whether the
+    Newton step was taken, and the step just taken (the ``du_prev`` of the call
+    after next). A tiny *accepted* Newton step (``u_newton - u``, which vanishes
     only as the residual does, since ``f'*h`` is bounded away from 0) is the
     convergence signal the drivers test -- a *bisection* step can be spuriously
     small far from the root, so the step size alone is not a safe criterion.
@@ -437,8 +451,11 @@ def _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu):
     u_hi = jnp.where(pos, u_hi, u)
     u_newton = u - fv / dfdu
     in_bracket = (u_newton - u_lo) * (u_newton - u_hi) <= 0.0
-    u_next = jnp.where(in_bracket, u_newton, 0.5 * (u_lo + u_hi))
-    return u_lo, u_hi, u_next, u_newton, in_bracket
+    newton = in_bracket
+    if du_prev is not None:
+        newton = newton & (jnp.abs(2.0 * fv) <= jnp.abs(du_prev * dfdu))
+    u_next = jnp.where(newton, u_newton, 0.5 * (u_lo + u_hi))
+    return u_lo, u_hi, u_next, u_newton, newton, u_next - u
 
 
 def _adaptive_root_log_h(
@@ -505,19 +522,34 @@ def _adaptive_root_log_h(
         return (it < max_iter) & jnp.any(~converged)
 
     def body(state):
-        u_lo, u_hi, u, aux, it, _ = state
+        u_lo, u_hi, u, aux, du_prev, du_last, it, done = state
         fv, dfdu, carry = eval_fn(u, aux)
-        u_lo, u_hi, u_next, u_newton, in_bracket = _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu)
-        step_converged = in_bracket & (jnp.abs(u_newton - u) <= utol)
+        lo_n, hi_n, u_next, u_newton, newton, du = _safeguarded_newton_step(
+            u_lo, u_hi, u, fv, dfdu, None if coupled else du_prev
+        )
+        step_converged = newton & (jnp.abs(u_newton - u) <= utol)
         if coupled:
-            aux, aux_converged = update_aux(u_next, aux, carry)
+            aux_next, aux_converged = update_aux(u_next, aux, carry)
             converged = step_converged & aux_converged
         else:
-            converged = step_converged
-        return (u_lo, u_hi, u_next, aux, it + 1, converged)
+            aux_next, converged = aux, step_converged
+        new = (lo_n, hi_n, u_next, aux_next, du_last, du)
+        if coupled:
+            return (*new, it + 1, converged)
+        # A broadcast solve runs until every element has converged, so an element
+        # that already has must stay put: its next Newton step is zero, which the
+        # progress test refuses, and the bisection would move it off the root.
+        old = (u_lo, u_hi, u, aux, du_prev, du_last)
+        kept = tuple(jnp.where(done, o, n) for o, n in zip(old, new))
+        return (*kept, it + 1, done | converged)
 
-    init = (u_lo, u_hi, u0, aux0, jnp.asarray(0), jnp.zeros(out_shape, dtype=bool))
-    _, _, u, aux, _, _ = jax.lax.while_loop(cond, body, init)
+    # The first two steps are measured against the full bracket width, so only
+    # a Newton step longer than half the bracket is refused at the start. The
+    # step history is carried on the coupled path too, unused, so both share
+    # one loop state.
+    width = u_hi - u_lo
+    init = (u_lo, u_hi, u0, aux0, width, width, jnp.asarray(0), jnp.zeros(out_shape, dtype=bool))
+    _, _, u, aux, *_ = jax.lax.while_loop(cond, body, init)
     return u, aux
 
 
