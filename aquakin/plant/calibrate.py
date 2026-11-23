@@ -62,6 +62,7 @@ from aquakin.integrate.seam import (
     _check_start_in_domain,
     _coerce_sigma,
     _convert_observations,
+    _data_mean_square,
     _FitConfig,
     _free_ic_fields,
     _is_multi_dataset,
@@ -542,6 +543,7 @@ def _resolve_plant_problem(
 
     datasets = []
     digest_parts: list = []  # what the loss / residual closures bake in
+    obs_seen = []  # each dataset's observations, for the data mean square
     n_seen_per_output = np.zeros(n_observed, dtype=int)  # observed (non-NaN) entries
     for ds in range(n_datasets):
         tobs_i = jnp.asarray(tobs_list[ds])
@@ -555,6 +557,7 @@ def _resolve_plant_problem(
         if obs_i.ndim == 1:
             obs_i = obs_i[:, None]
         seen_i = _observed_counts(ds, obs_i)
+        obs_seen.append(obs_i)
         if obs_i.shape[0] != tobs_i.shape[0]:
             raise ValueError(
                 f"dataset {ds}: observations has {obs_i.shape[0]} rows but t_obs "
@@ -637,6 +640,7 @@ def _resolve_plant_problem(
         rate_bounds=_resolve_rate_bounds(
             ns, free_params, resolved_transforms, bounds, use_model_bounds
         ),
+        data_mean_square=_data_mean_square(loss, obs_seen),
     )
     return problem, resolved_observables, use_c0_as_y0
 

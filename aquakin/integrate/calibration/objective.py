@@ -3,13 +3,14 @@ jit-cached value-and-gradient, residual and Jacobian, and the start-gradient che
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 
 from aquakin.integrate._common import check_finite_gradient
+from aquakin.integrate._config import FORWARD_THROUGH_SOLVE_DIFF, STABLE_REVERSE_DIFF
 from aquakin.integrate.calibration.config import _resolve_laplace
 from aquakin.integrate.calibration.loss import _data_term, _pooled_sse
 from aquakin.integrate.calibration.multistart import _is_solve_failure
@@ -164,7 +165,12 @@ def _residual_parts(
 class _ObjectiveBundle:
     """The compiled callables the optimiser drives: the scalar
     value-and-gradient (L-BFGS-B) and the residual / Jacobian (Gauss-Newton).
-    ``res_j`` / ``jac_j`` are ``None`` for the L-BFGS-B optimiser."""
+    ``res_j`` / ``jac_j`` are ``None`` for the L-BFGS-B optimiser.
+
+    All of them are of the objective divided by :attr:`loss_scale` (1 until
+    the driver sets it from the starting loss, see :func:`_objective_scale`),
+    so SciPy's absolute tolerances act relative to the starting misfit;
+    multiply a value by ``loss_scale`` to get the loss itself."""
 
     value_and_grad: object
     res_j: object
@@ -175,6 +181,13 @@ class _ObjectiveBundle:
     # level the Gauss-Newton residual / Jacobian are scaled by.
     sigma_hat_of: object = None
     set_sigma_hat: object = None
+    # One-element holder of the scale, shared with the callables above.
+    scale_box: list = field(default_factory=lambda: [1.0])
+
+    @property
+    def loss_scale(self) -> float:
+        """The factor the optimiser's objective is divided by."""
+        return self.scale_box[0]
 
 
 def _build_objective(
@@ -218,9 +231,13 @@ def _build_objective(
         ("obj_vg",) + struct_key, lambda: jax.jit(jax.value_and_grad(objective))
     )
     data = problem.data
+    # The optimiser's scale of the objective (see _ObjectiveBundle): applied
+    # outside the compiled programs, so it is not part of their cache key.
+    scale_box = [1.0]
 
     def obj_value_and_grad(theta):
-        return _obj_vg_jit(theta, *data)
+        value, grad = _obj_vg_jit(theta, *data)
+        return value / scale_box[0], grad / scale_box[0]
 
     res_j = None
     jac_j = None
@@ -271,16 +288,16 @@ def _build_objective(
         _jac_core = _cached_jit(("gn_jac", use_forward) + struct_key, lambda: jax.jit(_jac))
 
         def _res_call(theta):
-            return _res_core(theta, *data, sigma_box[0])
+            return _res_core(theta, *data, sigma_box[0]) / jnp.sqrt(scale_box[0])
 
         def _jac_call(theta):
-            return _jac_core(theta, *data, sigma_box[0])
+            return _jac_core(theta, *data, sigma_box[0]) / jnp.sqrt(scale_box[0])
 
         res_j = _res_call
         jac_j = _jac_call
 
     return _ObjectiveBundle(
-        obj_value_and_grad, res_j, jac_j, use_forward, sigma_hat_of, set_sigma_hat
+        obj_value_and_grad, res_j, jac_j, use_forward, sigma_hat_of, set_sigma_hat, scale_box
     )
 
 
@@ -303,28 +320,26 @@ def _check_start_gradient(cfg: _FitConfig, bundle: _ObjectiveBundle, theta0):
             "direct cause above."
         ) from exc
     # Forward-mode only enters through the Gauss-Newton Jacobian; L-BFGS-B always
-    # uses a reverse scalar gradient, so its cap-free fix is gradient='stable_adjoint'.
+    # uses a reverse scalar gradient, so its cap-free fix is the stable adjoint.
     on_finite_path = cfg.gradient == "stable_adjoint" or (
         cfg.ad_mode == "forward" and cfg.optimizer == "gauss_newton"
     )
     if on_finite_path:
+        method = "stable" if cfg.gradient == "stable_adjoint" else "through_solve"
         remedy = (
             "It was already on a finite-by-construction path "
-            f"(ad_mode={cfg.ad_mode!r}, gradient={cfg.gradient!r}, "
-            f"optimizer={cfg.optimizer!r}); check the model, data, and "
-            "parameter ranges."
-        )
-    elif cfg.optimizer == "gauss_newton":
-        remedy = (
-            "Pass ad_mode='forward' (forward-mode, finite through a stiff "
-            "solve) or gradient='stable_adjoint' (cap-free reverse-mode); "
-            "either is handled internally with no diffrax or dtmax in your "
-            "code."
+            f"(diff=DifferentiationConfig(mode={cfg.ad_mode!r}, method={method!r}), "
+            f"OptimizerConfig(method={cfg.optimizer!r})); check the model, data, "
+            "and parameter ranges."
         )
     else:
+        # The stable adjoint serves a reactor and a plant fit; the forward-mode
+        # Gauss-Newton Jacobian is a reactor-fit option only.
         remedy = (
-            "Pass gradient='stable_adjoint' (cap-free reverse-mode, handled "
-            "internally), or switch to optimizer='gauss_newton' with "
-            "ad_mode='forward'."
+            f"Pass {STABLE_REVERSE_DIFF} (cap-free reverse-mode, handled "
+            "internally), or, for a reactor fit, "
+            'optimizer=aquakin.OptimizerConfig(method="gauss_newton") with '
+            f"{FORWARD_THROUGH_SOLVE_DIFF} (forward-mode, finite through a stiff "
+            "solve). Neither needs diffrax or a dtmax cap in your code."
         )
     check_finite_gradient(probe, what="calibration gradient", remedy=remedy)

@@ -44,37 +44,27 @@ stiff systems: `Kvaerno5`. Adjoint sensitivity (`diffrax.RecursiveCheckpointAdjo
 is the default for parameter estimation — memory-efficient for long integration
 times typical of reactor contact times.
 
-**Adjoint choice and forward-mode AD.** Every reactor takes an `adjoint=`
-argument. The default `RecursiveCheckpointAdjoint` is **reverse-mode only**: it
-registers a `custom_vjp`, so `jax.grad`/`jacrev` work but `jax.jvp`/`jacfwd`
-(forward mode) are rejected with *"can't apply forward-mode autodiff (jvp) to a
-custom_vjp function"*. When you need forward-mode AD through the solve — e.g. a
-forward-mode sensitivity Jacobian or a Gauss–Newton/Fisher matrix — construct the
-reactor with `adjoint=diffrax.DirectAdjoint()` (or the dependency-free alias
-`aquakin.forward_adjoint()`), which is plainly differentiable
-in both modes. Its drawback is *usually* memory (it stores/unrolls the whole
-solve, cost growing with step count), so keep `RecursiveCheckpointAdjoint` as the
-default and switch to `DirectAdjoint` only when forward-mode is actually required.
-**The plumbing is now hidden for the common consumers:** `calibrate` and
-`sensitivity` take `ad_mode="forward"|"reverse"` and build the right reactor
-adjoint internally (no `diffrax` / `adjoint=` in user code); `calibrate` also has
-`check_finite=True` to turn a non-finite stiff gradient into a friendly error with
-the remedy. **For a user who rolls their own loss + optimizer through
-`reactor.solve` (outside `calibrate`/`sensitivity`),** the same silent-non-finite
-reverse-gradient footgun is exposed and nothing raises. Every reactor therefore
-carries `check_gradient_finite(grad_value, what=...)` (the `GradientCheckMixin` in
-`integrate/_config.py`): wrap a freshly computed `jax.grad` in it
-(`g = reactor.check_gradient_finite(jax.grad(loss)(p))`) to convert a silent
-`NaN`/`Inf` into an actionable error whose remedy is tailored to whether the
-reactor already caps `dtmax`. The underlying free checker `check_finite_gradient`
-is exported at the package level too (`aquakin.check_finite_gradient`) for guarding
-a gradient computed without a reactor handle. `dgsm` takes `ad_mode=` too but cannot set the adjoint for you (your
-`fn` constructs the reactor), so its `fn` still needs
-`adjoint=aquakin.forward_adjoint()`. And `Plant.solve(gradient="auto")` (the
-default) auto-routes a differentiated stiff plant to the cap-free `stable_adjoint`
-while keeping a plain forward solve on the fast cached path — so a plant gradient
-is finite by default with no `dtmax` to tune.
-`dgsm(..., ad_mode="forward")` is the first-class consumer of this (see the DGSM API
+**Adjoint choice and forward-mode AD.** A reactor takes no `adjoint=`
+argument: its diffrax adjoint comes from `diff=DifferentiationConfig(...)`
+(`DifferentiationConfig.reactor_adjoint`). The default `RecursiveCheckpointAdjoint`
+is **reverse-mode only** (it registers a `custom_vjp`, so `jax.jvp`/`jacfwd` are
+rejected); `mode="forward", method="through_solve"` gives the reactor
+`DirectAdjoint` (`aquakin.forward_adjoint()`), differentiable in both modes at
+the cost of memory. `calibrate` and `sensitivity` build the forward adjoint
+internally from `diff.mode`; `dgsm` cannot (its `fn` builds the reactor).
+**Advice to users names the real keyword arguments.** Every error message or
+docstring that tells a user how to switch AD direction or adjoint uses the
+constants in `integrate/_config.py` (`FORWARD_DIFF`, `FORWARD_THROUGH_SOLVE_DIFF`,
+`STABLE_REVERSE_DIFF`, `FORWARD_REACTOR_REMEDY`); do not write the spelling out
+again, and do not name removed keywords (`ad_mode=`, `gradient=`, a reactor
+`adjoint=`), which once survived the API change in every remedy. A non-finite
+reverse gradient a user takes by hand through `reactor.solve` is guarded by
+`reactor.check_gradient_finite(g)` (`GradientCheckMixin`) or the free
+`aquakin.check_finite_gradient`. `Plant.solve` with the default `diff`
+(reverse, `method="stable"`) routes a differentiated stiff plant to the cap-free
+discrete adjoint and keeps a plain forward solve on the fast cached path, so a
+plant gradient is finite by default with no `dtmax` to tune.
+`dgsm(..., diff=DifferentiationConfig(mode="forward"))` is the first-class consumer of this (see the DGSM API
 below): for a **multi-output sensitivity screen of a stiff model** forward mode
 can be *faster and lighter* than reverse — the reverse adjoint is paid once per
 output and is inflated by the `dtmax` step cap, whereas forward pushes all `d`
@@ -224,9 +214,9 @@ computation. The key materialises `atol` values, which is impossible **under
 tracing** (a calibration loss differentiating through `solve`); in that case the
 key is `None` and the cache is bypassed (the solve is traced into the outer
 computation, which JAX compiles as a whole, so caching gives nothing there
-anyway). Both caches assume the model / plant is not structurally mutated
-after the first solve — the same assumption reactors already make about their
-fixed model and conditions.
+anyway). The reactor cache assumes the model is not mutated after the first
+solve; the plant's is dropped by `Plant._structure_changed()` whenever a unit,
+connection or influent is added (`.claude/rules/plant-solve.md`).
 
 **What this is and isn't.** It removes *duplicate* compiles; it does not remove
 the first compile of each distinct `(model/plant, settings, signature)`, and

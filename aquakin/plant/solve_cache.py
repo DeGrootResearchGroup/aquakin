@@ -27,7 +27,9 @@ invalidates both.
 It is a plain value object: a ``Plant`` holds exactly one (``plant._solve_cache``)
 and reads/populates its dicts from the solve paths. Unlike ``RecycleResolver`` /
 ``ColoredJacobianManager`` it needs no back-reference to the plant -- it owns
-storage, not plant-dependent logic.
+storage, not plant-dependent logic. :func:`structure_changed` is the one place
+a structure change (a unit, connection or influent added) clears this cache
+together with the plant's other structure-derived state.
 """
 
 from __future__ import annotations
@@ -71,3 +73,31 @@ class SolveCache:
         self.steady_jit.clear()
         self.continuation_kernels.clear()
         self.arclength_kernels.clear()
+
+
+def structure_changed(plant) -> None:
+    """Drop everything a :class:`Plant` derived from its flowsheet structure.
+
+    Bound onto ``Plant`` as ``_structure_changed`` and called by every method
+    that adds a unit, a connection or a wired influent, so a plant edited after
+    a solve is solved, read and differentiated as if it had been built that
+    way. It clears the compiled solves and kernels (:meth:`SolveCache.invalidate`),
+    the colored-Jacobian builders, the recycle map-constancy verdicts, the
+    per-unit parameter slices, the one-time recycle diagnostics and the
+    controller-materialization guards; the state layout, topology and clock
+    are rebuilt by ``Plant._build_state_layout`` on every solve anyway. A new
+    memo derived from the structure is cleared here, not by each mutator.
+
+    Parameters
+    ----------
+    plant : Plant
+        The plant whose structure changed.
+    """
+    plant._solve_cache.invalidate()
+    plant._colored.reset()
+    plant._recycle.reset()
+    plant._params_unit_cache = None
+    plant._flow_affinity_checked = False
+    plant._recycle_convergence_checked = False
+    plant._aeration_materialized = False
+    plant._dosing_materialized = False
