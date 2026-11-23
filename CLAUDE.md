@@ -71,6 +71,7 @@ task needs the detail):**
 | Note | Contents |
 |---|---|
 | `.claude/notes/studies-design.md` | the studies design and the owner's decisions (live / frozen, replace with a warning, version notes, unfreezing discards results) |
+| `.claude/notes/rate-kernel-log.md` | the vectorized rate kernel's compile measurements (jaxpr share, reduction, end-to-end speedup per model) |
 | `.claude/notes/plant-sensitivity-log.md` | `Plant.solve_sensitivity` corrector measurements (#654), the lean loop's stage-Newton drift diagnostic and its Anderson acceleration |
 
 **Published documentation site** (Sphinx/MyST → Read the Docs; built from

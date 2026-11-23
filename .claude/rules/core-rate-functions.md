@@ -114,8 +114,8 @@ traces **one nested closure tree per reaction**, so the jaxpr holds
 scale with that op count, so the **compile** is dominated by it — and amplified
 in the reverse-mode adjoint, where the RHS jaxpr is differentiated ~80x per
 step (the multi-minute discrete-adjoint compiles). Compile, not run, is the cost
-of a stiff solve (~1.6 s compile vs ~0.02 s run for an ASM1 batch), so this
-*compile-time* lever is what hurts the test suite, where each test compiles a
+of a stiff solve (`.claude/rules/integration.md`, "Compiled-solve caching"), so
+this *compile-time* lever is what hurts the test suite, where each test compiles a
 distinct configuration once.
 
 `build_vectorized_rates` builds, from the per-reaction rate ASTs, a single
@@ -139,11 +139,9 @@ Built once in `CompiledModel.__post_init__` (`_rate_kernel`) and dispatched
 from `CompiledModel.rates` after the clip / derived-condition / temperature
 preprocessing (which is unchanged); a future AST node type with no batched
 kernel raises `UnsupportedNode` and `rates` falls back to the scalar stack, so
-the kernel is a safe, transparent overlay. **Measured:** the rate jaxpr is the
-dominant term in a differentiated stiff-solve compile (60% asm1 → 85% adm1 →
-94% wats_sewer_extended), and the kernel cuts that jaxpr ~2–12x (asm1 2.9x,
-adm1 2.2x, asm2d 10x, wats 5.6x), giving an end-to-end differentiated-compile
-speedup of ~1.15x (asm1) / 1.5x (adm1) / 3.4x (wats) — larger on the bigger
-models, where the suite hurts most. Runtime is unchanged. Regression-guarded
+the kernel is a safe, transparent overlay. Do not remove it to simplify
+`rates`: the rate jaxpr dominates a differentiated stiff-solve compile, more so
+on the larger models (measurements in `.claude/notes/rate-kernel-log.md`); the
+runtime is unchanged either way. Regression-guarded
 (bit-identicality on randomized states, op-count reduction, AD parity, and the
 unsupported-node fallback) in `tests/unit/test_vector_kernel.py`.

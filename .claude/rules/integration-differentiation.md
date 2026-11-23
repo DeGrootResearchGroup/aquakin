@@ -364,9 +364,9 @@ stage by a fixed 12-iteration Newton scan, ~72 Jacobian builds + dense solves +
 RHS evals per step; the saved-stage path removes all of it.) The saving is threaded
 through the shared `_discrete_adjoint_solve` driver as `save_stages=` (ESDIRK sets
 it; the s=1 implicit-Euler adjoint reads the post-step state directly and leaves it
-off). **Measured (BSM2 `value+grad`, dense backward, 3-day warm-started span): the
-backward dropped 10,647 → 617 ms (~17×) and the whole gradient 11,200 → 1,212 ms
-(~9×), gradient FD-/jax_adjoint-validated unchanged.** Validated: the stage
+off). Do not go back to recomputing the stages in the backward: it was the
+dominant backward cost (measurements in `docs/plant_performance.md`, "Saved-stage
+discrete-adjoint backward"). Validated: the stage
 reconstruction is exact (the discrete-adjoint suite — analytic decay, FD, trajectory
 and time-dependent gradients — and the plant BSM1/BSM2 cross-interface, colored,
 and flow-setpoint `∂M/∂θ` gradients all match FD / the capped `jax_adjoint` path).

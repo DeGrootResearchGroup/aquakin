@@ -240,6 +240,13 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   layer-biomass rows dropped in the layers). So colored is staleness-free on
   those flowsheets too; the single-unit assembled-pattern superset is checked per
   unit in the same test.
+- **Saved-stage discrete-adjoint backward.** The ESDIRK discrete adjoint reads
+  each step's stage increments from the forward's dense output instead of
+  re-solving every stage by a fixed 12-iteration Newton scan (~72 Jacobian
+  builds, dense solves and RHS evaluations per step). Measured on BSM2
+  `value+grad`, dense backward, 3-day warm-started span: the backward dropped
+  10,647 → 617 ms (~17×) and the whole gradient 11,200 → 1,212 ms (~9×), with
+  the gradient FD- and `jax_adjoint`-validated unchanged.
 - **Also colors the `gradient="stable_adjoint"` BACKWARD pass.** Since the
   saved-stage backward (above) reconstructs the stages instead of re-solving them
   by a 12-iteration Newton scan, the per-step `df/dy` builds dropped from ~79 to
