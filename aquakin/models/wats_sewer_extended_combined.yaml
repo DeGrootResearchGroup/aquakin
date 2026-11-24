@@ -87,6 +87,13 @@ speciation:
 positivity_limiter:
   threshold: 1.0e-3
 
+# Evaluate the rates with negative concentrations treated as zero. A stiff solve
+# can step a nearly depleted species slightly below zero, where a Monod or ratio
+# term would run its reaction backwards. The raw state still drives transport
+# and the outputs, so this is identity wherever every concentration is
+# non-negative.
+clip_negative_states: true
+
 expressions:
   # Temperature correction factors (theta^(T-20)).
   theta_w: "a_w ** ({T} - 20.0)"

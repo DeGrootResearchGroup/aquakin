@@ -162,6 +162,7 @@ conditions:
   default: 7.5
 positivity_limiter:
   threshold: 0.001
+clip_negative_states: true
 expressions:
   theta_w: a_w ** ({T} - 20.0)
   theta_f: a_f ** ({T} - 20.0)

@@ -17,6 +17,7 @@ import pytest
 
 import aquakin
 from aquakin.core.nodes import SafeDivideNode, SpeciesNode
+from aquakin.plant.catalog import shipped_models
 
 # (model, species that deplete together), each set to the values in
 # ``_DEPLETED_VALUES``.
@@ -114,3 +115,43 @@ def test_safe_div_rewrite_leaves_nonzero_values_unchanged():
     j = net.reaction_names.index("maint_aer_VFA_substrate")
     r_vfa = float(net.rates(C, p, cf, 0)[j])
     assert r / (r + r_vfa) == pytest.approx(sb / (sb + svfa), rel=1e-12)
+
+
+#: Every shipped model, by name.
+_SHIPPED = [m["name"] for m in shipped_models()]
+
+
+@pytest.mark.parametrize("name", _SHIPPED)
+def test_rates_at_a_slightly_negative_state_equal_the_depleted_rates(name):
+    """A species a stiff solver steps to -1e-9 gives exactly the rates of 0.
+
+    Each species in turn is set to 0 and to -1e-9, with every other species
+    present (default + 1, so the kinetics are active). Every rate, including any
+    that depends on the species through a state-derived pH, must be identical
+    at the two states: a Monod or ratio term evaluated at the negative value
+    instead runs the reaction backwards (a small negative rate) or, near a
+    pole, blows it up. Every shipped model sets ``clip_negative_states``,
+    which makes the two states identical inside ``rates``.
+    """
+    net = aquakin.load_model(name)
+    p = net.default_parameters()
+    cf = net.default_conditions().fields
+    base = net.default_concentrations() + 1.0
+    n = base.shape[0]
+
+    def rates_with(value):
+        states = jnp.tile(base, (n, 1)).at[jnp.arange(n), jnp.arange(n)].set(value)
+        return jax.vmap(lambda c: net.rates(c, p, cf, 0))(states)
+
+    at_zero, below_zero = (np.asarray(a) for a in jax.jit(jax.vmap(rates_with))(_DEPLETED_VALUES))
+    # Equal, with a NaN matching a NaN: a rate singular at the depleted state
+    # itself is a property of its rate law, not of the clip, and is not what
+    # this test is about.
+    differs = (at_zero != below_zero) & ~(np.isnan(at_zero) & np.isnan(below_zero))
+    species = list(net.species_index)
+    moved = {
+        species[i]: [net.reaction_names[j] for j in np.flatnonzero(differs[i])]
+        for i in range(n)
+        if np.any(differs[i])
+    }
+    assert not moved, f"{name}: rates move at -1e-9 (species -> reactions): {moved}"

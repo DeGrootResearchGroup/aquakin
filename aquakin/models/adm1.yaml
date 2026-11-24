@@ -121,6 +121,13 @@ speciation:
   strong_anions:
     - {species: S_an,  molar_mass: 1.0, charge: 1}    # kmol/m3 -> eq/L (already molar, -1)
 
+# Evaluate the rates with negative concentrations treated as zero. A stiff solve
+# can step a nearly depleted species slightly below zero, where a Monod or ratio
+# term would run its reaction backwards. The raw state still drives transport
+# and the outputs, so this is identity wherever every concentration is
+# non-negative.
+clip_negative_states: true
+
 parameters:
   # --- hydrolysis / disintegration (1/d) ---
   k_dis:     {value: 0.5,  units: "1/d",  bounds: [0.1, 2.0],   transform: positive_log, prior: {mean: 0.5, std: 0.25}}

@@ -27,6 +27,13 @@ species:
 conditions:
   - {name: T, default: 293.15, description: "Temperature (K)."}
 
+# Evaluate the rates with negative concentrations treated as zero. A stiff solve
+# can step a nearly depleted species slightly below zero, where a Monod or ratio
+# term would run its reaction backwards. The raw state still drives transport
+# and the outputs, so this is identity wherever every concentration is
+# non-negative.
+clip_negative_states: true
+
 parameters:
   KALK: {value: 0.0001, transform: positive_log, bounds: [1e-06, 0.01], units: "kmol/m3"}
   KA_O2: {value: 0.5, transform: positive_log, bounds: [0.005, 50.0], units: "g_O2/m3"}

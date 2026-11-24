@@ -106,6 +106,13 @@ conditions:
 positivity_limiter:
   threshold: 1.0e-3
 
+# Evaluate the rates with negative concentrations treated as zero. A stiff solve
+# can step a nearly depleted species slightly below zero, where a Monod or ratio
+# term would run its reaction backwards. The raw state still drives transport
+# and the outputs, so this is identity wherever every concentration is
+# non-negative.
+clip_negative_states: true
+
 expressions:
   # Active heterotroph term for bulk+biofilm processes: bulk biomass plus the
   # biofilm contribution eps * X_Bf * (A/V).
