@@ -68,13 +68,26 @@ def _info(doc):
     return lambda name: model_info(name, doc.model_files().get(name))
 
 
-def test_a_reagent_is_shown_read_only_and_kept_on_apply(bsm2):
+def test_a_reagent_is_shown_as_its_model_label_and_composition(bsm2):
     rows = {r["key"]: r for r in forms.rows_for(bsm2, "external_carbon", _info(bsm2))}
-    reagent = rows["reagent"]
-    assert reagent["widget"] == "readonly"
-    assert reagent["placeholder"] == "external carbon: SS: 400000"
+    assert "reagent" not in rows
+    model = rows["reagent.model"]
+    # The project's own ASM1 (at 15 °C), a model file, is offered beside the shipped ones.
+    assert model["widget"] == "select" and model["value"] == "asm1_bsm2" and model["reshape"]
+    assert {"asm1_bsm2", "asm1"} <= set(model["items"]) and model["label"] == "reagent model *"
+    assert rows["reagent.label"]["value"] == "external carbon"
+    composition = rows["reagent.composition"]
+    assert composition["widget"] == "composition"
+    assert composition["value"] == [{"species": "SS", "value": "400000"}]
+    species = _info(bsm2)("asm1_bsm2")["species"]
+    assert composition["items"] == [s["name"] for s in species]
+    assert composition["units"]["SS"] == "g_COD/m³"
+
+
+def test_an_unedited_reagent_is_kept_on_apply(bsm2):
     before = bsm2.units["external_carbon"].settings["reagent"]
-    _, settings = forms.read_rows(bsm2, "external_carbon", list(rows.values()))
+    rows = forms.rows_for(bsm2, "external_carbon", _info(bsm2))
+    _, settings = forms.read_rows(bsm2, "external_carbon", rows)
     assert settings["reagent"] == before
 
 

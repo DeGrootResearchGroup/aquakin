@@ -1,8 +1,9 @@
 """The unit form: rows generated from a kind's catalogue settings, and back.
 
 Pure functions, with no page in them. :func:`rows_for` turns one unit into the
-rows the Unit panel shows (one per setting; a model's conditions and an
-aeration's mode and value expand into several), and :func:`read_rows` turns the
+rows the Unit panel shows (one per setting; a model's conditions, an
+aeration's mode and value, and a reagent's model, label and composition expand
+into several), and :func:`read_rows` turns the
 edited rows back into the unit's label and settings. No setting, type or choice
 is listed here: every row follows from the catalogue.
 """
@@ -15,7 +16,7 @@ import re
 from aquakin_ui.document import Flowsheet
 
 AERATION_MODES = ("none", "kla", "do_setpoint")
-_READ_ONLY = ("unsupported", "reagent")
+_READ_ONLY = ("unsupported",)
 
 
 def _float_text(value: float) -> str:
@@ -128,8 +129,11 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
     -------
     list of dict
         One row per field: ``key``, ``label``, ``widget`` (``text``,
-        ``select``, ``multi``, ``readonly``), ``value``, ``items``, ``hint``,
-        ``placeholder``.
+        ``select``, ``multi``, ``readonly``, ``composition``), ``value``,
+        ``items``, ``hint``, ``placeholder``, ``suffix``; ``reshape`` marks a
+        choice that changes which rows the form has. A ``composition`` row's
+        value is a list of ``{species, value}`` entries, its ``items`` the
+        species to choose from and its ``units`` each species' unit.
     """
     u = doc.units[uid]
     model = u.settings.get("model")
@@ -149,7 +153,17 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
             "suffix": unit_in(s["help"], clock),
         }
         if t == "model":
-            rows.append(_row(key, label, "select", value or "", items=doc.model_names(), **common))
+            rows.append(
+                _row(
+                    key,
+                    label,
+                    "select",
+                    value or "",
+                    items=doc.model_names(),
+                    reshape=True,
+                    **common,
+                )
+            )
         elif t == "conditions":
             for c in info["conditions"] if info else []:
                 v = (value or {}).get(c["name"])
@@ -168,47 +182,7 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
                     )
                 )
         elif t == "aeration":
-            mode = next(
-                (m for m in AERATION_MODES[1:] if value and value.get(m) is not None), "none"
-            )
-            rows.append(
-                _row(
-                    "aeration.mode",
-                    "aeration",
-                    "select",
-                    mode,
-                    items=list(AERATION_MODES),
-                    hint=s["help"],
-                )
-            )
-            if mode != "none" and value:  # a mode other than none is read from value
-                clock = (doc.meta.get("options") or {}).get("time_unit") or "d"
-                oxygen = (value or {}).get("species") or _oxygen(species) or ""
-                units = {s["name"]: s.get("unit", "") for s in info["species"]} if info else {}
-                suffix = f"1/{clock}" if mode == "kla" else units.get(oxygen, "")
-                rows.append(
-                    _row(
-                        "aeration.value",
-                        mode,
-                        value=_text(value[mode]),
-                        hint=s["help"],
-                        suffix=suffix,
-                    )
-                )
-            if mode != "none" and species:
-                aerated = (value or {}).get("species")
-                if aerated not in species:  # e.g. ASM1's SO on an ASM3 plant
-                    aerated = _oxygen(species) or aerated
-                rows.append(
-                    _row(
-                        "aeration.species",
-                        "aerated species",
-                        "select",
-                        aerated or "",
-                        items=species,
-                        hint="The dissolved species the aeration transfers (oxygen).",
-                    )
-                )
+            rows += _aeration_rows(s, value, info, clock)
         elif t == "species" and species:
             rows.append(_row(key, label, "select", value or "", items=species, **common))
         elif t == "species_list" and species:
@@ -221,12 +195,7 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
             text = "" if value is None else str(value).lower()
             rows.append(_row(key, label, "select", text, items=["true", "false"], **common))
         elif t == "reagent":
-            shown = (
-                f"{value['label']}: {_text(value.get('composition', {}))}"
-                if value
-                else "set in the spec file"
-            )
-            rows.append(_row(key, label, "readonly", "", hint=s["help"], placeholder=shown))
+            rows += _reagent_rows(doc, s, value or {}, model_info)
         elif t == "unsupported":
             rows.append(
                 _row(
@@ -241,6 +210,91 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
         else:
             rows.append(_row(key, label, value=_text(value), **common))
     return rows
+
+
+def _aeration_rows(s: dict, value, info, clock: str) -> list[dict]:
+    """The rows of an aeration: its mode, then (in a mode other than none) its
+    value on the plant's ``clock`` and the species it aerates."""
+    species = [sp["name"] for sp in info["species"]] if info else []
+    mode = next((m for m in AERATION_MODES[1:] if value and value.get(m) is not None), "none")
+    rows = [
+        _row(
+            "aeration.mode",
+            "aeration",
+            "select",
+            mode,
+            items=list(AERATION_MODES),
+            hint=s["help"],
+            reshape=True,
+        )
+    ]
+    if mode != "none" and value:  # a mode other than none is read from value
+        oxygen = value.get("species") or _oxygen(species) or ""
+        units = {sp["name"]: sp.get("unit", "") for sp in info["species"]} if info else {}
+        suffix = f"1/{clock}" if mode == "kla" else units.get(oxygen, "")
+        rows.append(
+            _row("aeration.value", mode, value=_text(value[mode]), hint=s["help"], suffix=suffix)
+        )
+    if mode != "none" and species:
+        aerated = (value or {}).get("species")
+        if aerated not in species:  # e.g. ASM1's SO on an ASM3 plant
+            aerated = _oxygen(species) or aerated
+        rows.append(
+            _row(
+                "aeration.species",
+                "aerated species",
+                "select",
+                aerated or "",
+                items=species,
+                hint="The dissolved species the aeration transfers (oxygen).",
+            )
+        )
+    return rows
+
+
+def _reagent_rows(doc: Flowsheet, s: dict, value: dict, model_info) -> list[dict]:
+    """The rows of a dosed reagent: its model, its label and its composition.
+
+    The composition lists the species of the reagent's own model, which is
+    the dosed stream's, so a dosing unit (with no model of its own) is drawn
+    with them; the model is a choice that redraws the form.
+    """
+    key = s["name"]
+    model = value.get("model") or ""
+    info = model_info(model) if model else None
+    species = info["species"] if info else []
+    composition = value.get("composition") or {}
+    return [
+        _row(
+            f"{key}.model",
+            f"{key} model" + (" *" if s["required"] else ""),
+            "select",
+            model,
+            items=doc.model_names(),
+            hint=f"{s['help']} Choose it first: the composition lists its species.",
+            placeholder="required",
+            reshape=True,
+        ),
+        _row(
+            f"{key}.label",
+            f"{key} label",
+            value=value.get("label") or "",
+            hint="A name for the reagent, used in messages.",
+            placeholder="reagent (default)",
+        ),
+        _row(
+            f"{key}.composition",
+            f"{key} composition",
+            "composition",
+            [{"species": k, "value": _text(v)} for k, v in composition.items()],
+            items=[sp["name"] for sp in species],
+            units={sp["name"]: sp.get("unit", "") for sp in species},
+            hint=(
+                "The neat reagent's concentration of each species it contains; "
+                "every species not listed is zero."
+            ),
+        ),
+    ]
 
 
 def _finite(text: str) -> float:
@@ -352,6 +406,7 @@ def _field(key: str, read, *args):
 def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, dict]:
     u = doc.units[uid]
     values = {r["key"]: r["value"] for r in rows}
+    items = {r["key"]: r.get("items") for r in rows}
     settings: dict = {}
     for s in doc.catalog.settings(u.kind):
         name, t = s["name"], s["type"]
@@ -384,6 +439,10 @@ def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, 
                 settings[name] = {**kept, mode: value}
             else:
                 settings[name] = None
+        elif t == "reagent":
+            reagent = _read_reagent(name, values, items.get(f"{name}.composition") or [])
+            if reagent is not None:
+                settings[name] = reagent
         elif t in _READ_ONLY:
             if name in u.settings:
                 settings[name] = u.settings[name]
@@ -393,3 +452,49 @@ def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, 
                 settings[name] = v
     label = str(values.get("label", "")).strip() or None
     return label, settings
+
+
+def _composition(entries: list[dict], species: list[str]) -> dict[str, float]:
+    """A composition's entries (``{species, value}``, as the form holds them) as
+    a mapping of species to a finite number; a wholly empty entry is skipped.
+
+    ``species`` are those the reagent's model has (none when it could not be
+    described: then no name is refused here, and aquakin's check reports one).
+    """
+    out: dict[str, float] = {}
+    for entry in entries:
+        name = str(entry.get("species") or "").strip()
+        raw = entry.get("value")
+        text = "" if raw is None else str(raw).strip()
+        if not name and not text:
+            continue
+        if not name:
+            raise ValueError(f"choose the species {text} is the concentration of")
+        if species and name not in species:
+            raise ValueError(f"{name!r} is not a species of the reagent's model")
+        if name in out:
+            raise ValueError(f"{name} is listed twice")
+        if not text:
+            raise ValueError(f"give {name} a concentration")
+        out[name] = _finite(text)
+    return out
+
+
+def _read_reagent(name: str, values: dict, species: list[str]) -> dict | None:
+    """A reagent setting from its rows, or ``None`` when they are all empty.
+
+    Raises
+    ------
+    FieldError
+        If a composition entry cannot be read, or a label or composition is
+        given without the model they are written in.
+    """
+    key = f"{name}.composition"
+    composition = _field(key, _composition, values.get(key) or [], species)
+    model = str(values.get(f"{name}.model") or "").strip()
+    label = str(values.get(f"{name}.label") or "").strip()
+    if not model:
+        if composition or label:
+            raise FieldError(f"{name}.model", "choose the model the reagent is written in")
+        return None
+    return {"model": model, **({"label": label} if label else {}), "composition": composition}

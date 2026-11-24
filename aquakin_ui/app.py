@@ -32,8 +32,8 @@ UNDO_DEPTH = 50  # edits of the flowsheet Undo can take back
 
 def _needs_python(kind: dict) -> bool:
     """Whether a kind has a required setting the form cannot edit (an SBR's
-    phases, a dosing unit's reagent)."""
-    return any(s["required"] and s["type"] in ("unsupported", "reagent") for s in kind["settings"])
+    phases and settling model)."""
+    return any(s["required"] and s["type"] == "unsupported" for s in kind["settings"])
 
 
 class Editor:
@@ -471,7 +471,7 @@ class Editor:
                         "label": k["label"],
                         "summary": k["summary"]
                         + (
-                            " Some of its settings can only be set from Python or in the spec file."
+                            " Some of its settings can only be set from Python."
                             if _needs_python(k)
                             else ""
                         ),
