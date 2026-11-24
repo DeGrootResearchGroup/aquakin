@@ -59,6 +59,13 @@ from aquakin.integrate.calibrate import (
     calibrate,
 )
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.calibration.criteria import (
+    ModelComparison,
+    aic,
+    aicc,
+    bic,
+    compare_models,
+)
 from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
 from aquakin.integrate.experiment_design import (
     CandidateScore,
@@ -263,6 +270,7 @@ __all__ = [
     "LaplaceConfig",
     "MassBalance",
     "MixerUnit",
+    "ModelComparison",
     "MonteCarloResult",
     "NoDigesterError",
     "OperatingConditions",
@@ -303,6 +311,9 @@ __all__ = [
     "UnknownUnitError",
     "WiringError",
     "aeration_energy",
+    "aic",
+    "aicc",
+    "bic",
     "blower_airflow_total",
     "blower_energy",
     "blower_power_kw",
@@ -317,6 +328,7 @@ __all__ = [
     "check_nitrogen",
     "clear_model_cache",
     "co2e_from_energy",
+    "compare_models",
     "compare_scenarios",
     "compile_model",
     "composition_table",

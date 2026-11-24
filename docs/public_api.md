@@ -119,6 +119,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Fisher information and profile likelihood of plant parameters | `aquakin.plant.plant_fisher_information` → `FisherInformation`, `aquakin.plant.plant_profile_likelihood` → `ProfileResult` |
 | Choose plant sensors by the information they add | `aquakin.plant.plant_rank_sensor_sets` with `aquakin.plant.SensorSet` → `CandidateScore` |
 | Identifiability report from a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |
+| Compare model structures fitted to the same data (AIC, AICc, BIC, Akaike weights) | `aic`, `aicc`, `bic` of a `CalibrationResult`; `compare_models` → `ModelComparison` |
 | Score a design (D / A / E / modified-E) | `design_criterion` |
 | Choose between candidate experiments | `rank_experiments` → `CandidateScore` |
 | Choose the best set of measurements from a candidate pool under a budget | `design_from_candidates` → `CandidateDesign` |

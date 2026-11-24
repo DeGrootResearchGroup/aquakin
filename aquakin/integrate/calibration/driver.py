@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate.calibration.coords import _ic_theta_from_pools
+from aquakin.integrate.calibration.criteria import _fit_statistics
 from aquakin.integrate.calibration.laplace import (
     _at_bound_named,
     _at_bound_sides,
@@ -215,6 +216,7 @@ def _fit_result(problem: _CalibrationProblem, fm, cfg: _FitConfig, bundle, resul
     # sum(log(sigma)) normaliser; evaluating the objective puts both on scale),
     # and in the loss's own units (the optimiser saw it divided by loss_scale).
     reported_loss = float(bundle.value_and_grad(theta_opt)[0]) * bundle.loss_scale
+    stats = _fit_statistics(problem, physical_opt, ic_opt, reported_loss)
 
     return CalibrationResult(
         params=full_params,
@@ -232,4 +234,5 @@ def _fit_result(problem: _CalibrationProblem, fm, cfg: _FitConfig, bundle, resul
         sigma_estimate=sigma_hat,
         ic_fractions=ic_fractions,
         at_bound=at_bound,
+        **stats,
     )

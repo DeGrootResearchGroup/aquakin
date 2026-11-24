@@ -43,6 +43,7 @@ from aquakin.integrate.calibration.problem import (
     _CalibrationProblem,
     _check_start_in_domain,
     _is_multi_dataset,
+    _observation_record,
     _resolve_priors,
     _resolve_rate_bounds,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "_is_sigma_estimate",
     "_n_obs_per_output",
     "_observation_noise",
+    "_observation_record",
     "_observation_unit_factors",
     "_observed_counts",
     "_point_optimizer",
