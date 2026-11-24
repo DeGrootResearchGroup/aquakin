@@ -1,5 +1,7 @@
 """The unit form: rows from the catalogue, and the settings they give back."""
 
+import re
+
 import pytest
 import yaml
 
@@ -234,3 +236,116 @@ def test_a_scheduled_value_keeps_a_number_a_number_and_an_expression_text():
     }
     with pytest.raises(ValueError, match="write each entry as 'name: value'"):
         _parse(composition, "SS 60")
+
+
+# -- a dosing unit's reagent --------------------------------------------------
+
+
+@pytest.fixture
+def dosing(ui_catalog):
+    """A flowsheet holding one dosing unit with no reagent yet."""
+    return Flowsheet.from_spec(
+        ui_catalog,
+        {"format": 2, "name": "p", "units": {"dose": {"kind": "dosing", "flow": 2.0}}},
+    )
+
+
+def _reagent_rows(doc, model="", label="", entries=()):
+    """The dosing unit's rows with the reagent's fields set as a user would."""
+    rows = forms.rows_for(doc, "dose", _info)
+    edits = {"reagent.model": model, "reagent.label": label, "reagent.composition": entries}
+    return [{**r, "value": edits[r["key"]]} if r["key"] in edits else r for r in rows]
+
+
+def test_a_new_reagent_is_drawn_empty_and_left_unset(dosing):
+    rows = _rows(dosing, "dose")
+    assert rows["reagent.model"]["value"] == "" and rows["reagent.model"]["reshape"]
+    assert rows["reagent.label"]["placeholder"] == "reagent (default)"
+    composition = rows["reagent.composition"]
+    assert composition["widget"] == "composition"
+    assert composition["value"] == [] and composition["items"] == []
+    # A wholly empty entry (an "Add a species" left blank) is no entry.
+    rows = _reagent_rows(dosing, entries=[{"species": "", "value": ""}])
+    _, settings = forms.read_rows(dosing, "dose", rows)
+    assert settings == {"flow": 2.0}
+
+
+def test_a_reagent_composed_in_the_form_builds_that_reagent(dosing):
+    """The reagent the form gives is the one aquakin builds: the concentrations
+    typed in, every other species of the model zero."""
+    from aquakin import load_model
+    from aquakin.plant.catalog import build_unit
+
+    rows = _reagent_rows(dosing, model="asm1")
+    assert rows[-1]["items"] == []  # the species come with the model, on the redraw
+    dosing.apply("dose", forms.read_rows(dosing, "dose", rows)[1], None)
+    assert dosing.units["dose"].settings["reagent"] == {"model": "asm1", "composition": {}}
+    composition = _rows(dosing, "dose")["reagent.composition"]
+    assert composition["items"] == list(load_model("asm1").species)
+    assert composition["units"]["SNO"] == "g_N/m³"
+
+    entries = [{"species": "SS", "value": "4e5"}, {"species": "SNO", "value": " 1000 "}]
+    rows = _reagent_rows(dosing, "asm1", "methanol", entries)
+    _, settings = forms.read_rows(dosing, "dose", rows)
+    assert settings["reagent"] == {
+        "model": "asm1",
+        "label": "methanol",
+        "composition": {"SS": 400000.0, "SNO": 1000.0},
+    }
+    unit = build_unit("dosing", "dose", settings)
+    asm1 = load_model("asm1")
+    expected = [{"SS": 4e5, "SNO": 1000.0}.get(s, 0.0) for s in asm1.species]
+    assert [float(c) for c in unit.reagent.composition] == expected
+    assert unit.reagent.label == "methanol"
+
+
+@pytest.mark.parametrize(
+    ("entries", "message"),
+    [
+        ([{"species": "", "value": "5"}], "choose the species 5 is the concentration of"),
+        ([{"species": "SS", "value": ""}], "give SS a concentration"),
+        ([{"species": "SS", "value": None}], "give SS a concentration"),
+        ([{"species": "SS", "value": "1"}, {"species": "SS", "value": "2"}], "SS is listed twice"),
+        ([{"species": "SS", "value": "lots"}], "'lots' is not a number"),
+        ([{"species": "SS", "value": "nan"}], "'nan' is not a finite number"),
+        ([{"species": "SFOO", "value": "1"}], "'SFOO' is not a species of the reagent's model"),
+    ],
+)
+def test_an_unreadable_composition_entry_is_named(dosing, entries, message):
+    dosing.apply("dose", {"flow": 2.0, "reagent": {"model": "asm1"}}, None)
+    rows = _reagent_rows(dosing, "asm1", entries=entries)
+    with pytest.raises(forms.FieldError, match=f"^reagent composition: {re.escape(message)}$") as caught:
+        forms.read_rows(dosing, "dose", rows)
+    assert caught.value.key == "reagent.composition"
+
+
+@pytest.mark.parametrize(
+    ("label", "entries"), [("", [{"species": "SS", "value": "1"}]), ("methanol", [])]
+)
+def test_a_reagent_without_its_model_is_refused_at_the_model(dosing, label, entries):
+    rows = _reagent_rows(dosing, label=label, entries=entries)
+    with pytest.raises(
+        forms.FieldError, match=r"^reagent model: choose the model the reagent is written in$"
+    ) as caught:
+        forms.read_rows(dosing, "dose", rows)
+    assert caught.value.key == "reagent.model"
+
+
+def test_a_reagent_on_a_model_that_cannot_be_described_takes_any_species(dosing):
+    """With no description of the model there is no species list to refuse a
+    name against; aquakin's check reports one the model lacks."""
+    dosing.apply("dose", {"flow": 2.0, "reagent": {"model": "mine"}}, None)
+    rows = forms.rows_for(dosing, "dose", lambda name: None)
+    rows = [
+        {**r, "value": [{"species": "SANY", "value": "3"}]}
+        if r["key"] == "reagent.composition"
+        else r
+        for r in rows
+    ]
+    _, settings = forms.read_rows(dosing, "dose", rows)
+    assert settings["reagent"] == {"model": "mine", "composition": {"SANY": 3.0}}
+
+
+def test_the_choices_that_redraw_the_form_are_marked(bsm1):
+    marked = {r["key"] for r in forms.rows_for(bsm1, "tank3", _info) if r.get("reshape")}
+    assert marked == {"model", "aeration.mode"}

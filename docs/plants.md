@@ -878,6 +878,11 @@ you edit and lists any errors.
   selected units and wires (Backspace does not).
 - Edits typed into a unit's form are applied when you select another unit, and
   a value that cannot be read is named under its field.
+- A chemical dosing unit's reagent is set in its form: choose the model it is
+  written in first, then add each species it contains with its concentration.
+  A unit marked **Python** in the palette has a setting the form cannot edit
+  yet (a sequencing batch reactor's phases and settling model): build it in
+  Python.
 
 **Simulate** saves the flowsheet, creates a study called `simulation` the first
 time (`simulation_<file name>` for a file not named `flowsheet.yaml`, so each

@@ -274,9 +274,9 @@ def test_a_node_summarizes_its_main_settings(make_editor):
 def test_the_palette_marks_kinds_the_form_cannot_finish(make_editor):
     ed, _ = make_editor()
     marked = {k["kind"] for cat in ed.state.palette for k in cat["kinds"] if k["python"]}
-    assert marked == {"sbr", "dosing"}
+    assert marked == {"sbr"}  # a dosing unit's reagent has a form of its own
     sbr = next(k for cat in ed.state.palette for k in cat["kinds"] if k["kind"] == "sbr")
-    assert sbr["summary"].endswith("can only be set from Python or in the spec file.")
+    assert sbr["summary"].endswith("can only be set from Python.")
 
 
 def test_a_new_flowsheet_runs_on_days(make_editor):
@@ -396,6 +396,35 @@ def test_a_kind_without_a_model_is_dropped_with_no_settings(make_editor):
     ed.on_dropped({"kind": "dosing", "position": {"x": 0, "y": 0}})
     assert ed.doc.units[ed.state.selected].settings == {}
     assert worker.count("model") == 0
+
+
+def test_a_reagent_set_in_the_form_builds_and_survives_save_and_open(make_editor, tmp_path):
+    """Choosing the reagent's model redraws the composition with its species;
+    the reagent composed there builds, and Save then Open give it back."""
+    from aquakin.plant.catalog import model_info
+
+    ed, _ = make_editor()
+    ed.on_dropped({"kind": "dosing", "position": {"x": 0, "y": 0}})
+    uid = ed.state.selected
+    assert ed._check_unit(uid) == "'reagent' is required"
+    rows = ed.state.sel_rows
+    ed.reshape_form(rows, next(i for i, r in enumerate(rows) if r["key"] == "reagent.model"), "asm3")
+    composition = _with(ed.state.sel_rows, "reagent.composition", None)
+    assert composition["items"] == [s["name"] for s in model_info("asm3")["species"]]
+    entries = [{"species": "SS", "value": "250000"}]
+    rows = _with(_with(ed.state.sel_rows, "reagent.composition", entries), "flow", "3")
+    assert ed.apply_properties(rows)
+    reagent = {"model": "asm3", "composition": {"SS": 250000.0}}
+    assert ed.doc.units[uid].settings == {"flow": 3.0, "reagent": reagent}
+    assert ed._check_unit(uid) is None
+
+    ed.state.spec_path = str(tmp_path / "flowsheet.yaml")
+    ed.save()
+    ed.open(tmp_path / "flowsheet.yaml")
+    assert ed.doc.units[uid].settings["reagent"] == reagent
+    assert yaml.safe_load((tmp_path / "flowsheet.yaml").read_text())["units"][uid]["reagent"] == (
+        reagent
+    )
 
 
 def _node(ed, uid):

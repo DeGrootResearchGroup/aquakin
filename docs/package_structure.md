@@ -298,6 +298,7 @@ aquakin/
 │   ├── app.py                          # Editor: its state, drawing, undo, canvas events,
 │   │                                   #   the unit form, wiring of the modules below
 │   ├── page.py / study_page.py         # the trame / Vuetify page; the Studies tab + dialogs
+│   ├── repeated.py                     # lists of records edited on the page (study dialog, unit form)
 │   ├── checks.py                       # aquakin's background checks of units and plant
 │   ├── files.py                        # open / save the spec, unsaved-edit questions
 │   ├── studies.py                      # list / run / freeze studies, Simulate, results

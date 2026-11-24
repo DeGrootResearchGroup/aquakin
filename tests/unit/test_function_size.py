@@ -64,7 +64,6 @@ RECORDED_LINES = {
     "aquakin/plant/sensitivity.py::steady_state_dgsm": 132,
     "aquakin/plant/steady_solve.py::steady_state": 183,
     "aquakin/utils/units.py::_infer": 127,
-    "aquakin_ui/forms.py::rows_for": 110,
 }
 RECORDED_PARAMS = {
     "aquakin/core/ph_solver.py::_adaptive_activity_solve": 12,

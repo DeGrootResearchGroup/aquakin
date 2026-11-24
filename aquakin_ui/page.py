@@ -14,6 +14,7 @@ from trame.ui.vuetify3 import SinglePageWithDrawerLayout
 from trame.widgets import client, html
 from trame.widgets import vuetify3 as v3
 
+from aquakin_ui.repeated import add_button, bound, remove_button
 from aquakin_ui.widget import Flowsheet as FlowsheetCanvas
 
 if TYPE_CHECKING:
@@ -51,6 +52,11 @@ PAGE_CSS = """
 
 
 def _build(self: Editor) -> None:
+    # The form's rows are edited in the browser and sent whole on Apply, so the
+    # page's own changes to them (a composition's entries redrawn) are not sent
+    # back: Python's last rows stay what a redraw is compared with, so an
+    # unchanged background redraw still leaves the typing alone.
+    self.state.client_only("sel_rows")
     with SinglePageWithDrawerLayout(self.server, theme=("dark ? 'dark' : 'light'",)) as layout:
         layout.title.set_text("aquakin · {{ plant_name }}")
         layout.footer.hide()
@@ -171,7 +177,7 @@ def _palette(self: Editor, layout) -> None:
                     "Python",
                     v_if="k.python",
                     classes="text-caption text-medium-emphasis ms-auto",
-                    title="Some of its settings can only be set from Python or in the spec file",
+                    title="Some of its settings can only be set from Python",
                 )
 
 
@@ -318,7 +324,7 @@ def _unit_form(self: Editor) -> None:
                 classes="mb-2",
             )
             v3.VSelect(
-                v_if="row.widget === 'select' && ['aeration.mode', 'model'].includes(row.key)",
+                v_if="row.widget === 'select' && row.reshape",
                 items=("row.items",),
                 model_value=("row.value",),
                 update_modelValue=(self.reshape_form, "[sel_rows, i, $event]"),
@@ -341,6 +347,7 @@ def _unit_form(self: Editor) -> None:
                 update_modelValue="sel_dirty = true",
                 **common,
             )
+            _composition_input(common)
             v3.VTextField(
                 v_else_if="row.widget === 'readonly'",
                 disabled=True,
@@ -360,3 +367,36 @@ def _unit_form(self: Editor) -> None:
         ):
             html.Div("{{ focus_label }}", classes="font-weight-medium mb-1")
             html.Div("{{ focus_help }}", classes="text-medium-emphasis")
+
+
+#: A form row changed in the browser: Apply turns "Apply changes".
+_DIRTY = "sel_dirty = true"
+
+
+def _composition_input(common: dict) -> None:
+    """A composition (``row.value``, entries of a species and its concentration),
+    each species chosen from ``row.items``."""
+    with html.Div(v_else_if="row.widget === 'composition'", classes="ak-composition mb-2"):
+        html.Div("{{ row.label }}", classes="text-caption text-medium-emphasis mb-1")
+        compact = {k: v for k, v in common.items() if k not in ("label", "placeholder", "classes")}
+        with html.Div(v_for="(e, ei) in row.value", key="ei", classes="d-flex ga-1 mb-1"):
+            v3.VSelect(
+                **bound("e.species", "sel_rows", _DIRTY),
+                items=("row.items",),
+                label="species",
+                style="flex: 0 0 104px;",
+                **compact,
+            )
+            v3.VTextField(
+                **bound("e.value", "sel_rows", _DIRTY),
+                label="concentration",
+                suffix=("row.units[e.species] || ''",),
+                **compact,
+            )
+            remove_button("row.value", "ei", "sel_rows", _DIRTY)
+        html.Div(
+            "{{ sel_errors[row.key] }}",
+            v_if="sel_errors[row.key]",
+            classes="text-caption text-error mb-1",
+        )
+        add_button("Add a species", "row.value", "{species: '', value: ''}", "sel_rows", _DIRTY)
