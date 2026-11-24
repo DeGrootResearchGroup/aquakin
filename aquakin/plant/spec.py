@@ -655,6 +655,9 @@ def plant_from_spec(cls, spec, *, base_dir=None):
             raise SpecError(f"streams.{name}: {type(exc).__name__}: {exc}") from None
     plant.influent_endpoint = doc.influent_endpoint
     plant.effluent_endpoint = doc.effluent_endpoint
+    # Rebuilt plants of one spec compile the same programs, so they share them
+    # (a study run, the editor's worker); a change to this plant ends that.
+    plant._solve_cache.share_as((cls, _built_fingerprint(doc, models, influents)))
     return plant
 
 
@@ -1247,16 +1250,41 @@ def spec_inputs(spec, *, base_dir=None) -> dict[str, str]:
         A result records these to tell, later, whether it is stale and which
         input changed.
     """
+    spec, base_dir = _resolve(spec, base_dir)
+
+    def model_digest(name, ref):
+        if ref.source == "shipped":
+            return _shipped_fingerprint(name)
+        return _model_fingerprint(_located(ref.source, base_dir, name))
+
+    def table_digest(uid, source):
+        return _file_digest(_located(source, base_dir, f"units.{uid}.series"))
+
+    return _inputs_of(_validate(spec), model_digest, table_digest)
+
+
+def _inputs_of(doc: _Document, model_digest, table_digest) -> dict[str, str]:
+    """:func:`spec_inputs` of a validated spec, its models and tables digested
+    by the given callables.
+
+    Parameters
+    ----------
+    doc : _Document
+        The validated spec.
+    model_digest : callable
+        ``model_digest(name, ref)``: the fingerprint of model ``name``.
+    table_digest : callable
+        ``table_digest(unit, source)``: the sha256 of the table an influent
+        ``unit`` reads from ``source``.
+
+    Returns
+    -------
+    dict
+        As :func:`spec_inputs` returns.
+    """
     from aquakin.plant.catalog import unit_kind
 
-    spec, base_dir = _resolve(spec, base_dir)
-    doc = _validate(spec)
-    inputs: dict[str, str] = {}
-    for name, ref in doc.models.items():
-        if ref.source == "shipped":
-            inputs[f"model:{name}"] = _shipped_fingerprint(name)
-        else:
-            inputs[f"model:{name}"] = _model_fingerprint(_located(ref.source, base_dir, name))
+    inputs = {f"model:{name}": model_digest(name, ref) for name, ref in doc.models.items()}
     units, ports = [], {}
     for uid, entry in doc.units.items():
         try:
@@ -1268,8 +1296,7 @@ def spec_inputs(spec, *, base_dir=None) -> dict[str, str]:
         settings = _canonical_settings(kind, {**kind.defaults(), **extra}, f"units.{uid}")
         ports[uid] = kind.ports_for(settings)
         if settings.get("series") is not None:
-            table = _located(settings["series"], base_dir, f"units.{uid}.series")
-            inputs[f"table:{uid}"] = _file_digest(table)
+            inputs[f"table:{uid}"] = table_digest(uid, settings["series"])
             settings["series"] = "<table>"  # where the table sits does not matter
         units.append([uid, entry.kind, settings])
     connections = []
@@ -1318,9 +1345,45 @@ def spec_fingerprint(spec, *, base_dir=None) -> str:
     str
         A 64-character hex digest.
     """
-    inputs = spec_inputs(spec, base_dir=base_dir)
+    return _combined(spec_inputs(spec, base_dir=base_dir))
+
+
+def _combined(inputs: dict[str, str]) -> str:
+    """One digest of :func:`spec_inputs`' fingerprints (:func:`spec_fingerprint`)."""
     text = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _built_fingerprint(doc: _Document, models: dict, influents: dict) -> str:
+    """:func:`spec_fingerprint` of the plant :func:`plant_from_spec` built.
+
+    The models and influent tables are digested as they were read (the
+    fingerprint ``load_model`` / ``load_model_from_file`` and
+    ``read_influent_table`` record on what they return), not as the files are
+    now: a file edited after it was read, while the plant was built or before
+    a cached shipped model was reloaded, must not give two different plants
+    one fingerprint.
+
+    Parameters
+    ----------
+    doc : _Document
+        The validated spec.
+    models : dict
+        ``{name: CompiledModel}`` as loaded.
+    influents : dict
+        ``{unit: InfluentSeries}`` as built.
+
+    Returns
+    -------
+    str
+        A 64-character hex digest.
+    """
+    inputs = _inputs_of(
+        doc,
+        lambda name, ref: models[name]._aquakin_source[2],
+        lambda uid, source: influents[uid]._aquakin_source[2],
+    )
+    return _combined(inputs)
 
 
 def spec_changes(spec, *, base_dir=None) -> list[str]:

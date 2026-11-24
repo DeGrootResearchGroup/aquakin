@@ -30,9 +30,61 @@ and reads/populates its dicts from the solve paths. Unlike ``RecycleResolver`` /
 storage, not plant-dependent logic. :func:`structure_changed` is the one place
 a structure change (a unit, connection or influent added) clears this cache
 together with the plant's other structure-derived state.
+
+**Sharing between plants built from one spec.** A plant rebuilt from the same
+flowsheet spec compiles the same programs, and a study run or the editor's
+worker rebuilds the plant on every run. So a plant built by
+:meth:`Plant.from_spec` is given an identity (:meth:`SolveCache.share_as`: its
+class and the fingerprint of the spec *as built*, the loaded models' and
+influent tables' own digests included), and its forward and steady-state
+solves are also kept in a process-wide store under that identity, where every
+other plant of the same identity finds them. Equal identities mean the same
+units, settings, wiring, options, model content and influent data, hence the
+same compiled program. The identity lasts only while the plant is exactly as
+built: any :meth:`SolveCache.invalidate` (a condition or structure mutator)
+drops it and withdraws what the plant published, because a published program
+closes over the plant that built it and a retrace would read its new state. A
+plant reads a shared program without copying it, so a withdrawn one is never
+reused. The store keeps the :data:`SHARED_LIMIT` most recently used programs:
+each holds its plant and its executables alive.
 """
 
 from __future__ import annotations
+
+import threading
+from collections import OrderedDict
+
+#: The most compiled programs the process-wide store keeps; the least recently
+#: used is dropped first. A study run uses up to about three (an initial steady
+#: state, the solve, a sensitivity), and each holds its plant and executables
+#: (some 80 MB for a BSM1 steady-state solve), so the bound is kept small.
+SHARED_LIMIT = 4
+
+# ``(identity, store, key) -> (value, *keep_alive)``, most recently used last.
+_SHARED: OrderedDict = OrderedDict()
+# Plants of one process may solve on several threads (the editor's tests run
+# studies on threads).
+_SHARED_LOCK = threading.Lock()
+
+# The stores a plant shares; the continuation and arclength kernels close over
+# values taken from one call (a known solution's scale) that their keys omit, so
+# they stay with the plant that built them.
+_SHAREABLE = ("jit", "steady_jit")
+
+
+def clear_shared() -> None:
+    """Drop every compiled program in the process-wide store.
+
+    The plants keep their own; a plant built afterwards compiles afresh.
+    """
+    with _SHARED_LOCK:
+        _SHARED.clear()
+
+
+def shared_size() -> int:
+    """The number of compiled programs in the process-wide store."""
+    with _SHARED_LOCK:
+        return len(_SHARED)
 
 
 class SolveCache:
@@ -59,8 +111,83 @@ class SolveCache:
         self.continuation_kernels: dict = {}
         # Jitted pseudo-arclength continuation kernels, keyed by settings.
         self.arclength_kernels: dict = {}
+        # The identity under which this plant's solves are shared, or ``None``.
+        self.shared_as = None
+        # The process-wide keys this plant published, withdrawn on invalidation.
+        self._published: set = set()
 
-    def invalidate(self) -> None:
+    def share_as(self, identity) -> None:
+        """Share this plant's compiled solves with every plant of ``identity``.
+
+        Parameters
+        ----------
+        identity : hashable
+            Equal only for plants that compile identical programs (see the
+            module docstring): :meth:`Plant.from_spec` passes the plant class
+            and the fingerprint of the spec as built.
+        """
+        self.shared_as = identity
+
+    def get(self, store: str, key):
+        """The compiled program for ``key`` in ``store``, or ``None``.
+
+        Looks in this plant's own ``store`` (``"jit"`` or ``"steady_jit"``),
+        then, while the plant is shared, in the process-wide store.
+
+        Parameters
+        ----------
+        store : str
+            ``"jit"`` or ``"steady_jit"``.
+        key : hashable or None
+            The settings key; ``None`` (an uncacheable call) finds nothing.
+
+        Returns
+        -------
+        object or None
+            The cached value, or ``None`` on a miss.
+        """
+        if key is None:
+            return None
+        own = getattr(self, store).get(key)
+        if own is not None or self.shared_as is None:
+            return own
+        full = (self.shared_as, store, key)
+        with _SHARED_LOCK:
+            entry = _SHARED.get(full)
+            if entry is None:
+                return None
+            _SHARED.move_to_end(full)
+        return entry[0]
+
+    def put(self, store: str, key, value, *keep_alive) -> None:
+        """Keep ``value`` for ``key`` in ``store``, and publish it while shared.
+
+        Parameters
+        ----------
+        store : str
+            ``"jit"`` or ``"steady_jit"``.
+        key : hashable
+            The settings key.
+        value : object
+            The compiled program.
+        *keep_alive : object
+            Objects the key names by ``id`` (a custom adjoint), held with the
+            published entry so their ``id`` cannot be reused while it lives.
+        """
+        if store not in _SHAREABLE:
+            raise ValueError(f"no shared store {store!r}; expected one of {_SHAREABLE}")
+        getattr(self, store)[key] = value
+        if self.shared_as is None:
+            return
+        full = (self.shared_as, store, key)
+        with _SHARED_LOCK:
+            _SHARED[full] = (value, *keep_alive)
+            _SHARED.move_to_end(full)
+            while len(_SHARED) > SHARED_LIMIT:
+                _SHARED.popitem(last=False)
+        self._published.add(full)
+
+    def invalidate(self, *, keep_shared: bool = False) -> None:
         """Drop every compiled solve / kernel.
 
         Call whenever a change would make a previously-compiled solve stale -- a
@@ -68,11 +195,28 @@ class SolveCache:
         length. Cheap: the artefacts recompile lazily on the next solve. This is
         the single invalidation point so a mutator cannot clear one cache and
         forget another.
+
+        Parameters
+        ----------
+        keep_shared : bool, optional
+            Keep sharing (see the module docstring). Only for work every plant
+            of the identity does the same way before it compiles: the plant's
+            clock, resolved from its models, units and influents at the first
+            solve. A change to the plant never passes it: the plant is then no
+            longer the one its identity describes, so it stops sharing and
+            withdraws what it published.
         """
         self.jit.clear()
         self.steady_jit.clear()
         self.continuation_kernels.clear()
         self.arclength_kernels.clear()
+        if keep_shared:
+            return
+        self.shared_as = None
+        with _SHARED_LOCK:
+            for full in self._published:
+                _SHARED.pop(full, None)
+        self._published.clear()
 
 
 def structure_changed(plant) -> None:

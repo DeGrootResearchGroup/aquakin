@@ -1223,7 +1223,7 @@ class Plant:
                 unit.set_time_unit(time_unit)
         for name, series in self._influents_added.items():
             self.influents[name] = series.in_time_unit(time_unit)
-        self._solve_cache.invalidate()
+        self._solve_cache.invalidate(keep_shared=True)  # the same for every plant of a spec
         self._time_unit_key = key
 
     def _validate_control_signals(self) -> None:
