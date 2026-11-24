@@ -9,7 +9,6 @@ and check a cache hit against a solve by a fresh object, so a hit that returned
 a program compiled for different settings would fail.
 """
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -17,23 +16,6 @@ import pytest
 import aquakin.integrate.batch as batch_mod
 import aquakin.plant.dynamic_solve as dynamic_mod
 from aquakin import BatchReactor, Event, SpatialConditions
-
-# The duration event JAX records for every XLA compilation.
-_BACKEND_COMPILE = "/jax/core/compile/backend_compile_duration"
-
-
-@pytest.fixture
-def xla_compiles():
-    """A list that gains one entry per XLA compilation while the test runs."""
-    compiles = []
-
-    def listener(event, duration, **kwargs):
-        if event == _BACKEND_COMPILE:
-            compiles.append(duration)
-
-    jax.monitoring.register_event_duration_secs_listener(listener)
-    yield compiles
-    jax.monitoring.unregister_event_duration_listener(listener)
 
 
 def _spy(monkeypatch, module):

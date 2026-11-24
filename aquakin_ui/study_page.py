@@ -3,7 +3,7 @@ question before replacing results), built with trame and Vuetify.
 
 Each builder is bound onto :class:`~aquakin_ui.app.Editor` as a method (``self``
 is the editor). The study dialog's draft is nested state, which the page does
-not redraw on its own: see ``_bound`` and ``_REDRAW``.
+not redraw on its own: see :mod:`aquakin_ui.repeated`.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 from trame.widgets import html
 from trame.widgets import vuetify3 as v3
+
+from aquakin_ui.repeated import add_button, bound, redraw, remove_button
 
 if TYPE_CHECKING:
     from aquakin_ui.app import Editor
@@ -45,17 +47,14 @@ def _js(value) -> str:
     return text.replace('"', "'")
 
 
-# Rows are added to and removed from the study draft in place, which the page
-# does not see; reassigning the draft redraws them.
-_REDRAW = "; study_draft = {...study_draft}"
+#: The state holding the study dialog's draft.
+_STATE = "study_draft"
+_REDRAW = redraw(_STATE)
 
 
 def _bound(expr: str) -> dict:
     """Bind a widget to a value inside the study draft, redrawing after each change."""
-    return {
-        "v_model": expr,
-        "update_modelValue": "$nextTick(() => { study_draft = {...study_draft} })",
-    }
+    return bound(expr, _STATE)
 
 
 def _studies_panel(self: Editor) -> None:
@@ -224,20 +223,8 @@ def _observables_editor(rows: str) -> None:
             variant="outlined",
             hide_details=True,
         )
-        v3.VBtn(
-            icon="mdi-close",
-            size="small",
-            variant="text",
-            click=f"{rows}.splice(oi, 1){_REDRAW}",
-        )
-    v3.VBtn(
-        "Add a stream",
-        prepend_icon="mdi-plus",
-        size="small",
-        variant="text",
-        classes="text-none",
-        click=f"{rows}.push({{stream: '', channels: [], measures: {{}}}}){_REDRAW}",
-    )
+        remove_button(rows, "oi", _STATE)
+    add_button("Add a stream", rows, "{stream: '', channels: [], measures: {}}", _STATE)
 
 
 def _candidate_fields(c: str) -> None:
@@ -449,20 +436,8 @@ def _parameter_values_input() -> None:
                 style="max-width: 160px;",
                 **_COMMON,
             )
-            v3.VBtn(
-                icon="mdi-close",
-                size="small",
-                variant="text",
-                click=f"{_DRAFT}.splice(ri, 1){_REDRAW}",
-            )
-        v3.VBtn(
-            "Add a parameter",
-            prepend_icon="mdi-plus",
-            size="small",
-            variant="text",
-            classes="text-none",
-            click=f"{_DRAFT}.push({{name: '', value: ''}}){_REDRAW}",
-        )
+            remove_button(_DRAFT, "ri", _STATE)
+        add_button("Add a parameter", _DRAFT, "{name: '', value: ''}", _STATE)
 
 
 def _transforms_input() -> None:
@@ -481,20 +456,8 @@ def _transforms_input() -> None:
                 style="max-width: 180px;",
                 **_COMMON,
             )
-            v3.VBtn(
-                icon="mdi-close",
-                size="small",
-                variant="text",
-                click=f"{_DRAFT}.splice(ri, 1){_REDRAW}",
-            )
-        v3.VBtn(
-            "Add a transform",
-            prepend_icon="mdi-plus",
-            size="small",
-            variant="text",
-            classes="text-none",
-            click=f"{_DRAFT}.push({{name: '', transform: 'positive_log'}}){_REDRAW}",
-        )
+            remove_button(_DRAFT, "ri", _STATE)
+        add_button("Add a transform", _DRAFT, "{name: '', transform: 'positive_log'}", _STATE)
 
 
 def _candidates_input() -> None:

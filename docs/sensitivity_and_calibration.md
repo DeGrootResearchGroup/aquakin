@@ -15,9 +15,10 @@ to know *how* an output depends on its inputs, or to fit a model to data.
 | Question | Reactor | Plant |
 |---|---|---|
 | How does an output change with each parameter, here? | `aquakin.sensitivity`, `reactor.solve_sensitivity` | `plant.steady_state_sensitivity`, `plant.dynamic_sensitivity`, `plant.solve_sensitivity` |
-| Which inputs matter over a whole range? | `aquakin.dgsm` | `plant.steady_state_dgsm`, `plant.dynamic_dgsm` |
+| Which inputs matter over a whole range? | `aquakin.dgsm`; `aquakin.sobol_indices` for first-order and interaction shares | `plant.steady_state_dgsm`, `plant.dynamic_dgsm` |
 | Which parameter values fit my data? | `aquakin.calibrate` (`aquakin.fit` for a point estimate only) | `plant.calibrate` |
 | How well do the data determine them? | the Laplace posterior, `aquakin.profile_likelihood`, `aquakin.identifiability` | the same, with `plant_profile_likelihood` |
+| Which model structure do the data support? | `aquakin.aic`, `aicc`, `bic`, `compare_models` | the same |
 | What should I measure next? | `aquakin.fisher_information`, `rank_experiments`, `optimize_experiment`, `design_from_candidates` | `plant_fisher_information`, `plant_rank_sensor_sets` |
 | How uncertain is a prediction? Which design is best? | `aquakin.monte_carlo`, `compare_scenarios`, `optimize_design` | the same |
 
@@ -212,6 +213,67 @@ res.ranked()              # [(name, bound), ...] most influential first
 derivatives in forward mode. The result is the same; forward mode is faster
 when there are many outputs, or when the reverse pass through a stiff solve is
 expensive.
+
+### Variance-based global sensitivity (Sobol indices)
+
+DGSM gives an upper bound on each input's total effect. It does not say what
+fraction of the output variance an input explains on its own, or which inputs
+interact. `aquakin.sobol_indices` estimates both, for each input `z_j`:
+
+- the **first-order index** `S_j`, the fraction of the output variance that
+  `z_j` explains on its own (Saltelli et al. 2010 estimator);
+- the **total-order index** `S_j^tot`, the same fraction including every
+  interaction with other inputs (Jansen 1999 estimator);
+- their difference, `res.interaction`, the share that `z_j` explains only
+  through interactions.
+
+It takes the same function as `dgsm`, and its inputs are described as for
+`monte_carlo`: a `(low, high)` range, or a uniform, normal or lognormal
+distribution. The function does not need to be differentiable. As with
+`monte_carlo`, it can also wrap a dynamic plant solve
+([Uncertainty and scenarios](plants.md#uncertainty-and-scenarios)).
+
+The decomposition costs much more than DGSM. For `d` inputs and a base sample
+of `N` points it runs `N (d + 2)` forward solves, where DGSM runs about `N`
+differentiated ones. At `N = 1024` and 17 inputs that is about 19 000 solves.
+Check the count with `sobol_indices_cost` before you start:
+
+| Method | Gives | Solves for `d` inputs, base sample `N` |
+|---|---|---|
+| `aquakin.dgsm` | an upper bound on each `S_j^tot`; a ranking | about `N` differentiated solves |
+| `aquakin.sobol_indices` | `S_j`, `S_j^tot`, interactions, confidence intervals | `N (d + 2)` forward solves |
+
+Use DGSM to screen many inputs. Then use Sobol indices on the few that matter,
+or on a cheap model.
+
+```python
+aquakin.sobol_indices_cost(2, 64)     # 256 solves for the two rate constants
+
+sob = aquakin.sobol_indices(bromate_umol, {"k1": (80.0, 320.0), "k_dec": (35.0, 140.0)},
+                            n_samples=64, seed=0,
+                            bootstrap=aquakin.BootstrapConfig(confidence=0.9))
+sob.first_order          # (2,) share of Var(bromate) each rate explains alone
+sob.total_order          # (2,) the same including interactions
+sob.interaction          # (2,) total minus first order
+sob.total_order_ci       # (2, 2) bootstrap 90 % intervals, from 1000 resamples
+```
+
+% invisible-code-block: python
+%     assert aquakin.sobol_indices_cost(2, 64) == 256 == sob.n_evaluations
+%     assert (sob.confidence, sob.n_bootstrap) == (0.9, 1000)
+%     assert np.all(sob.total_order <= np.asarray(res.sobol_total_bound))
+
+The confidence intervals come from a bootstrap over the base sample. The
+bootstrap costs no extra solves. `bootstrap=aquakin.BootstrapConfig(...)` sets
+the number of resamples (`n_resamples`, default 1000, at least 100) and the
+interval level (`confidence`, default 0.95); raise `n_resamples` for a high
+level such as 0.99, whose tails hold few resamples. The bootstrap treats the
+sample as independent random draws, so on the scrambled-Sobol design used here the intervals are
+conservative: they are usually wider than the actual error. Increase
+`n_samples` until the intervals are narrow enough to separate the inputs you
+want to compare. With a small sample an index near zero can come out slightly
+negative, which is sampling noise. The indices assume that the inputs are
+independent.
 
 ### Plant sensitivity
 
@@ -623,6 +685,67 @@ orthogonal and grows without bound as they become linearly dependent,
 regardless of how sensitive the output is to each parameter.
 `rep.identifiable_subsets()` lists every subset below a threshold (default
 15), largest first.
+
+## Comparing model structures
+
+When several model structures could explain the same data (a different rate
+law, an extra pathway, a parameter fitted or held at a literature value), an
+information criterion says which the data support, charging each structure for
+the quantities it estimates. A fit with `loss="nll"` carries what they need:
+
+- `result.log_likelihood`: the Gaussian log-likelihood of the observations at
+  the fit, complete with its `-(N/2) log(2π)` constant and without any prior.
+  It is not `-result.loss`, which leaves out the constant and includes the
+  prior penalty.
+- `result.n_observations`: the observed entries over every dataset (a `NaN` is
+  not counted).
+- `result.n_estimated`: the free rate parameters, plus the fitted initial
+  pools of every dataset, plus one noise level per observed output with
+  `sigma="estimate"`.
+
+`aquakin.aic(result)`, `aquakin.aicc(result)` and `aquakin.bic(result)` give
+the criteria, and `aquakin.compare_models` ranks several fits of the same
+observations. Here the question is whether the data call for fitting
+`k_dec`, or whether its default value will do:
+
+```python
+k1_only = aquakin.calibrate(reactor, C0, observations, t_obs, ["O3_Br_direct.k1"],
+                            observed_species=observed, loss="nll", sigma=sigma)
+table = aquakin.compare_models({"k1 and k_dec": result, "k1 only": k1_only},
+                               criterion="aicc")
+table.best       # 'k1 only'
+table.delta      # how far each is behind the best
+table.weights    # {'k1 only': 0.59, 'k1 and k_dec': 0.41} (to two decimals)
+```
+
+% invisible-code-block: python
+%     assert table.best == "k1 only"
+%     assert round(table.weights["k1 only"], 2) == 0.59
+%     assert round(table.weights["k1 and k_dec"], 2) == 0.41
+%     assert (result.n_estimated, k1_only.n_estimated, result.n_observations) == (2, 1, 24)
+
+Lower is better, and only differences between fits of the same observations
+mean anything, so `compare_models` refuses fits whose observations or
+observation times differ. Fitting `k_dec` as well raises the likelihood too
+little to pay for the extra parameter, though a weight of 0.41 says the data do
+not rule it out either. As a rule of thumb, a difference below 2 is weak
+evidence and one above 10 is decisive. AICc corrects AIC for small samples and
+is the safer default unless there are many more observations than estimated
+quantities (more than about 40 per quantity); BIC charges more for each
+parameter and favours the simpler structure more strongly as the data grow.
+
+Some fits cannot be compared this way:
+
+- `"mse"` and `"wmse"` are not likelihoods, so the criteria refuse them. Refit
+  with `loss="nll"` and `sigma="estimate"`, which is the least-squares form of
+  the criteria with one noise level estimated per output.
+- A prior (a model-declared one with `use_priors=True`, an explicit `priors=`,
+  or `FreeICConfig(prior_log_std=)`) moves the fit off the maximum-likelihood
+  point, so the criteria warn. Refit with `use_priors=False` and no priors to
+  compare structures.
+- `aicc` needs more observations than estimated quantities plus one.
+
+`plant.calibrate` results work the same way.
 
 ## Designing experiments
 

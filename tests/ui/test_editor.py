@@ -674,8 +674,8 @@ def test_the_form_marks_the_bad_field_and_new_units_suit_the_model(tmp_path):
         assert settling and all(s.startswith("X") for s in settling)
 
         kinds = {k["kind"]: k for group in ed.state.palette for k in group["kinds"]}
-        assert kinds["sbr"]["python"] and "only be set from Python" in kinds["sbr"]["summary"]
-        assert not kinds["cstr"]["python"]
+        # Every required setting of every kind has a form (an SBR's phases too).
+        assert not any(k["python"] for k in kinds.values())
     finally:
         ed.worker.stop()
 

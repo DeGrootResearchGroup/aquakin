@@ -60,8 +60,8 @@ optional hooks); these are the invariants around it.
   a unit ignores what it does not use.
 - **A new optional capability is a named `runtime_checkable` Protocol in
   `plant/units.py`, detected with `isinstance`** (as `SignalProducer`,
-  `LiquidVolumeUnit`, `TemperatureSettable`, `PlantTimeUnitAware`, ...), and is
-  listed in the `Unit` docstring. Only hooks read as values with a default
+  `LiquidVolumeUnit`, `TemperatureSettable`, `ReactionBalanceUnit`,
+  `OxygenTransferUnit`, ...), and is listed in the `Unit` docstring. Only hooks read as values with a default
   (`signal_names`, `required_signals`, `flow_param_defaults`, a translator's
   `needs_src_pH` / `needs_dest_pH`) stay plain look-ups.
 - **A stateless unit inherits `StatelessUnit`** rather than writing the
@@ -130,8 +130,8 @@ optional hooks); these are the invariants around it.
 
 ### Tracing, temperature and warm starts
 
-- **Everything `solve` calls must trace**: `monte_carlo`, `compare_scenarios` and
-  `dgsm` jit the user's function. No `float()`, `np.asarray` or Python `if` on a
+- **Everything `solve` calls must trace**: `monte_carlo`, `compare_scenarios`,
+  `dgsm` and `sobol_indices` jit the user's function. No `float()`, `np.asarray` or Python `if` on a
   `jnp`-built value in the solve path (`initial_state`, a `TemperatureModel`'s
   methods); Python scalars only for static layout data.
 - `plant.set_temperature` changes baked-in conditions, so it invalidates
@@ -202,9 +202,9 @@ apply, scaled to the plant clock) and its conditions with `_init_conditions` /
 signals)` to `_reaction`** (the operating conditions by default; the heated
 digester and the SBR override it to their static ones), so the mass balance can
 ask for the same conditions. Never write `stoich.T @ rates` in a unit or in
-`balance.py`: `_reaction_terms_at` calls `unit._reaction` at
-`_reaction_conditions`, fed by `Plant._unit_inputs_and_signals` (the RHS's own
-input and signal assembly), so the balance integrates what the unit integrated.
+`balance.py`: `_reaction_terms_at` calls the unit's public `reaction_term`
+(`_reaction` at `_reaction_conditions`), fed by `Plant._unit_inputs_and_signals`
+(the RHS's own assembly), so the balance integrates what the unit integrated.
 A unit needing extra parameter handling overrides `_reaction` (the digester
 slaves `V_liq`). A unit whose temperature an operator sets inherits
 `AdjustableTemperatureUnit`; the heated digester does not, so

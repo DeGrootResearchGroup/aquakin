@@ -322,6 +322,11 @@ def dgsm(
         results (one per output, in order, each carrying its ``output_name``)
         when ``fn`` is vector-valued.
 
+    See Also
+    --------
+    aquakin.sobol_indices : the first-order and total Sobol indices themselves,
+        with confidence intervals, at ``N (d + 2)`` forward evaluations.
+
     Examples
     --------
     >>> def fn(z):                       # output sensitive to z0, not z1

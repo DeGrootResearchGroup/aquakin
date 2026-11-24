@@ -58,6 +58,13 @@ conditions:
       ozone_bromate model so workflows can compose.
     default: 5.0e4
 
+# Evaluate the rates with negative concentrations treated as zero. A stiff solve
+# can step a nearly depleted species slightly below zero, where a Monod or ratio
+# term would run its reaction backwards. The raw state still drives transport
+# and the outputs, so this is identity wherever every concentration is
+# non-negative.
+clip_negative_states: true
+
 reactions:
   - name: H2O2_photolysis
     description: "H2O2 + hv -> 2 OH (254 nm UV photolysis)."

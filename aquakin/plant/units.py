@@ -104,6 +104,12 @@ class Unit(Protocol):
       events (an SBR's fill/react/settle/decant boundaries).
     - :class:`TemperatureSettable` (``set_temperature``) -- its operating
       temperature can be set by :meth:`Plant.set_temperature`.
+    - :class:`ReactionBalanceUnit` (``reaction_term`` / ``reaction_volumes`` /
+      ``reaction_gas_components``) -- has a reaction term the mass balance
+      integrates for the gas its reactions export.
+    - :class:`OxygenTransferUnit` (``oxygen_transfer`` / ``required_signals``)
+      -- has an aeration term the mass balance integrates for the oxygen it
+      transfers and the gases it co-strips.
     - :class:`AssumedUnits` (``assumed_units``) -- declares the concentration
       basis its internal constants assume for some species, checked by
       :meth:`Plant.check_units`.
@@ -255,6 +261,73 @@ class TemperatureSettable(Protocol):
     one call (a heated fixed-``T`` unit like the digester does not implement it)."""
 
     def set_temperature(self, temperature_K: float) -> None: ...
+
+
+@runtime_checkable
+class ReactionBalanceUnit(Protocol):
+    """A unit whose reaction term the results-level mass balance integrates (the
+    kinetic units: CSTR, MBR, SBR, IFAS/MBBR tank, ADM1 digester).
+
+    A component the unit's reactions do not conserve (nitrate reduced to N₂,
+    organics leaving as biogas) left the plant as gas, so the balance integrates
+    ``Σ_species reaction_term · content · reaction_volumes`` over the saved
+    trajectory and counts the loss of each component in
+    ``reaction_gas_components`` as gas.
+
+    - ``reaction_gas_components``: the components (``"COD"``, ``"N"``) the
+      unit's reactions can export to a gas phase or an untracked electron
+      acceptor. A component left out (the digester's N: it has no nitrogen gas
+      phase) is not counted as gas, so a reaction that fails to conserve it
+      surfaces as an imbalance.
+    - ``reaction_term(state, inputs, params, signals)``: the reaction ``dC/dt``
+      over the model's species that the unit's ``rhs`` adds, at the conditions
+      that ``rhs`` used, given the unit's state, the inputs and signals the plant
+      hands it, and its parameter vector.
+    - ``reaction_volumes(state, params)``: the volume each species' reaction
+      term acts in, shape ``(n_species,)``, at that state (a variable-volume
+      unit reads its volume from the state).
+    """
+
+    reaction_gas_components: frozenset
+
+    def reaction_term(
+        self,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+        signals: dict | None,
+    ) -> jnp.ndarray: ...
+
+    def reaction_volumes(self, state: jnp.ndarray, params: jnp.ndarray): ...
+
+
+@runtime_checkable
+class OxygenTransferUnit(Protocol):
+    """A unit with an aeration (gas-transfer) term the mass balance integrates:
+    the oxygen it transfers into the liquid is COD removed from the plant, and a
+    co-stripped gas carries its content out.
+
+    - ``required_signals``: the control signals ``oxygen_transfer`` reads (the
+      closed-loop kLa).
+    - ``oxygen_transfer(t, state, inputs, params, signals)``: ``(oxygen,
+      stripped)``, each a per-species transfer rate per unit volume, shape
+      ``(n_species,)``: the aeration term the unit's ``rhs`` adds, on the
+      aerated oxygen species only, and on the co-stripped gases only (zero when
+      there are none). It is given what ``rhs`` is given, so it applies the same
+      temperature correction and conditions; ``t`` is the plant time, which a
+      time-phased unit (the SBR) reads to pick the active phase.
+    """
+
+    required_signals: tuple
+
+    def oxygen_transfer(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+        signals: dict | None,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]: ...
 
 
 class StatelessUnit(CouplingAware):

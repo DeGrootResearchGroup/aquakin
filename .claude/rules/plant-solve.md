@@ -76,6 +76,26 @@ docstrings of `aquakin/plant/colored.py`, `aquakin/plant/solve_cache.py` and
   connection or an influent calls it, and every new structure-derived memo is
   cleared in it (not by each mutator), so an edited plant solves as if it had
   been built that way.
+- **Plants built from one spec share their `"jit"` and `"steady_jit"`
+  programs** through a bounded process-wide store (`SolveCache.share_as`, set
+  by `plant_from_spec` to the plant class and `_built_fingerprint`: the spec
+  fingerprint with the models and tables digested *as loaded*). Read and write
+  those two stores with `SolveCache.get` / `put`, never the dicts, or the
+  sharing is skipped. Equal identity must mean an identical program, so
+  anything a from-spec plant compiles in must be in the spec fingerprint or in
+  the settings key. Every change to a plant must go through `invalidate()`
+  (which ends sharing and withdraws what the plant published: a published
+  program closes over its plant, and a retrace reads that plant's new state);
+  `invalidate(keep_shared=True)` is only for work every plant of the identity
+  does identically before compiling (the time-unit resolution). Keys that name
+  an object by `id` pass it to `put` as `keep_alive`. The continuation and
+  arclength kernels close over the call's `rhs`, so they are not shared.
+- **A key holds the value of every array a program closes over.** The
+  continuation and arclength kernels bake in `scale_floor` and the known
+  point's `scale`, so their keys carry those values (`atol_cache_key`); a key
+  without them reuses another call's scale. A diffrax adjoint is keyed by its
+  type and settings (`_adjoint_key` in `integrate/_cache.py`), not its `id`:
+  `reactor_adjoint()` builds a new one per call, and an `id` key never hits.
 
 ## Arclength continuation must not jump branches
 

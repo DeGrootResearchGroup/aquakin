@@ -68,6 +68,7 @@ from aquakin.integrate.seam import (
     _is_multi_dataset,
     _is_sigma_estimate,
     _n_obs_per_output,
+    _observation_record,
     _observation_unit_factors,
     _observed_counts,
     _resolve_ic_coords,
@@ -543,6 +544,7 @@ def _resolve_plant_problem(
 
     datasets = []
     digest_parts: list = []  # what the loss / residual closures bake in
+    obs_parts: list = []  # the observations and their times, for the criteria
     obs_seen = []  # each dataset's observations, for the data mean square
     n_seen_per_output = np.zeros(n_observed, dtype=int)  # observed (non-NaN) entries
     for ds in range(n_datasets):
@@ -575,6 +577,7 @@ def _resolve_plant_problem(
         tspan_i = (float(span_i[0]), float(span_i[1]))
         sig_i = _coerce_sigma(sigma_list[ds])
         digest_parts += [obs_i, sig_i, tobs_i]
+        obs_parts += [obs_i, tobs_i]
         if multi:
             C0_i = y0_list[ds]
         elif m_ic:
@@ -641,6 +644,7 @@ def _resolve_plant_problem(
             ns, free_params, resolved_transforms, bounds, use_model_bounds
         ),
         data_mean_square=_data_mean_square(loss, obs_seen),
+        **_observation_record(loss, n_seen_per_output, obs_parts),
     )
     return problem, resolved_observables, use_c0_as_y0
 

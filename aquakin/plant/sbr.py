@@ -52,13 +52,13 @@ class SBRPhase:
         Phase label (e.g. ``"fill"``, ``"react"``, ``"settle"``, ``"decant"``,
         ``"idle"``), used in the event log.
     duration : float
-        Phase length in the plant's time unit.
+        Phase length (d), on the plant's clock.
     feed : bool
         Draw feed in at the unit's ``feed_flow`` during this phase (fill).
     decant : bool
         Draw clarified effluent out at ``decant_flow`` during this phase (decant).
     kla : float
-        Oxygen mass-transfer coefficient applied during this phase (aerobic
+        Oxygen mass-transfer coefficient (1/d) applied during this phase (aerobic
         react). 0 (default) = no aeration (anoxic / settle / fill).
     settle : bool
         Let the contents settle this phase (the settling model's clarity grows).
@@ -319,6 +319,73 @@ class SBRUnit(AdjustableTemperatureUnit, CouplingAware):
         (see the class docstring)."""
         return self._condition_arrays
 
+    def _aeration(self, idx: jnp.ndarray, C: jnp.ndarray) -> jnp.ndarray:
+        """The aeration term ``kLa*(do_sat - C)`` on the oxygen species, at the
+        ``kLa`` of phase ``idx`` (zero in an unaerated phase)."""
+        return self._kla[idx] * self._o2_mask * (self.do_sat - C)
+
+    # ----- the mass balance's transfer and volume contracts --------------
+    @property
+    def required_signals(self) -> tuple[str, ...]:
+        """No control signals: the SBR's aeration follows its phase schedule."""
+        return ()
+
+    def oxygen_transfer(
+        self,
+        t,
+        state: jnp.ndarray,
+        inputs: dict,
+        params: jnp.ndarray,
+        signals: dict | None,
+    ):
+        """The aeration transfer the mass balance integrates
+        (:class:`~aquakin.plant.units.OxygenTransferUnit`): the same term
+        :meth:`rhs` adds, at the phase :meth:`rhs` is in at ``t``.
+
+        Parameters
+        ----------
+        t : float or jnp.ndarray
+            Plant time, which selects the active phase.
+        state : jnp.ndarray
+            The unit's state ``[C, V, <settling state>]``.
+        inputs : dict[str, Stream]
+            The unit's input streams (unused).
+        params : jnp.ndarray
+            The unit's parameter vector (unused).
+        signals : dict or None
+            The control-signal bus (unused).
+
+        Returns
+        -------
+        oxygen, stripped : jnp.ndarray
+            Per-species transfer rate per unit volume, shape ``(n_species,)``:
+            the aeration term on the oxygen species, and zeros, since the SBR
+            co-strips no other gas.
+        """
+        C = self._split(state)[0]
+        idx = self._phase_index(jnp.asarray(t))
+        return self._aeration(idx, C), jnp.zeros_like(C)
+
+    def reaction_volumes(self, state: jnp.ndarray, params: jnp.ndarray):
+        """The volume each species' reaction term acts in: the current liquid
+        volume ``V`` from the state, for every species.
+
+        Parameters
+        ----------
+        state : jnp.ndarray
+            The unit's state ``[C, V, <settling state>]``.
+        params : jnp.ndarray
+            The unit's parameter vector (unused).
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``(n_species,)`` (m³).
+        """
+        import numpy as np
+
+        return np.full(self.model.n_species, float(self.liquid_volume(state)))
+
     def rhs(
         self,
         t: jnp.ndarray,
@@ -331,7 +398,6 @@ class SBRUnit(AdjustableTemperatureUnit, CouplingAware):
         idx = self._phase_index(t)
         q_in = self._feed[idx] * self.feed_flow
         q_out = self._decant[idx] * self.decant_flow
-        kla = self._kla[idx]
         settle_on = self._settle[idx]
         mix_on = self._mixed[idx]
 
@@ -347,7 +413,7 @@ class SBRUnit(AdjustableTemperatureUnit, CouplingAware):
 
         chemistry = self._reaction(C, params, self._reaction_conditions(inputs, signals))
 
-        aeration = kla * self._o2_mask * (self.do_sat - C)
+        aeration = self._aeration(idx, C)
 
         dC = convection + chemistry + aeration
         dV = jnp.reshape(q_in - q_out, (1,))

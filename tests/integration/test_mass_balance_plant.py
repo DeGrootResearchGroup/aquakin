@@ -186,6 +186,81 @@ def test_stateful_units_own_their_component_inventory():
     assert all(vol[i] == pytest.approx(3400.0) for i in liquid_states)
 
 
+def _digester(adm1):
+    from aquakin.plant.digester import ADM1DigesterUnit
+
+    return ADM1DigesterUnit(name="digester", model=adm1, volume=3400.0,
+                            conditions={"T": 308.15}, input_port_names=["feed"])
+
+
+def test_digester_reacts_for_the_balance_with_cod_gas_only():
+    """The digester declares ReactionBalanceUnit (not OxygenTransferUnit) with
+    COD as its only gas component, and its reaction volumes put the three gas
+    states at ``V_gas`` and the liquid states at the liquid volume."""
+    from aquakin.plant.units import OxygenTransferUnit, ReactionBalanceUnit
+
+    adm1 = aquakin.load_model("adm1")
+    dig = _digester(adm1)
+    assert isinstance(dig, ReactionBalanceUnit)
+    assert not isinstance(dig, OxygenTransferUnit)
+    assert dig.reaction_gas_components == frozenset({"COD"})
+    params = adm1.default_parameters()
+    vols = dig.reaction_volumes(dig.initial_state(), params)
+    v_gas = float(params[adm1.param_index["V_gas"]])
+    for sp in ("S_gas_h2", "S_gas_ch4", "S_gas_co2"):
+        assert vols[adm1.species_index[sp]] == v_gas
+    assert vols[adm1.species_index["S_su"]] == 3400.0
+
+
+@pytest.mark.slow  # the ADM1 compile and the 21-row balance take ~20 s
+def test_digester_exports_biogas_cod_and_no_nitrogen_gas():
+    """In the mass balance the digester's reaction-integral COD export equals
+    the biogas COD computed independently from the headspace
+    (``digester_gas``), and its N gas is exactly zero."""
+    adm1 = aquakin.load_model("adm1")
+    dig = _digester(adm1)
+    p = Plant("dig", time_unit="d")
+    p.add_unit(dig)
+    p.add_influent("feed", adm1.influent(Q=170.0), to="digester.feed")
+    sol = p.solve(t_span=(0.0, 0.5), t_eval=np.linspace(0.0, 0.5, 21))
+    mb = p.mass_balance(sol)
+    assert mb["N"].gas == 0.0
+    assert mb.gas_detail["aeration_O2"] == 0.0
+    # Two routes to the same export: they differ only by the trapezoid sampling.
+    assert mb.gas_detail["reaction_COD"] == pytest.approx(
+        mb.gas_detail["biogas_COD"], rel=1e-4
+    )
+
+
+def test_unit_capabilities_for_the_gas_term():
+    """Every kinetic unit declares ReactionBalanceUnit and every aerating one
+    OxygenTransferUnit (the SBR included); a non-reactive unit declares neither,
+    so the balance needs no attribute probe."""
+    from aquakin.plant import IFASUnit, InterfaceSettling, MBRUnit, SBRPhase, SBRUnit
+    from aquakin.plant.mixer import MixerUnit
+    from aquakin.plant.units import OxygenTransferUnit, ReactionBalanceUnit
+
+    asm1 = aquakin.load_model("asm1")
+    T = {"T": 293.15}
+    units = [
+        CSTRUnit("c", asm1, volume=100.0, input_port_names=["in"], conditions=T),
+        MBRUnit("m", asm1, volume=100.0, conditions=T),
+        IFASUnit(name="i", model=asm1, volume=100.0, input_port_names=["in"],
+                 specific_surface_area=500.0, fill_fraction=0.4,
+                 biofilm_thickness=5e-4, n_layers=2, conditions=T),
+        SBRUnit("s", asm1, [SBRPhase("react", 1.0, kla=10.0)], full_volume=100.0,
+                feed_flow=0.0, decant_flow=0.0,
+                settling=InterfaceSettling(v_settle=1.0, area=1.0), conditions=T),
+    ]
+    for u in units:
+        assert isinstance(u, ReactionBalanceUnit), u.name
+        assert isinstance(u, OxygenTransferUnit), u.name
+        assert u.reaction_gas_components == frozenset({"COD", "N"})
+    mixer = MixerUnit("x", ["a", "b"], asm1)
+    assert not isinstance(mixer, ReactionBalanceUnit)
+    assert not isinstance(mixer, OxygenTransferUnit)
+
+
 def test_mass_balance_default_ports_are_influents_and_dangling_outputs():
     net = aquakin.load_model("asm1")
     plant = _aerated_cstr_plant(net)

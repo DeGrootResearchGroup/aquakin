@@ -46,8 +46,9 @@ from aquakin.plant.ifas import IFASUnit
 from aquakin.plant.mbr import MBRUnit
 from aquakin.plant.mixer import MixerUnit, RatioSplitter, SetpointSplitter, ThresholdSplitter
 from aquakin.plant.primary_clarifier import PrimaryClarifier
-from aquakin.plant.sbr import SBRUnit
+from aquakin.plant.sbr import SBRPhase, SBRUnit
 from aquakin.plant.separators import IdealThickener
+from aquakin.plant.settling import InterfaceSettling, LayeredSettling
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.takacs import TakacsClarifier
 
@@ -96,6 +97,14 @@ SETTING_TYPES = {
     "port_map": "a mapping of port name to a number (one port per key)",
     "number_map": "a mapping of name to a number (e.g. settling parameters)",
     "reagent": "a dosed reagent: ``{model, label, composition}``",
+    "records": (
+        "a list of mappings, each the arguments of one record (an SBR's phases: "
+        "``{name, duration, feed, ...}``); its ``fields`` describe them"
+    ),
+    "tagged": (
+        "a mapping naming a ``kind`` and its arguments (an SBR's settling model: "
+        "``{kind: interface, v_settle, area}``); its ``fields`` describe each kind's"
+    ),
     "unsupported": "a value that can only be given from Python for now",
 }
 
@@ -166,6 +175,9 @@ class Setting:
         The argument's description from the unit's docstring.
     python_type : str
         The constructor's annotation, as written.
+    fields : list or dict, optional
+        What a ``records`` setting's records hold (a list of settings, as plain
+        data), or for a ``tagged`` setting, that list for each kind.
     """
 
     name: str
@@ -175,6 +187,7 @@ class Setting:
     optional: bool = False
     help: str = ""
     python_type: str = ""
+    fields: Any = None
 
     def to_json(self) -> dict:
         """The setting as plain data."""
@@ -307,10 +320,25 @@ def _plain_records(value) -> Any:
     return _plain(value)
 
 
+#: Settings that hold a list of records: the annotation, the class of a record.
+_RECORDS = {"Sequence[SBRPhase]": SBRPhase}
+#: Settings that pick a class by ``kind``: the annotation, the classes by kind.
+_TAGGED = {"SettlingModel": {"interface": InterfaceSettling, "layered": LayeredSettling}}
+
+
+def _base(annotation: str) -> str:
+    """An annotation without its ``None`` alternative."""
+    return annotation.replace("| None", "").replace("None |", "").strip()
+
+
 def _setting_type(name: str, annotation: str) -> tuple[str, bool]:
     """The front-end type of a constructor argument, and whether ``None`` is accepted."""
     optional = "None" in annotation
-    base = annotation.replace("| None", "").replace("None |", "").strip()
+    base = _base(annotation)
+    if base in _RECORDS:
+        return "records", optional
+    if base in _TAGGED:
+        return "tagged", optional
     if base == "CompiledModel":
         return "model", optional
     if name == "conditions":
@@ -379,9 +407,210 @@ def _settings_of(cls, skip: tuple[str, ...] = ("name",)) -> tuple[Setting, ...]:
                 optional=optional,
                 help=help_text,
                 python_type=annotation,
+                fields=_fields(kind, annotation),
             )
         )
     return tuple(out)
+
+
+def _private(cls) -> tuple[str, ...]:
+    """The constructor arguments of ``cls`` that are not settings (``_``-named)."""
+    return tuple(n for n in inspect.signature(cls).parameters if n.startswith("_"))
+
+
+def _record_fields(cls) -> list[dict]:
+    return [f.to_json() for f in _settings_of(cls, skip=_private(cls))]
+
+
+def _fields(kind: str, annotation: str):
+    """The ``fields`` of a ``records`` or ``tagged`` setting, else ``None``."""
+    if kind == "records":
+        return _record_fields(_RECORDS[_base(annotation)])
+    if kind == "tagged":
+        return {k: _record_fields(c) for k, c in _TAGGED[_base(annotation)].items()}
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Settings that are the constructor arguments of a class, picked by kind
+# ---------------------------------------------------------------------------
+
+
+def same_kind(default, value) -> bool:
+    """Whether ``value`` has the type of a setting whose default is ``default``:
+    true/false, a whole number, a finite number, or text."""
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(default, float):
+        return (
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        )
+    if isinstance(default, str):
+        return isinstance(value, str)
+    return isinstance(value, (bool, int, float, str))
+
+
+def record_settings(value: dict, cls: type, what: str, owner: str, skip=()) -> dict:
+    """``value``, a mapping of ``cls``'s constructor arguments, with every one
+    filled in from its default and checked by type.
+
+    Parameters
+    ----------
+    value : dict
+        Argument name to plain value.
+    cls : type
+        The class whose constructor the arguments are for.
+    what : str
+        The setting, as messages name it (``"translator"``).
+    owner : str
+        What holds the arguments, as messages name it (``"translator asm1_to_adm1"``).
+    skip : tuple of str, optional
+        Constructor arguments that are not settings (given by the caller).
+
+    Returns
+    -------
+    dict
+        Every argument but those skipped, a float argument as a float.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` names an argument ``cls`` does not take, holds a value of
+        the wrong type, or leaves out an argument that has no default.
+    """
+    from aquakin.core.hints import did_you_mean
+
+    params = {k: p for k, p in inspect.signature(cls).parameters.items() if k not in skip}
+    full = {key: p.default for key, p in params.items()}
+    for key, v in value.items():
+        if key not in params:
+            hint = did_you_mean(str(key), list(params))
+            raise ValueError(f"'{key}' is not a setting of {owner}.{hint}")
+        example = _example(params[key])
+        if v is None and (params[key].default is None or "None" in str(params[key].annotation)):
+            full[key] = None
+            continue
+        if not same_kind(example, v):
+            raise ValueError(f"{what} setting '{key}' has the wrong type ({v!r})")
+        full[key] = float(v) if isinstance(example, float) else v
+    for key, v in full.items():
+        if v is inspect.Parameter.empty:
+            raise ValueError(f"{what} setting '{key}' is required")
+    return full
+
+
+#: A value of each plain annotation, to check a setting with no default against.
+_EXAMPLES = {"bool": False, "int": 0, "float": 0.0, "str": ""}
+
+
+def _example(p: inspect.Parameter):
+    """A value of the type argument ``p`` takes: its default, or else one of
+    its annotation (``None`` when that is not a plain type: any plain value)."""
+    if p.default is not inspect.Parameter.empty and p.default is not None:
+        return p.default
+    annotation = p.annotation if isinstance(p.annotation, str) else p.annotation.__name__
+    return _EXAMPLES.get(_base(annotation))
+
+
+def kind_settings(value: dict, classes: dict, what: str, skip=()) -> tuple[type, dict]:
+    """The class ``value``'s ``kind`` names among ``classes``, and ``value`` with
+    every argument of that class filled in and checked (:func:`record_settings`).
+
+    Raises
+    ------
+    ValueError
+        If the kind is not one of ``classes``, or an argument is unknown or of
+        the wrong type.
+    """
+    value = dict(value)
+    kind = value.pop("kind", None)
+    if kind not in classes:
+        raise ValueError(f"{what} kind {kind!r} is not one of {sorted(classes)}")
+    full = record_settings(value, classes[kind], what, f"{what} {kind}", skip)
+    return classes[kind], {"kind": kind, **full}
+
+
+def record_plain(obj, what: str, skip=()) -> dict:
+    """The constructor arguments of ``obj`` (but ``skip``) as plain data.
+
+    Raises
+    ------
+    ValueError
+        If an argument has no plain form.
+    """
+    out: dict[str, Any] = {}
+    for name in inspect.signature(type(obj)).parameters:
+        if name in skip:
+            continue
+        raw = getattr(obj, name)
+        value = _plain(raw)
+        if value is None and raw is not None:
+            raise ValueError(f"{what} setting '{name}' has no plain form")
+        out[name] = value
+    return out
+
+
+def _entry(name: str, i: int, item) -> str:
+    """Entry ``i`` of records setting ``name`` as messages name it, with its own
+    name when it has one: ``'phases' entry 2 (react)``."""
+    own = item.get("name") if isinstance(item, dict) else None
+    return f"'{name}' entry {i + 1}" + (f" ({own})" if isinstance(own, str) else "")
+
+
+def filled_value(s: Setting, value):
+    """The value of a ``records`` or ``tagged`` setting with every argument of
+    each record filled in from its default and checked by name and type.
+
+    Parameters
+    ----------
+    s : Setting
+        A setting of type ``records`` or ``tagged``.
+    value : list or dict
+        Its plain value: a list of mappings, or a mapping with a ``kind``.
+
+    Returns
+    -------
+    list of dict or dict
+        The records, or ``{kind, ...arguments}``.
+
+    Raises
+    ------
+    ValueError
+        If the value has the wrong shape, names an unknown kind or argument
+        (with the entry it is in), or holds a value of the wrong type.
+    """
+    if s.type == "records":
+        cls = _RECORDS[_base(s.python_type)]
+        if not isinstance(value, list):
+            raise ValueError(f"'{s.name}' must be a list, got {type(value).__name__}")
+        out = []
+        for i, item in enumerate(value):
+            entry = _entry(s.name, i, item)
+            if not isinstance(item, dict):
+                raise ValueError(f"{entry} must be a mapping, got {type(item).__name__}")
+            out.append(record_settings(item, cls, entry, entry, _private(cls)))
+        return out
+    classes = _TAGGED[_base(s.python_type)]
+    if not isinstance(value, dict):
+        raise ValueError(f"'{s.name}' must be a mapping, got {type(value).__name__}")
+    skip = tuple(n for c in classes.values() for n in _private(c))
+    return kind_settings(value, classes, f"'{s.name}'", skip)[1]
+
+
+def kind_plain(obj, classes: dict, what: str, skip=()) -> dict:
+    """``obj`` as ``{kind, ...arguments}``, its kind found in ``classes``.
+
+    Raises
+    ------
+    ValueError
+        If ``obj``'s class is none of ``classes``, or an argument has no plain form.
+    """
+    for kind, cls in classes.items():
+        if type(obj) is cls:
+            return {"kind": kind, **record_plain(obj, what, skip)}
+    raise ValueError(f"{what} {type(obj).__name__} cannot be written in a spec")
 
 
 def _port_rules(settings: tuple[Setting, ...], fixed: tuple[PortRule, ...]) -> tuple[PortRule, ...]:
@@ -803,6 +1032,9 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
             ok = isinstance(value, dict)
             if ok:
                 _check_aeration(name, value)
+        elif t in ("records", "tagged"):
+            filled_value(s, value)
+            ok = True
         elif t == "reagent":
             ok = (
                 isinstance(value, dict)
@@ -916,6 +1148,12 @@ def _arguments(kind: UnitKind, settings: dict, models: dict | None = None) -> di
             args[s.name] = list(value) if s.type == "port_names" else tuple(value)
         elif s.type in ("port_map", "conditions", "species_values", "number_map"):
             args[s.name] = {k: float(_number(v)) for k, v in value.items()}
+        elif s.type == "records":
+            cls = _RECORDS[_base(s.python_type)]
+            args[s.name] = tuple(cls(**r) for r in filled_value(s, value))
+        elif s.type == "tagged":
+            full = dict(filled_value(s, value))
+            args[s.name] = _TAGGED[_base(s.python_type)][full.pop("kind")](**full)
         elif s.type == "reagent":
             from aquakin.plant.dosing import Reagent
 
@@ -1053,6 +1291,15 @@ def _setting_value(s: Setting, value, *, model_ref=None, full=False):
                     continue
             out[f.name] = v
         return out
+    if s.type == "records":
+        return [
+            record_plain(r, f"'{s.name}' entry {i + 1}", _private(type(r)))
+            for i, r in enumerate(value)
+        ]
+    if s.type == "tagged":
+        return kind_plain(
+            value, _TAGGED[_base(s.python_type)], f"'{s.name}'", _private(type(value))
+        )
     if s.type == "reagent":
         return {
             "model": model_ref(value.model),

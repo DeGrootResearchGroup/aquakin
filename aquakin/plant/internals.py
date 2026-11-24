@@ -99,11 +99,11 @@ SHARED_INTERNALS: dict[str, frozenset[str]] = {
             "_build_state_layout",
             "_coerce_params",
             "_colored",
-            "_jit_cache",
             "_operating_design",
             "_parse_operating",
             "_recycle",
             "_rhs",
+            "_solve_cache",
             "_split_state",
         }
     ),
@@ -120,7 +120,8 @@ SHARED_INTERNALS: dict[str, frozenset[str]] = {
             "_solve_cache",
         }
     ),
-    "plant/spec.py": frozenset({"_insertion_order"}),
+    # A plant built from a spec shares its compiled solves under its fingerprint.
+    "plant/spec.py": frozenset({"_insertion_order", "_solve_cache"}),
     "plant/temperature.py": frozenset({"_temperature_units", "_temperature_volumes"}),
     "study/study.py": frozenset({"_parse_endpoint"}),
 }

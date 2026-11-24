@@ -59,6 +59,13 @@ from aquakin.integrate.calibrate import (
     calibrate,
 )
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.calibration.criteria import (
+    ModelComparison,
+    aic,
+    aicc,
+    bic,
+    compare_models,
+)
 from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
 from aquakin.integrate.experiment_design import (
     CandidateScore,
@@ -107,6 +114,12 @@ from aquakin.integrate.global_sensitivity import DGSMResult, dgsm
 from aquakin.integrate.events import Event, EventedResult, solve_with_events
 from aquakin.integrate.design import Constraint, OptimizeResult, optimize_design
 from aquakin.integrate.monte_carlo import MonteCarloResult, monte_carlo
+from aquakin.integrate.variance_sensitivity import (
+    BootstrapConfig,
+    SobolResult,
+    sobol_indices,
+    sobol_indices_cost,
+)
 from aquakin.integrate.scenarios import (
     KPIComparison,
     ScenarioComparison,
@@ -230,6 +243,7 @@ __all__ = [
     "BatchSolution",
     "BiofilmReactor",
     "BiofilmSolution",
+    "BootstrapConfig",
     "CFDReactor",
     "CSTRUnit",
     "CalibrationResult",
@@ -263,6 +277,7 @@ __all__ = [
     "LaplaceConfig",
     "MassBalance",
     "MixerUnit",
+    "ModelComparison",
     "MonteCarloResult",
     "NoDigesterError",
     "OperatingConditions",
@@ -286,6 +301,7 @@ __all__ = [
     "SensitivityResult",
     "SetpointSplitter",
     "SludgeMetrics",
+    "SobolResult",
     "SpatialConditions",
     "SpeciationUnitsWarning",
     "StateTranslator",
@@ -303,6 +319,9 @@ __all__ = [
     "UnknownUnitError",
     "WiringError",
     "aeration_energy",
+    "aic",
+    "aicc",
+    "bic",
     "blower_airflow_total",
     "blower_energy",
     "blower_power_kw",
@@ -317,6 +336,7 @@ __all__ = [
     "check_nitrogen",
     "clear_model_cache",
     "co2e_from_energy",
+    "compare_models",
     "compare_scenarios",
     "compile_model",
     "composition_table",
@@ -373,6 +393,8 @@ __all__ = [
     "sensitivity",
     "size_activated_sludge",
     "sludge_metrics",
+    "sobol_indices",
+    "sobol_indices_cost",
     "solve_with_events",
     "stripped_n2o",
     "t10_from_baffling",

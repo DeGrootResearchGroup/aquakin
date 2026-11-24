@@ -782,11 +782,32 @@ A time-varying influent is kept as a table file beside the flowsheet (columns
 `to_spec(path)` writes it to `data/<influent>.csv` unless it was already read
 from a table inside the flowsheet's folder.
 
-Reading a file checks it strictly: a misspelled setting, a value of the wrong
-type or a model that is not listed is an error that names where it is. Anything
-a file cannot express yet (array-valued settings such as initial
-concentrations, SBR phases, a heat-balance temperature model) raises a
-`SpecError` that names it rather than being left out.
+An SBR's phases are a list with one mapping per phase, in `SBRPhase`'s own
+field names, and its settling model a mapping that names its `kind`
+(`interface` for `InterfaceSettling`, `layered` for `LayeredSettling`) and that
+model's arguments. A field left out takes its default (`mixed: null` lets the
+phase decide from `feed` and `kla`), and `to_spec` writes every field:
+
+```yaml
+  sbr:
+    kind: sbr
+    model: asm1
+    phases:
+      - {name: fill, duration: 0.1, feed: true}
+      - {name: react, duration: 0.3, kla: 240.0}
+      - {name: settle, duration: 0.1, settle: true}
+      - {name: decant, duration: 0.1, decant: true}
+    settling: {kind: interface, v_settle: 400.0, area: 200.0}
+    full_volume: 1000.0
+    feed_flow: 5000.0
+    decant_flow: 5000.0
+```
+
+Reading a file checks it strictly: a misspelled setting (a phase's too, named by
+its entry), a value of the wrong type or a model that is not listed is an error
+that names where it is. Anything a file cannot express yet (array-valued
+settings such as initial concentrations, a heat-balance temperature model)
+raises a `SpecError` that names it rather than being left out.
 
 `aquakin.plant.spec_fingerprint(spec)` gives a fingerprint of the plant a file
 builds: its settings, wiring and the content of its models and influent tables,
@@ -889,6 +910,11 @@ you edit and lists any errors.
   selected units and wires (Backspace does not).
 - Edits typed into a unit's form are applied when you select another unit, and
   a value that cannot be read is named under its field.
+- A chemical dosing unit's reagent is set in its form: choose the model it is
+  written in first, then add each species it contains with its concentration.
+- A sequencing batch reactor's phases are a table in its form: add a phase,
+  move it up or down, or remove it. Its settling model is a choice of kind,
+  after which that model's arguments appear.
 
 **Simulate** saves the flowsheet, creates a study called `simulation` the first
 time (`simulation_<file name>` for a file not named `flowsheet.yaml`, so each

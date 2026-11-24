@@ -22,7 +22,7 @@ import diffrax
 import jax
 import jax.numpy as jnp
 
-from aquakin.integrate._common import IntegratorConfig, friendly_solve_errors
+from aquakin.integrate._common import IntegratorConfig, atol_cache_key, friendly_solve_errors
 from aquakin.integrate.seam import _run_diffeqsolve
 from aquakin.plant.results import (
     SteadyStateResult,
@@ -342,7 +342,8 @@ def _steady_continuation_fallback(
     ``None`` if continuation is not configured or did not reach the target (a
     fold the natural-parameter path cannot turn, left to the forward backstop /
     a future pseudo-arclength layer). The jitted kernels are cached per
-    settings, so a screen over many targets from one known point compiles once.
+    settings and ``scale_floor`` values, so a screen over many targets from one
+    known point compiles once.
     """
     if continuation_from is None:
         return None
@@ -351,6 +352,7 @@ def _steady_continuation_fallback(
     pk, yk = continuation_from
     pk = self._coerce_params(pk)
     yk = jnp.asarray(yk)
+    # The kernels close over ``scale_floor``, so its values are in the key.
     ckey = (
         float(dt0),
         float(dt_max),
@@ -359,6 +361,7 @@ def _steady_continuation_fallback(
         float(tol),
         bool(nonneg),
         float(influent_time),
+        atol_cache_key(scale_floor),
     )
     cache = self._solve_cache.continuation_kernels
     kernels = cache.get(ckey)
@@ -409,8 +412,10 @@ def _steady_arclength_fallback(
     ``operating_point_exists=True``), a past-fold result (``method="past_fold"``,
     ``operating_point_exists=False`` -- a screen should *exclude* it), or
     ``None`` if inconclusive (the caller falls through to the forward backstop).
-    Kernels are cached per settings (the ``rhs`` and the known-solution-derived
-    scale are fixed across a sweep from one known point).
+    Kernels are cached per settings and per value of the scales they close
+    over (the known-solution-derived ``scale`` and ``scale_floor``), so a sweep
+    from one known point compiles once and a different known point compiles
+    its own.
     """
     if continuation_from is None:
         return None
@@ -421,7 +426,15 @@ def _steady_arclength_fallback(
     yk = jnp.asarray(yk)
     scale = jnp.maximum(jnp.abs(yk), 1e-3)
     ptc_kw = dict(scale_floor=jnp.asarray(scale_floor), tol=tol, nonneg=nonneg)
-    ckey = (float(tol), bool(nonneg), float(influent_time))
+    # The kernels close over ``scale`` (from the known point) and
+    # ``scale_floor``, so their values are in the key.
+    ckey = (
+        float(tol),
+        bool(nonneg),
+        float(influent_time),
+        atol_cache_key(scale),
+        atol_cache_key(scale_floor),
+    )
     cache = self._solve_cache.arclength_kernels
     kernels = cache.get(ckey)
     if kernels is None:
@@ -941,7 +954,7 @@ def steady_state(
             bool(nonneg),
             float(influent_time),
         )
-        jitted = self._steady_jit_cache.get(key)
+        jitted = self._solve_cache.get("steady_jit", key)
         if jitted is None:
 
             def _fwd(y0_, params_, scale_floor_):
@@ -959,7 +972,7 @@ def steady_state(
                 )
 
             jitted = jax.jit(_fwd)
-            self._steady_jit_cache[key] = jitted
+            self._solve_cache.put("steady_jit", key, jitted)
         y_star, residual_a, iters_a, conv_a = jitted(y0, params, jnp.asarray(scale_floor))
         return finish(y_star, bool(conv_a), int(iters_a), float(residual_a))
 

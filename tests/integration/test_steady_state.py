@@ -625,6 +625,58 @@ def test_plant_steady_state_arclength_rung_reaches_closed_form(make_cstr_plant):
     assert len(plant._solve_cache.arclength_kernels) == 1
 
 
+def _second_fallback(make_cstr_plant, first, second, **extra):
+    """Run a continuation fallback with the ``first`` overrides, then one with
+    ``second`` on the same plant, and the ``second`` on a fresh plant. Each
+    override dict may set ``known`` (the factor on ``k`` at the known point)
+    and ``scale_floor``. Returns the shared plant, both second results and the
+    target's closed form."""
+
+    def run(plant, known=1.0, scale_floor=1.0):
+        p_known, p_target, _, kw = _cstr_continuation_case(plant)
+        p_known = p_known.at[0].multiply(known)
+        y_known = jnp.asarray(_cstr_steady(float(p_known[0])))
+        kw["scale_floor"] = scale_floor
+        return plant.steady_state(p_target, continuation_from=(p_known, y_known), **extra, **kw)
+
+    plant = make_cstr_plant()
+    run(plant, **first)
+    shared = run(plant, **second)
+    fresh = run(make_cstr_plant(), **second)
+    p_target = plant.default_parameters().at[0].multiply(4.0)
+    return plant, shared, fresh, _cstr_steady(float(p_target[0]))
+
+
+def test_continuation_kernels_are_not_reused_for_another_scale_floor(make_cstr_plant):
+    # The continuation kernels close over the PTC ``scale_floor``: a second
+    # fallback on the same plant with another floor compiles its own and gives
+    # a fresh plant's result bit for bit, not the first floor's.
+    plant, shared, fresh, expected = _second_fallback(
+        make_cstr_plant, {"scale_floor": 1.0}, {"scale_floor": 1e-8}, arclength=False
+    )
+    assert shared.method == fresh.method == "continuation"
+    np.testing.assert_array_equal(np.asarray(shared.state), np.asarray(fresh.state))
+    assert shared.iterations == fresh.iterations
+    np.testing.assert_allclose(np.asarray(shared.state), expected, atol=1e-5)
+    assert len(plant._solve_cache.continuation_kernels) == 2
+
+
+def test_arclength_kernels_are_not_reused_from_another_known_point(make_cstr_plant):
+    # The arclength kernels close over the scale of the known point: a second
+    # fallback on the same plant from a known point of another scale compiles
+    # its own kernels and reaches the target as a fresh plant does, bit for bit.
+    plant, shared, fresh, expected = _second_fallback(
+        make_cstr_plant, {"known": 1.0}, {"known": 100.0},
+        continuation_kwargs={"max_continuation_steps": 1},
+    )
+    assert shared.method == fresh.method == "arclength"
+    np.testing.assert_array_equal(np.asarray(shared.state), np.asarray(fresh.state))
+    # The landing on the target is accepted within s_tol = 1e-4 of s = 1, a
+    # k error of 1e-4 * 9.6 and so an A error of about 4e-4 here.
+    np.testing.assert_allclose(np.asarray(shared.state), expected, atol=1e-3)
+    assert len(plant._solve_cache.arclength_kernels) == 2
+
+
 def test_plant_steady_state_ladder_falls_through_to_forward(make_cstr_plant):
     # Both continuation rungs are starved (one natural-parameter step, one
     # arclength step), so neither reaches the target and the ladder ends on the

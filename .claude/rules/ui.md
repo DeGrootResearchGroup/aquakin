@@ -35,7 +35,7 @@ tested, not asserted away.
 |---|---|
 | `worker.py`, `catalog.py` | the only worker client; the catalogue as plain data (ports without a round trip) |
 | `document.py` | **pure** (no page, no worker); units keyed by stable id (the plant's unit name), labels display only; `from_spec` refuses a kind the catalogue lacks (it would break every redraw) |
-| `forms.py` | **pure**; lists no setting, type or choice: every row follows from the catalogue. **Numbers are shown exactly** (`_float_text`): Apply reads every field back, so a rounded display changes values nobody edited. The aeration value is read only in the mode the form was drawn with; a unit's conditions are kept when its model could not be described; read-only settings and unshown aeration fields survive read-back. An unreadable field raises `FieldError` with its row key. Each row's `suffix` is the unit its help names, flows and times on the plant's clock |
+| `forms.py` | **pure**; lists no setting, type or choice: every row follows from the catalogue. **Numbers are shown exactly** (`_float_text`): Apply reads every field back, so a rounded display changes values nobody edited. The aeration value is read only in the mode the form was drawn with; a unit's conditions are kept when its model could not be described; read-only settings and unshown aeration fields survive read-back. An unreadable field raises `FieldError` with its row key. Each row's `suffix` is the unit its help names, flows and times on the plant's clock. A choice that redraws the form carries `reshape` (the page reads the flag, never a key). A reagent is three rows (`reagent.model`, `.label`, `.composition`, its species from the reagent's own model); all empty reads back as unset. A `records` setting (an SBR's phases) is one `records` row whose fields come from the catalogue's `fields` (a box for a true / false field, a default / true / false choice for an optional one); every box and choice is read back, an empty text field is left out, an entry left blank is skipped, and an error names the entry and field. A `tagged` setting (the settling model) is a `<name>.kind` choice that redraws the form and a row per argument of that kind; switching kind keeps the arguments both take |
 | `icons.py` | the only per-kind presentation table; an unlisted kind gets the tank icon |
 | `study_form.py` | **pure**; lists no setting of its own (all from the worker's `study_form`) |
 | `results.py` | **pure**; one channel per chart, never two y-axes; colours are the dataviz palette (dark-mode blue set in `PAGE_CSS`); `analysis_view` raises on a kind `ANALYSIS_VIEWS` lacks |
@@ -43,6 +43,7 @@ tested, not asserted away.
 | `process.py`, `jobs.py` | starting / discarding child processes (below); `StudyRun`, one `aquakin study run --json` process per run |
 | `app.py` | `Editor`: state, drawing, undo, canvas events, the unit form, and the binding of every function below; do not grow it |
 | `checks.py`, `files.py`, `studies.py`, `page.py`, `study_page.py` | bound `Editor` concerns: checks; Open / Save; studies; the page; the Studies tab |
+| `repeated.py` | the one implementation of lists of records edited on the page (`bound`, `redraw`, `add_button`, `move_button`, `remove_button`), shared by the study dialog and the unit form (composition, phase table) |
 | `widget/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
 
 **`Editor` is split by concern, bound like `Plant`'s modules.** Each module holds
@@ -131,7 +132,8 @@ that imports both. Keep it that way rather than copying knowledge across:
   field-named error). Save, Open, Simulate and Run apply them first
   (`_apply_pending`) and wait when they cannot be applied. A reset of the form
   (`cancel_apply`) marks its first row with a new `revision`; only there: a
-  background redraw must never overwrite typing.
+  background redraw must never overwrite typing, nor clear `sel_dirty` (the
+  redraw that ends a round of checks keeps it, `_run_checks`).
 - **Removing a wired port asks first** (`Flowsheet.dropped_by`; nothing changes
   until `confirm_apply`).
 - **aquakin's checks run in the background** (`schedule_checks`, after
@@ -163,9 +165,13 @@ that imports both. Keep it that way rather than copying knowledge across:
   always asks; replacing may be turned off ("Don't ask again", the Studies tab's
   switch), and both go through `Editor.set_ask_replace`: nothing watches the
   state, so code calls the method, never sets the state.
-- **The study dialog's draft is nested state, and the page does not redraw on a
-  nested change**: every widget bound into it uses `_bound` and every row add /
-  remove ends with `_REDRAW`, or rows do not appear. The draft is sent whole on
+- **Lists of records inside page state are nested, and the page does not redraw
+  on a nested change**: every widget bound into one uses `repeated.bound` and
+  every add / remove ends with `repeated.redraw` (the buttons do), or rows do not
+  appear. Do not write a second set of row buttons. `sel_rows` is
+  `client_only` (`page._build`): its redraws stay in the page, so a background
+  redraw still compares with Python's last rows and leaves typing alone.
+- **The study dialog's draft** is such state. The draft is sent whole on
   Create / Save and written by the worker (`create_study` / `update_study`);
   errors show beside the buttons. Switching kind keeps the fields both kinds
   have. A new study's `flowsheet:` is the open spec's path; an edited study keeps

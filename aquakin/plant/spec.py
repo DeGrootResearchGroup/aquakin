@@ -60,15 +60,17 @@ connection becomes :meth:`Plant.add_influent`. Units the plant derives itself
 spec cannot express yet is refused by :meth:`Plant.to_spec` with a
 :class:`SpecError` naming it rather than dropped: a model that is neither
 shipped nor read from a file, a heat-balance temperature model, and settings
-only Python can give (arrays of initial concentrations, SBR phases, settling
-models).
+only Python can give (arrays of initial concentrations).
+
+An SBR's ``phases`` are a list of mappings with :class:`~aquakin.plant.sbr.SBRPhase`'s field names
+and its ``settling`` a mapping naming a ``kind`` (``interface`` or ``layered``)
+with that model's arguments; a field left out takes its default, and every
+field is written.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
-import inspect
 import json
 import math
 import os
@@ -492,41 +494,18 @@ def _check_model_names(settings: dict, models: dict, where: str) -> None:
             raise SpecError(f"{where}: model '{name}' is not listed under 'models'")
 
 
-def _same_kind(default, value) -> bool:
-    """Whether ``value`` has the type of a translator setting whose default is
-    ``default``: true/false, a finite number, or text."""
-    if isinstance(default, bool):
-        return isinstance(value, bool)
-    if isinstance(default, (int, float)):
-        return (
-            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-        )
-    if isinstance(default, str):
-        return isinstance(value, str)
-    return isinstance(value, (bool, int, float, str))
+#: A translator's constructor arguments that are not settings: the plant passes them.
+_TRANSLATOR_MODELS = ("source_model", "target_model")
 
 
 def _translator_settings(spec: dict, where: str) -> tuple[type, dict]:
     """The translator class and its settings, every one filled in, checked by type."""
-    spec = dict(spec)
-    kind = spec.pop("kind", None)
-    classes = _translators()
-    if kind not in classes:
-        raise SpecError(f"{where}: translator kind {kind!r} is not one of {sorted(classes)}")
-    cls = classes[kind]
-    params = inspect.signature(cls).parameters
-    full = {}
-    for key, p in params.items():
-        if key in ("source_model", "target_model"):
-            continue
-        full[key] = p.default
-    for key, value in spec.items():
-        if key not in full:
-            raise SpecError(f"{where}: '{key}' is not a setting of translator {kind}")
-        if not _same_kind(full[key], value):
-            raise SpecError(f"{where}: translator setting '{key}' has the wrong type ({value!r})")
-        full[key] = float(value) if isinstance(full[key], float) else value
-    return cls, {"kind": kind, **full}
+    from aquakin.plant.catalog import kind_settings
+
+    try:
+        return kind_settings(spec, _translators(), "translator", _TRANSLATOR_MODELS)
+    except ValueError as exc:
+        raise SpecError(f"{where}: {exc}") from None
 
 
 def _build_translator(spec: dict, src_model, dst_model, where: str):
@@ -655,6 +634,9 @@ def plant_from_spec(cls, spec, *, base_dir=None):
             raise SpecError(f"streams.{name}: {type(exc).__name__}: {exc}") from None
     plant.influent_endpoint = doc.influent_endpoint
     plant.effluent_endpoint = doc.effluent_endpoint
+    # Rebuilt plants of one spec compile the same programs, so they share them
+    # (a study run, the editor's worker); a change to this plant ends that.
+    plant._solve_cache.share_as((cls, _built_fingerprint(doc, models, influents)))
     return plant
 
 
@@ -772,23 +754,12 @@ def _scheduled(name: str, key: str, value):
 
 
 def _translator_spec(t, where) -> dict:
-    from aquakin.plant.catalog import _plain
+    from aquakin.plant.catalog import kind_plain
 
-    for kind, cls in _translators().items():
-        if type(t) is cls:
-            break
-    else:
-        raise SpecError(f"{where}: translator {type(t).__name__} cannot be written in a spec")
-    out: dict[str, Any] = {"kind": kind}
-    params = inspect.signature(cls).parameters
-    for f in dataclasses.fields(t):
-        if f.name in ("source_model", "target_model") or f.name not in params:
-            continue
-        value = _plain(getattr(t, f.name))
-        if value is None:
-            raise SpecError(f"{where}: translator setting '{f.name}' has no plain form")
-        out[f.name] = value
-    return out
+    try:
+        return kind_plain(t, _translators(), "translator", _TRANSLATOR_MODELS)
+    except ValueError as exc:
+        raise SpecError(f"{where}: {exc}") from None
 
 
 def _seed_spec(stream, model, where) -> dict:
@@ -1046,13 +1017,14 @@ def _canonical_settings(kind, settings: dict, where: str) -> dict:
     So that ``1000`` and ``1000.0`` (a hand edit, a JSON writer) are one plant.
     ``None`` values (unset; required ones too, in a draft) are kept as they are.
     """
-    from aquakin.plant.catalog import validate_settings
+    from aquakin.plant.catalog import filled_value, validate_settings
 
     try:
         validate_settings(kind, {k: v for k, v in settings.items() if v is not None})
     except ValueError as exc:
         raise SpecError(f"{where}: {exc}") from None
-    types = {s.name: s.type for s in kind.settings}
+    settings_of = {s.name: s for s in kind.settings}
+    types = {name: s.type for name, s in settings_of.items()}
     out = {}
     for k, v in settings.items():
         t = types.get(k)
@@ -1069,6 +1041,10 @@ def _canonical_settings(kind, settings: dict, where: str) -> dict:
                 else x
                 for key, x in v.items()
             }
+        elif t in ("records", "tagged"):
+            # Every argument of every record, so a default left out and one
+            # written out are one plant (and one fingerprint).
+            out[k] = filled_value(settings_of[k], v)
         elif t == "reagent":
             composition = {key: _canonical_number(x) for key, x in v.get("composition", {}).items()}
             out[k] = {**v, "composition": composition}
@@ -1247,16 +1223,41 @@ def spec_inputs(spec, *, base_dir=None) -> dict[str, str]:
         A result records these to tell, later, whether it is stale and which
         input changed.
     """
+    spec, base_dir = _resolve(spec, base_dir)
+
+    def model_digest(name, ref):
+        if ref.source == "shipped":
+            return _shipped_fingerprint(name)
+        return _model_fingerprint(_located(ref.source, base_dir, name))
+
+    def table_digest(uid, source):
+        return _file_digest(_located(source, base_dir, f"units.{uid}.series"))
+
+    return _inputs_of(_validate(spec), model_digest, table_digest)
+
+
+def _inputs_of(doc: _Document, model_digest, table_digest) -> dict[str, str]:
+    """:func:`spec_inputs` of a validated spec, its models and tables digested
+    by the given callables.
+
+    Parameters
+    ----------
+    doc : _Document
+        The validated spec.
+    model_digest : callable
+        ``model_digest(name, ref)``: the fingerprint of model ``name``.
+    table_digest : callable
+        ``table_digest(unit, source)``: the sha256 of the table an influent
+        ``unit`` reads from ``source``.
+
+    Returns
+    -------
+    dict
+        As :func:`spec_inputs` returns.
+    """
     from aquakin.plant.catalog import unit_kind
 
-    spec, base_dir = _resolve(spec, base_dir)
-    doc = _validate(spec)
-    inputs: dict[str, str] = {}
-    for name, ref in doc.models.items():
-        if ref.source == "shipped":
-            inputs[f"model:{name}"] = _shipped_fingerprint(name)
-        else:
-            inputs[f"model:{name}"] = _model_fingerprint(_located(ref.source, base_dir, name))
+    inputs = {f"model:{name}": model_digest(name, ref) for name, ref in doc.models.items()}
     units, ports = [], {}
     for uid, entry in doc.units.items():
         try:
@@ -1268,8 +1269,7 @@ def spec_inputs(spec, *, base_dir=None) -> dict[str, str]:
         settings = _canonical_settings(kind, {**kind.defaults(), **extra}, f"units.{uid}")
         ports[uid] = kind.ports_for(settings)
         if settings.get("series") is not None:
-            table = _located(settings["series"], base_dir, f"units.{uid}.series")
-            inputs[f"table:{uid}"] = _file_digest(table)
+            inputs[f"table:{uid}"] = table_digest(uid, settings["series"])
             settings["series"] = "<table>"  # where the table sits does not matter
         units.append([uid, entry.kind, settings])
     connections = []
@@ -1318,9 +1318,45 @@ def spec_fingerprint(spec, *, base_dir=None) -> str:
     str
         A 64-character hex digest.
     """
-    inputs = spec_inputs(spec, base_dir=base_dir)
+    return _combined(spec_inputs(spec, base_dir=base_dir))
+
+
+def _combined(inputs: dict[str, str]) -> str:
+    """One digest of :func:`spec_inputs`' fingerprints (:func:`spec_fingerprint`)."""
     text = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _built_fingerprint(doc: _Document, models: dict, influents: dict) -> str:
+    """:func:`spec_fingerprint` of the plant :func:`plant_from_spec` built.
+
+    The models and influent tables are digested as they were read (the
+    fingerprint ``load_model`` / ``load_model_from_file`` and
+    ``read_influent_table`` record on what they return), not as the files are
+    now: a file edited after it was read, while the plant was built or before
+    a cached shipped model was reloaded, must not give two different plants
+    one fingerprint.
+
+    Parameters
+    ----------
+    doc : _Document
+        The validated spec.
+    models : dict
+        ``{name: CompiledModel}`` as loaded.
+    influents : dict
+        ``{unit: InfluentSeries}`` as built.
+
+    Returns
+    -------
+    str
+        A 64-character hex digest.
+    """
+    inputs = _inputs_of(
+        doc,
+        lambda name, ref: models[name]._aquakin_source[2],
+        lambda uid, source: influents[uid]._aquakin_source[2],
+    )
+    return _combined(inputs)
 
 
 def spec_changes(spec, *, base_dir=None) -> list[str]:

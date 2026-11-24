@@ -24,7 +24,10 @@ share is below ``--fail-under`` (100 by default), printing each line to look
 at.
 
 The diff is taken from the merge base with ``--base`` (``origin/main`` by
-default) to the working tree, so uncommitted edits are included.
+default) to the working tree, so uncommitted edits are included. Untracked files
+are not in that diff, so an untracked Python file under the packages is named
+and fails the check: commit it, or mark it intended-to-add with
+``git add -N <file>`` so its lines are counted.
 """
 
 from __future__ import annotations
@@ -92,6 +95,31 @@ def changed_lines(diff: str) -> dict[str, set[int]]:
             if count:
                 lines.setdefault(path, set()).update(range(start, start + count))
     return lines
+
+
+def _git(*args: str, cwd: Path | None = None) -> str:
+    """The standard output of ``git <args>``, raising when git fails."""
+    return subprocess.run(
+        ["git", *args], capture_output=True, text=True, check=True, cwd=cwd
+    ).stdout
+
+
+def untracked(cwd: Path | None = None) -> list[str]:
+    """The untracked, measured Python files, which no ``git diff`` includes.
+
+    Parameters
+    ----------
+    cwd : pathlib.Path, optional
+        The repository folder to ask. Default: the current folder.
+
+    Returns
+    -------
+    list of str
+        Repository-relative paths that :func:`measured` accepts and that git
+        neither tracks nor ignores, sorted.
+    """
+    listing = _git("ls-files", "--others", "--exclude-standard", "--", *PACKAGES, cwd=cwd)
+    return sorted(path for path in listing.splitlines() if measured(path))
 
 
 def line_states(coverage_xml: str, root: Path | None = None) -> dict[str, dict[int, str]]:
@@ -206,12 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     if not report_path.is_file():
         print(f"{report_path} not found: run pytest with --cov-report=xml first.")
         return 2
-    base = subprocess.run(
-        ["git", "merge-base", args.base, "HEAD"], capture_output=True, text=True, check=True
-    ).stdout.strip()
-    diff = subprocess.run(
-        ["git", "diff", "-U0", "--no-color", base], capture_output=True, text=True, check=True
-    ).stdout
+    base = _git("merge-base", args.base, "HEAD").strip()
+    diff = _git("diff", "-U0", "--no-color", base)
     reports, unmeasured = patch_report(changed_lines(diff), line_states(report_path.read_text()))
 
     for path, report in reports.items():
@@ -221,11 +245,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{path}: partial branch {_ranges(report.partial)}")
     for path in unmeasured:
         print(f"{path}: not in {report_path} (stale report, or the package was not measured)")
+    new_files = untracked()
+    for path in new_files:
+        print(
+            f"{path}: untracked, so its lines are not measured "
+            f"(commit it, or run `git add -N {path}` to count it)"
+        )
 
     share = percent(reports)
     counted = sum(len(r.covered) + len(r.partial) + len(r.missed) for r in reports.values())
     print(f"patch coverage {share:.2f}% of {counted} changed lines (target {args.fail_under:g}%)")
-    return 1 if (share < args.fail_under or unmeasured) else 0
+    return 1 if (share < args.fail_under or unmeasured or new_files) else 0
 
 
 if __name__ == "__main__":

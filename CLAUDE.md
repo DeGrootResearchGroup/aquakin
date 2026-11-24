@@ -302,10 +302,18 @@ codebase something; the examples are real.
   methods), not as more methods on the class. New calibration code goes in its
   concern's module under `integrate/calibration/`, not `integrate/calibrate.py`.
   Their line ceilings are checked by `tests/unit/test_size_limits.py`.
-- A function past about 100 lines of body, or with more than about eight
-  parameters, gets split or takes a config dataclass before it gets longer.
+- A function past 100 lines of body, or with more than eight parameters, gets
+  split into named steps or takes a config dataclass before it gets longer.
   `tests/unit/test_function_size.py` fails on a new one and on a recorded one
-  that grows.
+  that grows. **Do not meet the limit by removing a capability**: dropping a
+  parameter, hard-coding a value a caller could set, or packing unrelated
+  arguments together. Group the parameters that belong together into a config
+  dataclass, or split the function. A config dataclass for related options is
+  the established pattern (`IntegratorConfig`, `DifferentiationConfig`,
+  `OptimizerConfig`), not by itself an owner decision; if you think a grouping
+  is a costly-to-undo interface, or neither fix fits, stop and ask rather than
+  remove the option. The limit flags a function to restructure, not a number
+  to get under.
 
 ### Behaviour-preserving refactors
 

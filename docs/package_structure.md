@@ -83,9 +83,11 @@ aquakin/
 │   │   ├── global_sensitivity.py    # dgsm(), DGSMResult: derivative-based
 │   │   │                            #   global (Sobol total-index) screen
 │   │   ├── _qmc.py                   # shared Sobol samplers + unit sampler +
-│   │   │                            #   fn(x)->output eval helpers (dgsm + DoE)
+│   │   │                            #   fn(x)->output eval helpers (dgsm, Sobol, DoE)
 │   │   ├── monte_carlo.py           # monte_carlo(): uncertainty propagation
 │   │   │                            #   (distribution samplers -> inverse-CDF)
+│   │   ├── variance_sensitivity.py  # sobol_indices(), SobolResult: Saltelli /
+│   │   │                            #   Jansen first-order + total Sobol indices
 │   │   ├── scenarios.py             # compare_scenarios() + kpi_comparison():
 │   │   │                            #   scenario / standardized-report KPI tables
 │   │   ├── design.py                # optimize_design() + Constraint: AD-gradient
@@ -127,7 +129,9 @@ aquakin/
 │   │   │   ├── objective.py         #   _FitConfig, jit-cached objective / residual / Jacobian
 │   │   │   ├── multistart.py        #   starts, optimizer bounds, the multistart loop
 │   │   │   ├── laplace.py           #   Laplace posterior, at-bound checks
-│   │   │   └── driver.py            #   _run_fit / _fit_result: shared with Plant.calibrate
+│   │   │   ├── driver.py            #   _run_fit / _fit_result: shared with Plant.calibrate
+│   │   │   └── criteria.py          #   log-likelihood / k / n of a fit; aic, aicc, bic,
+│   │   │                            #   compare_models (public, re-exported by aquakin)
 │   │   ├── seam.py                  # the private integrate names aquakin.plant reuses,
 │   │   │                            #   listed in one place (the only route; test-checked)
 │   │   ├── _linalg.py               # null-direction tolerances shared by the Laplace
@@ -298,6 +302,7 @@ aquakin/
 │   ├── app.py                          # Editor: its state, drawing, undo, canvas events,
 │   │                                   #   the unit form, wiring of the modules below
 │   ├── page.py / study_page.py         # the trame / Vuetify page; the Studies tab + dialogs
+│   ├── repeated.py                     # lists of records edited on the page (study dialog, unit form)
 │   ├── checks.py                       # aquakin's background checks of units and plant
 │   ├── files.py                        # open / save the spec, unsaved-edit questions
 │   ├── studies.py                      # list / run / freeze studies, Simulate, results

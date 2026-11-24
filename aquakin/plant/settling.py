@@ -122,11 +122,11 @@ class InterfaceSettling(SettlingModel):
     Parameters
     ----------
     v_settle : float
-        Zone-settling (interface) velocity, length/time (e.g. m/d).
+        Zone-settling (interface) velocity (m/d), on the plant's clock.
     area : float
-        Tank cross-sectional area, length^2, converting volume to depth.
+        Tank cross-sectional area (m²), converting volume to depth.
     remix_rate : float
-        First-order rate (1/time) at which clarity decays back to 0 while the
+        First-order rate (1/d) at which clarity decays back to 0 while the
         tank is actively mixed. Large enough that the tank is well mixed within a
         fill/react phase; default 1e3 (effectively instant on a daily cycle).
     """
@@ -182,11 +182,11 @@ class LayeredSettling(SettlingModel):
     n_layers : int
         Number of vertical layers (>= 2).
     v_settle : float
-        Settling velocity, length/time.
+        Settling velocity (m/d), on the plant's clock.
     area : float
-        Tank cross-sectional area, length^2.
+        Tank cross-sectional area (m²).
     remix_rate : float
-        Re-mixing relaxation rate (1/time) while the tank is actively mixed.
+        Re-mixing relaxation rate (1/d) while the tank is actively mixed.
         Default 1e3.
     """
 

@@ -724,12 +724,12 @@ def _solve_forward_fast(
             concrete_settings_key(rtol, atol, None, None, max_steps),
             self._recycle._recycle_map_constant,
         )
-        jitted = self._jit_cache.get(fkey)
+        jitted = self._solve_cache.get("jit", fkey)
         if jitted is None:
             jitted = self._build_jitted_forward_fast(
                 rf, t0, t1, rtol=rtol, atol=atol, max_steps=max_steps
             )
-            self._jit_cache[fkey] = jitted
+            self._solve_cache.put("jit", fkey, jitted)
         with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
             ts, ys = jitted(y0, params, te)
         return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
@@ -820,7 +820,7 @@ def _solve_jax_adjoint(
         if (settings is None or event is not None or progress_meter is not None)
         else (sig, settings, solver_key, factormax, recycle_key, colored_active, order)
     )
-    jitted = self._jit_cache.get(cache_key) if cache_key is not None else None
+    jitted = self._solve_cache.get("jit", cache_key)
     if jitted is None:
         jitted = self._build_jitted_solve(
             t0,
@@ -838,7 +838,8 @@ def _solve_jax_adjoint(
             order=order,
         )
         if cache_key is not None:
-            self._jit_cache[cache_key] = jitted
+            # An adjoint keyed by identity (see _adjoint_key) is kept alive with it.
+            self._solve_cache.put("jit", cache_key, jitted, adjoint)
 
     with friendly_solve_errors(max_steps, what="plant solve"):
         if t_eval is None:
@@ -959,7 +960,7 @@ def _event_segment_solver(self, settings, events, *, has_t_eval):
             segment_signature(events),
             self._recycle.cache_flags(),
         )
-        cached = self._jit_cache.get(key)
+        cached = self._solve_cache.get("jit", key)
         if cached is not None:
             return cached[0]
     rhs_with_maps = self._recycle.rhs_with_maps
@@ -967,9 +968,9 @@ def _event_segment_solver(self, settings, events, *, has_t_eval):
         rhs_with_maps, settings, root_events_of(events), has_t_eval=has_t_eval
     )
     if key is not None:
-        # The adjoint is keyed by identity: keep it alive with the entry so its
-        # id cannot be reused by another object while the entry exists.
-        self._jit_cache[key] = (solve_segment, settings.adjoint)
+        # An adjoint keyed by identity (see _adjoint_key) is kept alive with the
+        # entry so its id cannot be reused by another object while it exists.
+        self._solve_cache.put("jit", key, (solve_segment, settings.adjoint))
     return solve_segment
 
 

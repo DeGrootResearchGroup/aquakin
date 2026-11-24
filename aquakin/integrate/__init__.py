@@ -47,6 +47,13 @@ from aquakin.integrate.particle import (
 )
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.calibration.criteria import (
+    ModelComparison,
+    aic,
+    aicc,
+    bic,
+    compare_models,
+)
 from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
 from aquakin.integrate.experiment_design import (
     CandidateScore,
@@ -73,12 +80,19 @@ from aquakin.integrate.scenarios import (
     kpi_comparison,
 )
 from aquakin.integrate.sensitivity import SensitivityResult, sensitivity
+from aquakin.integrate.variance_sensitivity import (
+    BootstrapConfig,
+    SobolResult,
+    sobol_indices,
+    sobol_indices_cost,
+)
 
 __all__ = [
     "BatchReactor",
     "BatchSolution",
     "BiofilmReactor",
     "BiofilmSolution",
+    "BootstrapConfig",
     "CFDReactor",
     "CalibrationResult",
     "CandidateDesign",
@@ -99,6 +113,7 @@ __all__ = [
     "IntegratorConfig",
     "KPIComparison",
     "LaplaceConfig",
+    "ModelComparison",
     "MonteCarloResult",
     "OptimizeResult",
     "OptimizerConfig",
@@ -109,10 +124,15 @@ __all__ = [
     "ProfileResult",
     "ScenarioComparison",
     "SensitivityResult",
+    "SobolResult",
     "Track",
     "TrackSolution",
+    "aic",
+    "aicc",
+    "bic",
     "calibrate",
     "check_finite_gradient",
+    "compare_models",
     "compare_scenarios",
     "design_criterion",
     "design_from_candidates",
@@ -133,5 +153,7 @@ __all__ = [
     "profile_likelihood",
     "rank_experiments",
     "sensitivity",
+    "sobol_indices",
+    "sobol_indices_cost",
     "solve_with_events",
 ]

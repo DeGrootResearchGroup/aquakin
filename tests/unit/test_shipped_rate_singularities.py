@@ -17,6 +17,7 @@ import pytest
 
 import aquakin
 from aquakin.core.nodes import SafeDivideNode, SpeciesNode
+from aquakin.plant.catalog import shipped_models
 
 # (model, species that deplete together), each set to the values in
 # ``_DEPLETED_VALUES``.
@@ -114,3 +115,87 @@ def test_safe_div_rewrite_leaves_nonzero_values_unchanged():
     j = net.reaction_names.index("maint_aer_VFA_substrate")
     r_vfa = float(net.rates(C, p, cf, 0)[j])
     assert r / (r + r_vfa) == pytest.approx(sb / (sb + svfa), rel=1e-12)
+
+
+#: Every shipped model, by name.
+_SHIPPED = [m["name"] for m in shipped_models()]
+
+
+@pytest.mark.parametrize("name", _SHIPPED)
+def test_rates_at_a_slightly_negative_state_equal_the_depleted_rates(name):
+    """A species a stiff solver steps to -1e-9 gives exactly the rates of 0.
+
+    Each species in turn is set to 0 and to -1e-9, with every other species
+    present (default + 1, so the kinetics are active). Every rate, including any
+    that depends on the species through a state-derived pH, must be identical
+    at the two states: a Monod or ratio term evaluated at the negative value
+    instead runs the reaction backwards (a small negative rate) or, near a
+    pole, blows it up. Every shipped model sets ``clip_negative_states``,
+    which makes the two states identical inside ``rates``.
+    """
+    net = aquakin.load_model(name)
+    p = net.default_parameters()
+    cf = net.default_conditions().fields
+    base = net.default_concentrations() + 1.0
+    n = base.shape[0]
+
+    def rates_with(value):
+        states = jnp.tile(base, (n, 1)).at[jnp.arange(n), jnp.arange(n)].set(value)
+        return jax.vmap(lambda c: net.rates(c, p, cf, 0))(states)
+
+    at_zero, below_zero = (np.asarray(a) for a in jax.jit(jax.vmap(rates_with))(_DEPLETED_VALUES))
+    # Equal, with a NaN matching a NaN: a rate singular at the depleted state
+    # itself is a property of its rate law, not of the clip, and is not what
+    # this test is about.
+    differs = (at_zero != below_zero) & ~(np.isnan(at_zero) & np.isnan(below_zero))
+    species = list(net.species_index)
+    moved = {
+        species[i]: [net.reaction_names[j] for j in np.flatnonzero(differs[i])]
+        for i in range(n)
+        if np.any(differs[i])
+    }
+    assert not moved, f"{name}: rates move at -1e-9 (species -> reactions): {moved}"
+
+
+def test_asm2d_tud_glycogen_formation_is_finite_with_no_stored_glycogen():
+    """``asm2d_tud`` glycogen formation takes its finite limit at XGLY = 0.
+
+    The published drive ``XPHA / XGLY * (f_GLY / (KfGLY + f_GLY)) * XPAO``,
+    f_GLY = XGLY / XPAO, tends to ``XPHA / KfGLY`` as XGLY -> 0; written as that
+    product it is ``inf * 0 = NaN`` there. Every other pool stays at its default.
+    """
+    net = aquakin.load_model("asm2d_tud")
+    p = net.default_parameters()
+    cf = net.default_conditions().fields
+    c = net.default_concentrations().at[net.species_index["XGLY"]].set(0.0)
+
+    rates = np.asarray(net.rates(c, p, cf, 0))
+    assert np.all(np.isfinite(rates))
+    grad = jax.grad(lambda c: jnp.sum(net.dCdt(c, p, cf, 0)))(c)
+    assert np.all(np.isfinite(np.asarray(grad)))
+
+    # The aerobic rate at the limit, from the closed form above.
+    def value(name):
+        return float(c[net.species_index[name]])
+
+    def param(name):
+        return float(p[net.param_index[name]])
+
+    def monod(x, k):
+        return x / (k + x)
+
+    expected = (
+        param("qGLY")
+        * value("XPHA") / param("KfGLY")
+        * monod(value("SO"), param("KO_HYD"))
+        * monod(value("XPHA"), param("KPHA"))
+    )
+    i = net.reaction_names.index("Aerobic_glycogen_formation")
+    assert rates[i] == pytest.approx(expected, rel=1e-12)
+    assert rates[i] > 0.0
+
+    # A batch solve started there stays finite.
+    reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
+    sol = reactor.solve(c, params=p, t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 5))
+    assert np.all(np.isfinite(np.asarray(sol.C)))
+    assert float(sol.C_named("XGLY")[-1]) > 0.0

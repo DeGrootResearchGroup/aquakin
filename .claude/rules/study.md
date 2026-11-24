@@ -90,6 +90,11 @@ results. The design and the owner's decisions are in
   Data and initial-state files are part of the study's fingerprint.
   A new kind adds a runner, its required fields, a form entry, a reader, a view
   in `aquakin_ui`, and a test in `tests/integration/test_study.py`.
+- **A run builds its plant with `Plant.from_spec`** and never keeps a `Plant`
+  between runs: rebuilt plants of one spec share their compiled solves
+  (`.claude/rules/plant-solve.md`), so a repeat run compiles nothing, while a
+  kept plant would carry one run's changes into the next. A runner that
+  changes the plant (a temperature, a unit) gets its own compile, by design.
 - **Progress and cancel** (`aquakin/progress.py`): `run_study(progress=)` passes
   the callable to the analysis; `Cancelled` (a `BaseException`) stops it and
   the run is recorded with outcome `cancelled` (state `"cancelled"`).

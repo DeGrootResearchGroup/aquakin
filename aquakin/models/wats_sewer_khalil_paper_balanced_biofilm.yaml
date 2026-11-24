@@ -167,6 +167,7 @@ conditions:
   default: 7.5
 positivity_limiter:
   threshold: 0.001
+clip_negative_states: true
 expressions:
   no_gate: 0.01 / ([S_NO] + 0.01)
   em_frac_sub: ([S_B] + [S_VFA]) / (0.1 + [S_B] + [S_VFA])

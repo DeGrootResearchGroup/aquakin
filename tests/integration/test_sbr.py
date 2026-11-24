@@ -210,32 +210,7 @@ def test_layered_settling_solves_finite(asm1):
 # event-driven fill / react / settle / decant / idle cycle on the two-species
 # A -> B decay model (in seconds, B taken as the settling particulate), which
 # compiles and solves in seconds, so the fast gate exercises the SBR solve and
-# its gradient too.
-
-_SMALL_V_FULL, _SMALL_Q = 100.0, 10.0          # m3, m3/s: fill / decant 50 m3
-
-
-def _small_sbr_plant(simple_model):
-    """A one-SBR plant on the A -> B model: heel 50 m3, filled to 100 m3 and
-    decanted back to 50 m3 each 27 s cycle."""
-    phases = [
-        SBRPhase("fill", 5.0, feed=True),
-        SBRPhase("react", 10.0, mixed=True),
-        SBRPhase("settle", 5.0, settle=True),
-        SBRPhase("decant", 5.0, decant=True),
-        SBRPhase("idle", 2.0),
-    ]
-    sbr = SBRUnit("sbr", simple_model, phases, full_volume=_SMALL_V_FULL,
-                  feed_flow=_SMALL_Q, decant_flow=_SMALL_Q,
-                  settling=InterfaceSettling(v_settle=2.0, area=10.0, remix_rate=1.0),
-                  particulate_species=["B"], initial_fraction=0.5,
-                  conditions={"T": 293.15})
-    p = Plant("small_sbr", time_unit="s")
-    p.add_unit(sbr)
-    p.add_influent("feed", InfluentSeries.constant(simple_model, A=1.0, B=0.0, Q=_SMALL_Q),
-                   to="sbr.feed")
-    return p
-
+# its gradient too (the plant is `make_small_sbr_plant`, in `tests/conftest.py`).
 
 def _volume_closed_form(sbr, t):
     """The SBR's liquid volume from its schedule alone: the initial heel, rising
@@ -254,18 +229,18 @@ def _volume_closed_form(sbr, t):
     return V
 
 
-def test_small_sbr_volume_follows_fill_and_decant(simple_model):
+def test_small_sbr_volume_follows_fill_and_decant(simple_model, make_small_sbr_plant):
     """Over one cycle the small SBR's volume equals its piecewise-linear closed
     form at every save point, the phase boundaries included; the decant is
     clarified (B, the particulate, well below the bulk) while A passes through."""
-    p = _small_sbr_plant(simple_model)
+    p = make_small_sbr_plant()
     t = np.linspace(0.0, 27.0, 55)                # 0.5 s grid, on every boundary
     sol = p.solve(t_span=(0.0, 27.0), t_eval=jnp.asarray(t), rtol=1e-8)
     V = np.asarray(sol.state[:, simple_model.n_species])
     # dV/dt is piecewise constant between located events; the implicit solve
     # reproduces the closed form to within its tolerance (rtol 1e-8).
     np.testing.assert_allclose(V, _volume_closed_form(p.units["sbr"], t), rtol=1e-6)
-    assert V.max() == pytest.approx(_SMALL_V_FULL) and V[-1] == pytest.approx(50.0)
+    assert V.max() == pytest.approx(p.units["sbr"].full_volume) and V[-1] == pytest.approx(50.0)
 
     eff = p.stream(sol, "sbr.effluent")
     decant = np.where(np.asarray(eff.Q) > 0.0)[0]
@@ -277,14 +252,14 @@ def test_small_sbr_volume_follows_fill_and_decant(simple_model):
     np.testing.assert_allclose(C_eff[decant, a], C[decant, a], rtol=1e-12)
 
 
-def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simple_model):
+def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simple_model, make_small_sbr_plant):
     """d(A + 2B at the end of the decant)/dk from a full tank through the settle
     and decant phases (two located-event segments, the settling state and the
     clarified draw) matches a central finite difference."""
-    p = _small_sbr_plant(simple_model)
+    p = make_small_sbr_plant()
     base = p.default_parameters()
     a, b = simple_model.species_index["A"], simple_model.species_index["B"]
-    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(_SMALL_V_FULL)
+    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(p.units["sbr"].full_volume)
     y0 = p.initial_state(overrides={"sbr": full})
 
     def loss(k):
@@ -302,12 +277,12 @@ def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simp
     assert g != 0.0
 
 
-def test_small_sbr_solve_traces_under_jit_and_matches_eager(simple_model):
+def test_small_sbr_solve_traces_under_jit_and_matches_eager(simple_model, make_small_sbr_plant):
     """A whole-cycle SBR solve wrapped in ``jax.jit`` -- the default ``y0``,
     traced parameters and a save grid built inside the trace -- traces and gives
     the eager solve's trajectory (one computation compiled whole instead of
     segment by segment, so they agree to rounding)."""
-    p = _small_sbr_plant(simple_model)
+    p = make_small_sbr_plant()
     base = p.default_parameters()
 
     def trajectory(params):
@@ -324,16 +299,16 @@ def test_small_sbr_solve_traces_under_jit_and_matches_eager(simple_model):
                                rtol=1e-4)
 
 
-def test_small_sbr_jitted_gradient_matches_finite_difference(simple_model):
+def test_small_sbr_jitted_gradient_matches_finite_difference(simple_model, make_small_sbr_plant):
     """``jax.jit(jax.grad(...))`` of the settle + decant loss of the
     finite-difference test above (a save grid built inside the trace) matches a
     central finite difference of the eager loss. (About 15 s, like that test:
     the cost is compiling the reverse pass through the stiff solve, and this is
     the fast tier's only check that a jitted SBR gradient traces.)"""
-    p = _small_sbr_plant(simple_model)
+    p = make_small_sbr_plant()
     base = p.default_parameters()
     a, b = simple_model.species_index["A"], simple_model.species_index["B"]
-    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(_SMALL_V_FULL)
+    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(p.units["sbr"].full_volume)
     y0 = p.initial_state(overrides={"sbr": full})
 
     def loss(k):
@@ -374,6 +349,72 @@ def test_mass_balance_reads_sbr_inventory(asm1):
     inv2 = _unit_inventory(p, "sbr", state.at[n + 1].set(0.1),
                            {asm1.name: content}, params)
     assert inv2["COD"] == pytest.approx(inv["COD"], rel=1e-12)
+
+
+def test_mass_balance_closes_over_aerobic_anoxic_decant_cycles(asm1):
+    """Regression for #852: plant.mass_balance must integrate an SBR's reaction
+    and aeration terms, so its COD and N balances close.
+
+    A full tank is never fed; each 0.4 d cycle is aerobic, anoxic, settle and
+    decant, so the oxygen transferred in the aerobic phase (COD), the nitrate
+    denitrified to N₂ in the anoxic phase (N) and the decanted effluent are the
+    only exits, and the volume falls 1000 -> 750 -> 500 m³ over the two
+    cycles. Before the fix the SBR took no part in the gas term, so the gas was
+    0 and the relative imbalance was 7.4 (COD) and 3.1 (N).
+
+    The gas integrals are trapezoids over the saves, so the closure is set by
+    the sampling: on this 321-point grid it is 5.1e-3 (COD) and 2.1e-3 (N),
+    against 5.0e-3 and 1.1e-2 for a constantly aerated CSTR of the same
+    kinetics and start, and both fall below 3e-4 on 1601 points.
+    """
+    idx = asm1.species_index
+    C0 = np.asarray(asm1.default_concentrations()).copy()
+    for sp, v in dict(SS=50.0, SNH=30.0, SNO=20.0, XS=100.0, XB_H=1000.0,
+                      XB_A=100.0, SO=2.0, SALK=7.0).items():
+        C0[idx[sp]] = v
+    phases = [SBRPhase("aerobic", 0.15, kla=120.0),
+              SBRPhase("anoxic", 0.15, mixed=True),
+              SBRPhase("settle", 0.05, settle=True),
+              SBRPhase("decant", 0.05, decant=True)]
+    sbr = SBRUnit("sbr", asm1, phases, full_volume=1000.0, feed_flow=0.0,
+                  decant_flow=5000.0,
+                  settling=InterfaceSettling(v_settle=400.0, area=200.0),
+                  particulate_species=_PARTS, initial_fraction=1.0,
+                  conditions={"T": 293.15}, initial_concentrations=jnp.asarray(C0))
+    p = Plant("sbr_batch", time_unit="d")
+    p.add_unit(sbr)
+    p.add_influent("feed", InfluentSeries.constant(asm1, Q=0.0), to="sbr.feed")
+    sol = p.solve(t_span=(0.0, 0.8), t_eval=jnp.linspace(0.0, 0.8, 321))
+    V = np.asarray(sol.state[:, asm1.n_species])
+    assert V[-1] == pytest.approx(500.0, rel=1e-4)   # the volume did vary
+
+    mb = p.mass_balance(sol)
+    assert mb["COD"].inflow == 0.0 and mb["N"].inflow == 0.0
+    assert mb.gas_detail["aeration_O2"] > 0.0
+    assert mb.gas_detail["denitrification_N2"] > 0.0
+    # Tolerance from the sampling (see the docstring): the CSTR reference on the
+    # same grid closes to 1.1e-2 in N.
+    assert abs(mb["COD"].relative_imbalance) < 1e-2
+    assert abs(mb["N"].relative_imbalance) < 1e-2
+
+
+def test_oxygen_transfer_follows_the_phase_rhs_is_in(asm1):
+    """The SBR's mass-balance aeration term is the rhs aeration term: kLa of the
+    active phase times (do_sat - SO), and zero in an unaerated phase."""
+    sbr = _sbr(asm1)                                  # react (0.1-0.4) aerated
+    state = sbr.initial_state()
+    o2 = asm1.species_index["SO"]
+    so = float(state[o2])
+    oxygen, stripped = sbr.oxygen_transfer(0.2, state, {}, None, None)
+    assert float(oxygen[o2]) == pytest.approx(240.0 * (sbr.do_sat - so), rel=1e-12)
+    assert float(jnp.sum(jnp.abs(oxygen))) == pytest.approx(abs(float(oxygen[o2])), rel=1e-12)
+    assert float(jnp.max(jnp.abs(stripped))) == 0.0
+    # The fill phase (0-0.1) and the next cycle's settle (0.65+0.45) are unaerated.
+    assert float(jnp.max(jnp.abs(sbr.oxygen_transfer(0.05, state, {}, None, None)[0]))) == 0.0
+    assert float(jnp.max(jnp.abs(sbr.oxygen_transfer(1.1, state, {}, None, None)[0]))) == 0.0
+    assert sbr.required_signals == ()
+    # The reaction volume is the state's liquid volume, not the full volume.
+    assert np.all(sbr.reaction_volumes(state, asm1.default_parameters()) == 500.0)
 
 
 @pytest.mark.slow

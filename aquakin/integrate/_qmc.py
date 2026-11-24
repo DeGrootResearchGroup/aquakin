@@ -7,6 +7,8 @@ common:
   points in an input box or from independent normals, used by
   :func:`aquakin.dgsm` (and the plant DGSM screens) and, via
   :func:`_unit_sample`, by the design-of-experiments workflows.
+* :func:`_sobol_log2_size` -- the power-of-two size every Sobol draw rounds to,
+  also used by :func:`aquakin.sobol_indices_cost` to quote a cost before a run.
 * :func:`_unit_sample` -- draw low-discrepancy points in the unit cube (scrambled
   Sobol / Latin hypercube / plain random), reused by :func:`aquakin.monte_carlo`
   (mapped through each input's inverse CDF) and by :func:`aquakin.optimize_design`
@@ -30,6 +32,16 @@ import jax.numpy as jnp
 import numpy as np
 
 
+def _sobol_log2_size(n_samples):
+    """The base-2 exponent of the Sobol sample drawn for a requested size.
+
+    Sobol sequences are balanced at powers of two, so every sampler here draws
+    ``2 ** _sobol_log2_size(n_samples)`` points: ``n_samples`` rounded to the
+    nearest power of two, and at least 2.
+    """
+    return max(1, round(math.log2(max(n_samples, 2))))
+
+
 def _sobol_sample(lo, hi, d, n_samples, seed):
     """Draw scrambled-Sobol points in the input box.
 
@@ -39,8 +51,7 @@ def _sobol_sample(lo, hi, d, n_samples, seed):
     """
     from scipy.stats import qmc
 
-    n_pow = max(1, round(math.log2(max(n_samples, 2))))
-    U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(n_pow)
+    U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(_sobol_log2_size(n_samples))
     Z = lo[None, :] + (hi - lo)[None, :] * U
     return Z, int(Z.shape[0])
 
@@ -60,8 +71,7 @@ def _sobol_normal_sample(mean, std, d, n_samples, seed):
     """
     from scipy.stats import norm, qmc
 
-    n_pow = max(1, round(math.log2(max(n_samples, 2))))
-    U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(n_pow)
+    U = qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(_sobol_log2_size(n_samples))
     U = np.clip(U, 1e-12, 1.0 - 1e-12)  # avoid +/-inf at the 0/1 endpoints
     mean = np.asarray(mean)
     std = np.asarray(std)

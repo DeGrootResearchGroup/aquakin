@@ -1043,7 +1043,7 @@ def solve_sensitivity(
         max_steps,
         sens_error_control,
     )
-    jitted = plant._jit_cache.get(key)
+    jitted = plant._solve_cache.get("jit", key)
     if jitted is None:
         jitted = _build_sensitivity_solve(
             plant,
@@ -1057,7 +1057,7 @@ def solve_sensitivity(
             max_steps=max_steps,
             sens_error_control=sens_error_control,
         )
-        plant._jit_cache[key] = jitted
+        plant._solve_cache.put("jit", key, jitted)
     with friendly_solve_errors(max_steps, what="plant sensitivity solve"):
         ys, S, stats = jitted(
             y0,

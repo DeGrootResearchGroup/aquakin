@@ -187,6 +187,14 @@ class _CalibrationProblem:
     # bounds how far the optimiser's objective is scaled up (see
     # :func:`_objective_scale`).
     data_mean_square: float | None = None
+    # What the information criteria read (see ``calibration/criteria.py``):
+    # whether the data term is a Gaussian negative log-likelihood
+    # (``loss="nll"``), the number of observed (non-NaN) entries over every
+    # dataset, and a fingerprint of the observations and their times alone, so
+    # fits of different models to the same data can be recognized as such.
+    is_likelihood: bool = False
+    n_observations: int = 0
+    observations_key: str = ""
 
     @property
     def m_ic_theta(self) -> int:
@@ -272,6 +280,34 @@ def _array_digest(*arrays) -> str:
         h.update(f"{arr.dtype}{arr.shape}|".encode())
         h.update(arr.tobytes())
     return h.hexdigest()
+
+
+def _observation_record(loss: str, n_seen_per_output, obs_parts) -> dict:
+    """The :class:`_CalibrationProblem` fields the information criteria read.
+
+    Shared by the reactor and plant resolvers.
+
+    Parameters
+    ----------
+    loss : str
+        The loss; only ``"nll"`` is a likelihood.
+    n_seen_per_output : array-like of int
+        Observed (non-``NaN``) entries of each output, over every dataset.
+    obs_parts : list of array-like
+        Each dataset's observations and observation times, as the user's data
+        (no ``sigma`` and no loss), so fits of different models to the same
+        data share the fingerprint.
+
+    Returns
+    -------
+    dict
+        ``is_likelihood``, ``n_observations`` and ``observations_key``.
+    """
+    return {
+        "is_likelihood": loss == "nll",
+        "n_observations": int(np.sum(n_seen_per_output)),
+        "observations_key": _array_digest(*obs_parts),
+    }
 
 
 def _predict(problem: _CalibrationProblem, fm: _ReactorForwardModel, p, ic_thetas, C0s):
@@ -374,6 +410,7 @@ class _ResolvedDatasets(NamedTuple):
     obs_species_indices: jnp.ndarray
     n_observed: int
     data_mean_square: float | None
+    obs_parts: list
 
 
 def _resolve_datasets(
@@ -410,6 +447,7 @@ def _resolve_datasets(
     datasets = []
     tobs_user = []
     digest_parts = []
+    obs_parts = []  # the observations and their times as given, for the criteria
     obs_seen = []
     n_seen_per_output = np.zeros(n_observed, dtype=int)  # observed (non-NaN) entries
     for ds, (C0_i, obs_i, tobs_i, sig_i) in enumerate(
@@ -448,6 +486,7 @@ def _resolve_datasets(
         obs_seen.append(obs_i)
         sig_arr = _coerce_sigma(sig_i)
         digest_parts += [obs_i, sig_arr, tobs_i, tobs_user[-1]]
+        obs_parts += [obs_i, tobs_user[-1]]
         datasets.append(
             (
                 C0_i,
@@ -465,6 +504,7 @@ def _resolve_datasets(
         obs_species_indices,
         n_observed,
         _data_mean_square(loss, obs_seen),
+        obs_parts,
     )
 
 
@@ -602,6 +642,7 @@ def _resolve_problem(
         data_key=(loss, _array_digest(*data.digest_parts)),
         rate_bounds=rate_bounds,
         data_mean_square=data.data_mean_square,
+        **_observation_record(loss, data.n_seen_per_output, data.obs_parts),
     )
 
 

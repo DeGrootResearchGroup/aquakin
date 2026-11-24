@@ -1,8 +1,9 @@
 """Functions in the package stay small enough to read, as a ratchet.
 
 CLAUDE.md, *Keep modules and functions small enough to read*: "A function past
-about 100 lines of body, or with more than about eight parameters, gets split
-or takes a config dataclass before it gets longer." This module checks it over
+100 lines of body, or with more than eight parameters, gets split into named
+steps or takes a config dataclass before it gets longer", and never gets under
+the limit by removing a capability. This module checks it over
 ``aquakin/`` and ``aquakin_ui/``, as ``test_size_limits.py`` does for files:
 
 - a function whose body (without its docstring) is over ``MAX_BODY_LINES``
@@ -39,7 +40,6 @@ RECORDED_LINES = {
     "aquakin/integrate/biofilm.py::BiofilmReactor.__init__": 173,
     "aquakin/integrate/calibration/laplace.py::_laplace_posterior": 145,
     "aquakin/integrate/calibration/multistart.py::_run_multistart": 153,
-    "aquakin/integrate/calibration/objective.py::_build_objective": 107,
     "aquakin/integrate/candidate_design.py::design_from_candidates": 150,
     "aquakin/integrate/discrete_adjoint.py::_discrete_adjoint_solve": 119,
     "aquakin/integrate/discrete_adjoint.py::esdirk_adjoint_solve": 146,
@@ -64,7 +64,6 @@ RECORDED_LINES = {
     "aquakin/plant/sensitivity.py::steady_state_dgsm": 132,
     "aquakin/plant/steady_solve.py::steady_state": 183,
     "aquakin/utils/units.py::_infer": 127,
-    "aquakin_ui/forms.py::rows_for": 110,
 }
 RECORDED_PARAMS = {
     "aquakin/core/ph_solver.py::_adaptive_activity_solve": 12,
@@ -143,8 +142,13 @@ RECORDED_PARAMS = {
 }
 
 ADVICE = (
-    "Split it into named steps, or group its parameters into a config dataclass "
-    "(CLAUDE.md, 'Keep modules and functions small enough to read')."
+    "Split it into named steps, or group the parameters that belong together into "
+    "a config dataclass (the established pattern, as IntegratorConfig and "
+    "OptimizerConfig; not by itself an owner decision). Do not get under the "
+    "limit by removing a capability (dropping a parameter, hard-coding a value a "
+    "caller could set, or packing unrelated arguments together); if neither fix "
+    "fits, stop and ask (CLAUDE.md, 'Keep modules and functions small enough to "
+    "read')."
 )
 
 

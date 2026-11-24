@@ -101,6 +101,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Gradient of an output w.r.t. parameters/conditions | `sensitivity` → `SensitivityResult` |
 | Cap-free forward sensitivity through a stiff solve | `forward_sensitivity` → `ForwardSensitivityResult` |
 | Global (Sobol-total-bound) sensitivity | `dgsm` → `DGSMResult` |
+| Variance-based (Sobol first-order and total) sensitivity | `sobol_indices` → `SobolResult`, `BootstrapConfig`, `sobol_indices_cost` |
 | Configure differentiation / integration | `DifferentiationConfig`, `IntegratorConfig`, `forward_adjoint` |
 | Guard against silent non-finite gradients | `check_finite_gradient` |
 | Sensitivities of a plant solve | `Plant.solve_sensitivity`, `Plant.dynamic_sensitivity`, `Plant.steady_state_sensitivity`, `Plant.dynamic_dgsm`, `Plant.steady_state_dgsm` |
@@ -119,6 +120,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Fisher information and profile likelihood of plant parameters | `aquakin.plant.plant_fisher_information` → `FisherInformation`, `aquakin.plant.plant_profile_likelihood` → `ProfileResult` |
 | Choose plant sensors by the information they add | `aquakin.plant.plant_rank_sensor_sets` with `aquakin.plant.SensorSet` → `CandidateScore` |
 | Identifiability report from a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |
+| Compare model structures fitted to the same data (AIC, AICc, BIC, Akaike weights) | `aic`, `aicc`, `bic` of a `CalibrationResult`; `compare_models` → `ModelComparison` |
 | Score a design (D / A / E / modified-E) | `design_criterion` |
 | Choose between candidate experiments | `rank_experiments` → `CandidateScore` |
 | Choose the best set of measurements from a candidate pool under a budget | `design_from_candidates` → `CandidateDesign` |

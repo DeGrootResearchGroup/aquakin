@@ -82,6 +82,18 @@ BUILDABLE = {
         "signal_name": "kla",
     },
     "influent": {"model": "asm1", "Q": 18000.0, "composition": {"SS": 69.5}},
+    "sbr": {
+        "model": "asm1",
+        "conditions": T,
+        "phases": [
+            {"name": "fill", "duration": 0.1, "feed": True},
+            {"name": "decant", "duration": 0.1, "decant": True},
+        ],
+        "full_volume": 100.0,
+        "feed_flow": 1.0,
+        "decant_flow": 1.0,
+        "settling": {"kind": "interface", "v_settle": 1.0, "area": 10.0},
+    },
 }
 
 # Port settings changed from their defaults, to check the rules follow them.
@@ -94,11 +106,12 @@ RENAMED = {
     "setpoint_splitter": {"output_port_flows": {"was": 385.0}, "remainder_port": "ras"},
     "threshold_splitter": {"threshold_port": "over", "remainder_port": "under"},
     "primary_clarifier": {"input_port_names": ["a", "b"], "effluent_port": "e", "sludge_port": "s"},
+    "sbr": {"input_port": "in", "output_port": "decant"},
 }
 
 
 def test_every_kind_is_tested_and_every_category_known():
-    assert set(BUILDABLE) | {"sbr", "dosing"} == set(unit_kinds())
+    assert set(BUILDABLE) | {"dosing"} == set(unit_kinds())
     assert {k.category for k in unit_kinds().values()} <= set(CATEGORIES)
 
 
@@ -120,22 +133,6 @@ def test_port_rules_follow_renamed_ports(kind):
 
 def test_port_rules_of_kinds_built_only_from_python():
     m = aquakin.load_model("asm1")
-    sbr = plant.SBRUnit(
-        "s",
-        m,
-        [plant.SBRPhase("fill", 0.1, feed=True)],
-        100.0,
-        1.0,
-        1.0,
-        plant.InterfaceSettling(1.0, 10.0),
-        conditions=T,
-        input_port="in",
-        output_port="decant",
-    )
-    assert unit_kind("sbr").ports_for({"input_port": "in", "output_port": "decant"}) == (
-        sbr.input_ports,
-        sbr.output_ports,
-    )
     dosing = plant.DosingUnit(
         "d", plant.Reagent(m, jnp.zeros(m.n_species)), flow=1.0, input_port="a"
     )
@@ -206,7 +203,7 @@ def test_a_constructor_error_is_reported_not_raised():
     out = check_unit("cstr", "c", {"model": "asm1", "volume": 1.0})
     assert not out["ok"] and "missing required condition values" in out["error"]
     out = check_unit("sbr", "s", {"model": "asm1"})
-    assert not out["ok"] and "only be set from Python" in out["error"]
+    assert not out["ok"] and out["error"] == "'phases' is required"
     assert not check_unit("no_such_kind", "x", {})["ok"]
 
 
@@ -537,3 +534,96 @@ def test_a_scheduled_composition_is_keyed_by_species_name():
         validate_settings(
             unit_kind("influent"), {"model": "asm1", "Q": 1.0, "composition": {3: 1.0}}
         )
+
+
+# -- settings that are records: an SBR's phases and settling model -----------
+
+
+def test_an_sbrs_phases_and_settling_describe_their_fields():
+    """The phases are records of SBRPhase's fields; the settling model is one
+    kind of two, each with its own arguments (and none of its private state)."""
+    settings = {s.name: s for s in unit_kind("sbr").settings}
+    phases, settling = settings["phases"], settings["settling"]
+    assert (phases.type, phases.required, settling.type, settling.required) == (
+        "records",
+        True,
+        "tagged",
+        True,
+    )
+    fields = {f["name"]: f for f in phases.fields}
+    assert list(fields) == ["name", "duration", "feed", "decant", "kla", "settle", "mixed"]
+    assert fields["duration"]["type"] == "number" and fields["duration"]["required"]
+    assert fields["mixed"]["type"] == "boolean" and fields["mixed"]["optional"]
+    assert fields["kla"]["default"] == 0.0 and "(1/d)" in fields["kla"]["help"]
+    kinds = {k: [f["name"] for f in v] for k, v in settling.fields.items()}
+    assert kinds == {
+        "interface": ["v_settle", "area", "remix_rate"],
+        "layered": ["n_layers", "v_settle", "area", "remix_rate"],
+    }
+    layers = settling.fields["layered"][0]
+    assert (layers["type"], layers["default"]) == ("integer", 4)
+    assert set(SETTING_TYPES) >= {"records", "tagged"}
+    assert json.loads(json.dumps(catalog(), allow_nan=False))  # still strict JSON
+
+
+def test_an_sbr_built_from_plain_settings_has_those_phases_and_settling():
+    from aquakin.plant.catalog import build_unit, unit_settings
+
+    sbr = build_unit("sbr", "s", BUILDABLE["sbr"])
+    assert tuple(sbr.phases) == (
+        plant.SBRPhase("fill", 0.1, feed=True),
+        plant.SBRPhase("decant", 0.1, decant=True),
+    )
+    assert type(sbr.settling) is plant.InterfaceSettling
+    assert (sbr.settling.v_settle, sbr.settling.area, sbr.settling.remix_rate) == (
+        1.0,
+        10.0,
+        1000.0,
+    )
+    _, written = unit_settings(sbr)
+    assert written["phases"][1] == {
+        "name": "decant",
+        "duration": 0.1,
+        "feed": False,
+        "decant": True,
+        "kla": 0.0,
+        "settle": False,
+        "mixed": None,
+    }
+    assert written["settling"] == {
+        "kind": "interface",
+        "v_settle": 1.0,
+        "area": 10.0,
+        "remix_rate": 1000.0,
+    }
+
+
+def test_a_settling_model_of_no_kind_cannot_be_written():
+    """A settling model the catalogue does not list (one written in Python) is
+    refused by name rather than written as something else."""
+    import dataclasses
+
+    from aquakin.plant.catalog import build_unit, unit_settings
+
+    @dataclasses.dataclass
+    class Mine(plant.InterfaceSettling):
+        pass
+
+    sbr = build_unit("sbr", "s", BUILDABLE["sbr"])
+    own = dataclasses.replace(sbr, settling=Mine(v_settle=1.0, area=10.0))
+    with pytest.raises(ValueError, match=r"^unit 's': 'settling' Mine cannot be written in a spec$"):
+        unit_settings(own)
+
+
+def test_a_phase_with_no_plain_form_cannot_be_written():
+    import dataclasses
+
+    from aquakin.plant.catalog import build_unit, unit_settings
+
+    sbr = build_unit("sbr", "s", BUILDABLE["sbr"])
+    odd = dataclasses.replace(sbr.phases[0], duration=jnp.asarray([0.1, 0.2]))
+    object.__setattr__(sbr, "phases", (odd, sbr.phases[1]))
+    with pytest.raises(
+        ValueError, match=r"^unit 's': 'phases' entry 1 setting 'duration' has no plain form$"
+    ):
+        unit_settings(sbr)
