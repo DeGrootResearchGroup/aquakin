@@ -305,6 +305,7 @@ aquakin/
 │   ├── repeated.py                     # lists of records edited on the page (study dialog, unit form)
 │   ├── checks.py                       # aquakin's background checks of units and plant
 │   ├── files.py                        # open / save the spec, unsaved-edit questions
+│   ├── unit_form.py                    # unit-form choices that redraw it; resending its rows
 │   ├── studies.py                      # list / run / freeze studies, Simulate, results
 │   ├── document.py                     # the flowsheet document (pure)
 │   ├── forms.py                        # unit form from the catalogue (pure)

@@ -42,7 +42,7 @@ tested, not asserted away.
 | `settings.py` | the user's preferences file (`AQUAKIN_UI_CONFIG` overrides); `tests/ui/conftest.py` points it at a temporary file, so a test never touches the user's |
 | `process.py`, `jobs.py` | starting / discarding child processes (below); `StudyRun`, one `aquakin study run --json` process per run |
 | `app.py` | `Editor`: state, drawing, undo, canvas events, the unit form, and the binding of every function below; do not grow it |
-| `checks.py`, `files.py`, `studies.py`, `page.py`, `study_page.py` | bound `Editor` concerns: checks; Open / Save; studies; the page; the Studies tab |
+| `checks.py`, `files.py`, `studies.py`, `page.py`, `study_page.py`, `unit_form.py` | bound `Editor` concerns: checks; Open / Save; studies; the page; the Studies tab; the unit form's redrawing choices and resending its rows |
 | `repeated.py` | the one implementation of lists of records edited on the page (`bound`, `redraw`, `add_button`, `move_button`, `remove_button`), shared by the study dialog and the unit form (composition, phase table) |
 | `widget/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
 
@@ -102,7 +102,7 @@ that imports both. Keep it that way rather than copying knowledge across:
 - **trame sends a value only when it differs from the one it last pushed**
   (`state.dirty` cannot force it; a page's first state does not count). A value
   that must reach the page again unchanged carries a new `revision`
-  (`cancel_apply`, `_show_kept_selection`). Push state set outside a page handler
+  (`_resend_rows`, `_show_kept_selection`). Push state set outside a page handler
   where it is set (`with self.state:`, `schedule_checks`), or a later change back
   to the last pushed value is dropped.
 - **Python owns the flowsheet.** The canvas emits only finished edits (`connect`,
@@ -131,9 +131,15 @@ that imports both. Keep it that way rather than copying knowledge across:
   applies them to the unit selected until then (or keeps it selected, with the
   field-named error). Save, Open, Simulate and Run apply them first
   (`_apply_pending`) and wait when they cannot be applied. A reset of the form
-  (`cancel_apply`) marks its first row with a new `revision`; only there: a
-  background redraw must never overwrite typing, nor clear `sel_dirty` (the
-  redraw that ends a round of checks keeps it, `_run_checks`).
+  (`cancel_apply`, and a choice that cannot be applied) marks its first row
+  with a new `revision` (`_resend_rows`); only there: a background redraw must
+  never overwrite typing, nor clear `sel_dirty` (the redraw that ends a round
+  of checks keeps it, `_run_checks`).
+- **A choice that redraws the form blocks the form until Python's rows
+  arrive.** The page marks the choice's row `waiting` and the form is `inert`
+  while any row is, because the rows Python sends replace whatever was entered
+  meanwhile. So `reshape_form` must send rows back on every path, the form as
+  it was when the choice cannot be applied (`_resend_rows` drops the mark).
 - **Removing a wired port asks first** (`Flowsheet.dropped_by`; nothing changes
   until `confirm_apply`).
 - **aquakin's checks run in the background** (`schedule_checks`, after

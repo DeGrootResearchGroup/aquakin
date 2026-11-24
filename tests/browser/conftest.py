@@ -28,9 +28,44 @@ def browser():
         b.close()
 
 
+class Relay:
+    """The page's websocket, passed through here so a test can hold back what
+    Python sends (``hold``) and deliver it later (``release``): what the page
+    does while an answer is on its way."""
+
+    def __init__(self):
+        self._held = None
+
+    def route(self, ws):
+        server = ws.connect_to_server()
+
+        def to_page(message):
+            if self._held is None:
+                ws.send(message)
+            else:
+                self._held.append((ws, message))
+
+        server.on_message(to_page)
+        ws.on_message(server.send)
+
+    def hold(self):
+        self._held = []
+
+    def release(self):
+        held, self._held = self._held or [], None
+        for ws, message in held:
+            ws.send(message)
+
+
 @pytest.fixture
-def page(browser, tmp_path):
-    """The editor on a copy of the BSM1 project, drawn in a fresh page."""
+def relay():
+    return Relay()
+
+
+@pytest.fixture
+def page(browser, tmp_path, relay):
+    """The editor on a copy of the BSM1 project, drawn in a fresh page, its
+    websocket passed through ``relay``."""
     project = tmp_path / "bsm1"
     shutil.copytree(PROJECTS / "bsm1", project)
     env = {**os.environ, "AQUAKIN_UI_CONFIG": str(tmp_path / "ui.json")}
@@ -52,6 +87,7 @@ def page(browser, tmp_path):
         else:
             raise AssertionError("the editor did not start:\n" + "".join(seen))
         pg = browser.new_page(viewport={"width": 1400, "height": 900})
+        pg.route_web_socket(re.compile(".*"), relay.route)
         pg.goto(f"http://127.0.0.1:{found.group(1)}/")
         pg.wait_for_selector(".vue-flow__node", timeout=60_000)
         yield pg

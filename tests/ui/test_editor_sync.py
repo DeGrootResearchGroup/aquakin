@@ -383,6 +383,21 @@ def test_a_model_change_that_cannot_be_read_changes_nothing(make_editor):
     assert set(ed.state.sel_errors) == {"volume"}
 
 
+def test_a_model_change_that_cannot_be_read_draws_the_page_rows_again(make_editor):
+    """The page marks the choice's row waiting and takes no input until rows
+    come back; a choice that cannot be applied sends back the page's own rows,
+    the unapplied edit kept and the mark gone."""
+    ed, _ = make_editor(BSM1)
+    ed.on_select({"nodes": ["tank1"], "edges": []})
+    rows = _with(ed.state.sel_rows, "volume", "lots")
+    i = next(i for i, r in enumerate(rows) if r["key"] == "model")
+    rows[i]["waiting"] = True
+    ed.reshape_form(rows, i, "asm3")
+    assert _with(ed.state.sel_rows, "volume", None)["value"] == "lots"
+    assert _with(ed.state.sel_rows, "model", None)["value"] == rows[i]["value"]
+    assert not any("waiting" in r for r in ed.state.sel_rows)
+
+
 def test_removing_a_unit_keeps_another_selection(make_editor):
     ed, _ = make_editor(BSM1)
     ed.on_select({"nodes": ["tank1"], "edges": []})

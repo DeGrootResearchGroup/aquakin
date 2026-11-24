@@ -291,78 +291,88 @@ def _unit_form(self: Editor) -> None:
             html.Span(v_html="sel_icon", classes="ak-sel-icon d-inline-flex")
             html.Div("{{ sel_kind }}", classes="text-subtitle-1 font-weight-medium")
         html.Div("{{ sel_summary }}", classes="text-caption text-medium-emphasis mb-3")
-        v3.VBtn(
-            "{{ sel_dirty ? 'Apply changes' : 'Apply' }}",
-            click=(self.apply_properties, "[sel_rows]"),
-            color="primary",
-            block=True,
-            variant=("sel_dirty ? 'flat' : 'tonal'",),
-            classes="mb-3 text-none",
-        )
-        html.Div(
-            "Selecting another unit applies these changes.",
-            v_if="sel_dirty",
-            classes="text-caption text-medium-emphasis mb-2",
-        )
-        v3.VAlert(
-            "{{ sel_error }}",
-            v_if="sel_error",
-            type="error",
-            variant="tonal",
-            density="compact",
-            classes="mb-3 text-caption",
-        )
-        with html.Div(v_for="(row, i) in sel_rows", key="row.key"):
-            common = dict(
-                label=("row.label",),
-                hide_details="auto",
-                update_focused="if ($event) { focus_label = row.label; focus_help = row.hint }",
-                placeholder=("row.placeholder",),
-                persistent_placeholder=True,
+        # A choice that redraws the form marks its row "waiting" until Python's
+        # rows replace them: anything entered meanwhile would be overwritten, so
+        # the form takes no input until then.
+        with html.Div(
+            raw_attrs=[f':inert="{_WAITING}"'], style=(f"{_WAITING} ? 'opacity: 0.6' : ''",)
+        ):
+            v3.VBtn(
+                "{{ sel_dirty ? 'Apply changes' : 'Apply' }}",
+                click=(self.apply_properties, "[sel_rows]"),
+                color="primary",
+                block=True,
+                variant=("sel_dirty ? 'flat' : 'tonal'",),
+                classes="mb-3 text-none",
+            )
+            html.Div(
+                "Selecting another unit applies these changes.",
+                v_if="sel_dirty",
+                classes="text-caption text-medium-emphasis mb-2",
+            )
+            v3.VAlert(
+                "{{ sel_error }}",
+                v_if="sel_error",
+                type="error",
+                variant="tonal",
                 density="compact",
-                variant="outlined",
-                classes="mb-2",
+                classes="mb-3 text-caption",
             )
-            v3.VSelect(
-                v_if="row.widget === 'select' && row.reshape",
-                items=("row.items",),
-                model_value=("row.value",),
-                update_modelValue=(self.reshape_form, "[sel_rows, i, $event]"),
-                **common,
-            )
-            v3.VSelect(
-                v_else_if="row.widget === 'select'",
-                items=("row.items",),
-                v_model="row.value",
-                update_modelValue="sel_dirty = true",
-                **common,
-            )
-            v3.VSelect(
-                v_else_if="row.widget === 'multi'",
-                items=("row.items",),
-                multiple=True,
-                chips=True,
-                closable_chips=True,
-                v_model="row.value",
-                update_modelValue="sel_dirty = true",
-                **common,
-            )
-            _composition_input(common)
-            _records_input()
-            v3.VTextField(
-                v_else_if="row.widget === 'readonly'",
-                disabled=True,
-                model_value=("row.value",),
-                **common,
-            )
-            v3.VTextField(
-                v_else=True,
-                v_model="row.value",
-                update_modelValue="sel_dirty = true",
-                suffix=("row.suffix",),
-                error_messages=("sel_errors[row.key] || []",),
-                **common,
-            )
+            with html.Div(v_for="(row, i) in sel_rows", key="row.key"):
+                common = dict(
+                    label=("row.label",),
+                    hide_details="auto",
+                    update_focused="if ($event) { focus_label = row.label; focus_help = row.hint }",
+                    placeholder=("row.placeholder",),
+                    persistent_placeholder=True,
+                    density="compact",
+                    variant="outlined",
+                    classes="mb-2",
+                )
+                v3.VSelect(
+                    v_if="row.widget === 'select' && row.reshape",
+                    items=("row.items",),
+                    model_value=("row.value",),
+                    update_modelValue=(
+                        "row.waiting = true; sel_rows = [...sel_rows]; "
+                        f"trigger('{self.server.trigger_name(self.reshape_form)}', "
+                        "[sel_rows, i, $event])"
+                    ),
+                    **common,
+                )
+                v3.VSelect(
+                    v_else_if="row.widget === 'select'",
+                    items=("row.items",),
+                    v_model="row.value",
+                    update_modelValue="sel_dirty = true",
+                    **common,
+                )
+                v3.VSelect(
+                    v_else_if="row.widget === 'multi'",
+                    items=("row.items",),
+                    multiple=True,
+                    chips=True,
+                    closable_chips=True,
+                    v_model="row.value",
+                    update_modelValue="sel_dirty = true",
+                    **common,
+                )
+                _composition_input(common)
+                _records_input()
+                v3.VTextField(
+                    v_else_if="row.widget === 'readonly'",
+                    disabled=True,
+                    model_value=("row.value",),
+                    **common,
+                )
+                v3.VTextField(
+                    v_else=True,
+                    v_model="row.value",
+                    update_modelValue="sel_dirty = true",
+                    suffix=("row.suffix",),
+                    error_messages=("sel_errors[row.key] || []",),
+                    **common,
+                )
         with v3.VSheet(
             v_if="focus_help", rounded=True, border=True, classes="pa-2 mt-1 text-caption"
         ):
@@ -372,6 +382,9 @@ def _unit_form(self: Editor) -> None:
 
 #: A form row changed in the browser: Apply turns "Apply changes".
 _DIRTY = "sel_dirty = true"
+
+#: A choice that redraws the form is on its way to Python (see ``reshape_form``).
+_WAITING = "sel_rows.some(r => r.waiting)"
 
 
 def _composition_input(common: dict) -> None:
