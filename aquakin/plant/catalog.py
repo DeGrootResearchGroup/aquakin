@@ -371,6 +371,115 @@ def _settings_of(cls, skip: tuple[str, ...] = ("name",)) -> tuple[Setting, ...]:
     return tuple(out)
 
 
+# ---------------------------------------------------------------------------
+# Settings that are the constructor arguments of a class, picked by kind
+# ---------------------------------------------------------------------------
+
+
+def same_kind(default, value) -> bool:
+    """Whether ``value`` has the type of a setting whose default is ``default``:
+    true/false, a finite number, or text."""
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, (int, float)):
+        return (
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        )
+    if isinstance(default, str):
+        return isinstance(value, str)
+    return isinstance(value, (bool, int, float, str))
+
+
+def record_settings(value: dict, cls: type, what: str, owner: str, skip=()) -> dict:
+    """``value``, a mapping of ``cls``'s constructor arguments, with every one
+    filled in from its default and checked by type.
+
+    Parameters
+    ----------
+    value : dict
+        Argument name to plain value.
+    cls : type
+        The class whose constructor the arguments are for.
+    what : str
+        The setting, as messages name it (``"translator"``).
+    owner : str
+        What holds the arguments, as messages name it (``"translator asm1_to_adm1"``).
+    skip : tuple of str, optional
+        Constructor arguments that are not settings (given by the caller).
+
+    Returns
+    -------
+    dict
+        Every argument but those skipped, a float argument as a float.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` names an argument ``cls`` does not take, or holds a value
+        of the wrong type.
+    """
+    params = inspect.signature(cls).parameters
+    full = {key: p.default for key, p in params.items() if key not in skip}
+    for key, v in value.items():
+        if key not in full:
+            raise ValueError(f"'{key}' is not a setting of {owner}")
+        if not same_kind(full[key], v):
+            raise ValueError(f"{what} setting '{key}' has the wrong type ({v!r})")
+        full[key] = float(v) if isinstance(full[key], float) else v
+    return full
+
+
+def kind_settings(value: dict, classes: dict, what: str, skip=()) -> tuple[type, dict]:
+    """The class ``value``'s ``kind`` names among ``classes``, and ``value`` with
+    every argument of that class filled in and checked (:func:`record_settings`).
+
+    Raises
+    ------
+    ValueError
+        If the kind is not one of ``classes``, or an argument is unknown or of
+        the wrong type.
+    """
+    value = dict(value)
+    kind = value.pop("kind", None)
+    if kind not in classes:
+        raise ValueError(f"{what} kind {kind!r} is not one of {sorted(classes)}")
+    full = record_settings(value, classes[kind], what, f"{what} {kind}", skip)
+    return classes[kind], {"kind": kind, **full}
+
+
+def record_plain(obj, what: str, skip=()) -> dict:
+    """The constructor arguments of ``obj`` (but ``skip``) as plain data.
+
+    Raises
+    ------
+    ValueError
+        If an argument has no plain form.
+    """
+    out: dict[str, Any] = {}
+    for name in inspect.signature(type(obj)).parameters:
+        if name in skip:
+            continue
+        value = _plain(getattr(obj, name))
+        if value is None:
+            raise ValueError(f"{what} setting '{name}' has no plain form")
+        out[name] = value
+    return out
+
+
+def kind_plain(obj, classes: dict, what: str, skip=()) -> dict:
+    """``obj`` as ``{kind, ...arguments}``, its kind found in ``classes``.
+
+    Raises
+    ------
+    ValueError
+        If ``obj``'s class is none of ``classes``, or an argument has no plain form.
+    """
+    for kind, cls in classes.items():
+        if type(obj) is cls:
+            return {"kind": kind, **record_plain(obj, what, skip)}
+    raise ValueError(f"{what} {type(obj).__name__} cannot be written in a spec")
+
+
 def _port_rules(settings: tuple[Setting, ...], fixed: tuple[PortRule, ...]) -> tuple[PortRule, ...]:
     """Port rules read from the port settings, after any fixed rules.
 

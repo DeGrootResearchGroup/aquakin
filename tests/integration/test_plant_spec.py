@@ -927,7 +927,8 @@ def test_an_influent_feeding_through_a_translator_round_trips():
 
 def test_translator_and_seed_helpers(monkeypatch):
     import aquakin.plant.spec as spec_module
-    from aquakin.plant.spec import _build_seed, _build_translator, _same_kind, _Seed
+    from aquakin.plant.catalog import same_kind as _same_kind
+    from aquakin.plant.spec import _build_seed, _build_translator, _Seed
 
     class Refusing:
         def __init__(self, source_model, target_model, rate: float = 1.0):
@@ -959,10 +960,10 @@ def test_a_failed_write_leaves_no_temporary_file(tmp_path, monkeypatch):
 def test_small_spec_helpers_on_their_edges(tmp_path):
     import dataclasses
 
+    from aquakin.plant.catalog import same_kind as _same_kind
     from aquakin.plant.spec import (
         _canonical_endpoint,
         _extends_of,
-        _same_kind,
         _translator_spec,
         spec_changes,
     )
