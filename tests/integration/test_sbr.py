@@ -210,32 +210,7 @@ def test_layered_settling_solves_finite(asm1):
 # event-driven fill / react / settle / decant / idle cycle on the two-species
 # A -> B decay model (in seconds, B taken as the settling particulate), which
 # compiles and solves in seconds, so the fast gate exercises the SBR solve and
-# its gradient too.
-
-_SMALL_V_FULL, _SMALL_Q = 100.0, 10.0          # m3, m3/s: fill / decant 50 m3
-
-
-def _small_sbr_plant(simple_model):
-    """A one-SBR plant on the A -> B model: heel 50 m3, filled to 100 m3 and
-    decanted back to 50 m3 each 27 s cycle."""
-    phases = [
-        SBRPhase("fill", 5.0, feed=True),
-        SBRPhase("react", 10.0, mixed=True),
-        SBRPhase("settle", 5.0, settle=True),
-        SBRPhase("decant", 5.0, decant=True),
-        SBRPhase("idle", 2.0),
-    ]
-    sbr = SBRUnit("sbr", simple_model, phases, full_volume=_SMALL_V_FULL,
-                  feed_flow=_SMALL_Q, decant_flow=_SMALL_Q,
-                  settling=InterfaceSettling(v_settle=2.0, area=10.0, remix_rate=1.0),
-                  particulate_species=["B"], initial_fraction=0.5,
-                  conditions={"T": 293.15})
-    p = Plant("small_sbr", time_unit="s")
-    p.add_unit(sbr)
-    p.add_influent("feed", InfluentSeries.constant(simple_model, A=1.0, B=0.0, Q=_SMALL_Q),
-                   to="sbr.feed")
-    return p
-
+# its gradient too (the plant is `make_small_sbr_plant`, in `tests/conftest.py`).
 
 def _volume_closed_form(sbr, t):
     """The SBR's liquid volume from its schedule alone: the initial heel, rising
@@ -254,18 +229,18 @@ def _volume_closed_form(sbr, t):
     return V
 
 
-def test_small_sbr_volume_follows_fill_and_decant(simple_model):
+def test_small_sbr_volume_follows_fill_and_decant(simple_model, make_small_sbr_plant):
     """Over one cycle the small SBR's volume equals its piecewise-linear closed
     form at every save point, the phase boundaries included; the decant is
     clarified (B, the particulate, well below the bulk) while A passes through."""
-    p = _small_sbr_plant(simple_model)
+    p = make_small_sbr_plant()
     t = np.linspace(0.0, 27.0, 55)                # 0.5 s grid, on every boundary
     sol = p.solve(t_span=(0.0, 27.0), t_eval=jnp.asarray(t), rtol=1e-8)
     V = np.asarray(sol.state[:, simple_model.n_species])
     # dV/dt is piecewise constant between located events; the implicit solve
     # reproduces the closed form to within its tolerance (rtol 1e-8).
     np.testing.assert_allclose(V, _volume_closed_form(p.units["sbr"], t), rtol=1e-6)
-    assert V.max() == pytest.approx(_SMALL_V_FULL) and V[-1] == pytest.approx(50.0)
+    assert V.max() == pytest.approx(p.units["sbr"].full_volume) and V[-1] == pytest.approx(50.0)
 
     eff = p.stream(sol, "sbr.effluent")
     decant = np.where(np.asarray(eff.Q) > 0.0)[0]
@@ -277,14 +252,14 @@ def test_small_sbr_volume_follows_fill_and_decant(simple_model):
     np.testing.assert_allclose(C_eff[decant, a], C[decant, a], rtol=1e-12)
 
 
-def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simple_model):
+def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simple_model, make_small_sbr_plant):
     """d(A + 2B at the end of the decant)/dk from a full tank through the settle
     and decant phases (two located-event segments, the settling state and the
     clarified draw) matches a central finite difference."""
-    p = _small_sbr_plant(simple_model)
+    p = make_small_sbr_plant()
     base = p.default_parameters()
     a, b = simple_model.species_index["A"], simple_model.species_index["B"]
-    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(_SMALL_V_FULL)
+    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(p.units["sbr"].full_volume)
     y0 = p.initial_state(overrides={"sbr": full})
 
     def loss(k):
@@ -302,12 +277,12 @@ def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simp
     assert g != 0.0
 
 
-def test_small_sbr_solve_traces_under_jit_and_matches_eager(simple_model):
+def test_small_sbr_solve_traces_under_jit_and_matches_eager(simple_model, make_small_sbr_plant):
     """A whole-cycle SBR solve wrapped in ``jax.jit`` -- the default ``y0``,
     traced parameters and a save grid built inside the trace -- traces and gives
     the eager solve's trajectory (one computation compiled whole instead of
     segment by segment, so they agree to rounding)."""
-    p = _small_sbr_plant(simple_model)
+    p = make_small_sbr_plant()
     base = p.default_parameters()
 
     def trajectory(params):
@@ -324,16 +299,16 @@ def test_small_sbr_solve_traces_under_jit_and_matches_eager(simple_model):
                                rtol=1e-4)
 
 
-def test_small_sbr_jitted_gradient_matches_finite_difference(simple_model):
+def test_small_sbr_jitted_gradient_matches_finite_difference(simple_model, make_small_sbr_plant):
     """``jax.jit(jax.grad(...))`` of the settle + decant loss of the
     finite-difference test above (a save grid built inside the trace) matches a
     central finite difference of the eager loss. (About 15 s, like that test:
     the cost is compiling the reverse pass through the stiff solve, and this is
     the fast tier's only check that a jitted SBR gradient traces.)"""
-    p = _small_sbr_plant(simple_model)
+    p = make_small_sbr_plant()
     base = p.default_parameters()
     a, b = simple_model.species_index["A"], simple_model.species_index["B"]
-    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(_SMALL_V_FULL)
+    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(p.units["sbr"].full_volume)
     y0 = p.initial_state(overrides={"sbr": full})
 
     def loss(k):
