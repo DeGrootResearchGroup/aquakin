@@ -232,6 +232,55 @@ def test_zero_variance_output_warns_and_reports_zero():
         )
     assert res.output_variance == 0.0
     assert np.all(res.first_order == 0.0) and np.all(res.total_order_ci == 0.0)
+    assert res.n_bootstrap == 0  # no intervals were formed
+
+
+def test_bootstrap_resample_count_is_honoured_and_recorded():
+    """The resample count changes the intervals (more resamples draw more rows
+    from the same seeded stream) but not the point estimates, and each result
+    records the count used; the default is 1000 at 95 %."""
+    rng = [(-PI, PI)] * 3
+    default = aquakin.sobol_indices(_ishigami, rng, n_samples=128)
+    few = aquakin.sobol_indices(
+        _ishigami, rng, n_samples=128, bootstrap=aquakin.BootstrapConfig(n_resamples=200)
+    )
+    assert (default.n_bootstrap, default.confidence) == (1000, 0.95)
+    assert few.n_bootstrap == 200
+    np.testing.assert_array_equal(few.first_order, default.first_order)
+    np.testing.assert_array_equal(few.total_order, default.total_order)
+    assert not np.array_equal(few.first_order_ci, default.first_order_ci)
+    assert not np.array_equal(few.total_order_ci, default.total_order_ci)
+
+
+def test_bootstrap_confidence_sets_the_interval_level():
+    """With the same seed and resample count the bootstrap distribution is the
+    same, so a 50 % interval lies inside the 95 % one, and the level is recorded."""
+    rng = [(-PI, PI)] * 3
+    wide = aquakin.sobol_indices(_ishigami, rng, n_samples=128)
+    narrow = aquakin.sobol_indices(
+        _ishigami, rng, n_samples=128, bootstrap=aquakin.BootstrapConfig(confidence=0.5)
+    )
+    assert narrow.confidence == 0.5
+    for n_ci, w_ci in (
+        (narrow.first_order_ci, wide.first_order_ci),
+        (narrow.total_order_ci, wide.total_order_ci),
+    ):
+        assert np.all(w_ci[:, 0] < n_ci[:, 0]) and np.all(n_ci[:, 1] < w_ci[:, 1])
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        (dict(n_resamples=99), "n_resamples must be an integer of at least 100; got 99"),
+        (dict(n_resamples=500.0), "n_resamples must be an integer of at least 100; got 500.0"),
+        (dict(n_resamples=True), "n_resamples must be an integer of at least 100; got True"),
+        (dict(confidence=1.0), "confidence must lie strictly between 0 and 1; got 1.0"),
+        (dict(confidence=0.0), "confidence must lie strictly between 0 and 1; got 0.0"),
+    ],
+)
+def test_bootstrap_config_rejects_bad_settings(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        aquakin.BootstrapConfig(**kwargs)
 
 
 def test_sobol_indices_cost_rounds_to_a_power_of_two():
@@ -246,7 +295,6 @@ def test_sobol_indices_cost_rounds_to_a_power_of_two():
     "kwargs, match",
     [
         (dict(distributions=[]), "at least one input distribution"),
-        (dict(confidence=1.0), "confidence must lie strictly between 0 and 1"),
         (dict(input_names=["only"]), "input_names has 1 entries but there are 2"),
         (dict(output_names=["a", "b"]), "output_names has 2 entries but fn returns m=1"),
         (dict(distributions=[(1.0, 0.0), (0.0, 1.0)]), "uniform needs high > low"),

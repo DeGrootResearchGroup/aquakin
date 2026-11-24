@@ -250,20 +250,25 @@ or on a cheap model.
 aquakin.sobol_indices_cost(2, 64)     # 256 solves for the two rate constants
 
 sob = aquakin.sobol_indices(bromate_umol, {"k1": (80.0, 320.0), "k_dec": (35.0, 140.0)},
-                            n_samples=64, seed=0)
+                            n_samples=64, seed=0,
+                            bootstrap=aquakin.BootstrapConfig(confidence=0.9))
 sob.first_order          # (2,) share of Var(bromate) each rate explains alone
 sob.total_order          # (2,) the same including interactions
 sob.interaction          # (2,) total minus first order
-sob.total_order_ci       # (2, 2) bootstrap 95 % intervals
+sob.total_order_ci       # (2, 2) bootstrap 90 % intervals, from 1000 resamples
 ```
 
 % invisible-code-block: python
 %     assert aquakin.sobol_indices_cost(2, 64) == 256 == sob.n_evaluations
+%     assert (sob.confidence, sob.n_bootstrap) == (0.9, 1000)
 %     assert np.all(sob.total_order <= np.asarray(res.sobol_total_bound))
 
 The confidence intervals come from a bootstrap over the base sample. The
-bootstrap costs no extra solves. It treats the sample as independent random
-draws, so on the scrambled-Sobol design used here the intervals are
+bootstrap costs no extra solves. `bootstrap=aquakin.BootstrapConfig(...)` sets
+the number of resamples (`n_resamples`, default 1000, at least 100) and the
+interval level (`confidence`, default 0.95); raise `n_resamples` for a high
+level such as 0.99, whose tails hold few resamples. The bootstrap treats the
+sample as independent random draws, so on the scrambled-Sobol design used here the intervals are
 conservative: they are usually wider than the actual error. Increase
 `n_samples` until the intervals are narrow enough to separate the inputs you
 want to compare. With a small sample an index near zero can come out slightly

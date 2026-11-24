@@ -81,6 +81,7 @@ from aquakin.integrate.scenarios import (
 )
 from aquakin.integrate.sensitivity import SensitivityResult, sensitivity
 from aquakin.integrate.variance_sensitivity import (
+    BootstrapConfig,
     SobolResult,
     sobol_indices,
     sobol_indices_cost,
@@ -91,6 +92,7 @@ __all__ = [
     "BatchSolution",
     "BiofilmReactor",
     "BiofilmSolution",
+    "BootstrapConfig",
     "CFDReactor",
     "CalibrationResult",
     "CandidateDesign",

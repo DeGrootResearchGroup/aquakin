@@ -115,6 +115,7 @@ from aquakin.integrate.events import Event, EventedResult, solve_with_events
 from aquakin.integrate.design import Constraint, OptimizeResult, optimize_design
 from aquakin.integrate.monte_carlo import MonteCarloResult, monte_carlo
 from aquakin.integrate.variance_sensitivity import (
+    BootstrapConfig,
     SobolResult,
     sobol_indices,
     sobol_indices_cost,
@@ -242,6 +243,7 @@ __all__ = [
     "BatchSolution",
     "BiofilmReactor",
     "BiofilmSolution",
+    "BootstrapConfig",
     "CFDReactor",
     "CSTRUnit",
     "CalibrationResult",

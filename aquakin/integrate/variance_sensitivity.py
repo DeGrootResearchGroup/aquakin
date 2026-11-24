@@ -57,13 +57,56 @@ from aquakin.integrate.monte_carlo import _map_unit_sample, _resolve_distributio
 
 _log = logging.getLogger(__name__)
 
-# Bootstrap replicates for the confidence intervals. They reuse the evaluations
-# already made, so they cost no solves; 1000 puts the Monte-Carlo error of a
-# 2.5 % / 97.5 % percentile well below the interval width.
-_N_BOOTSTRAP = 1000
+# Fewest bootstrap resamples accepted: with fewer, the 2.5 % / 97.5 % percentile
+# of a 95 % interval is the second or third most extreme resample, not an
+# estimate of the tail.
+_MIN_RESAMPLES = 100
 # Replicates resampled per batch: bounds the ``(batch, d, N)`` temporary at a
 # few tens of MB for d ~ 20 inputs and N ~ 4096 samples.
 _BOOTSTRAP_BATCH = 64
+
+
+@dataclass(frozen=True)
+class BootstrapConfig:
+    """Settings of the bootstrap confidence intervals of :func:`sobol_indices`.
+
+    The bootstrap resamples the rows of the evaluations already made, so it
+    costs no model evaluations; ``n_resamples`` trades only the run time of the
+    resampling against the Monte-Carlo noise in the interval end points.
+
+    Parameters
+    ----------
+    n_resamples : int, optional
+        Number of bootstrap resamples, at least 100. The default 1000 puts the
+        Monte-Carlo error of a 2.5 % / 97.5 % percentile well below the
+        interval width; raise it for a higher ``confidence``, whose tails hold
+        fewer resamples.
+    confidence : float, optional
+        Level of the percentile confidence intervals, in ``(0, 1)``.
+
+    Raises
+    ------
+    ValueError
+        If ``n_resamples`` is not an integer of at least 100, or ``confidence``
+        is not strictly between 0 and 1.
+    """
+
+    n_resamples: int = 1000
+    confidence: float = 0.95
+
+    def __post_init__(self):
+        n = self.n_resamples
+        if not isinstance(n, (int, np.integer)) or n < _MIN_RESAMPLES:
+            raise ValueError(
+                f"BootstrapConfig.n_resamples must be an integer of at least "
+                f"{_MIN_RESAMPLES}; got {n!r}. With fewer resamples the interval "
+                "end points are the sample extremes, not percentile estimates."
+            )
+        if not 0.0 < self.confidence < 1.0:
+            raise ValueError(
+                f"BootstrapConfig.confidence must lie strictly between 0 and 1; "
+                f"got {self.confidence!r}."
+            )
 
 
 @dataclass
@@ -96,6 +139,9 @@ class SobolResult:
         evaluations is non-finite in this output.
     confidence : float
         Level of the confidence intervals.
+    n_bootstrap : int
+        Bootstrap resamples behind the intervals (``0`` when the output has zero
+        variance and no intervals were formed).
     seed : int
         Seed of the sampler and the bootstrap; fixing it makes the result
         reproducible.
@@ -113,6 +159,7 @@ class SobolResult:
     n_evaluations: int
     n_valid: int
     confidence: float
+    n_bootstrap: int
     seed: int
     output_name: str | None = None
 
@@ -206,7 +253,7 @@ def _sobol_estimates(fA, fB, fAB):
         return num_first / var[..., None], num_total / var[..., None], var
 
 
-def _bootstrap_intervals(fA, fB, fAB, confidence, rng):
+def _bootstrap_intervals(fA, fB, fAB, bootstrap, rng):
     """Bootstrap percentile intervals for ``S`` and ``S_tot``, each ``(d, 2)``.
 
     Resamples the ``N`` base-sample rows with replacement (a row carries its
@@ -215,12 +262,13 @@ def _bootstrap_intervals(fA, fB, fAB, confidence, rng):
     """
     n = fA.shape[-1]
     first, total = [], []
-    for start in range(0, _N_BOOTSTRAP, _BOOTSTRAP_BATCH):
-        idx = rng.integers(0, n, size=(min(_BOOTSTRAP_BATCH, _N_BOOTSTRAP - start), n))
+    n_resamples = bootstrap.n_resamples
+    for start in range(0, n_resamples, _BOOTSTRAP_BATCH):
+        idx = rng.integers(0, n, size=(min(_BOOTSTRAP_BATCH, n_resamples - start), n))
         S, ST, _ = _sobol_estimates(fA[idx], fB[idx], np.moveaxis(fAB[:, idx], 0, 1))
         first.append(S)
         total.append(ST)
-    tail = 50.0 * (1.0 - confidence)
+    tail = 50.0 * (1.0 - bootstrap.confidence)
     q = (tail, 100.0 - tail)
     return (
         np.percentile(np.concatenate(first), q, axis=0).T,
@@ -228,14 +276,7 @@ def _bootstrap_intervals(fA, fB, fAB, confidence, rng):
     )
 
 
-def _check_sobol_arguments(d, confidence):
-    if d < 1:
-        raise ValueError("sobol_indices needs at least one input distribution.")
-    if not 0.0 < confidence < 1.0:
-        raise ValueError(f"confidence must lie strictly between 0 and 1; got {confidence}.")
-
-
-def _output_result(fA, fB, fAB, name, common, rng):
+def _output_result(fA, fB, fAB, name, common, bootstrap, rng):
     """Estimate the indices of one output column and wrap them in a SobolResult.
 
     Drops every base-sample row with a non-finite evaluation in this output;
@@ -254,8 +295,9 @@ def _output_result(fA, fB, fAB, name, common, rng):
         )
     fA, fB, fAB = fA[keep], fB[keep], fAB[:, keep]
     S, ST, var = _sobol_estimates(fA, fB, fAB)
+    n_bootstrap = bootstrap.n_resamples
     if var > 0:
-        S_ci, ST_ci = _bootstrap_intervals(fA, fB, fAB, common["confidence"], rng)
+        S_ci, ST_ci = _bootstrap_intervals(fA, fB, fAB, bootstrap, rng)
     else:
         # Every finite evaluation gave the same value: the indices are 0/0. Report
         # zeros but warn, so an empty ranking is not read as "no input matters".
@@ -268,6 +310,7 @@ def _output_result(fA, fB, fAB, name, common, rng):
         )
         S, ST = np.zeros(d), np.zeros(d)
         S_ci, ST_ci = np.zeros((d, 2)), np.zeros((d, 2))
+        n_bootstrap = 0
     return SobolResult(
         first_order=S,
         total_order=ST,
@@ -275,6 +318,7 @@ def _output_result(fA, fB, fAB, name, common, rng):
         total_order_ci=ST_ci,
         output_variance=float(var),
         n_valid=n_keep,
+        n_bootstrap=n_bootstrap,
         output_name=name,
         **common,
     )
@@ -288,7 +332,7 @@ def sobol_indices(
     output_names: Sequence[str] | None = None,
     n_samples: int = 512,
     seed: int = 0,
-    confidence: float = 0.95,
+    bootstrap: BootstrapConfig = BootstrapConfig(),
     batched: bool = True,
 ) -> SobolResult | list[SobolResult]:
     """First-order and total Sobol indices by the Saltelli / Jansen estimators.
@@ -334,10 +378,10 @@ def sobol_indices(
     seed : int, optional
         Seed of the scrambled-Sobol sampler and of the bootstrap. Fixing it (the
         default ``0``) makes the result exactly reproducible.
-    confidence : float, optional
-        Level of the bootstrap percentile confidence intervals, in ``(0, 1)``.
-        The 1000 bootstrap replicates reuse the evaluations already made, so
-        they cost no solves.
+    bootstrap : BootstrapConfig, optional
+        Resample count and level of the bootstrap percentile confidence
+        intervals (default 1000 resamples, 95 %). The resamples reuse the
+        evaluations already made, so they cost no solves.
     batched : bool, optional
         Evaluate the whole design through one :func:`jax.vmap` (default), or one
         call per point (lower peak memory for a large design).
@@ -351,9 +395,8 @@ def sobol_indices(
     Raises
     ------
     ValueError
-        For no inputs, a malformed distribution, mismatched ``input_names`` /
-        ``output_names``, or ``confidence`` outside
-        ``(0, 1)``.
+        For no inputs, a malformed distribution, or mismatched
+        ``input_names`` / ``output_names``.
     RuntimeError
         If fewer than two base-sample rows give finite evaluations of an output.
 
@@ -366,7 +409,8 @@ def sobol_indices(
     """
     names, ppfs = _resolve_distributions(distributions, input_names)
     d = len(ppfs)
-    _check_sobol_arguments(d, confidence)
+    if d < 1:
+        raise ValueError("sobol_indices needs at least one input distribution.")
     X, n = _saltelli_design(ppfs, n_samples, seed)
     vector = len(jax.eval_shape(lambda x: jnp.asarray(fn(x)), jnp.asarray(X[0])).shape) == 1
     _log.info("sobol_indices: %d evaluations of fn (N=%d, d=%d)", X.shape[0], n, d)
@@ -378,13 +422,13 @@ def sobol_indices(
         input_names=list(names),
         n_samples=n,
         n_evaluations=int(X.shape[0]),
-        confidence=float(confidence),
+        confidence=float(bootstrap.confidence),
         seed=seed,
     )
     rng = np.random.default_rng(seed)
     fAB = Y[2 * n :].reshape(d, n, m)
     results = [
-        _output_result(Y[:n, i], Y[n : 2 * n, i], fAB[:, :, i], name, common, rng)
+        _output_result(Y[:n, i], Y[n : 2 * n, i], fAB[:, :, i], name, common, bootstrap, rng)
         for i, name in enumerate(out_names)
     ]
     return results if vector else results[0]
