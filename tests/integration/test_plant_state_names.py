@@ -33,10 +33,10 @@ def _buildable():
     spec = importlib.util.spec_from_file_location("_catalog_settings", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.BUILDABLE
+    return module.BUILDABLE, module.MODEL_FILES
 
 
-BUILDABLE = _buildable()
+BUILDABLE, MODEL_FILES = _buildable()
 
 
 def _check(unit):
@@ -48,7 +48,9 @@ def _check(unit):
 
 @pytest.mark.parametrize("kind", sorted(set(BUILDABLE) - {"influent"}))
 def test_every_kind_names_each_state_entry_once(kind):
-    _check(build_unit(kind, "u", BUILDABLE[kind]))
+    model = BUILDABLE[kind].get("model")
+    models = {model: aquakin.load_model_from_file(MODEL_FILES[model])} if model in MODEL_FILES else None
+    _check(build_unit(kind, "u", BUILDABLE[kind], models=models))
 
 
 def test_layered_units_name_their_layers():
