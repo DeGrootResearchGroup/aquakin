@@ -155,3 +155,47 @@ def test_rates_at_a_slightly_negative_state_equal_the_depleted_rates(name):
         if np.any(differs[i])
     }
     assert not moved, f"{name}: rates move at -1e-9 (species -> reactions): {moved}"
+
+
+def test_asm2d_tud_glycogen_formation_is_finite_with_no_stored_glycogen():
+    """``asm2d_tud`` glycogen formation takes its finite limit at XGLY = 0.
+
+    The published drive ``XPHA / XGLY * (f_GLY / (KfGLY + f_GLY)) * XPAO``,
+    f_GLY = XGLY / XPAO, tends to ``XPHA / KfGLY`` as XGLY -> 0; written as that
+    product it is ``inf * 0 = NaN`` there. Every other pool stays at its default.
+    """
+    net = aquakin.load_model("asm2d_tud")
+    p = net.default_parameters()
+    cf = net.default_conditions().fields
+    c = net.default_concentrations().at[net.species_index["XGLY"]].set(0.0)
+
+    rates = np.asarray(net.rates(c, p, cf, 0))
+    assert np.all(np.isfinite(rates))
+    grad = jax.grad(lambda c: jnp.sum(net.dCdt(c, p, cf, 0)))(c)
+    assert np.all(np.isfinite(np.asarray(grad)))
+
+    # The aerobic rate at the limit, from the closed form above.
+    def value(name):
+        return float(c[net.species_index[name]])
+
+    def param(name):
+        return float(p[net.param_index[name]])
+
+    def monod(x, k):
+        return x / (k + x)
+
+    expected = (
+        param("qGLY")
+        * value("XPHA") / param("KfGLY")
+        * monod(value("SO"), param("KO_HYD"))
+        * monod(value("XPHA"), param("KPHA"))
+    )
+    i = net.reaction_names.index("Aerobic_glycogen_formation")
+    assert rates[i] == pytest.approx(expected, rel=1e-12)
+    assert rates[i] > 0.0
+
+    # A batch solve started there stays finite.
+    reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
+    sol = reactor.solve(c, params=p, t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 5))
+    assert np.all(np.isfinite(np.asarray(sol.C)))
+    assert float(sol.C_named("XGLY")[-1]) > 0.0

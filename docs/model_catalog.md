@@ -69,7 +69,10 @@ g TSS/m³), and they integrate in **days**.
 `asm2d_tud`
 : The Delft (TU Delft) variant of ASM2d, with a metabolic description of the
   PAO storage/growth cycle in place of ASM2d's black-box bio-P kinetics
-  (Meijer et al. 2001; Murnleitner et al. 1997). *(18 species, 22 reactions.)*
+  (Meijer et al. 2001; Murnleitner et al. 1997). As published, the poly-P
+  storage rate is inversely proportional to the stored fraction XPP/XPAO, so
+  it is infinite when XPP is exactly 0: start a simulation with XPP > 0.
+  *(18 species, 22 reactions.)*
 
 `asm2d_chemp`
 : ASM2d with **saturation-index-driven** chemical phosphorus precipitation

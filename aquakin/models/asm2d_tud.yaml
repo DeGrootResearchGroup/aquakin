@@ -5,7 +5,10 @@ model:
     The TU Delft variant of ASM2d: the PAO storage and growth cycle is
     described metabolically (PHA, polyphosphate and glycogen pools with
     stoichiometry derived from the PAO metabolism) in place of ASM2d's
-    empirical bio-P kinetics. 18 state variables, 22 processes.
+    empirical bio-P kinetics. 18 state variables, 22 processes. The
+    poly-P storage rates are inversely proportional to the stored fraction
+    XPP/XPAO, as published, so they are infinite at XPP = 0: give XPP a
+    positive initial value.
   references:
     - "Meijer, van Loosdrecht & Heijnen (2001). Metabolic modelling of full-scale biological nitrogen and phosphorus removing WWTP's. Water Res. 35(11), 2711-2723. doi:10.1016/S0043-1354(00)00567-4"
     - "Murnleitner, Kuba, van Loosdrecht & Heijnen (1997). An integrated metabolic model for the aerobic and denitrifying biological phosphorus removal. Biotechnol. Bioeng. 54(5), 434-450."
@@ -163,7 +166,12 @@ expressions:
   Monod_SO_A: "monod([SO], KO_A)"
   Monod_SNH_A: "monod([SNH], KNH_A)"
   Monod_SHCO_A: "monod([SHCO], KHCO_A)"
-  Monod_XGLY_over_XPAO: "monod_ratio([XGLY], [XPAO], KfGLY)"
+  # Glycogen-formation drive: the published XPHA/XGLY * (f_GLY / (KfGLY + f_GLY))
+  # * XPAO, with f_GLY = XGLY/XPAO, multiplied through so XGLY no longer divides:
+  # XPHA * XPAO / (KfGLY * XPAO + XGLY). The two agree wherever both are defined,
+  # and this one stays finite at XGLY = 0 (limit XPHA/KfGLY), where the product
+  # form is 0 * inf = NaN. safe_div gives 0 when XPAO and XGLY are both 0.
+  Glycogen_drive: "safe_div([XPHA] * [XPAO], KfGLY * [XPAO] + [XGLY])"
 
 reactions:
   - name: Aerobic_hydrolysis
@@ -327,6 +335,9 @@ reactions:
   # rate to come out in g P/m3/d, matching the stoichiometry (XPP +1), qPP
   # carries (g_P/g_COD)^2/d. The literature quotes it in g P/(g COD d), treating
   # f_PP as a pure ratio; the value is the same.
+  # Unlike glycogen formation, this rate has no finite limit as XPP -> 0: the
+  # max-ratio term tends to fPP_max/(KfPP + fPP_max), so the rate grows as
+  # 1/XPP and is inf at XPP = 0 exactly. Start a simulation with XPP > 0.
   - name: Anoxic_storage_of_XPP
     description: "Anoxic storage of XPP"
     rate: "qPP * etaNO_PAO * [XPAO] / [XPP] * Monod_KO_PAO * Monod_SNO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
@@ -342,7 +353,7 @@ reactions:
 
   - name: Anoxic_glycogen_formation
     description: "Anoxic glycogen formation"
-    rate: "qGLY * etaNO_PAO * [XPHA] / [XGLY] * Monod_KO_PAO * Monod_SNO * Monod_XPHA * Monod_XGLY_over_XPAO * Monod_SHCO * [XPAO]"
+    rate: "qGLY * etaNO_PAO * Glycogen_drive * Monod_KO_PAO * Monod_SNO * Monod_XPHA * Monod_SHCO"
     stoichiometry:
       SNH: "iN_BM / YGLY_NO"
       SNO: "(-1) * (1 / YGLY_NO - 1) / iNO3_N2"
@@ -391,7 +402,7 @@ reactions:
 
   - name: Aerobic_glycogen_formation
     description: "Aerobic glycogen formation"
-    rate: "qGLY * [XPHA] / [XGLY] * Monod_SO * Monod_XPHA * Monod_XGLY_over_XPAO * [XPAO]"
+    rate: "qGLY * Glycogen_drive * Monod_SO * Monod_XPHA"
     stoichiometry:
       SO: "(-1) * (1 - YGLY_O) / YGLY_O"
       SNH: "iN_BM / YGLY_O"
