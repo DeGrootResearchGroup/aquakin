@@ -60,8 +60,12 @@ connection becomes :meth:`Plant.add_influent`. Units the plant derives itself
 spec cannot express yet is refused by :meth:`Plant.to_spec` with a
 :class:`SpecError` naming it rather than dropped: a model that is neither
 shipped nor read from a file, a heat-balance temperature model, and settings
-only Python can give (arrays of initial concentrations, SBR phases, settling
-models).
+only Python can give (arrays of initial concentrations).
+
+An SBR's ``phases`` are a list of mappings with :class:`~aquakin.plant.sbr.SBRPhase`'s field names
+and its ``settling`` a mapping naming a ``kind`` (``interface`` or ``layered``)
+with that model's arguments; a field left out takes its default, and every
+field is written.
 """
 
 from __future__ import annotations
@@ -1013,13 +1017,14 @@ def _canonical_settings(kind, settings: dict, where: str) -> dict:
     So that ``1000`` and ``1000.0`` (a hand edit, a JSON writer) are one plant.
     ``None`` values (unset; required ones too, in a draft) are kept as they are.
     """
-    from aquakin.plant.catalog import validate_settings
+    from aquakin.plant.catalog import filled_value, validate_settings
 
     try:
         validate_settings(kind, {k: v for k, v in settings.items() if v is not None})
     except ValueError as exc:
         raise SpecError(f"{where}: {exc}") from None
-    types = {s.name: s.type for s in kind.settings}
+    settings_of = {s.name: s for s in kind.settings}
+    types = {name: s.type for name, s in settings_of.items()}
     out = {}
     for k, v in settings.items():
         t = types.get(k)
@@ -1036,6 +1041,10 @@ def _canonical_settings(kind, settings: dict, where: str) -> dict:
                 else x
                 for key, x in v.items()
             }
+        elif t in ("records", "tagged"):
+            # Every argument of every record, so a default left out and one
+            # written out are one plant (and one fingerprint).
+            out[k] = filled_value(settings_of[k], v)
         elif t == "reagent":
             composition = {key: _canonical_number(x) for key, x in v.get("composition", {}).items()}
             out[k] = {**v, "composition": composition}

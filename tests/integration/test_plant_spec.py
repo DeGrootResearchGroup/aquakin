@@ -1009,3 +1009,157 @@ def test_a_model_file_read_with_another_activity_model_is_not_a_plain_file_model
     path = files("aquakin.models") / "adm1.yaml"
     m = aquakin.load_model_from_file(str(path), activity_model="davies")
     assert getattr(m, "_aquakin_source", None) is None
+
+
+# -- a sequencing batch reactor: its phases and settling model ----------------
+
+
+_SBR_SOLIDS = ["XI", "XS", "XB_H", "XB_A", "XP", "XND"]
+
+
+def _sbr_plant(settling):
+    """One SBR on a constant feed (its last-but-one phase not mixed explicitly)."""
+    from aquakin.plant import SBRPhase, SBRUnit
+
+    phases = [
+        SBRPhase("fill", 0.10, feed=True),
+        SBRPhase("react", 0.30, kla=240.0),
+        SBRPhase("settle", 0.10, settle=True),
+        SBRPhase("decant", 0.10, decant=True, mixed=False),
+        SBRPhase("idle", 0.05),
+    ]
+    sbr = SBRUnit(
+        "sbr",
+        _asm1(),
+        phases,
+        full_volume=1000.0,
+        feed_flow=5000.0,
+        decant_flow=5000.0,
+        settling=settling,
+        particulate_species=_SBR_SOLIDS,
+        initial_fraction=0.5,
+        conditions={"T": 293.15},
+    )
+    p = Plant("sbr_plant", time_unit="d")
+    p.add_unit(sbr)
+    feed = InfluentSeries.constant(_asm1(), SS=200.0, SNH=40.0, XS=150.0, XB_H=50.0, Q=5000.0)
+    p.add_influent("feed", feed, to="sbr.feed")
+    return p
+
+
+def _settling_arguments(settling) -> dict:
+    return {f: getattr(settling, f) for f in ("v_settle", "area", "remix_rate", "n_layers")
+            if hasattr(settling, f)}  # fmt: skip
+
+
+_INTERFACE = {"kind": "interface", "v_settle": 400.0, "area": 200.0, "remix_rate": 1000.0}
+_LAYERED = {"kind": "layered", "n_layers": 3, "v_settle": 50.0, "area": 20.0, "remix_rate": 1000.0}
+
+
+@pytest.mark.parametrize("written", [_INTERFACE, _LAYERED], ids=["interface", "layered"])
+def test_an_sbr_round_trips_through_a_spec_file(tmp_path, written):
+    """Its phases are written as mappings of every SBRPhase field, its settling
+    model as its kind and every argument, and the plant read back is the same."""
+    from aquakin.plant import InterfaceSettling, LayeredSettling
+
+    cls = {"interface": InterfaceSettling, "layered": LayeredSettling}[written["kind"]]
+    p = _sbr_plant(cls(**{k: v for k, v in written.items() if k != "kind"}))
+    path = tmp_path / "flowsheet.yaml"
+    p.to_spec(path)
+    unit = yaml.safe_load(path.read_text())["units"]["sbr"]
+    assert unit["phases"][0] == {
+        "name": "fill",
+        "duration": 0.1,
+        "feed": True,
+        "decant": False,
+        "kla": 0.0,
+        "settle": False,
+        "mixed": None,
+    }
+    assert unit["phases"][3]["mixed"] is False
+    assert unit["settling"] == written
+
+    q = Plant.from_spec(path)
+    _assert_same_plant(p, q)
+    a, b = p.units["sbr"], q.units["sbr"]
+    assert tuple(b.phases) == tuple(a.phases)
+    assert type(b.settling) is cls
+    assert _settling_arguments(b.settling) == _settling_arguments(a.settling)
+
+
+def test_an_sbr_read_from_a_spec_file_solves_bit_identically(
+    tmp_path, simple_model, make_small_sbr_plant
+):
+    """A whole cycle (fill, react, settle, decant, idle) of the plant and of the
+    plant its spec file builds give the same states, bit for bit."""
+    import jax.numpy as jnp
+
+    p = make_small_sbr_plant()
+    path = tmp_path / "flowsheet.yaml"
+    p.to_spec(path)
+    q = Plant.from_spec(path)
+    t = jnp.linspace(0.0, 27.0, 28)
+    a = p.solve(t_span=(0.0, 27.0), t_eval=t)
+    b = q.solve(t_span=(0.0, 27.0), t_eval=t)
+    np.testing.assert_array_equal(np.asarray(b.state), np.asarray(a.state))
+    # The tank filled to 100 m3 and was decanted back: the solve did something.
+    volume = np.asarray(a.unit_state("sbr")[:, simple_model.n_species])
+    assert volume.max() == pytest.approx(100.0) and volume[-1] == pytest.approx(50.0)
+
+
+def test_an_sbr_spec_with_defaults_left_out_has_the_same_fingerprint():
+    """Leaving out a phase field or a settling argument at its default is the
+    same plant as writing it; changing one is not."""
+    from aquakin.plant import InterfaceSettling
+    from aquakin.plant.spec import spec_fingerprint
+
+    spec = _sbr_plant(InterfaceSettling(v_settle=400.0, area=200.0)).to_spec()
+    unit = spec["units"]["sbr"]
+    defaults = {"feed": False, "decant": False, "kla": 0.0, "settle": False, "mixed": None}
+    short = [
+        {k: v for k, v in phase.items() if k not in defaults or v != defaults[k]}
+        for phase in unit["phases"]
+    ]
+    assert short[1] == {"name": "react", "duration": 0.3, "kla": 240.0}
+    assert short[3] == {"name": "decant", "duration": 0.1, "decant": True, "mixed": False}
+    terse = {**unit, "phases": short, "settling": {"kind": "interface", "v_settle": 400, "area": 200}}
+    base = spec_fingerprint(spec)
+    assert spec_fingerprint({**spec, "units": {**spec["units"], "sbr": terse}}) == base
+    longer = [*short[:1], {**short[1], "duration": 0.31}, *short[2:]]
+    changed = {**unit, "phases": longer}
+    assert spec_fingerprint({**spec, "units": {**spec["units"], "sbr": changed}}) != base
+
+
+@pytest.mark.parametrize(
+    ("phases", "settling", "message"),
+    [
+        ([{"name": "fill", "duration": 0.1, "kLa": 2.0}], None,
+         r"'kLa' is not a setting of 'phases' entry 1 \(fill\)\. Did you mean: kla\?"),
+        ([{"name": "fill", "duration": "long"}], None,
+         r"'phases' entry 1 \(fill\) setting 'duration' has the wrong type \('long'\)"),
+        ([{"name": "fill", "duration": 0.1}, {"name": "react"}], None,
+         r"'phases' entry 2 \(react\) setting 'duration' is required"),
+        ([{"name": "fill", "duration": 0.1, "mixed": "yes"}], None,
+         r"'phases' entry 1 \(fill\) setting 'mixed' has the wrong type"),
+        ([{"duration": 0.1, "feed": 1}], None, r"'phases' entry 1 setting 'feed' has the wrong type"),
+        ({"fill": 0.1}, None, r"'phases' must be a list, got dict"),
+        (["fill"], None, r"'phases' entry 1 must be a mapping, got str"),
+        (None, {"kind": "plug"}, r"'settling' kind 'plug' is not one of \['interface', 'layered'\]"),
+        (None, ["interface"], r"'settling' must be a mapping, got list"),
+        (None, {"kind": "layered", "n_layers": 3.5}, r"'settling' setting 'n_layers' has the wrong type"),
+        (None, {"kind": "interface", "area": 2.0}, r"'settling' setting 'v_settle' is required"),
+        (None, {"kind": "interface", "v_settle": 1, "area": 2, "_particulate_mask": [1]},
+         r"'_particulate_mask' is not a setting of 'settling' interface"),
+    ],
+)  # fmt: skip
+def test_an_sbr_spec_that_cannot_be_read_names_the_entry(phases, settling, message):
+    from aquakin.plant import InterfaceSettling
+
+    spec = _sbr_plant(InterfaceSettling(v_settle=400.0, area=200.0)).to_spec()
+    unit = dict(spec["units"]["sbr"])
+    if phases is not None:
+        unit["phases"] = phases
+    if settling is not None:
+        unit["settling"] = settling
+    with pytest.raises(SpecError, match=rf"^units\.sbr: ValueError: {message}"):
+        Plant.from_spec({**spec, "units": {**spec["units"], "sbr": unit}})

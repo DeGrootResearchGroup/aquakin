@@ -129,11 +129,14 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
     -------
     list of dict
         One row per field: ``key``, ``label``, ``widget`` (``text``,
-        ``select``, ``multi``, ``readonly``, ``composition``), ``value``,
-        ``items``, ``hint``, ``placeholder``, ``suffix``; ``reshape`` marks a
-        choice that changes which rows the form has. A ``composition`` row's
-        value is a list of ``{species, value}`` entries, its ``items`` the
-        species to choose from and its ``units`` each species' unit.
+        ``select``, ``multi``, ``readonly``, ``composition``, ``records``),
+        ``value``, ``items``, ``hint``, ``placeholder``, ``suffix``; ``reshape``
+        marks a choice that changes which rows the form has. A ``composition``
+        row's value is a list of ``{species, value}`` entries, its ``items`` the
+        species to choose from and its ``units`` each species' unit. A
+        ``records`` row's value is a list of records, one mapping of field to
+        shown value each; its ``fields`` describe them, ``blank`` is a new
+        record and ``item`` names one (``phase``).
     """
     u = doc.units[uid]
     model = u.settings.get("model")
@@ -196,6 +199,10 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
             rows.append(_row(key, label, "select", text, items=["true", "false"], **common))
         elif t == "reagent":
             rows += _reagent_rows(doc, s, value or {}, model_info)
+        elif t == "records":
+            rows.append(_records_row(s, value or [], clock))
+        elif t == "tagged":
+            rows += _tagged_rows(s, value or {}, clock)
         elif t == "unsupported":
             rows.append(
                 _row(
@@ -295,6 +302,138 @@ def _reagent_rows(doc: Flowsheet, s: dict, value: dict, model_info) -> list[dict
             ),
         ),
     ]
+
+
+#: The choices of a true / false field that may also be left to its default.
+_MAYBE = [
+    {"title": "default", "value": ""},
+    {"title": "true", "value": "true"},
+    {"title": "false", "value": "false"},
+]
+
+
+def _checkbox(f: dict) -> bool:
+    """Whether a record's field is a box to tick (true / false, never unset)."""
+    return f["type"] == "boolean" and not f["optional"]
+
+
+def _shown(f: dict, value):
+    """A record field's value as its widget holds it: a box's true / false, else text."""
+    if _checkbox(f):
+        return bool(f["default"] if value is None else value)
+    if f["type"] == "boolean":
+        return "" if value is None else str(value).lower()
+    return _text(value)
+
+
+def _records_row(s: dict, value: list, clock: str) -> dict:
+    """The row of a ``records`` setting: one record per entry of ``value``."""
+    fields = [
+        {
+            **f,
+            "suffix": unit_in(f["help"], clock),
+            "label": f["name"] + (" *" if f["required"] else ""),
+            "placeholder": _placeholder(f),
+        }
+        for f in s["fields"]
+    ]
+    return _row(
+        s["name"],
+        s["name"] + (" *" if s["required"] else ""),
+        "records",
+        [{f["name"]: _shown(f, r.get(f["name"])) for f in fields} for r in value],
+        hint=s["help"],
+        fields=fields,
+        items=_MAYBE,
+        blank={f["name"]: _shown(f, None) for f in fields},
+        item=s["name"].removesuffix("s"),
+    )
+
+
+def _read_records(s: dict, entries: list[dict]) -> list[dict]:
+    """A ``records`` setting's entries back to plain records; an entry left as
+    it was added (every field at its blank) is skipped.
+
+    Raises
+    ------
+    FieldError
+        If a field cannot be read, or a required one is empty; the message
+        names the entry and the field.
+    """
+    item = s["name"].removesuffix("s")
+    blank = {f["name"]: _shown(f, None) for f in s["fields"]}
+    out = []
+    for i, entry in enumerate(entries):
+        if all(entry.get(k, b) == b for k, b in blank.items()):
+            continue
+        own = str(entry.get("name") or "").strip()
+        where = f"{item} {i + 1}" + (f" ({own})" if own else "")
+        record: dict = {}
+        for f in s["fields"]:
+            raw = entry.get(f["name"], blank[f["name"]])
+            if _checkbox(f):
+                record[f["name"]] = bool(raw)
+                continue
+            try:
+                value = _parse(f, raw)
+            except ValueError as exc:
+                raise FieldError(s["name"], f"{where}: {f['name']}: {exc}") from None
+            if value is None and f["required"]:
+                raise FieldError(s["name"], f"{where}: give {f['name']}")
+            if value is not None or f["type"] == "boolean":
+                record[f["name"]] = value
+        out.append(record)
+    return out
+
+
+def _tagged_rows(s: dict, value: dict, clock: str) -> list[dict]:
+    """The rows of a ``tagged`` setting: its kind (a choice that redraws the
+    form), then the arguments of that kind."""
+    name, kind = s["name"], value.get("kind") or ""
+    rows = [
+        _row(
+            f"{name}.kind",
+            name + (" *" if s["required"] else ""),
+            "select",
+            kind,
+            items=list(s["fields"]),
+            hint=s["help"],
+            placeholder="required" if s["required"] else "not set",
+            reshape=True,
+        )
+    ]
+    for f in s["fields"].get(kind, []):
+        label = f"{name} {f['name']}" + (" *" if f["required"] else "")
+        rows.append(
+            _row(
+                f"{name}.{f['name']}",
+                label,
+                value=_text(value.get(f["name"])),
+                hint=f["help"],
+                placeholder=_placeholder(f),
+                suffix=unit_in(f["help"], clock),
+            )
+        )
+    return rows
+
+
+def _read_tagged(s: dict, values: dict) -> dict | None:
+    """A ``tagged`` setting from its rows: its kind and every argument given
+    (an empty one takes its default), or ``None`` when no kind is chosen. The
+    arguments of the kind the form was drawn with that the chosen kind also
+    takes are kept, so switching kind keeps what both share."""
+    name = s["name"]
+    kind = str(values.get(f"{name}.kind") or "").strip()
+    if not kind:
+        return None
+    out: dict = {"kind": kind}
+    for f in s["fields"].get(kind, []):
+        key = f"{name}.{f['name']}"
+        if key in values:
+            value = _field(key, _parse, f, values[key])
+            if value is not None:
+                out[f["name"]] = value
+    return out
 
 
 def _finite(text: str) -> float:
@@ -443,6 +582,14 @@ def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, 
             reagent = _read_reagent(name, values, items.get(f"{name}.composition") or [])
             if reagent is not None:
                 settings[name] = reagent
+        elif t == "records":
+            records = _read_records(s, values.get(name) or [])
+            if records:
+                settings[name] = records
+        elif t == "tagged":
+            tagged = _read_tagged(s, values)
+            if tagged is not None:
+                settings[name] = tagged
         elif t in _READ_ONLY:
             if name in u.settings:
                 settings[name] = u.settings[name]

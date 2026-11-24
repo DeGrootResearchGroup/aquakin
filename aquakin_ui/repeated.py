@@ -44,6 +44,19 @@ def remove_button(items: str, index: str, state: str, also: str = "") -> None:
     )
 
 
+def move_button(items: str, index: str, step: int, state: str, also: str = "") -> None:
+    """A small arrow that moves record ``index`` of the list ``items`` one place
+    up (``step`` -1) or down (+1); it is disabled at the end it would leave."""
+    to = f"{index} + ({step})"
+    v3.VBtn(
+        icon="mdi-arrow-up" if step < 0 else "mdi-arrow-down",
+        size="small",
+        variant="text",
+        disabled=(f"{to} < 0 || {to} >= {items}.length",),
+        click=f"{_then(also)}{items}.splice({to}, 0, ...{items}.splice({index}, 1)){redraw(state)}",
+    )
+
+
 def add_button(text: str, items: str, record: str, state: str, also: str = "") -> None:
     """A button that appends ``record`` (a JavaScript literal) to the list ``items``."""
     v3.VBtn(

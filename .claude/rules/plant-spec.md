@@ -61,7 +61,7 @@ settings (no `data/` table).
 (the flowsheet editor prototype) learn the unit types from
 `aquakin.plant.catalog`, never by importing unit classes. A kind's *settings* are
 read from the class: constructor signature (types mapped to front-end types
-such as `number`, `port_name`, `aeration`, `unsupported`), dataclass default
+such as `number`, `port_name`, `aeration`, `records`, `tagged`, `unsupported`), dataclass default
 factories, and the docstring's `Parameters` section for help. Only what the
 signature cannot say is declared per kind in `_build_kinds`: label, category,
 port rules beyond the naming convention (`input_port`/`input_port_names` are
@@ -69,7 +69,7 @@ inputs, every other `*_port` and the port-keyed mappings are outputs, in
 constructor order; fixed ports such as the splitters' `in`, the mixer's `out`,
 the storage tank's `out`/`bypass` are `PortRule(form="fixed")`), GUI-friendly
 defaults for required port settings, and `exactly_one_of` groups.
-`check_unit` builds the real unit and is the authority. **When adding a unit
+**A setting whose value is a class's constructor arguments** reads and writes them through one set of functions: `record_settings` / `record_plain` (fill every argument from its default, check each by name and type, refuse an unknown one) and `kind_settings` / `kind_plain` for a mapping that picks the class by `kind`. A connection's translator, an SBR's `phases` (`records`, the classes in `_RECORDS`) and its `settling` (`tagged`, in `_TAGGED`) all use them, and the catalogue sends each such setting's `fields` (per kind for `tagged`); a new one is a row in those tables, not another reader. `filled_value` is the canonical form (every argument written), so leaving a default out does not change `spec_fingerprint`. `check_unit` builds the real unit and is the authority. **When adding a unit
 class or changing a unit's ports**, add or update its kind:
 `tests/unit/test_plant_catalog.py` builds every kind and compares the
 rule-derived ports with the built unit's, and fails if an exported unit class
