@@ -161,6 +161,40 @@ def _residual_parts(
     return jnp.concatenate(parts)
 
 
+def _add_prior_term(problem: _CalibrationProblem, value, physical, ic_thetas, ic_center):
+    """``value`` plus the prior penalty the objective adds to its data term.
+
+    Parameters
+    ----------
+    problem : _CalibrationProblem
+        The resolved problem (its priors and free-IC settings).
+    value : jnp.ndarray or float
+        What the penalty is added to: the data term in the objective, or 0 for
+        the penalty alone.
+    physical : jnp.ndarray
+        Free rate parameters in physical space, shape ``(n_rate,)``.
+    ic_thetas : jnp.ndarray
+        Fitted initial-pool coordinates of every dataset.
+    ic_center : jnp.ndarray
+        The prior centre of ``ic_thetas``.
+
+    Returns
+    -------
+    jnp.ndarray or float
+        ``value``, plus ``0.5 * sum(((physical - mean) / std)**2)`` over the
+        rates with a prior, plus ``0.5 * sum(((ic_thetas - ic_center) /
+        prior_log_std)**2)`` when the pools have a prior; ``value`` unchanged
+        when there is no prior.
+    """
+    if problem.has_priors:
+        value = value + 0.5 * jnp.sum(
+            problem.prior_mask * ((physical - problem.prior_mean) / problem.prior_std) ** 2
+        )
+    if problem.m_ic and problem.ic_prior_log_std:
+        value = value + 0.5 * jnp.sum(((ic_thetas - ic_center) / problem.ic_prior_log_std) ** 2)
+    return value
+
+
 @dataclass
 class _ObjectiveBundle:
     """The compiled callables the optimiser drives: the scalar
@@ -221,15 +255,7 @@ def _build_objective(
         p = p0_full_arg.at[problem.free_indices].set(physical)
         # Sum the data terms over every dataset (the batches share ``p``).
         data_term = _data_term(problem, _predict(problem, fm, p, ic_thetas, C0s))
-        if problem.has_priors:
-            data_term = data_term + 0.5 * jnp.sum(
-                problem.prior_mask * ((physical - problem.prior_mean) / problem.prior_std) ** 2
-            )
-        if problem.m_ic and problem.ic_prior_log_std:
-            data_term = data_term + 0.5 * jnp.sum(
-                ((ic_thetas - ic_center) / problem.ic_prior_log_std) ** 2
-            )
-        return data_term
+        return _add_prior_term(problem, data_term, physical, ic_thetas, ic_center)
 
     _obj_vg_jit = _cached_jit(
         ("obj_vg",) + struct_key, lambda: jax.jit(jax.value_and_grad(objective))

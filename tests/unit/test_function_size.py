@@ -39,7 +39,6 @@ RECORDED_LINES = {
     "aquakin/integrate/biofilm.py::BiofilmReactor.__init__": 173,
     "aquakin/integrate/calibration/laplace.py::_laplace_posterior": 145,
     "aquakin/integrate/calibration/multistart.py::_run_multistart": 153,
-    "aquakin/integrate/calibration/objective.py::_build_objective": 107,
     "aquakin/integrate/candidate_design.py::design_from_candidates": 150,
     "aquakin/integrate/discrete_adjoint.py::_discrete_adjoint_solve": 119,
     "aquakin/integrate/discrete_adjoint.py::esdirk_adjoint_solve": 146,
