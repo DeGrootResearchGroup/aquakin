@@ -288,17 +288,23 @@ def _plain(value) -> Any:
         return value if math.isfinite(value) else ("inf" if value > 0 else "-inf")
     if isinstance(value, (list, tuple)) and all(isinstance(v, (str, int, float)) for v in value):
         return [_plain(v) for v in value]
-    if isinstance(value, (list, tuple)) and all(
-        isinstance(v, (list, tuple)) and all(isinstance(x, (str, int, float)) for x in v)
-        for v in value
-    ):
-        # A list of records, e.g. an aeration's stripped (species, ratio, sat)
-        # triples or its air (gas, fraction) pairs.
-        return [[_plain(x) for x in v] for v in value]
     if isinstance(value, dict) and all(isinstance(k, str) for k in value):
         if all(isinstance(v, (int, float, str)) for v in value.values()):
             return {k: _plain(v) for k, v in value.items()}
     return None
+
+
+def _plain_records(value) -> Any:
+    """:func:`_plain`, also taking a list of records (an aeration's stripped
+    ``(species, ratio, sat)`` triples, its air ``(gas, fraction)`` pairs)."""
+    if (
+        isinstance(value, (list, tuple))
+        and value
+        and all(isinstance(v, (list, tuple)) for v in value)
+    ):
+        rows = [_plain(list(v)) for v in value]
+        return None if any(r is None for r in rows) else rows
+    return _plain(value)
 
 
 def _setting_type(name: str, annotation: str) -> tuple[str, bool]:
@@ -1029,7 +1035,12 @@ def _setting_value(s: Setting, value, *, model_ref=None, full=False):
     if s.type == "aeration":
         out = {}
         for f in dataclasses.fields(value):
-            v = _plain(getattr(value, f.name))
+            v = _plain_records(getattr(value, f.name))
+            if f.metadata.get("written_when_set") and not v:
+                # A field added after plants were first saved: written only when
+                # set, so a plant that does not use it saves (and fingerprints)
+                # as it did before.
+                continue
             if not full and f.default is not dataclasses.MISSING:
                 # The default as the aeration stores it (its normalization runs
                 # on it too: stripped=None is kept as an empty tuple). A field
@@ -1038,7 +1049,7 @@ def _setting_value(s: Setting, value, *, model_ref=None, full=False):
                     default = getattr(dataclasses.replace(value, **{f.name: f.default}), f.name)
                 except ValueError:
                     default = f.default
-                if v == _plain(default):
+                if v == _plain_records(default):
                     continue
             out[f.name] = v
         return out

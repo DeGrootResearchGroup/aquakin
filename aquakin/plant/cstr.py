@@ -247,7 +247,7 @@ class Aeration:
     kla_theta: float = 1.024
     saturation_model: str = "benson_krause"
     stripped: dict | tuple | str | None = None
-    air: dict | tuple | None = None
+    air: dict | tuple | None = field(default=None, metadata={"written_when_set": True})
 
     def __post_init__(self) -> None:
         # Normalize ``stripped`` to a hashable tuple of (species, ratio, sat)
@@ -344,7 +344,7 @@ def _normalize_air(air, stripped) -> tuple:
         If ``air`` is given without ``stripped="model"``, names a gas outside
         the library, or gives a fraction outside [0, 1].
     """
-    if air is None:
+    if not air:  # None, or the empty list a spec writes for it
         return ()
     if stripped != STRIP_MODEL_GASES:
         raise ValueError(

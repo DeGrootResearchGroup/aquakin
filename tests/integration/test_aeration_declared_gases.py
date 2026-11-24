@@ -172,7 +172,12 @@ def test_mass_balance_counts_the_nitrogen_taken_up_from_the_air(core, abiotic):
 
 def test_gradient_through_a_solve_matches_a_central_difference(core):
     """d(final inorganic carbon)/d(muH) on an aerated, seeded tank, where the
-    heterotrophs make the CO2 the aeration strips."""
+    heterotrophs make the CO2 the aeration strips.
+
+    About 30 s, mostly compiling the reverse-mode solve of the 19-state model;
+    kept in the fast tier because it is this feature's only gradient check
+    through a solve.
+    """
     feed = {"SA": 100.0, "SNH4": 30.0, "SIC": 60.0, "SN2": 15.0}
     plant = _single_tank_plant(
         core, feed, {"T": T, "pH": PH}, Aeration(kla=KLA, species="SO2", stripped="model")
@@ -180,12 +185,15 @@ def test_gradient_through_a_solve_matches_a_central_difference(core):
     seeds = dict.fromkeys(core.species, 0.0)
     seeds.update({"XH": 2000.0, "SA": 50.0, "SIC": 60.0, "SO2": 2.0})
     y0 = plant.initial_state(overrides={"tank": jnp.array([seeds[s] for s in core.species])})
-    k = plant.parameter_index[f"{core.name}.muH"]
+    k = plant.parameter_index(f"{core.name}.muH")
     sic = plant._state_layout["tank"][0] + core.species_index["SIC"]
-    p0 = plant.parameter_values
+    p0 = plant.parameter_values()
 
     def final_sic(p):
-        sol = plant.solve(t_span=(0.0, 0.1), y0=y0, t_eval=jnp.asarray([0.1]), params=p)
+        # A tight solver tolerance, so the difference quotient is not solver noise.
+        sol = plant.solve(
+            t_span=(0.0, 0.05), y0=y0, t_eval=jnp.asarray([0.05]), params=p, rtol=1e-10
+        )
         return sol.state[-1][sic]
 
     grad = float(jax.grad(final_sic)(p0)[k])
