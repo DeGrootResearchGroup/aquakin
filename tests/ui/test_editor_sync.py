@@ -79,6 +79,22 @@ def test_checks_wait_for_quiet_then_run_once_off_the_loop(make_editor):
     assert ed.state.errors == [] and ed.state.n_recycles == 2
 
 
+def test_the_redraw_after_the_checks_keeps_unapplied_edits_marked(make_editor):
+    """Edits typed while a round of checks runs are still unapplied after its
+    redraw (``sel_dirty``), so the next selection carries them; the browser test
+    of the same name shows them applied."""
+    ed, _ = make_editor(BSM1)
+    ed.on_select({"nodes": ["tank1"], "edges": []})
+
+    async def go():
+        ed.schedule_checks()
+        ed.state.sel_dirty = True  # the page marks a typed edit
+        await _until(lambda: not ed.state.checking)
+
+    asyncio.run(go())
+    assert ed.state.checked and ed.state.sel_dirty
+
+
 def test_a_unit_error_is_published_and_skips_the_plant_check(make_editor):
     """A unit that does not build is shown on its node and in the list, and the
     plant is not checked until every unit builds."""
@@ -274,9 +290,7 @@ def test_a_node_summarizes_its_main_settings(make_editor):
 def test_the_palette_marks_kinds_the_form_cannot_finish(make_editor):
     ed, _ = make_editor()
     marked = {k["kind"] for cat in ed.state.palette for k in cat["kinds"] if k["python"]}
-    assert marked == {"sbr"}  # a dosing unit's reagent has a form of its own
-    sbr = next(k for cat in ed.state.palette for k in cat["kinds"] if k["kind"] == "sbr")
-    assert sbr["summary"].endswith("can only be set from Python.")
+    assert marked == set()  # a reagent and an SBR's phases have forms of their own
 
 
 def test_a_new_flowsheet_runs_on_days(make_editor):
@@ -425,6 +439,50 @@ def test_a_reagent_set_in_the_form_builds_and_survives_save_and_open(make_editor
     assert yaml.safe_load((tmp_path / "flowsheet.yaml").read_text())["units"][uid]["reagent"] == (
         reagent
     )
+
+
+def test_an_sbr_set_up_in_the_form_builds_and_survives_save_and_open(make_editor, tmp_path):
+    """Choosing a settling kind redraws its arguments; phases typed into the
+    table and that settling model build the SBR, and Save then Open give them back."""
+    ed, _ = make_editor()
+    ed.on_dropped({"kind": "sbr", "position": {"x": 0, "y": 0}})
+    uid = ed.state.selected
+    assert ed._check_unit(uid) == "'phases' is required"
+    rows = ed.state.sel_rows
+    ed.reshape_form(rows, next(i for i, r in enumerate(rows) if r["key"] == "settling.kind"), "layered")
+    assert _with(ed.state.sel_rows, "settling.n_layers", None)["placeholder"] == "4 (default)"
+    phases = _with(ed.state.sel_rows, "phases", None)
+    fill = {**phases["blank"], "name": "fill", "duration": "0.1", "feed": True}
+    decant = {**phases["blank"], "name": "decant", "duration": "0.1", "decant": True}
+    rows = ed.state.sel_rows
+    for key, value in {
+        "phases": [fill, decant],
+        "settling.n_layers": "3",
+        "full_volume": "100",
+        "feed_flow": "1",
+        "decant_flow": "1",
+    }.items():
+        rows = _with(rows, key, value)
+    assert ed.apply_properties(rows)
+    settings = ed.doc.units[uid].settings
+    assert [p["name"] for p in settings["phases"]] == ["fill", "decant"]
+    assert settings["settling"] == {"kind": "layered", "n_layers": 3}
+    assert ed._check_unit(uid) is None
+
+    ed.state.spec_path = str(tmp_path / "flowsheet.yaml")
+    ed.save()
+    ed.open(tmp_path / "flowsheet.yaml")
+    written = yaml.safe_load((tmp_path / "flowsheet.yaml").read_text())["units"][uid]
+    # Saved with every field, the kla left empty at its default included.
+    assert ed.doc.units[uid].settings["phases"] == written["phases"]
+    assert written["phases"] == [{**p, "kla": 0.0} for p in settings["phases"]]
+    assert written["settling"] == {
+        "kind": "layered",
+        "n_layers": 3,
+        "v_settle": 100.0,
+        "area": 1.0,
+        "remix_rate": 1000.0,
+    }
 
 
 def _node(ed, uid):

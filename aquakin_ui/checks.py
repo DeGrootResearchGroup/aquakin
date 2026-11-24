@@ -138,4 +138,9 @@ async def _run_checks(self: Editor) -> None:
     with self.state:
         self.state.checking = False
         self.state.checked = True
+        # The redraw leaves the form's unapplied edits marked as such: the rows
+        # stay the page's own until Apply, and a cleared mark would let the next
+        # selection drop them.
+        dirty = self.state.sel_dirty
         self.publish(checks=False)
+        self.state.sel_dirty = dirty

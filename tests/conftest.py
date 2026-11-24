@@ -103,6 +103,45 @@ def make_cstr_plant(simple_model):
 
 
 @pytest.fixture
+def make_small_sbr_plant(simple_model):
+    """Build a one-SBR plant on the A -> B decay model (in seconds, B taken as
+    the settling particulate): a heel of 50 m3 filled to 100 m3 and decanted
+    back to 50 m3 each 27 s cycle of fill / react / settle / decant / idle.
+    Each call returns a new plant; it compiles and solves in seconds.
+    """
+    from aquakin.plant import InterfaceSettling, Plant, SBRPhase, SBRUnit
+    from aquakin.plant.influent import InfluentSeries
+
+    def make():
+        phases = [
+            SBRPhase("fill", 5.0, feed=True),
+            SBRPhase("react", 10.0, mixed=True),
+            SBRPhase("settle", 5.0, settle=True),
+            SBRPhase("decant", 5.0, decant=True),
+            SBRPhase("idle", 2.0),
+        ]
+        sbr = SBRUnit(
+            "sbr",
+            simple_model,
+            phases,
+            full_volume=100.0,
+            feed_flow=10.0,
+            decant_flow=10.0,
+            settling=InterfaceSettling(v_settle=2.0, area=10.0, remix_rate=1.0),
+            particulate_species=["B"],
+            initial_fraction=0.5,
+            conditions={"T": 293.15},
+        )
+        plant = Plant("small_sbr", time_unit="s")
+        plant.add_unit(sbr)
+        feed = InfluentSeries.constant(simple_model, A=1.0, B=0.0, Q=10.0)
+        plant.add_influent("feed", feed, to="sbr.feed")
+        return plant
+
+    return make
+
+
+@pytest.fixture
 def cstr_plant(make_cstr_plant):
     """One plant from :func:`make_cstr_plant`."""
     return make_cstr_plant()

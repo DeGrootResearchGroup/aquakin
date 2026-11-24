@@ -349,3 +349,163 @@ def test_a_reagent_on_a_model_that_cannot_be_described_takes_any_species(dosing)
 def test_the_choices_that_redraw_the_form_are_marked(bsm1):
     marked = {r["key"] for r in forms.rows_for(bsm1, "tank3", _info) if r.get("reshape")}
     assert marked == {"model", "aeration.mode"}
+
+
+# -- an SBR's phase table and settling model ----------------------------------
+
+
+_PHASES = [
+    {"name": "fill", "duration": 0.1, "feed": True},
+    {"name": "react", "duration": 0.3, "kla": 240.0},
+    {"name": "decant", "duration": 0.1, "decant": True, "mixed": False},
+]
+_SBR = {
+    "kind": "sbr",
+    "model": "asm1",
+    "conditions": {"T": 293.15},
+    "full_volume": 1000.0,
+    "feed_flow": 5000.0,
+    "decant_flow": 5000.0,
+    "phases": _PHASES,
+    "settling": {"kind": "interface", "v_settle": 400.0, "area": 200.0},
+    # ASM1's particulates, which the form would otherwise suggest for an empty list.
+    "particulate_species": ["XI", "XS", "XB_H", "XB_A", "XP", "XND"],
+}
+
+
+@pytest.fixture
+def sbr(ui_catalog):
+    """A flowsheet holding one SBR, its phases written tersely by hand."""
+    return Flowsheet.from_spec(ui_catalog, {"format": 2, "name": "p", "units": {"sbr": _SBR}})
+
+
+def _edit(rows, **values):
+    """``rows`` with the given values (keys with ``.`` written as ``__``)."""
+    values = {k.replace("__", "."): v for k, v in values.items()}
+    return [{**r, "value": values[r["key"]]} if r["key"] in values else r for r in rows]
+
+
+def test_the_phases_are_a_table_and_the_settling_model_its_kind_and_arguments(sbr):
+    rows = _rows(sbr, "sbr")
+    phases = rows["phases"]
+    assert phases["widget"] == "records" and phases["item"] == "phase"
+    assert [f["name"] for f in phases["fields"]] == [
+        "name", "duration", "feed", "decant", "kla", "settle", "mixed",
+    ]  # fmt: skip
+    fields = {f["name"]: f for f in phases["fields"]}
+    assert fields["duration"]["suffix"] == "d" and fields["kla"]["suffix"] == "1/d"
+    assert fields["kla"]["placeholder"] == "0 (default)"
+    assert phases["value"][1] == {
+        "name": "react",
+        "duration": "0.3",
+        "feed": False,
+        "decant": False,
+        "kla": "240",
+        "settle": False,
+        "mixed": "",
+    }
+    assert phases["value"][2]["mixed"] == "false"
+    assert phases["blank"] == {
+        "name": "",
+        "duration": "",
+        "feed": False,
+        "decant": False,
+        "kla": "",
+        "settle": False,
+        "mixed": "",
+    }
+    kind = rows["settling.kind"]
+    assert (kind["widget"], kind["value"], kind["reshape"]) == ("select", "interface", True)
+    assert kind["items"] == ["interface", "layered"]
+    assert rows["settling.v_settle"]["value"] == "400"
+    assert rows["settling.v_settle"]["suffix"] == "m/d"
+    assert rows["settling.remix_rate"]["placeholder"] == "1000 (default)"
+    assert "settling.n_layers" not in rows
+    # Choosing the other kind draws its arguments.
+    sbr.apply("sbr", {**sbr.units["sbr"].settings, "settling": {"kind": "layered"}}, None)
+    assert _rows(sbr, "sbr")["settling.n_layers"]["placeholder"] == "4 (default)"
+
+
+def test_an_unedited_sbr_form_gives_back_the_same_settings_and_plant(sbr):
+    before = sbr.units["sbr"].settings
+    _, settings = forms.read_rows(sbr, "sbr", forms.rows_for(sbr, "sbr", _info))
+    # Every phase reads back with its boxes and its "mixed" choice written out.
+    assert settings["phases"][0] == {
+        "name": "fill",
+        "duration": 0.1,
+        "feed": True,
+        "decant": False,
+        "settle": False,
+        "mixed": None,
+    }
+    assert settings["settling"] == before["settling"]
+    full = Plant.from_spec(sbr.to_spec()).to_spec()
+    sbr.apply("sbr", settings, None)
+    assert Plant.from_spec(sbr.to_spec()).to_spec() == full
+
+
+def test_phases_edited_reordered_and_added_in_the_form_build_those_phases(sbr):
+    """The table's entries, in the order shown, are the SBR's phases; an entry
+    added and left blank is no phase."""
+    from aquakin.plant import InterfaceSettling, LayeredSettling, SBRPhase
+    from aquakin.plant.catalog import build_unit
+
+    rows = forms.rows_for(sbr, "sbr", _info)
+    shown = _rows(sbr, "sbr")["phases"]
+    fill, react, decant = shown["value"]
+    settle = {**shown["blank"], "name": "settle", "duration": "0.05", "settle": True}
+    entries = [fill, {**react, "kla": "180", "mixed": "true"}, settle, decant, shown["blank"]]
+    rows = _edit(
+        rows, phases=entries, settling__kind="layered", settling__v_settle="50", settling__area=""
+    )
+    _, settings = forms.read_rows(sbr, "sbr", rows)
+    assert settings["settling"] == {"kind": "layered", "v_settle": 50.0}
+    unit = build_unit("sbr", "sbr", settings)
+    assert tuple(unit.phases) == (
+        SBRPhase("fill", 0.1, feed=True),
+        SBRPhase("react", 0.3, kla=180.0, mixed=True),
+        SBRPhase("settle", 0.05, settle=True),
+        SBRPhase("decant", 0.1, decant=True, mixed=False),
+    )
+    assert type(unit.settling) is LayeredSettling
+    assert (unit.settling.n_layers, unit.settling.v_settle, unit.settling.area) == (4, 50.0, 1.0)
+    assert not isinstance(unit.settling, InterfaceSettling)
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        ({"duration": "long"}, "phases: phase 2 (react): duration: 'long' is not a number"),
+        ({"duration": "nan"}, "phases: phase 2 (react): duration: 'nan' is not a finite number"),
+        ({"duration": ""}, "phases: phase 2 (react): give duration"),
+        ({"name": "", "duration": "0.2"}, "phases: phase 2: give name"),
+    ],
+)
+def test_an_unreadable_phase_is_named_with_its_field(sbr, entry, message):
+    rows = forms.rows_for(sbr, "sbr", _info)
+    entries = [dict(e) for e in _rows(sbr, "sbr")["phases"]["value"]]
+    entries[1].update(entry)
+    with pytest.raises(forms.FieldError, match=f"^{re.escape(message)}$") as caught:
+        forms.read_rows(sbr, "sbr", _edit(rows, phases=entries))
+    assert caught.value.key == "phases"
+
+
+def test_a_settling_argument_that_cannot_be_read_names_its_field(sbr):
+    rows = _edit(forms.rows_for(sbr, "sbr", _info), settling__area="wide")
+    with pytest.raises(
+        forms.FieldError, match=r"^settling area: 'wide' is not a number$"
+    ) as caught:
+        forms.read_rows(sbr, "sbr", rows)
+    assert caught.value.key == "settling.area"
+
+
+def test_a_new_sbr_is_drawn_with_an_empty_table_and_no_settling_model(ui_catalog):
+    doc = Flowsheet.from_spec(
+        ui_catalog, {"format": 2, "name": "p", "units": {"s": {"kind": "sbr", "model": "asm1"}}}
+    )
+    rows = _rows(doc, "s")
+    assert rows["phases"]["value"] == [] and rows["phases"]["label"] == "phases *"
+    assert rows["settling.kind"]["value"] == "" and rows["settling.kind"]["placeholder"] == "required"
+    assert not any(k.startswith("settling.") and k != "settling.kind" for k in rows)
+    _, settings = forms.read_rows(doc, "s", forms.rows_for(doc, "s", _info))
+    assert "phases" not in settings and "settling" not in settings

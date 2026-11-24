@@ -52,13 +52,13 @@ class SBRPhase:
         Phase label (e.g. ``"fill"``, ``"react"``, ``"settle"``, ``"decant"``,
         ``"idle"``), used in the event log.
     duration : float
-        Phase length in the plant's time unit.
+        Phase length (d), on the plant's clock.
     feed : bool
         Draw feed in at the unit's ``feed_flow`` during this phase (fill).
     decant : bool
         Draw clarified effluent out at ``decant_flow`` during this phase (decant).
     kla : float
-        Oxygen mass-transfer coefficient applied during this phase (aerobic
+        Oxygen mass-transfer coefficient (1/d) applied during this phase (aerobic
         react). 0 (default) = no aeration (anoxic / settle / fill).
     settle : bool
         Let the contents settle this phase (the settling model's clarity grows).

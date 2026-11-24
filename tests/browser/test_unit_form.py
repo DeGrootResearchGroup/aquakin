@@ -61,3 +61,78 @@ def test_a_reagent_is_composed_in_the_form_and_reaches_python_on_apply(page, tmp
     page.get_by_role("tab", name="Spec").click()
     # Waits until Python's spec has a composition of SS alone.
     expect(spec).to_contain_text(re.compile(r"composition:\n\s+SS: 250000\.0\n(?!\s+SNO)"))
+
+
+_SBR = """  sbr:
+    kind: sbr
+    model: asm1
+    conditions: {T: 293.15}
+    full_volume: 1000.0
+    feed_flow: 5000.0
+    decant_flow: 5000.0
+    phases:
+      - {name: fill, duration: 0.1, feed: true}
+      - {name: react, duration: 0.3, kla: 240.0}
+      - {name: decant, duration: 0.1, decant: true}
+    settling: {kind: interface, v_settle: 400.0, area: 200.0}
+"""
+
+
+def _open_with_an_sbr(page, tmp_path):
+    """Open a copy of BSM1 that also holds an SBR of three phases."""
+    spec = tmp_path / "bsm1" / "flowsheet.yaml"
+    with_sbr = spec.with_name("with_sbr.yaml")
+    with_sbr.write_text(spec.read_text().replace("\nunits:\n", "\nunits:\n" + _SBR))
+    page.get_by_placeholder("path/to/flowsheet.yaml").fill(str(with_sbr))
+    page.get_by_role("button", name="Open", exact=True).click()
+    expect(page.get_by_text(re.compile(r"^11 units · 11 connections"))).to_be_visible()
+
+
+def test_phases_are_reordered_added_and_removed_in_the_table_and_reach_python_on_apply(
+    page, tmp_path
+):
+    _open_with_an_sbr(page, tmp_path)
+    page.locator('.vue-flow__node[data-id="sbr"]').click()
+    cards = page.locator(".ak-records .v-sheet")
+    expect(cards).to_have_count(3)
+    # React before fill: its up arrow; the first card's up arrow is disabled.
+    expect(cards.nth(0).locator("button:has(.mdi-arrow-up)")).to_be_disabled()
+    cards.nth(1).locator("button:has(.mdi-arrow-up)").click()
+    expect(cards.nth(0).get_by_label("name *")).to_have_value("react")
+    # A settle phase added at the end and moved before the decant.
+    page.get_by_role("button", name="Add a phase").click()
+    expect(cards).to_have_count(4)
+    cards.nth(3).get_by_label("name *").fill("settle")
+    cards.nth(3).get_by_label("duration *").fill("0.05")
+    cards.nth(3).get_by_label("settle", exact=True).check()
+    cards.nth(3).locator("button:has(.mdi-arrow-up)").click()
+    expect(cards.nth(2).get_by_label("name *")).to_have_value("settle")
+    expect(cards.nth(2).get_by_label("settle", exact=True)).to_be_checked()
+    page.get_by_role("button", name="Apply changes").click()
+    page.get_by_role("tab", name="Spec").click()
+    spec = page.locator("#app pre")
+    order = r"name: react[\s\S]*name: fill[\s\S]*name: settle\n\s+duration: 0\.05[\s\S]*name: decant"
+    expect(spec).to_contain_text(re.compile(order))
+
+    # Removing the fill phase and applying again leaves the other three.
+    page.get_by_role("tab", name="Unit").click()
+    cards.nth(1).locator("button:has(.mdi-close)").click()
+    expect(cards).to_have_count(3)
+    page.get_by_role("button", name="Apply changes").click()
+    page.get_by_role("tab", name="Spec").click()
+    # Waits until Python's phases run react, settle, decant with no fill among them.
+    no_fill = r"(?:(?!name: fill)[\s\S])*?"
+    expect(spec).to_contain_text(
+        re.compile(rf"phases:{no_fill}name: react{no_fill}name: settle{no_fill}name: decant")
+    )
+
+
+def test_choosing_a_settling_kind_draws_its_arguments(page, tmp_path):
+    _open_with_an_sbr(page, tmp_path)
+    page.locator('.vue-flow__node[data-id="sbr"]').click()
+    expect(page.get_by_label("settling v_settle")).to_have_value("400")
+    _choose(page, page.get_by_label("settling *"), "layered")
+    # Python redraws the form with the layered model's arguments, keeping those
+    # both kinds take.
+    expect(page.get_by_label("settling n_layers")).to_be_visible()
+    expect(page.get_by_label("settling v_settle")).to_have_value("400")
