@@ -941,7 +941,7 @@ def steady_state(
             bool(nonneg),
             float(influent_time),
         )
-        jitted = self._steady_jit_cache.get(key)
+        jitted = self._solve_cache.get("steady_jit", key)
         if jitted is None:
 
             def _fwd(y0_, params_, scale_floor_):
@@ -959,7 +959,7 @@ def steady_state(
                 )
 
             jitted = jax.jit(_fwd)
-            self._steady_jit_cache[key] = jitted
+            self._solve_cache.put("steady_jit", key, jitted)
         y_star, residual_a, iters_a, conv_a = jitted(y0, params, jnp.asarray(scale_floor))
         return finish(y_star, bool(conv_a), int(iters_a), float(residual_a))
 

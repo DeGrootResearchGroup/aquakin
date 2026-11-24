@@ -195,12 +195,13 @@ compiled solve to avoid it:
   signature + settings. The plant RHS closes over the (static) unit graph, so
   the first solve compiles and every later solve of that plant reuses it —
   e.g. a parameter sweep / Monte Carlo that builds the plant once and solves
-  many times, or a warm-started steady-state-then-dynamic run. (Cross-*instance*
-  plant caching is deliberately **not** done: a fresh plant's compiled RHS
-  depends on the entire unit-config + connection graph, and a structural key
-  complete enough to never false-hit would be fragile — a miss there would
-  silently return a solve compiled for a *different* plant. Per-instance keying
-  cannot false-hit.) **Located-event solves** (`events=`) are cached too: every
+  many times, or a warm-started steady-state-then-dynamic run. Cross-*instance*
+  sharing is only between plants built by `Plant.from_spec` from specs of the
+  same fingerprint (as built, model and table content included) and unchanged
+  since: a structural key computed from an arbitrary plant would be fragile,
+  but the spec fingerprint already defines what is simulated (the study
+  staleness check relies on it), and any mutator ends the sharing
+  (`.claude/rules/plant-solve.md`). **Located-event solves** (`events=`) are cached too: every
   segment runs one jitted program from `events.build_segment_solver` whose
   segment bounds, save grid, `y0`, `args` and RHS context (the plant's cached
   recycle maps; the batch reactor's `params` and conditions) are runtime
