@@ -288,6 +288,13 @@ def _plain(value) -> Any:
         return value if math.isfinite(value) else ("inf" if value > 0 else "-inf")
     if isinstance(value, (list, tuple)) and all(isinstance(v, (str, int, float)) for v in value):
         return [_plain(v) for v in value]
+    if isinstance(value, (list, tuple)) and all(
+        isinstance(v, (list, tuple)) and all(isinstance(x, (str, int, float)) for x in v)
+        for v in value
+    ):
+        # A list of records, e.g. an aeration's stripped (species, ratio, sat)
+        # triples or its air (gas, fraction) pairs.
+        return [[_plain(x) for x in v] for v in value]
     if isinstance(value, dict) and all(isinstance(k, str) for k in value):
         if all(isinstance(v, (int, float, str)) for v in value.values()):
             return {k: _plain(v) for k, v in value.items()}
@@ -843,6 +850,12 @@ def _check_aeration(name: str, value: dict) -> None:
             ok, what = isinstance(v, bool), "true or false"
         elif "float" in annotation or "int" in annotation:
             ok, what = _is_number(v), "a number"
+        elif "dict" in annotation or "tuple" in annotation:
+            # A mapping or list of entries (``stripped``, ``air``), or for
+            # ``stripped`` the text "model".
+            text = "str" in annotation
+            ok = isinstance(v, (dict, list, tuple)) or (text and isinstance(v, str))
+            what = "a mapping or a list" + (" or text" if text else "")
         elif "str" in annotation:
             ok, what = isinstance(v, str), "text"
         else:  # pragma: no cover - every Aeration field is one of the above

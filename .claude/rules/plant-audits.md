@@ -85,8 +85,8 @@ paths:
   streams — effluent, wasted sludge, disposal cake), **gas** (O₂ transferred in
   by aeration, the digester biogas, denitrification N₂, and any gas co-stripped
   by `Aeration(stripped=...)` (`gas_detail["stripped_<q>"]`, the stripped
-  species' transfer dotted with their content) — computed from the
-  aeration term and a reaction-production integral over the reactive units, with
+  species' transfer dotted with their content) — computed from each unit's
+  own `aeration_term`, as its `rhs` adds it, and a reaction-production integral over the reactive units, with
   the digester deliberately excluded from the N gas term since it has no N gas
   phase; plus what a `GasExportUnit` vents through its own gas phase,
   `gas_detail["gas_export_<q>"]`, integrated from its `gas_export`) and

@@ -50,7 +50,6 @@ from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.cstr import (
     Aeration,
     AerationUnit,
-    aeration_transfer,
 )
 from aquakin.plant.kinetic import AdjustableTemperatureUnit
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
@@ -600,7 +599,7 @@ class IFASUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
         # temperature state) drives the bulk + biofilm kinetics, as for a CSTR.
         # The reaction itself runs per compartment inside the biofilm RHS, which
         # calls the same canonical model.dCdt.
-        conditions, T_op = self._operating_conditions(inputs, signals)
+        conditions = self._reaction_conditions(inputs, signals)
 
         # Biofilm diffusion + per-compartment reaction (no internal feed): this is
         # the BiofilmReactor RHS, finite-volume face fluxes between bulk<->surface
@@ -622,7 +621,7 @@ class IFASUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
         Q_total, C_in = mixed_feed(inputs, self.input_port_names)
         bulk = y[0]
         convection = (Q_total / self.volume) * (C_in - bulk)
-        aeration = aeration_transfer(self._av, bulk, T_op, signals, self.model)
+        aeration = self.aeration_term(bulk, inputs, params, signals)
         dydt = dydt.at[0].add(convection + aeration)
 
         if not self.dynamic_thickness:

@@ -21,6 +21,13 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.core.gases import (
+    AIR_MOLE_FRACTIONS,
+    ATMOSPHERE_PA,
+    saturation,
+    temperature_and_pH,
+    volatile_concentration,
+)
 from aquakin.core.temperature import T_REF_20C
 from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
@@ -89,6 +96,9 @@ def oxygen_saturation_bsm2(T_K):
         * (56.12 * 6791.5 * jnp.exp(-66.7354 + 87.4755 / theta + 24.4526 * jnp.log(theta)))
     )
 
+
+# ``Aeration(stripped=...)`` value that strips every gas the model declares.
+STRIP_MODEL_GASES = "model"
 
 # Saturation-model registry: name -> C_s(T) callable used for the temperature
 # correction ratio C_s(T)/C_s(ref_T).
@@ -199,8 +209,21 @@ class Aeration:
         factor), or under closed loop the controller signal times ``gain``. By
         penetration theory the ratio is the square root of the diffusivity
         ratio, close to 1 for N2O and NO (``{"SN2O": 1.0, "SNO": 1.0}``). The
-        gas saturation is not temperature-corrected. Default ``None`` (only
-        oxygen is transferred).
+        gas saturation is not temperature-corrected. ``"model"`` instead strips
+        every dissolved gas the model declares in its ``gases:`` block (other
+        than the aerated species): each at its ``kL_ratio``, toward the
+        saturation in equilibrium with its share of ``air`` at the tank's
+        temperature, ``H(T) * y * 101325 Pa * pressure_factor``; inorganic
+        carbon transfers as its H2CO3* fraction at the tank's pH. Change a gas's
+        solubility or transfer ratio in the model's ``gases:`` block. Default
+        ``None`` (only oxygen is transferred). A tank with no blowers but some
+        surface exchange is ``Aeration(kla=<surface kLa>, stripped="model")``.
+    air : dict, optional
+        With ``stripped="model"``: mole fractions of the gas the liquid meets,
+        ``{gas: fraction}`` for library gases (``"N2"``, ``"CO2"``, ...),
+        overriding those of dry air (:data:`aquakin.core.gases.AIR_MOLE_FRACTIONS`)
+        for the gases given, e.g. ``{"CO2": 0.02}`` for a covered tank whose
+        headspace holds CO2. Default ``None`` (dry air).
     """
 
     kla: float | None = None
@@ -223,12 +246,14 @@ class Aeration:
     pressure_factor: float = 1.0
     kla_theta: float = 1.024
     saturation_model: str = "benson_krause"
-    stripped: dict | tuple | None = None
+    stripped: dict | tuple | str | None = None
+    air: dict | tuple | None = None
 
     def __post_init__(self) -> None:
         # Normalize ``stripped`` to a hashable tuple of (species, ratio, sat)
         # triples (the dataclass is frozen and hashable).
         object.__setattr__(self, "stripped", _normalize_stripped(self.stripped, self.species))
+        object.__setattr__(self, "air", _normalize_air(self.air, self.stripped))
         n_modes = (self.kla is not None) + (self.do_setpoint is not None)
         if n_modes != 1:
             raise ValueError(
@@ -271,6 +296,13 @@ def _normalize_stripped(stripped, aerated_species: str) -> tuple:
     """
     if stripped is None:
         return ()
+    if isinstance(stripped, str):
+        if stripped != STRIP_MODEL_GASES:
+            raise ValueError(
+                f"Aeration stripped must be {STRIP_MODEL_GASES!r}, a {{species: ratio}} "
+                f"mapping or a tuple of (species, ratio, sat) triples; got {stripped!r}."
+            )
+        return stripped
     if isinstance(stripped, dict):
         items = []
         for sp, val in stripped.items():
@@ -303,6 +335,36 @@ def _normalize_stripped(stripped, aerated_species: str) -> tuple:
     return tuple(out)
 
 
+def _normalize_air(air, stripped) -> tuple:
+    """``Aeration.air`` as a sorted tuple of ``(gas, mole fraction)`` pairs.
+
+    Raises
+    ------
+    ValueError
+        If ``air`` is given without ``stripped="model"``, names a gas outside
+        the library, or gives a fraction outside [0, 1].
+    """
+    if air is None:
+        return ()
+    if stripped != STRIP_MODEL_GASES:
+        raise ValueError(
+            f"Aeration air is the gas the model's declared gases equilibrate with; "
+            f"it needs stripped={STRIP_MODEL_GASES!r}."
+        )
+    items = air.items() if isinstance(air, dict) else air
+    out = []
+    for gas, fraction in items:
+        if gas not in AIR_MOLE_FRACTIONS:
+            raise ValueError(
+                f"Aeration air names unknown gas '{gas}'; the library gases are "
+                f"{sorted(AIR_MOLE_FRACTIONS)}."
+            )
+        if not 0.0 <= float(fraction) <= 1.0:
+            raise ValueError(f"Aeration air fraction of '{gas}' must be in [0, 1], got {fraction}.")
+        out.append((str(gas), float(fraction)))
+    return tuple(sorted(out))
+
+
 def _aeration_signal_name(controller_id: str) -> str:
     return f"_aer_{controller_id}_kla"
 
@@ -332,6 +394,9 @@ class AerationVectors:
     # 1 at the aerated (oxygen) species, 0 elsewhere: the C_s(T)/C_s(ref)
     # temperature ratio applies to the oxygen saturation only.
     o2_mask: jnp.ndarray | None = None
+    # stripped="model": ((DissolvedGas, partial pressure in Pa), ...), whose
+    # saturation and volatile fraction are evaluated at the tank's conditions.
+    gases: tuple = ()
 
 
 def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
@@ -350,6 +415,7 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
     o2_mask = None
     ref_T, kla_theta, temp_correct = T_REF_20C, 1.024, False
     saturation_model = "benson_krause"
+    gases: tuple = ()
     if aeration is not None:
         if aeration.species not in model.species_index:
             raise ValueError(
@@ -366,7 +432,11 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
             kla_vec = kla_vec.at[idx].set(float(aeration.kla) * float(aeration.alpha))
         # Co-stripped gases ride on the oxygen kLa: ratio * (open-loop kla, or
         # the controller signal * gain).
-        for sp, ratio, sat in aeration.stripped:
+        listed = aeration.stripped
+        if listed == STRIP_MODEL_GASES:
+            gases = _declared_gases(aeration, model, unit_name)
+            listed = tuple((entry.species, entry.kL_ratio, 0.0) for entry, _p in gases)
+        for sp, ratio, sat in listed:
             if sp not in model.species_index:
                 raise ValueError(f"'{unit_name}' aeration stripped gas '{sp}' is not in the model.")
             g = model.species_index[sp]
@@ -390,10 +460,30 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
         saturation_model,
         stripped=stripped,
         o2_mask=o2_mask,
+        gases=gases,
     )
 
 
-def aeration_transfer(av: AerationVectors, C, T_eff, signals, model):
+def _declared_gases(aeration, model, unit_name: str) -> tuple:
+    """``((DissolvedGas, partial pressure in Pa), ...)`` for ``stripped="model"``:
+    every gas the model declares except the aerated species, each at its share
+    of the air the tank is aerated with."""
+    if model.gases is None:
+        raise ValueError(
+            f"'{unit_name}' aeration has stripped={STRIP_MODEL_GASES!r}, but model "
+            f"'{model.name}' declares no dissolved gases; add a 'gases:' block to the "
+            "model, or list the stripped gases as {species: ratio}."
+        )
+    air = {**AIR_MOLE_FRACTIONS, **dict(aeration.air)}
+    pressure = ATMOSPHERE_PA * float(aeration.pressure_factor)
+    return tuple(
+        (entry, air[entry.gas] * pressure)
+        for entry in model.gases.entries
+        if entry.species != aeration.species
+    )
+
+
+def aeration_transfer(av: AerationVectors, C, T_eff, signals, model, conditions=None, params=None):
     """The per-species mass-transfer term ``kLa * (C_sat - C)`` for state ``C``.
 
     Applies the temperature correction (saturation by ``C_s(T)/C_s(ref)``, the
@@ -401,7 +491,10 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, model):
     available, then overrides any closed-loop species' kLa with its control
     signal (``signal * gain``). ``T_eff`` is the operating temperature (the
     flow-weighted inlet, else the static condition); pass ``None`` to skip the
-    correction.
+    correction. A gas stripped as one the model declares (``stripped="model"``)
+    is driven by ``kLa * (H(T) p - C_volatile)`` at the temperature and pH of
+    ``conditions`` (the kinetics' conditions) and ``params``, which it then
+    requires.
     """
     kla_vec, sat_vec = av.kla_vec, av.sat_vec
     if av.temp_correct and T_eff is not None:
@@ -424,7 +517,27 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, model):
                 "silently leave it unaerated."
             )
         kla_vec = _apply_controlled_kla(av, kla_vec, signals, model)
+    if av.gases:
+        sat_vec, C = _declared_gas_driving(av, sat_vec, C, model, conditions, params)
     return kla_vec * (sat_vec - C)
+
+
+def _declared_gas_driving(av: AerationVectors, sat_vec, C, model, conditions, params):
+    """The saturation vector and the transferable concentrations with each
+    declared gas's entries evaluated at the tank's temperature and pH."""
+    if conditions is None:
+        raise ValueError(
+            "Aeration of the model's declared gases needs the tank's conditions "
+            "(temperature, pH); pass conditions= and params= to aeration_transfer."
+        )
+    T, pH = temperature_and_pH(model, C, params, conditions)
+    volatile = C
+    for entry, p in av.gases:
+        sat_vec = sat_vec.at[entry.index].set(saturation(entry, T, p))
+        volatile = volatile.at[entry.index].set(
+            volatile_concentration(entry, C[entry.index], T, pH)
+        )
+    return sat_vec, volatile
 
 
 def _apply_controlled_kla(av: AerationVectors, kla_vec, signals, model):
@@ -453,6 +566,29 @@ class AerationUnit:
         ``self._av``. Call from ``__post_init__`` once ``aeration`` / ``model``
         / ``name`` are set."""
         self._av = build_aeration_vectors(self.aeration, self.model, self.name)
+
+    def aeration_term(self, C, inputs: dict, params, signals: dict | None):
+        """The aeration mass-transfer term ``dC/dt`` the unit's ``rhs`` adds,
+        at the operating conditions the inputs and signals give.
+
+        Parameters
+        ----------
+        C : jnp.ndarray
+            The aerated liquid's concentrations, shape ``(n_species,)``.
+        inputs : dict[str, Stream]
+            The unit's input streams.
+        params : jnp.ndarray
+            The model's parameter vector.
+        signals : dict or None
+            The control-signal bus.
+
+        Returns
+        -------
+        jnp.ndarray
+            Shape ``(n_species,)``, per the plant's time unit.
+        """
+        conditions, T_op = self._operating_conditions(inputs, signals)
+        return aeration_transfer(self._av, C, T_op, signals, self.model, conditions, params)
 
     @property
     def required_signals(self) -> tuple[str, ...]:
@@ -683,11 +819,11 @@ class CSTRUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
         # temperature, else the flow-weighted inlet, else the static condition),
         # through the canonical dCdt. Convection and aeration are added on top,
         # unlimited (the reaction term is the only one the limiter guards).
-        conditions, T_op = self._operating_conditions(inputs, signals)
+        conditions = self._reaction_conditions(inputs, signals)
         chemistry = self._reaction(state, params, conditions)
         # Aeration (mass transfer), with the optional driving-force correction at
         # the same temperature; aeration_transfer then overrides any closed-loop
         # kLa with its control signal.
-        aeration = aeration_transfer(self._av, state, T_op, signals, self.model)
+        aeration = self.aeration_term(state, inputs, params, signals)
 
         return convection + chemistry + aeration

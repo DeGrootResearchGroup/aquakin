@@ -152,6 +152,17 @@ n2o_aeration = Aeration(do_setpoint=2.0, species="SO2", stripped={"SN2O": 1.0})
 bsm1_n2o = build_bsm1(n2o_model, aeration={f"tank{i}": n2o_aeration for i in (3, 4, 5)})
 ```
 
+A model that declares its dissolved gases in a `gases:` block (see [Model
+format](model_format.md)) need not list them: `Aeration(stripped="model")`
+strips every declared gas other than the aerated one, each at its transfer
+ratio from the gas library, toward the concentration in equilibrium with its
+share of the air at the tank's temperature (inorganic carbon as its dissolved
+CO₂ at the tank's pH). The air is dry air at one atmosphere times
+`pressure_factor`; give `air={"CO2": 0.02}` to change a gas's mole fraction,
+for example in a covered tank. Oxygen still uses `do_sat`. An unaerated tank
+with some surface exchange is `Aeration(kla=<surface kLa>, stripped="model")`;
+without an `Aeration` a tank exchanges no gas.
+
 Wire an influent in that model's species (`bsm1_n2o.add_influent(...)`) and
 solve as for ASM1. `direct_n2o_emission(bsm1_n2o, sol)` then reports the N₂O-N
 the solve stripped (kg N/d), time-averaged over the solution; it reads each

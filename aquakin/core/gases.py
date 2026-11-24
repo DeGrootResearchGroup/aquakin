@@ -72,6 +72,20 @@ GAS_LIBRARY: dict[str, GasProperties] = {
     "H2": GasProperties(henry=7.8e-6, henry_temperature=530.0, diffusivity=5.11e-9),
 }
 
+# Mole fraction of each library gas in dry air near sea level: O2, N2 from the
+# U.S. Standard Atmosphere (1976); CO2, CH4 and H2 at present-day background
+# levels (about 420 ppm, 1.9 ppm and 0.53 ppm). Aeration equilibrates a
+# dissolved gas toward its fraction of this air.
+AIR_MOLE_FRACTIONS: dict[str, float] = {
+    "O2": 0.20946,
+    "N2": 0.78084,
+    "CO2": 4.2e-4,
+    "CH4": 1.9e-6,
+    "H2": 5.3e-7,
+}
+# One standard atmosphere (Pa).
+ATMOSPHERE_PA = 101325.0
+
 # Acid/base systems whose un-ionised form is the volatile one.
 VALID_VOLATILE_FRACTIONS = ("carbonate",)
 
@@ -203,6 +217,40 @@ def volatile_concentration(entry: DissolvedGas, C, T_kelvin, pH):
     h = jnp.power(10.0, -pH)
     k1, k2 = K["co3_1"], K["co3_2"]
     return C * h * h / (h * h + k1 * h + k1 * k2)
+
+
+def temperature_and_pH(model, C, params, condition_arrays):
+    """The temperature (K) and pH a model's gas transfer uses.
+
+    Both come from the condition arrays the kinetics run at; the pH is
+    computed from the state ``C`` by the model's speciation when it is not a
+    supplied condition, and is ``None`` when the ``gases:`` block names no pH.
+
+    Parameters
+    ----------
+    model : CompiledModel
+        A model with a ``gases:`` block.
+    C : jnp.ndarray
+        Concentrations, shape ``(n_species,)``.
+    params : jnp.ndarray
+        The model's parameter vector.
+    condition_arrays : dict of str to jnp.ndarray
+        The conditions the kinetics run at, one location.
+
+    Returns
+    -------
+    T : jnp.ndarray
+        Temperature (K).
+    pH : jnp.ndarray or None
+    """
+    gases = model.gases
+    T = gases.kelvin(jnp.reshape(condition_arrays[gases.temperature_field], (-1,))[0])
+    if gases.pH_field is None:
+        return T, None
+    if gases.pH_field in condition_arrays:
+        return T, jnp.reshape(condition_arrays[gases.pH_field], (-1,))[0]
+    derived = model.derived_condition_fn(C, params, condition_arrays, 0)
+    return T, jnp.reshape(derived[gases.pH_field], ())
 
 
 def water_vapour_pressure(T_kelvin):

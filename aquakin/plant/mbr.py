@@ -32,7 +32,7 @@ import jax.numpy as jnp
 
 from aquakin.plant._constants import check_positive
 from aquakin.plant.coupling import CouplingAware
-from aquakin.plant.cstr import Aeration, AerationUnit, aeration_transfer
+from aquakin.plant.cstr import Aeration, AerationUnit
 from aquakin.plant.kinetic import AdjustableTemperatureUnit
 from aquakin.plant.streams import Stream, mixed_scalars
 
@@ -258,9 +258,9 @@ class MBRUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
 
         # Kinetics and aeration at the operating temperature (under a heat-balance
         # model the tank's own temperature state), exactly as the CSTR does.
-        conditions, T_op = self._operating_conditions(inputs, signals)
+        conditions = self._reaction_conditions(inputs, signals)
         chemistry = self._reaction(C, params, conditions)
-        aeration = aeration_transfer(self._av, C, T_op, signals, self.model)
+        aeration = self.aeration_term(C, inputs, params, signals)
 
         dC = convection + chemistry + aeration
 

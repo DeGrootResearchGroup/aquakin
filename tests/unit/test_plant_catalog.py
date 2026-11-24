@@ -193,6 +193,8 @@ def test_aeration_values_are_type_checked():
         ({"kla": 240.0, "temperature_correction": "false"}, "must be true or false"),
         ({"kla": 240.0, "do_sat": None}, "'aeration.do_sat' cannot be empty"),
         ({"kla": 240.0, "species": 3}, "'aeration.species' must be text"),
+        ({"kla": 240.0, "stripped": 3}, "'aeration.stripped' must be a mapping or a list or text"),
+        ({"kla": 240.0, "air": "dry"}, "'aeration.air' must be a mapping or a list,"),
         ({"kal": 240.0}, "'aeration.kal' is not an Aeration setting"),
     ):
         out = check_unit("cstr", "t", {**base, "aeration": aeration})

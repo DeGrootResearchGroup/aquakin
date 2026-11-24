@@ -29,6 +29,7 @@ import numpy as np
 from aquakin.core.gases import (
     partial_pressure,
     saturation,
+    temperature_and_pH,
     volatile_concentration,
     water_vapour_pressure,
 )
@@ -131,18 +132,6 @@ class HeadspaceDigesterUnit(KineticUnit, CouplingAware):
 
     # --- gas phase -------------------------------------------------------------
 
-    def _temperature_and_pH(self, C: jnp.ndarray, params: jnp.ndarray):
-        """The temperature (K) and pH the gas transfer uses: the conditions, with
-        the pH computed from the state when the model's speciation produces it."""
-        gases = self.model.gases
-        T = gases.kelvin(self._condition_arrays[gases.temperature_field][0])
-        if gases.pH_field is None:
-            return T, None
-        if gases.pH_field in self._condition_arrays:
-            return T, self._condition_arrays[gases.pH_field][0]
-        derived = self.model.derived_condition_fn(C, params, self._condition_arrays, 0)
-        return T, jnp.reshape(derived[gases.pH_field], ())
-
     def _partial_pressures(self, G: jnp.ndarray, T) -> jnp.ndarray:
         """Partial pressure (Pa) of each headspace gas."""
         return jnp.stack([partial_pressure(g, T, G[k]) for k, g in enumerate(self._gases)])
@@ -157,7 +146,7 @@ class HeadspaceDigesterUnit(KineticUnit, CouplingAware):
     def _transfer(self, C: jnp.ndarray, G: jnp.ndarray, params: jnp.ndarray) -> jnp.ndarray:
         """Gas-liquid transfer of each declared gas, per m³ of liquid per plant
         time unit."""
-        T, pH = self._temperature_and_pH(C, params)
+        T, pH = temperature_and_pH(self.model, C, params, self._condition_arrays)
         p = self._partial_pressures(G, T)
         driving = jnp.stack(
             [

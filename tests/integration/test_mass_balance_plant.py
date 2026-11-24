@@ -70,13 +70,13 @@ def test_composition_table_unknown_model_hints():
 
 # --- results-level balance ---------------------------------------------------
 
-def _aerated_cstr_plant(net, *, Q=5000.0):
+def _aerated_cstr_plant(net, *, Q=5000.0, T=293.15, aeration=None):
     """A single aerated ASM1 CSTR fed a constant influent (a minimal plant that
     exercises the inflow / outflow / aeration-O2 / inventory terms)."""
     plant = Plant("one", time_unit="d")
     plant.add_unit(CSTRUnit(name="tank", model=net, volume=2000.0,
-                            input_port_names=["inlet"], conditions={"T": 293.15},
-                            aeration=Aeration(kla=240.0, do_sat=8.0)))
+                            input_port_names=["inlet"], conditions={"T": T},
+                            aeration=aeration or Aeration(kla=240.0, do_sat=8.0)))
     plant.influent_endpoint = "tank.inlet"
     plant.effluent_endpoint = "tank.out"
     feed = net.influent({"SS": 200.0, "XS": 150.0, "SNH": 30.0, "SO": 0.0,
@@ -103,6 +103,20 @@ def test_mass_balance_closes_on_aerated_cstr():
     # The aeration oxygen transfer is the COD sink (positive g O2 removed).
     assert mb.gas_detail["aeration_O2"] > 0.0
     assert "closed" in mb.summary()
+
+
+def test_mass_balance_counts_the_temperature_corrected_aeration():
+    """With the aeration temperature correction on, away from its reference
+    temperature, the balance counts the oxygen the solve transferred (the
+    corrected saturation and kLa), so COD still closes at steady state."""
+    net = aquakin.load_model("asm1")
+    aeration = Aeration(kla=240.0, do_sat=8.0, temperature_correction=True)
+    plant = _aerated_cstr_plant(net, T=283.15, aeration=aeration)
+    ss = plant.run_to_steady_state(max_time=200.0)
+    assert ss.converged
+    sol = plant.solve(t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 5), y0=ss.state)
+    mb = plant.mass_balance(sol, components=("COD", "N"))
+    assert abs(mb["COD"].relative_imbalance) < 1e-3, mb.summary()
 
 
 def test_mass_balance_closes_with_time_unit_override():

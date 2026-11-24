@@ -508,6 +508,23 @@ def _reaction_terms_at(plant, t, state_full, params_full, reactive, maps=(None, 
     dict[str, jnp.ndarray]
         ``{unit: dC/dt}`` over the unit's species, per the plant's time unit.
     """
+    return _unit_terms_at(plant, t, state_full, params_full, reactive, _reaction_term, maps)
+
+
+def _reaction_term(unit, C, inputs, signals, params):
+    """A unit's reaction term, at the conditions its ``rhs`` evaluates it at."""
+    return unit._reaction(C, params, unit._reaction_conditions(inputs, signals))
+
+
+def _aeration_term(unit, C, inputs, signals, params):
+    """An aerated unit's mass-transfer term, as its ``rhs`` adds it."""
+    return unit.aeration_term(C, inputs, params, signals)
+
+
+def _unit_terms_at(plant, t, state_full, params_full, names, term, maps=(None, None)):
+    """``term(unit, C, inputs, signals, params)`` of each named unit at one saved
+    instant, ``{unit: (n_species,)}``, fed the inputs and signals the plant's RHS
+    assembly hands the unit at ``(t, state_full)``."""
     import jax.numpy as jnp
 
     state_full = jnp.asarray(state_full)
@@ -517,30 +534,31 @@ def _reaction_terms_at(plant, t, state_full, params_full, reactive, maps=(None, 
         jnp.asarray(t), states, params_full, recycle_map=recycle_map, flow_map=flow_map
     )
     out = {}
-    for name in reactive:
+    for name in names:
         unit = plant.units[name]
         # The species part only: a unit may carry trailing non-species state
-        # (an MBR's fouling resistance), which the reaction must not see.
+        # (an MBR's fouling resistance), which the term must not see.
         C = states[name][: unit.model.n_species]
-        conditions = unit._reaction_conditions(inputs[name], signals[name])
-        out[name] = unit._reaction(C, plant._params_for_unit(name, params_full), conditions)
+        out[name] = term(
+            unit, C, inputs[name], signals[name], plant._params_for_unit(name, params_full)
+        )
     return out
 
 
-def _reaction_terms(plant, solution, params, reactive):
-    """:func:`_reaction_terms_at` over every saved time, ``{unit: (n_t,
+def _unit_terms(plant, solution, params, names, term):
+    """:func:`_unit_terms_at` over every saved time, ``{unit: (n_t,
     n_species)}``, batched by ``jax.vmap`` as the stream reconstruction is."""
     import jax
     import jax.numpy as jnp
 
-    if not reactive:
+    if not names:
         return {}
     params_full = plant._coerce_params(params)
     ts = jnp.asarray(solution.t_native)
     states_flat = jnp.asarray(solution.state)
     maps = plant._recycle.cached_maps(ts[0], plant._split_state(states_flat[0]), params_full)
     return jax.vmap(
-        lambda t_i, row: _reaction_terms_at(plant, t_i, row, params_full, reactive, maps)
+        lambda t_i, row: _unit_terms_at(plant, t_i, row, params_full, names, term, maps)
     )(ts, states_flat)
 
 
@@ -559,7 +577,6 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
     import jax.numpy as jnp
 
     t = np.asarray(solution.t_native)  # native: the rates are per native time unit
-    layout = plant._state_layout
 
     reactive = [
         n
@@ -567,7 +584,6 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
         if hasattr(plant.units[n], "aeration") or hasattr(plant.units[n], "_liquid_mask")
     ]
     aerated = [n for n in reactive if hasattr(plant.units[n], "aeration")]
-    need_signals = any(plant.units[n].required_signals for n in aerated)
     rqs = [q for q in comps if q in ("COD", "N")]
     vols = {n: _reaction_volume(plant, n, params) for n in reactive}
     content = {
@@ -585,29 +601,22 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
         n: (set(rqs) if hasattr(plant.units[n], "aeration") else {q for q in rqs if q != "N"})
         for n in reactive
     }
-    reactions = _reaction_terms(plant, solution, params, reactive)
+    reactions = _unit_terms(plant, solution, params, reactive, _reaction_term)
+    aerating = [n for n in aerated if plant.units[n].aeration is not None]
+    transfers = _unit_terms(plant, solution, params, aerating, _aeration_term)
     o2_rows, R_rows, strip_rows = [], {q: [] for q in rqs}, {q: [] for q in rqs}
     for i in range(t.shape[0]):
-        state_i = solution.state[i]
-        sig = plant.signals_at(t[i], state_i, params) if need_signals else {}
         o2 = 0.0
         R = dict.fromkeys(rqs, 0.0)
         S = dict.fromkeys(rqs, 0.0)
         for name in reactive:
             unit = plant.units[name]
-            start, size = layout[name]
-            # Use the species part only: a unit may carry trailing non-species
-            # state (an MBR's fouling resistance), which the aeration term must
-            # not see.
-            n_sp = unit.model.n_species
-            C = state_i[start : start + n_sp]
             react = reactions[name][i]
             for q in gas_comps[name]:
                 R[q] += float(jnp.dot(react, content[name][q]))
-            if name in aerated and unit.aeration is not None:
+            if name in transfers:
                 sp_idx = unit.model.species_index
-                kla = unit.kla_vector(sig)
-                transfer = kla * (unit.saturation_vector - C)  # per species, per volume
+                transfer = transfers[name][i]  # per species, per volume
                 # Aeration O2 source (the aerated oxygen species only).
                 o2 += float(transfer[sp_idx[unit.aeration.species]] * float(unit.volume))
                 # Co-stripped gases (N2O, NO, ...) leaving to the air: their

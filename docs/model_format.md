@@ -621,6 +621,10 @@ can override any of them: `henry` (mol m-3 Pa-1 at 25 C), `henry_temperature`
 (`d ln H / d(1/T)`, K) and `kL_ratio`. The compiled declaration is
 `model.gases`.
 
+An aerated tank strips the declared gases with `Aeration(stripped="model")`
+(see [Plants](plants.md)), and `HeadspaceDigesterUnit` transfers them to its
+headspace.
+
 ## Inheriting a model: `extends:`
 
 A model that differs from another by a few parameters or rates can inherit it
