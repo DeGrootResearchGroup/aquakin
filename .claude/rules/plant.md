@@ -130,8 +130,8 @@ optional hooks); these are the invariants around it.
 
 ### Tracing, temperature and warm starts
 
-- **Everything `solve` calls must trace**: `monte_carlo`, `compare_scenarios` and
-  `dgsm` jit the user's function. No `float()`, `np.asarray` or Python `if` on a
+- **Everything `solve` calls must trace**: `monte_carlo`, `compare_scenarios`,
+  `dgsm` and `sobol_indices` jit the user's function. No `float()`, `np.asarray` or Python `if` on a
   `jnp`-built value in the solve path (`initial_state`, a `TemperatureModel`'s
   methods); Python scalars only for static layout data.
 - `plant.set_temperature` changes baked-in conditions, so it invalidates

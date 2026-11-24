@@ -80,12 +80,19 @@ from aquakin.integrate.scenarios import (
     kpi_comparison,
 )
 from aquakin.integrate.sensitivity import SensitivityResult, sensitivity
+from aquakin.integrate.variance_sensitivity import (
+    BootstrapConfig,
+    SobolResult,
+    sobol_indices,
+    sobol_indices_cost,
+)
 
 __all__ = [
     "BatchReactor",
     "BatchSolution",
     "BiofilmReactor",
     "BiofilmSolution",
+    "BootstrapConfig",
     "CFDReactor",
     "CalibrationResult",
     "CandidateDesign",
@@ -117,6 +124,7 @@ __all__ = [
     "ProfileResult",
     "ScenarioComparison",
     "SensitivityResult",
+    "SobolResult",
     "Track",
     "TrackSolution",
     "aic",
@@ -145,5 +153,7 @@ __all__ = [
     "profile_likelihood",
     "rank_experiments",
     "sensitivity",
+    "sobol_indices",
+    "sobol_indices_cost",
     "solve_with_events",
 ]

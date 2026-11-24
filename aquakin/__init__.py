@@ -114,6 +114,12 @@ from aquakin.integrate.global_sensitivity import DGSMResult, dgsm
 from aquakin.integrate.events import Event, EventedResult, solve_with_events
 from aquakin.integrate.design import Constraint, OptimizeResult, optimize_design
 from aquakin.integrate.monte_carlo import MonteCarloResult, monte_carlo
+from aquakin.integrate.variance_sensitivity import (
+    BootstrapConfig,
+    SobolResult,
+    sobol_indices,
+    sobol_indices_cost,
+)
 from aquakin.integrate.scenarios import (
     KPIComparison,
     ScenarioComparison,
@@ -237,6 +243,7 @@ __all__ = [
     "BatchSolution",
     "BiofilmReactor",
     "BiofilmSolution",
+    "BootstrapConfig",
     "CFDReactor",
     "CSTRUnit",
     "CalibrationResult",
@@ -294,6 +301,7 @@ __all__ = [
     "SensitivityResult",
     "SetpointSplitter",
     "SludgeMetrics",
+    "SobolResult",
     "SpatialConditions",
     "SpeciationUnitsWarning",
     "StateTranslator",
@@ -385,6 +393,8 @@ __all__ = [
     "sensitivity",
     "size_activated_sludge",
     "sludge_metrics",
+    "sobol_indices",
+    "sobol_indices_cost",
     "solve_with_events",
     "stripped_n2o",
     "t10_from_baffling",

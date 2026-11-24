@@ -101,6 +101,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Gradient of an output w.r.t. parameters/conditions | `sensitivity` → `SensitivityResult` |
 | Cap-free forward sensitivity through a stiff solve | `forward_sensitivity` → `ForwardSensitivityResult` |
 | Global (Sobol-total-bound) sensitivity | `dgsm` → `DGSMResult` |
+| Variance-based (Sobol first-order and total) sensitivity | `sobol_indices` → `SobolResult`, `BootstrapConfig`, `sobol_indices_cost` |
 | Configure differentiation / integration | `DifferentiationConfig`, `IntegratorConfig`, `forward_adjoint` |
 | Guard against silent non-finite gradients | `check_finite_gradient` |
 | Sensitivities of a plant solve | `Plant.solve_sensitivity`, `Plant.dynamic_sensitivity`, `Plant.steady_state_sensitivity`, `Plant.dynamic_dgsm`, `Plant.steady_state_dgsm` |
