@@ -36,6 +36,9 @@ aquakin/
 │   │   ├── precipitation_equilibrium.py # mode: equilibrium -> algebraic equilibrium solve
 │   │   │                            #   (MINEQL/PHREEQC: log-free-ion + phase amounts, smoothed-FB
 │   │   │                            #   complementarity; IFT-differentiable; -> Xeq_/projection)
+│   │   ├── gases.py                 # gas library (Henry, diffusivity) + the
+│   │   │                            #   gases: block -> CompiledModel.gases, read by
+│   │   │                            #   the units that own a gas phase
 │   │   ├── tolerance.py             # default_atol: the per-component solver noise floor
 │   │   │                            #   (CompiledModel.atol and every integrator; re-exported
 │   │   │                            #   from integrate/_solver.py and _common.py)

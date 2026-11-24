@@ -104,6 +104,7 @@ reactions:                # list of reactions
 
 speciation: {...}         # a pH computed from the state (see below)
 precipitation: {...}      # mineral precipitation (see below)
+gases: {...}              # which species are dissolved gases (see below)
 positivity_limiter: {threshold: <float>}  # see "Keeping states non-negative"
 clip_negative_states: <bool>              # default false
 
@@ -589,6 +590,36 @@ precipitate to its solubility limit algebraically instead, and
 well-conditioned. The shipped `precipitation_struvite_calcite`,
 `precipitation_metal_phosphate` (with its `_bounded` and `_equilibrium`
 variants) and `asm2d_chemp` models show each form.
+
+## Dissolved gases: `gases:`
+
+A model can say which of its species are dissolved gases. The model itself
+carries no gas phase, so the same model runs in every unit; the units that own
+a gas phase transfer these species, a digester to its headspace, for example.
+
+```yaml
+gases:
+  temperature_field: T            # the temperature condition
+  temperature_units: kelvin       # or celsius
+  pH_field: pH                    # needed only for a volatile_fraction
+  species:
+    SO2:  {gas: O2,  molar_mass: 32000}    # g O2/m3  -> mol/L
+    SCH4: {gas: CH4, molar_mass: 64000}    # g COD/m3 -> mol/L (64 g COD/mol)
+    SIC:  {gas: CO2, molar_mass: 12000, volatile_fraction: carbonate}
+```
+
+Each entry names a gas of the built-in library (`O2`, `N2`, `CO2`, `CH4`, `H2`)
+and, as in `speciation:`, the `molar_mass` that converts the species' units to
+mol/L. With `volatile_fraction: carbonate` only the un-ionised CO2 (H2CO3*) of
+an inorganic-carbon total transfers, at the current pH.
+
+The library holds each gas's Henry's-law solubility at 25 C and its
+temperature dependence (the evaluated reviews in Sander, *Atmos. Chem. Phys.*
+23, 10901, 2023) and its diffusivity in water (CRC Handbook), from which its
+transfer coefficient relative to oxygen's follows, `(D / D_O2) ** 0.5`. An entry
+can override any of them: `henry` (mol m-3 Pa-1 at 25 C), `henry_temperature`
+(`d ln H / d(1/T)`, K) and `kL_ratio`. The compiled declaration is
+`model.gases`.
 
 ## Inheriting a model: `extends:`
 
