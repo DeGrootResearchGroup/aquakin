@@ -284,18 +284,13 @@ FIT = {
 
 
 def test_a_calibration_study_recovers_a_parameter(project):
+    """The fit recovers the value the data were made with; without ``laplace``
+    there is no posterior, so no std and no covariance file."""
     folder = project / "studies" / "fit"
     _synthetic_data(project, folder, 5.0)
     (folder / "study.yaml").write_text(
         yaml.safe_dump(
-            {
-                "study": {
-                    "kind": "calibrate",
-                    "parameters": {"asm1_local.muH": 3},
-                    "laplace": True,
-                    **FIT,
-                }
-            }
+            {"study": {"kind": "calibrate", "parameters": {"asm1_local.muH": 3}, **FIT}}
         )
     )
     seen = []
@@ -303,9 +298,8 @@ def test_a_calibration_study_recovers_a_parameter(project):
     assert seen[0].stage == "setup" and seen[1].stage == "fit"
     fit = yaml.safe_load((folder / "results" / "fit.yaml").read_text())
     assert fit["fitted"]["asm1_local.muH"] == pytest.approx(5.0, rel=1e-3)
-    assert fit["std"]["asm1_local.muH"] > 0.0
-    cov, rows, _ = read_matrix(folder / "results" / "covariance.csv")
-    assert rows == ["asm1_local.muH"] and cov[0, 0] > 0.0
+    assert fit["std"] is None
+    assert not (folder / "results" / "covariance.csv").exists()
     assert read_named_values(folder / "results" / "parameters.yaml")["asm1_local.muH"] == (
         pytest.approx(5.0, rel=1e-3)
     )
@@ -741,35 +735,49 @@ def test_criteria_that_cannot_be_computed_are_left_empty(project, monkeypatch):
     assert summary["std"]["asm1_local.muH"] > 0.0
 
 
-def test_a_calibration_without_a_posterior_writes_no_covariance(project, monkeypatch):
-    """With the fit itself stubbed: no Laplace posterior, no covariance file."""
+def test_a_calibration_with_laplace_writes_its_posterior(project, monkeypatch):
+    """With the fit itself stubbed (the plant's Laplace posterior has its own
+    tests): the study asks for the posterior, and writes its std and covariance
+    by parameter name. The data table is made by hand, since the stub never
+    solves."""
     from types import SimpleNamespace
 
     import aquakin.plant as plant_module
+    from aquakin.study import write_trajectory
 
-    folder = project / "studies" / "nolaplace"
-    _synthetic_data(project, folder, 5.0)
-    (folder / "study.yaml").write_text(yaml.safe_dump({"study": {"kind": "calibrate", **FIT}}))
+    folder = project / "studies" / "laplace"
+    folder.mkdir(parents=True)
+    t = np.linspace(0.1, 0.5, 5)
+    write_trajectory(folder / "data.csv", t, {"effluent.SNH": 1.0 + t, "effluent.SS": 2.0 + t})
+    (folder / "study.yaml").write_text(
+        yaml.safe_dump({"study": {"kind": "calibrate", "laplace": True, **FIT}})
+    )
+    asked = {}
 
     def fit(plant, observations, t, free, **kw):
+        asked["laplace"] = kw["laplace"]
         return SimpleNamespace(
             params=kw["params"],
             params_named={n: float(kw["params"][plant.parameter_index(n)]) for n in free},
-            params_named_std=None,
+            params_named_std={"asm1_local.muH": 0.25},
             loss=0.0,
             converged=True,
             message="stub",
             n_iter=0,
             at_bound={},
             sigma_estimate=None,
-            posterior_cov=None,
+            posterior_cov=np.array([[0.0625]]),
             parameter_names=list(free),
         )
 
     monkeypatch.setattr(plant_module, "calibrate_plant", fit)
     run_study(folder)
-    assert not (folder / "results" / "covariance.csv").exists()
-    assert yaml.safe_load((folder / "results" / "fit.yaml").read_text())["std"] is None
+    assert asked["laplace"] is True
+    fit_yaml = yaml.safe_load((folder / "results" / "fit.yaml").read_text())
+    assert fit_yaml["std"] == {"asm1_local.muH": 0.25}
+    cov, rows, columns = read_matrix(folder / "results" / "covariance.csv")
+    assert rows == columns == ["asm1_local.muH"]
+    np.testing.assert_array_equal(cov, [[0.0625]])
 
 
 def test_the_fit_is_given_one_error_per_channel_or_estimates_it():

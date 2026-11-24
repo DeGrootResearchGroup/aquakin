@@ -223,6 +223,10 @@ def test_initial_concentration_goes_to_its_bound(reactor, params):
     np.testing.assert_allclose(res.experiments[0].t_obs, [4.0])
     assert res.value - res.initial_value == pytest.approx(2.0 * np.log(3.0 / A0), rel=1e-6)
 
+
+def test_initial_bounds_keyed_by_experiment(reactor, params):
+    """Bounds keyed ``(experiment, species)`` free that experiment's
+    concentration only: the other keeps its A0."""
     keyed = aquakin.optimize_experiment(
         reactor,
         [_exp([4.0]), _exp([4.0])],
