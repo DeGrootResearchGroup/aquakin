@@ -120,10 +120,16 @@ nor concentrating it in a few files makes the whole suite fast.
   `coverage.xml` as an artifact, and the **`fast-coverage`** job (after the
   unit, integration and ui matrices, under the `fast` flag) uploads them all in
   one call. With one upload
-  per shard, Codecov posted its PR comment and patch status after the first few
+  per shard, Codecov posted its patch status after the first few
   shards and showed the lines a still-running shard covers as missing.
   `after_n_builds` in `codecov.yml` did not help, because the carried-forward
   slow/validation/heavy sessions count toward it.
+
+  Codecov posts **no PR comment** (`comment: false` in `codecov.yml`): a
+  comment emails every participant in the PR, while the statuses below show
+  the same result in the PR's checks list without notifying anyone. Their
+  *Details* link opens the full report (files, flags, missed lines in the diff)
+  on the Codecov site.
 
   The Codecov **project** status is informational. The **patch** status
   (`codecov/patch`) has a **100%** target: every line a PR adds or changes is

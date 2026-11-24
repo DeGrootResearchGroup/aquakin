@@ -552,8 +552,8 @@ jobs:
   # ---- Fast-tier coverage: ONE Codecov upload after every fast shard -----------
   # Each fast shard keeps its coverage.xml as an artifact and this job uploads
   # them all to Codecov in a single call, once the unit, integration and ui
-  # matrices have finished. Codecov builds its PR comment and patch status from the
-  # uploads it has when it processes one, so per-shard uploads made it report
+  # matrices have finished. Codecov builds its patch status from the uploads it
+  # has when it processes one, so per-shard uploads made it report
   # after the first few shards: lines only a still-running shard covers showed as
   # missing (63.6 % patch coverage on a PR that was fully covered). Codecov's
   # `after_n_builds` did not hold it back, because the carried-forward

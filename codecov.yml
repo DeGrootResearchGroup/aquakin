@@ -20,8 +20,8 @@
 # changed; see docs/ci.md.
 #
 # The fast tier uploads once per run, from the `fast-coverage` job after every
-# fast shard has finished (.github/workflows/ci.yml), so the PR comment and
-# patch status are built from the whole fast tier. Per-shard uploads made
+# fast shard has finished (.github/workflows/ci.yml), so the patch status is
+# built from the whole fast tier. Per-shard uploads made
 # Codecov report after the first few, and `after_n_builds` did not prevent it
 # (the carried-forward sessions count toward it).
 
@@ -52,6 +52,8 @@ flags:
   heavy:
     carryforward: true
 
-comment:
-  layout: "reach, diff, flags, files"
-  require_changes: false
+# No PR comment: each new comment emails every participant in the PR. The
+# patch and project statuses carry the same signal in the PR's checks list
+# without notifying anyone, and their "Details" link opens the full report
+# (files, flags and the missed lines in the diff) on the Codecov site.
+comment: false
