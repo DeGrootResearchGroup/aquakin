@@ -89,8 +89,13 @@ docstrings of `aquakin/plant/colored.py`, `aquakin/plant/solve_cache.py` and
   `invalidate(keep_shared=True)` is only for work every plant of the identity
   does identically before compiling (the time-unit resolution). Keys that name
   an object by `id` pass it to `put` as `keep_alive`. The continuation and
-  arclength kernels close over call values their keys omit, so they are not
-  shared.
+  arclength kernels close over the call's `rhs`, so they are not shared.
+- **A key holds the value of every array a program closes over.** The
+  continuation and arclength kernels bake in `scale_floor` and the known
+  point's `scale`, so their keys carry those values (`atol_cache_key`); a key
+  without them reuses another call's scale. A diffrax adjoint is keyed by its
+  type and settings (`_adjoint_key` in `integrate/_cache.py`), not its `id`:
+  `reactor_adjoint()` builds a new one per call, and an `id` key never hits.
 
 ## Arclength continuation must not jump branches
 

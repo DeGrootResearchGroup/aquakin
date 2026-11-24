@@ -21,25 +21,8 @@ from aquakin.plant.solve_cache import SolveCache, clear_shared, shared_size
 from aquakin.plant.spec import spec_fingerprint
 from aquakin.study import run_study
 
-# The duration event JAX records for every XLA compilation.
-_BACKEND_COMPILE = "/jax/core/compile/backend_compile_duration"
-
 T_SPAN = (0.0, 20.0)
 T_EVAL = np.linspace(0.0, 20.0, 5)
-
-
-@pytest.fixture
-def xla_compiles():
-    """A list that gains one entry per XLA compilation while the test runs."""
-    compiles = []
-
-    def listener(event, duration, **kwargs):
-        if event == _BACKEND_COMPILE:
-            compiles.append(duration)
-
-    jax.monitoring.register_event_duration_secs_listener(listener)
-    yield compiles
-    jax.monitoring.unregister_event_duration_listener(listener)
 
 
 @pytest.fixture

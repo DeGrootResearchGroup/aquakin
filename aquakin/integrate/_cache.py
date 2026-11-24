@@ -5,6 +5,8 @@ Not part of the public API; ``aquakin.integrate._common`` re-exports every name.
 
 from __future__ import annotations
 
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -24,8 +26,9 @@ import numpy as np
 # model identity, the solver settings, and the call signature. A repeat solve
 # of the same (model, settings, signature) then reuses the compiled graph and
 # runs in milliseconds. The cache holds a reference to the model (and any
-# settings objects, e.g. a custom adjoint) so their ``id()`` cannot be reused by
-# a later object while the entry is live -- keying on ``id`` is therefore safe.
+# settings object keyed by identity, e.g. a custom adjoint) so their ``id()``
+# cannot be reused by a later object while the entry is live -- keying on ``id``
+# is therefore safe.
 #
 # Built-in models are themselves cached by name (``load_model``), so the
 # same model object is reused across calls and the ``id()`` key is stable
@@ -41,10 +44,33 @@ def atol_cache_key(atol):
 
     ``atol`` is often a per-component array derived from the model, so a fresh
     array object each reactor; key on its *values* so identical tolerances share
-    a cache entry.
+    a cache entry. Any other array or scalar a compiled program closes over (a
+    steady-state scale) is keyed the same way.
     """
     a = jnp.asarray(atol)
     return (tuple(a.shape), tuple(float(x) for x in np.asarray(a).reshape(-1)))
+
+
+def _adjoint_key(adjoint):
+    """A hashable key for a diffrax adjoint that is equal for equal programs.
+
+    ``None`` (the default ``RecursiveCheckpointAdjoint``) keys as ``None``. An
+    adjoint is an immutable dataclass whose type and fields fully determine the
+    program it compiles, so one whose fields are all plain scalars (or
+    ``None``) keys by its type and field values: a fresh ``DirectAdjoint`` per
+    solve (what :meth:`DifferentiationConfig.reactor_adjoint` returns) then
+    shares one compiled solve, while a different type or setting does not. Any
+    other adjoint (a field holding a solver, a dict, an array) keys by ``id``,
+    which never gives a false hit; the caller keeps it alive with the entry.
+    """
+    if adjoint is None:
+        return None
+    if dataclasses.is_dataclass(adjoint):
+        values = tuple((f.name, getattr(adjoint, f.name)) for f in dataclasses.fields(adjoint))
+        if all(v is None or type(v) in (bool, int, float, str) for _, v in values):
+            # The value's type is keyed too, so ``True`` and ``1`` stay apart.
+            return (type(adjoint), tuple((name, type(v), v) for name, v in values))
+    return id(adjoint)
 
 
 def _assemble_settings_key(rtol, atol_key, adjoint, dtmax, max_steps, order, factormax, solver):
@@ -56,13 +82,13 @@ def _assemble_settings_key(rtol, atol_key, adjoint, dtmax, max_steps, order, fac
     :func:`reactor_settings_key` (the reactor path, memoised ``atol`` key). A new
     compile-affecting setting is added here **once**, so the two entry points
     cannot drift out of lockstep -- a drift would be a silent wrong-result cache
-    hit. ``adjoint`` is keyed by identity, ``solver`` by class name; ``None`` for
+    hit. ``adjoint`` is keyed by :func:`_adjoint_key`, ``solver`` by class name; ``None`` for
     ``order`` / ``factormax`` / ``solver`` keeps the historic key shape.
     """
     return (
         float(rtol),
         atol_key,
-        None if adjoint is None else id(adjoint),
+        _adjoint_key(adjoint),
         None if dtmax is None else float(dtmax),
         int(max_steps),
         None if order is None else int(order),
@@ -76,9 +102,10 @@ def settings_cache_key(
 ):
     """Hashable key for the solver settings that affect the compiled solve.
 
-    ``adjoint`` is keyed by identity (``None`` for the default, which is shared);
-    a custom adjoint object keys by ``id`` -- safe (never a false hit), and it
-    shares whenever the same object is reused. ``order`` / ``factormax`` /
+    ``adjoint`` is keyed by its type and settings (:func:`_adjoint_key`;
+    ``None`` for the default), so equal adjoints share a compiled solve; an
+    adjoint with non-scalar settings keys by ``id`` -- safe (never a false
+    hit), and it shares whenever the same object is reused. ``order`` / ``factormax`` /
     ``solver`` (the integrator-config fields that change the compiled reactor
     solve) are keyed in when supplied -- ``solver`` by class name, matching the
     plant path. ``None`` for any of them keeps the historic key shape.
@@ -117,7 +144,7 @@ def reactor_settings_key(reactor):
     exactly the many-short-solve loop the cache exists for. ``atol`` is fixed at
     construction, so its key is computed once and stored on the reactor.
 
-    The cheap parts (``rtol`` / ``adjoint`` id / ``dtmax`` / ``max_steps``) are
+    The cheap parts (``rtol`` / ``adjoint`` key / ``dtmax`` / ``max_steps``) are
     re-read every call rather than cached: :func:`with_adjoint` produces a
     *shallow copy* with a swapped ``adjoint`` (the forward-/reverse-mode variant
     ``calibrate`` / ``sensitivity`` build), and that copy inherits the cached
