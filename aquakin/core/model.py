@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.context import CompileContext
+from aquakin.core.gases import ModelGases, compile_gases
 from aquakin.core.hints import did_you_mean
 from aquakin.core.nodes import (
     ASTNode,
@@ -229,6 +230,9 @@ class CompiledModel:
     # snaps a composition onto the algebraic mineral equilibrium (see
     # :meth:`CompiledModel.precipitation_equilibrium`).
     precipitation_equilibrium_fn: Callable | None = None
+    # The dissolved gases a ``gases:`` block declares (aquakin.core.gases), read by
+    # the plant units that own a gas phase; None without the block.
+    gases: ModelGases | None = None
     # Optional positivity limiter on the net reaction term. When set, each
     # species' net reaction rate is throttled as its concentration approaches
     # zero, so consumption cannot drive a state negative. Applied to the
@@ -1615,6 +1619,7 @@ def compile_model(spec: Any) -> CompiledModel:
     condition_units = {c.name: getattr(c, "units", "") or "" for c in spec.conditions}
 
     # --- Optional positivity limiter --------------------------------
+    gases = compile_gases(spec, species_index, condition_fields)
     positivity_threshold = None
     limiter_cfg = getattr(spec, "positivity_limiter", None)
     if limiter_cfg is not None:
@@ -1663,6 +1668,7 @@ def compile_model(spec: Any) -> CompiledModel:
         derived_condition_fn=derived_condition_fn,
         derived_fields=derived_fields,
         precipitation_equilibrium_fn=precipitation_equilibrium_fn,
+        gases=gases,
         positivity_threshold=positivity_threshold,
         clip_negative_states=bool(getattr(spec, "clip_negative_states", False)),
         temperature_corrections=temperature_corrections,

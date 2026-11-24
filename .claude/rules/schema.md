@@ -125,6 +125,20 @@ shipped model is: `docs/model_catalog.md`.
   every species, and the conservation suite checks each model against its own
   table. A generator or a new variant must carry `composition:` through.
 
+## `gases:`
+
+- **A model that declares `gases:` carries no gas phase.** The block only says
+  which species are dissolved gases; the unit that owns a gas phase (aeration,
+  a digester headspace) does the transfer, so one model runs in every unit. Do
+  not add headspace states or transfer reactions to such a model. (`adm1` keeps
+  its BSM2 headspace in the model and declares no `gases:`.)
+- **Gas properties come from `GAS_LIBRARY` in `core/gases.py`**, each value
+  with its source in that module's docstring. A model overrides one with a
+  reason in a comment; a new gas goes in the library with its source, not in a
+  model file.
+- `molar_mass` follows the `speciation:` convention (`mol/L = state /
+  molar_mass`).
+
 ## `extends:`
 
 - **Write a variant as `extends:` rather than a copy** when it differs from a

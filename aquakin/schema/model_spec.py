@@ -330,6 +330,70 @@ class SpeciationSpec(BaseModel):
         return self
 
 
+from aquakin.core.gases import GAS_LIBRARY as _GAS_LIBRARY
+from aquakin.core.gases import VALID_VOLATILE_FRACTIONS as _VALID_VOLATILE_FRACTIONS
+
+
+class GasEntrySpec(BaseModel):
+    """One dissolved species in a ``gases:`` block.
+
+    ``gas`` names a gas of the built-in library, whose solubility and
+    diffusivity apply unless ``henry``, ``henry_temperature`` or ``kL_ratio``
+    override them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    gas: str
+    molar_mass: float = Field(gt=0.0)
+    volatile_fraction: str | None = None
+    henry: float | None = Field(default=None, gt=0.0)
+    henry_temperature: float | None = None
+    kL_ratio: float | None = Field(default=None, gt=0.0)
+
+    @model_validator(mode="after")
+    def _validate(self) -> GasEntrySpec:
+        if self.gas not in _GAS_LIBRARY:
+            raise ValueError(
+                f"gases: unknown gas {self.gas!r}{did_you_mean(self.gas, _GAS_LIBRARY)}; the "
+                f"library has {sorted(_GAS_LIBRARY)}."
+            )
+        if (
+            self.volatile_fraction is not None
+            and self.volatile_fraction not in _VALID_VOLATILE_FRACTIONS
+        ):
+            raise ValueError(
+                f"gases: volatile_fraction must be one of {_VALID_VOLATILE_FRACTIONS}; got "
+                f"{self.volatile_fraction!r}."
+            )
+        return self
+
+
+class GasesSpec(BaseModel):
+    """Optional ``gases:`` block: which species are dissolved gases.
+
+    The units that own a gas phase (aeration, a digester headspace) transfer
+    these species; the model itself carries no gas phase. See
+    :mod:`aquakin.core.gases`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    temperature_field: str = "T"
+    temperature_units: str = "kelvin"
+    pH_field: str | None = None
+    species: dict[str, GasEntrySpec] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate(self) -> GasesSpec:
+        if self.temperature_units not in ("celsius", "kelvin"):
+            raise ValueError(
+                "gases.temperature_units must be 'celsius' or 'kelvin', got "
+                f"{self.temperature_units!r}"
+            )
+        return self
+
+
 class PositivityLimiterSpec(BaseModel):
     """Optional ``positivity_limiter:`` block.
 
@@ -673,6 +737,7 @@ class ModelSpec(BaseModel):
     conserved_for: list[str] = Field(default_factory=list)
     speciation: SpeciationSpec | None = None
     precipitation: PrecipitationSpec | None = None
+    gases: GasesSpec | None = None
     positivity_limiter: PositivityLimiterSpec | None = None
     # Clamp concentrations to >= 0 when evaluating reaction rates (and any
     # state-derived condition). Protects the nonlinear kinetics from a

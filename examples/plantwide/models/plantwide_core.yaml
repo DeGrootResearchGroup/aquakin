@@ -63,6 +63,21 @@ conditions:
   - {name: T,  units: "K", default: 293.15, description: "Temperature (K)."}
   - {name: pH, units: "-", default: 7.0,    description: "pH. A condition at this level; the chemistry level computes it from the state."}
 
+# Dissolved gases. The model carries no gas phase: an aerated tank strips these
+# to the air and a digester to its headspace (aquakin.core.gases has the gas
+# properties and their sources). molar_mass converts each species' units to
+# mol/L: g O2, g N (28 g per mol N2), g COD (64 per mol CH4, 16 per mol H2) and
+# g C per m3. Only the un-ionised H2CO3* of the inorganic carbon transfers.
+gases:
+  temperature_field: T
+  pH_field: pH
+  species:
+    SO2:  {gas: O2,  molar_mass: 32000}
+    SN2:  {gas: N2,  molar_mass: 28000}
+    SCH4: {gas: CH4, molar_mass: 64000}
+    SH2:  {gas: H2,  molar_mass: 16000}
+    SIC:  {gas: CO2, molar_mass: 12000, volatile_fraction: carbonate}
+
 clip_negative_states: true
 
 parameters:

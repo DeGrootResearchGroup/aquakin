@@ -219,6 +219,33 @@ process is the same.
 | Iron-based chemical P removal | either the saturation-index approach already in `asm2d_chemp`, or surface complexation (Smith et al., 2008; Hauduc et al., 2015) — open decision |
 | CO₂ and NH₃ stripping | standard two-film gas transfer |
 
+## Gas phase (owner, 2026-11-24)
+
+The model carries no gas phase; the unit owns it (the method of Lizarralde et
+al., 2015: the biochemical model is unchanged in the aqueous phase, and each
+gas phase has its own balance in the unit).
+
+- **The model declares its dissolved gases** in a `gases:` block, mapping each
+  species onto a gas of a built-in library (`core/gases.py`) with the
+  `molar_mass` that converts it to mol/L, and, for inorganic carbon, the
+  `volatile_fraction` that transfers (H2CO3*). Any library value can be
+  overridden per entry.
+- **Library values.** Henry's-law solubility at 25 C and its temperature
+  dependence: the first evaluated-review entries of Sander (2023), Burkholder
+  et al. (2019) for O2, N2, CO2, CH4 and Fernandez-Prini et al. (2003) for H2.
+  For CH4, CO2 and H2 these agree with BSM2's within a few percent. Diffusivity
+  in water at 25 C: CRC Handbook, "Diffusion of gases in water". Transfer
+  coefficient relative to oxygen: `(D / D_O2) ** 0.5`; CO2 gives 0.888, within
+  the 0.88-0.92 Lizarralde et al. measured. NH3 is left for the chemistry
+  level: its transfer is partly gas-film limited.
+- **Units supply the gas side.** An aerated tank transfers every declared gas at
+  its ratio times kLa_O2 toward its saturation in air at the tank temperature;
+  an unaerated tank optionally by a surface kLa; the digester owns one
+  headspace state per declared gas, held as a concentration in the gas volume
+  as in BSM2, with one kLa for all gases and the BSM2 pressure-driven outflow.
+- **Order:** the `gases:` block and library (done), the digester headspace,
+  then aeration.
+
 ## Engine and plant work the model needs
 
 1. **Gas-phase species.** The digester unit defaults to ADM1's headspace
@@ -342,6 +369,10 @@ paper itself before citing it in a model file.
 - López-Vázquez, C.M. et al. (2009). Modeling the PAO–GAO competition: effects
   of carbon source, pH and temperature. *Water Res.* 43(2), 450–462.
   https://doi.org/10.1016/j.watres.2008.10.032
+- Lizarralde, I. et al. (2015). A new general methodology for incorporating
+  physico-chemical transformations into multi-phase wastewater treatment
+  process models. *Water Res.* 74, 239–256.
+  https://doi.org/10.1016/j.watres.2015.01.031
 - Meijer, S.C.F., van Loosdrecht, M.C.M. & Heijnen, J.J. (2001). Metabolic
   modelling of full-scale biological nitrogen and phosphorus removing WWTP's.
   *Water Res.* 35(11), 2711–2723.
@@ -352,6 +383,9 @@ paper itself before citing it in a model file.
 - Ozyildiz, G. et al. (2023). Restructuring anaerobic hydrolysis kinetics in
   plant-wide models for accurate prediction of biogas production. *Water Res.*
   120620. https://doi.org/10.1016/j.watres.2023.120620
+- Sander, R. (2023). Compilation of Henry's law constants (version 5.0.0) for
+  water as solvent. *Atmos. Chem. Phys.* 23, 10901–12440.
+  https://doi.org/10.5194/acp-23-10901-2023
 - Seco, A., Ribes, J., Serralta, J. & Ferrer, J. (2004). Biological nutrient
   removal model No.1 (BNRM1). *Water Sci. Technol.* 50(6), 69–78.
   https://doi.org/10.2166/wst.2004.0361
