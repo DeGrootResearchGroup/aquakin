@@ -33,6 +33,26 @@ def pytest_runtest_teardown(item, nextitem):
         pytest.fail(mem_watchdog.watchdog_message(item.nodeid, available, floor), pytrace=False)
 
 
+# The duration event JAX records for every XLA compilation.
+_BACKEND_COMPILE = "/jax/core/compile/backend_compile_duration"
+
+
+@pytest.fixture
+def xla_compiles():
+    """A list that gains one entry per XLA compilation while the test runs."""
+    import jax
+
+    compiles = []
+
+    def listener(event, duration, **kwargs):
+        if event == _BACKEND_COMPILE:
+            compiles.append(duration)
+
+    jax.monitoring.register_event_duration_secs_listener(listener)
+    yield compiles
+    jax.monitoring.unregister_event_duration_listener(listener)
+
+
 @pytest.fixture(scope="session")
 def simple_model():
     """Load the simple A -> B test model, once per session.

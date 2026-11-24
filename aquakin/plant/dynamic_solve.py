@@ -838,7 +838,7 @@ def _solve_jax_adjoint(
             order=order,
         )
         if cache_key is not None:
-            # The adjoint is keyed by identity: keep it alive with the entry.
+            # An adjoint keyed by identity (see _adjoint_key) is kept alive with it.
             self._solve_cache.put("jit", cache_key, jitted, adjoint)
 
     with friendly_solve_errors(max_steps, what="plant solve"):
@@ -968,8 +968,8 @@ def _event_segment_solver(self, settings, events, *, has_t_eval):
         rhs_with_maps, settings, root_events_of(events), has_t_eval=has_t_eval
     )
     if key is not None:
-        # The adjoint is keyed by identity: keep it alive with the entry so its
-        # id cannot be reused by another object while the entry exists.
+        # An adjoint keyed by identity (see _adjoint_key) is kept alive with the
+        # entry so its id cannot be reused by another object while it exists.
         self._solve_cache.put("jit", key, (solve_segment, settings.adjoint))
     return solve_segment
 
