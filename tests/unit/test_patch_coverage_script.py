@@ -5,6 +5,7 @@ hand-written coverage report whose answer is known by inspection.
 """
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -163,3 +164,53 @@ def test_a_name_shared_by_both_packages_resolves_under_its_own_source(pc, tmp_pa
         '<line number="1" hits="1"/></lines></class></classes></package></packages></coverage>'
     )
     assert pc.line_states(report, tmp_path) == {"aquakin_ui/units.py": {1: "covered"}}
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    """A one-commit git repository holding a tracked ``aquakin/a.py`` and an
+    empty coverage report, entered as the current folder."""
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-q")
+    (tmp_path / "aquakin").mkdir()
+    (tmp_path / "aquakin" / "a.py").write_text("x = 1\n")
+    (tmp_path / ".gitignore").write_text("coverage.xml\n")
+    (tmp_path / "coverage.xml").write_text("<coverage><sources/><packages/></coverage>")
+    git("add", ".")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+def test_an_untracked_package_file_is_named_and_fails_the_check(pc, repo, capsys):
+    """No ``git diff`` sees an untracked file, so without this it would pass as
+    100% with its lines never counted. It is named, the check exits 1, and an
+    untracked file outside the packages or not Python is ignored."""
+    (repo / "aquakin" / "gases.py").write_text("y = 2\n")
+    (repo / "aquakin" / "notes.yaml").write_text("")
+    (repo / "scratch.py").write_text("")
+    assert pc.untracked() == ["aquakin/gases.py"]
+    assert pc.main(["--base", "HEAD"]) == 1
+    out = capsys.readouterr().out
+    assert "aquakin/gases.py: untracked, so its lines are not measured" in out
+    assert "git add -N aquakin/gases.py" in out
+    assert "notes.yaml" not in out
+    assert "scratch.py" not in out
+
+
+def test_an_intent_to_add_file_is_no_longer_untracked(pc, repo):
+    """``git add -N`` puts the file in the diff, so it stops being flagged."""
+    (repo / "aquakin" / "gases.py").write_text("y = 2\n")
+    subprocess.run(["git", "add", "-N", "aquakin/gases.py"], cwd=repo, check=True)
+    assert pc.untracked() == []
+    assert "aquakin/gases.py" in pc._git("diff", "--name-only", "HEAD")
+
+
+def test_nothing_untracked_gives_no_warning(pc, repo, capsys):
+    """A clean tree with no changed lines passes with no untracked warning."""
+    assert pc.untracked() == []
+    assert pc.main(["--base", "HEAD"]) == 0
+    assert "untracked" not in capsys.readouterr().out
