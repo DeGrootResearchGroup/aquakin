@@ -103,6 +103,62 @@ class KineticUnit(ModelTimeScaling):
         """The reaction term ``model.dCdt`` at ``C``, per the plant's time unit."""
         return self._scale_rates(self.model.dCdt(C, params, conditions, 0))
 
+    # ----- the mass balance's reaction contract (units.ReactionBalanceUnit) -----
+    #: Components whose reaction loss leaves as gas: an activated-sludge reactor
+    #: reduces nitrate to N₂ (N) and oxidizes COD with it or with oxygen (COD).
+    reaction_gas_components: frozenset = frozenset({"COD", "N"})
+
+    def reaction_term(
+        self,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+        signals: dict | None,
+    ) -> jnp.ndarray:
+        """The reaction term the unit's ``rhs`` adds, at the conditions it used.
+
+        Parameters
+        ----------
+        state : jnp.ndarray
+            The unit's state; its leading ``n_species`` entries are the
+            concentrations the reaction sees (any trailing non-species state,
+            such as an MBR's fouling resistance, is not).
+        inputs : dict[str, Stream]
+            The unit's input streams, as the plant's RHS assembly hands them.
+        params : jnp.ndarray
+            The unit's parameter vector.
+        signals : dict or None
+            The control-signal bus.
+
+        Returns
+        -------
+        jnp.ndarray
+            ``dC/dt`` from the reactions, shape ``(n_species,)``, per the
+            plant's time unit.
+        """
+        C = state[: self.model.n_species]
+        return self._reaction(C, params, self._reaction_conditions(inputs, signals))
+
+    def reaction_volumes(self, state: jnp.ndarray, params: jnp.ndarray):
+        """The volume each species' reaction term acts in: the unit's fixed
+        ``volume`` for every species.
+
+        Parameters
+        ----------
+        state : jnp.ndarray
+            The unit's state (unused: the volume is fixed).
+        params : jnp.ndarray
+            The unit's parameter vector (unused).
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``(n_species,)`` (m³).
+        """
+        import numpy as np
+
+        return np.full(self.model.n_species, float(self.volume))
+
 
 class AdjustableTemperatureUnit(KineticUnit):
     """A :class:`KineticUnit` whose static operating temperature can be set.

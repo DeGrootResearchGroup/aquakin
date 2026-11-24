@@ -176,6 +176,29 @@ class ADM1DigesterUnit(KineticUnit, CouplingAware):
                 vol[j] = v_gas
         return vol
 
+    #: The digester exports COD as biogas (CH₄, H₂) but has no nitrogen gas
+    #: phase, so N is left out: if its reactions do not conserve N, the mass
+    #: balance shows an imbalance rather than absorbing it as gas.
+    reaction_gas_components = frozenset({"COD"})
+
+    def reaction_volumes(self, state: jnp.ndarray, params: jnp.ndarray):
+        """The volume each species' reaction term acts in: the liquid volume,
+        and ``V_gas`` for the gas-headspace states (:meth:`_state_volume_vector`).
+
+        Parameters
+        ----------
+        state : jnp.ndarray
+            The digester's state (unused: the volumes are fixed).
+        params : jnp.ndarray
+            This unit's parameter vector (to read ``V_gas``).
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``(n_species,)`` (m³).
+        """
+        return self._state_volume_vector(params)
+
     def component_inventory(self, state, content, params):
         """Canonical-component inventory held in the digester (``{component:
         grams}``).

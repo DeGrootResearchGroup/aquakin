@@ -434,18 +434,6 @@ def mass_balance(
     )
 
 
-def _reaction_volume(plant, unit_name, params):
-    """Per-species volume vector (m³) for a reactive unit's reaction term: the
-    liquid volume for every state, except a unit that holds some states in a
-    distinct volume (an ADM1 digester's three gas-headspace states, at ``V_gas``),
-    which declares its per-species volumes via ``_state_volume_vector``."""
-    unit = plant.units[unit_name]
-    vol_fn = getattr(unit, "_state_volume_vector", None)
-    if vol_fn is not None:
-        return vol_fn(plant._params_for_unit(unit_name, params))
-    return np.full(unit.model.n_species, float(unit.volume))
-
-
 def _reaction_terms_at(plant, t, state_full, params_full, reactive, maps=(None, None)):
     """The reaction (chemistry) term ``dC/dt`` of each reactive unit at one
     saved instant, ``{unit: (n_species,)}``.
@@ -491,12 +479,9 @@ def _reaction_terms_at(plant, t, state_full, params_full, reactive, maps=(None, 
     )
     out = {}
     for name in reactive:
-        unit = plant.units[name]
-        # The species part only: a unit may carry trailing non-species state
-        # (an MBR's fouling resistance), which the reaction must not see.
-        C = states[name][: unit.model.n_species]
-        conditions = unit._reaction_conditions(inputs[name], signals[name])
-        out[name] = unit._reaction(C, plant._params_for_unit(name, params_full), conditions)
+        out[name] = plant.units[name].reaction_term(
+            states[name], inputs[name], plant._params_for_unit(name, params_full), signals[name]
+        )
     return out
 
 
@@ -520,45 +505,42 @@ def _reaction_terms(plant, solution, params, reactive):
 def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps):
     """Integrate, over the saved trajectory, the aeration oxygen transfer (g O2/d
     == g COD/d removed) and the reaction-production of each component summed over
-    every reactive unit (the activated-sludge reactors and the ADM1 digester).
+    every reactive unit (the activated-sludge reactors, the SBR and the ADM1
+    digester).
 
-    Returns ``(o2_transfer, R)`` where ``R[component]`` is the window integral of
-    ``Σ_units Σ_species (dC/dt)·content·volume`` (canonical g). For a
-    component conserved among tracked species ``R`` is zero; where it is not
-    (denitrification reducing nitrate to N₂, the digester exporting biogas) ``R``
-    is the negative of the gas that left, so ``gas = −R`` (plus the aeration
-    oxygen for COD).
+    The units taking part are those declaring
+    :class:`~aquakin.plant.units.ReactionBalanceUnit`, and the aerated ones those
+    declaring :class:`~aquakin.plant.units.OxygenTransferUnit`; each supplies
+    its own reaction term, reaction volumes and aeration transfer, so a
+    variable-volume or time-phased unit (the SBR) is weighted by its volume and
+    aerated at its phase at each saved time.
+
+    Returns ``(o2_transfer, R, stripped)`` where ``R[component]`` is the window
+    integral of ``Σ_units Σ_species (dC/dt)·content·volume`` (canonical g) over
+    each unit's ``reaction_gas_components``. For a component conserved among
+    tracked species ``R`` is zero; where it is not (denitrification reducing
+    nitrate to N₂, the digester exporting biogas) ``R`` is the negative of the
+    gas that left, so ``gas = −R`` (plus the aeration oxygen for COD).
+    ``stripped[component]`` is the integral of the co-stripped gases' transfer
+    dotted with their content (negative: a loss).
     """
     import jax.numpy as jnp
+
+    from aquakin.plant.units import OxygenTransferUnit, ReactionBalanceUnit
 
     t = np.asarray(solution.t_native)  # native: the rates are per native time unit
     layout = plant._state_layout
 
-    reactive = [
-        n
-        for n in plant._unit_order
-        if hasattr(plant.units[n], "aeration") or hasattr(plant.units[n], "_liquid_mask")
-    ]
-    aerated = [n for n in reactive if hasattr(plant.units[n], "aeration")]
+    reactive = [n for n in plant._unit_order if isinstance(plant.units[n], ReactionBalanceUnit)]
+    aerated = {n for n in reactive if isinstance(plant.units[n], OxygenTransferUnit)}
     need_signals = any(plant.units[n].required_signals for n in aerated)
     rqs = [q for q in comps if q in ("COD", "N")]
-    vols = {n: _reaction_volume(plant, n, params) for n in reactive}
-    content = {
-        n: {q: jnp.asarray(content_by_model[plant.units[n].model.name][q] * vols[n]) for q in rqs}
-        for n in reactive
-    }
-
-    # Which components each reactive unit can export to an untracked gas /
-    # acceptor: an aerated/anoxic reactor reduces nitrate to N₂ (N) and oxidises
-    # COD with it (COD); an ADM1 digester exports biogas (COD via CH₄/H₂) but has
-    # no nitrogen gas phase, so it must NOT contribute to the N gas term -- if its
-    # reactions do not conserve N, that surfaces as a balance imbalance rather
-    # than being silently absorbed.
+    unit_params = {n: plant._params_for_unit(n, params) for n in reactive}
     gas_comps = {
-        n: (set(rqs) if hasattr(plant.units[n], "aeration") else {q for q in rqs if q != "N"})
-        for n in reactive
+        n: [q for q in rqs if q in plant.units[n].reaction_gas_components] for n in reactive
     }
     reactions = _reaction_terms(plant, solution, params, reactive)
+    weights = {}  # unit -> (volumes, volumes as jnp, {component: content x volume})
     o2_rows, R_rows, strip_rows = [], {q: [] for q in rqs}, {q: [] for q in rqs}
     for i in range(t.shape[0]):
         state_i = solution.state[i]
@@ -569,26 +551,29 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
         for name in reactive:
             unit = plant.units[name]
             start, size = layout[name]
-            # Use the species part only: a unit may carry trailing non-species
-            # state (an MBR's fouling resistance), which the aeration term must
-            # not see.
-            n_sp = unit.model.n_species
-            C = state_i[start : start + n_sp]
+            unit_state = state_i[start : start + size]
+            vols = np.asarray(unit.reaction_volumes(unit_state, unit_params[name]))
+            if name not in weights or not np.array_equal(vols, weights[name][0]):
+                # Rebuilt only when the volumes change (a variable-volume unit),
+                # so a fixed-volume unit builds its weights once.
+                cvec = content_by_model[unit.model.name]
+                weights[name] = (
+                    vols,
+                    jnp.asarray(vols),
+                    {q: jnp.asarray(cvec[q] * vols) for q in rqs},
+                )
+            _, vols_j, content = weights[name]
             react = reactions[name][i]
             for q in gas_comps[name]:
-                R[q] += float(jnp.dot(react, content[name][q]))
-            if name in aerated and unit.aeration is not None:
-                sp_idx = unit.model.species_index
-                kla = unit.kla_vector(sig)
-                transfer = kla * (unit.saturation_vector - C)  # per species, per volume
-                # Aeration O2 source (the aerated oxygen species only).
-                o2 += float(transfer[sp_idx[unit.aeration.species]] * float(unit.volume))
+                R[q] += float(jnp.dot(react, content[q]))
+            if name in aerated:
+                oxygen, stripped = unit.oxygen_transfer(t[i], unit_state, sig)
+                # Aeration O2 source: transfer per volume times the volume.
+                o2 += float(jnp.dot(oxygen, vols_j))
                 # Co-stripped gases (N2O, NO, ...) leaving to the air: their
                 # component content is a gas loss (transfer is negative).
-                if unit.stripped_gases:
-                    g = jnp.asarray([sp_idx[sp] for sp in unit.stripped_gases])
-                    for q in rqs:
-                        S[q] += float(jnp.dot(transfer[g], content[name][q][g]))
+                for q in rqs:
+                    S[q] += float(jnp.dot(stripped, content[q]))
         o2_rows.append(o2)
         for q in rqs:
             R_rows[q].append(R[q])

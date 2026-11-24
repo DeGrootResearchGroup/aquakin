@@ -96,7 +96,7 @@ paths:
   `{component: grams}` — the layered **`TakacsClarifier`** (blanket summed over
   layers, both `composition_mode`s + `soluble_holdup`) and the
   **`ADM1DigesterUnit`** (liquid states at `V_liq`, the three gas-headspace states
-  at `V_gas`, via its own `_state_volume_vector(params)` which `_reaction_volume`
+  at `V_gas`, via its own `_state_volume_vector(params)` which its `reaction_volumes`
   also reuses for the reaction integral). A unit holding a single well-mixed
   liquid volume (`StorageTank` / `MBRUnit` / `SBRUnit`, whose states are
   `[C…, scalar(s)]`) instead declares that volume through **`liquid_volume(state)`**,
@@ -134,7 +134,18 @@ paths:
   each unit's kinetics at the conditions its `rhs` used** (the inlet or
   heat-balance operating temperature, not the static `T`): `_reaction_terms_at`
   rebuilds the unit's inputs and signals with `Plant._unit_inputs_and_signals`
-  and asks the unit for `_reaction_conditions`; evaluating at static conditions
-  leaves a spurious imbalance whenever the feed temperature differs. **This is
+  and calls the unit's `reaction_term`; evaluating at static conditions
+  leaves a spurious imbalance whenever the feed temperature differs.
+  **The gas term dispatches on two Protocols, never on attributes**
+  (`hasattr(unit, "aeration")` once left the SBR out, #852):
+  `units.ReactionBalanceUnit` (`reaction_term`, `reaction_volumes(state,
+  params)`, `reaction_gas_components`; `KineticUnit` implements it, so every
+  kinetic unit takes part, and the digester narrows the components to COD and
+  its volumes to `_state_volume_vector`) and `units.OxygenTransferUnit`
+  (`oxygen_transfer(t, state, signals) -> (oxygen, stripped)` per volume,
+  `required_signals`; `AerationUnit` and the SBR). A variable-volume or
+  time-phased unit must read its volume and phase from the `state` and `t` it
+  is given, through the same helper its `rhs` uses (the SBR's `_aeration`,
+  `_phase_index`), so the balance integrates the term the solve did. **This is
   the tool that found the ADM1 nitrogen transcription error** (see the `adm1`
   model note).
