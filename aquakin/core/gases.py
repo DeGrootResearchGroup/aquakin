@@ -237,7 +237,7 @@ def compile_gases(spec, species_index: dict[str, int], condition_fields: set[str
     Raises
     ------
     ValueError
-        If an entry names an unknown species or gas, two entries name the same
+        If an entry names an unknown species, two entries name the same
         gas, or a condition the block reads is not available.
     """
     block = getattr(spec, "gases", None)
@@ -252,11 +252,6 @@ def compile_gases(spec, species_index: dict[str, int], condition_fields: set[str
     for species, cfg in block.species.items():
         if species not in species_index:
             raise ValueError(f"gases: '{species}' is not a species of the model.")
-        if cfg.gas not in GAS_LIBRARY:
-            raise ValueError(
-                f"gases: '{species}' names gas '{cfg.gas}', which is not in the gas "
-                f"library {sorted(GAS_LIBRARY)}."
-            )
         if cfg.volatile_fraction is not None and block.pH_field not in condition_fields:
             raise ValueError(
                 f"gases: '{species}' has volatile_fraction '{cfg.volatile_fraction}', which "
