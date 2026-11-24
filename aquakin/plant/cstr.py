@@ -531,6 +531,42 @@ class AerationUnit:
             return jnp.asarray(0.0)
         return self.kla_vector(signals)[self.model.species_index[self.aeration.species]]
 
+    def oxygen_transfer(self, t, state: jnp.ndarray, signals: dict | None):
+        """The aeration transfer the mass balance integrates
+        (:class:`~aquakin.plant.units.OxygenTransferUnit`), split into the
+        oxygen and the co-stripped gases.
+
+        The transfer is ``kla_vector(signals) * (saturation_vector - C)``,
+        without the aeration temperature correction (as the readers above).
+
+        Parameters
+        ----------
+        t : float or jnp.ndarray
+            Plant time (unused: the aeration is not time-phased).
+        state : jnp.ndarray
+            The unit's state; its leading ``n_species`` entries are the bulk
+            concentrations.
+        signals : dict or None
+            The control-signal bus, needed only under closed-loop control.
+
+        Returns
+        -------
+        oxygen, stripped : jnp.ndarray
+            Per-species transfer rate per unit volume, shape ``(n_species,)``:
+            on the aerated oxygen species only, and on the co-stripped gases
+            only. Both are zero for an unaerated tank.
+        """
+        n = self.model.n_species
+        if self.aeration is None:
+            return jnp.zeros((n,)), jnp.zeros((n,))
+        transfer = self.kla_vector(signals) * (self.saturation_vector - state[:n])
+        sp_idx = self.model.species_index
+        o2_mask = jnp.zeros((n,)).at[sp_idx[self.aeration.species]].set(1.0)
+        gas_mask = jnp.zeros((n,))
+        for sp in self.stripped_gases:
+            gas_mask = gas_mask.at[sp_idx[sp]].set(1.0)
+        return transfer * o2_mask, transfer * gas_mask
+
     # Readers onto the canonical ``self._av`` store, for tests that introspect
     # the per-species aeration vectors.
     @property

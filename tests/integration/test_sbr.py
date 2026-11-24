@@ -376,6 +376,72 @@ def test_mass_balance_reads_sbr_inventory(asm1):
     assert inv2["COD"] == pytest.approx(inv["COD"], rel=1e-12)
 
 
+def test_mass_balance_closes_over_aerobic_anoxic_decant_cycles(asm1):
+    """Regression for #852: plant.mass_balance must integrate an SBR's reaction
+    and aeration terms, so its COD and N balances close.
+
+    A full tank is never fed; each 0.4 d cycle is aerobic, anoxic, settle and
+    decant, so the oxygen transferred in the aerobic phase (COD), the nitrate
+    denitrified to N₂ in the anoxic phase (N) and the decanted effluent are the
+    only exits, and the volume falls 1000 -> 750 -> 500 m³ over the two
+    cycles. Before the fix the SBR took no part in the gas term, so the gas was
+    0 and the relative imbalance was 7.4 (COD) and 3.1 (N).
+
+    The gas integrals are trapezoids over the saves, so the closure is set by
+    the sampling: on this 321-point grid it is 5.1e-3 (COD) and 2.1e-3 (N),
+    against 5.0e-3 and 1.1e-2 for a constantly aerated CSTR of the same
+    kinetics and start, and both fall below 3e-4 on 1601 points.
+    """
+    idx = asm1.species_index
+    C0 = np.asarray(asm1.default_concentrations()).copy()
+    for sp, v in dict(SS=50.0, SNH=30.0, SNO=20.0, XS=100.0, XB_H=1000.0,
+                      XB_A=100.0, SO=2.0, SALK=7.0).items():
+        C0[idx[sp]] = v
+    phases = [SBRPhase("aerobic", 0.15, kla=120.0),
+              SBRPhase("anoxic", 0.15, mixed=True),
+              SBRPhase("settle", 0.05, settle=True),
+              SBRPhase("decant", 0.05, decant=True)]
+    sbr = SBRUnit("sbr", asm1, phases, full_volume=1000.0, feed_flow=0.0,
+                  decant_flow=5000.0,
+                  settling=InterfaceSettling(v_settle=400.0, area=200.0),
+                  particulate_species=_PARTS, initial_fraction=1.0,
+                  conditions={"T": 293.15}, initial_concentrations=jnp.asarray(C0))
+    p = Plant("sbr_batch", time_unit="d")
+    p.add_unit(sbr)
+    p.add_influent("feed", InfluentSeries.constant(asm1, Q=0.0), to="sbr.feed")
+    sol = p.solve(t_span=(0.0, 0.8), t_eval=jnp.linspace(0.0, 0.8, 321))
+    V = np.asarray(sol.state[:, asm1.n_species])
+    assert V[-1] == pytest.approx(500.0, rel=1e-4)   # the volume did vary
+
+    mb = p.mass_balance(sol)
+    assert mb["COD"].inflow == 0.0 and mb["N"].inflow == 0.0
+    assert mb.gas_detail["aeration_O2"] > 0.0
+    assert mb.gas_detail["denitrification_N2"] > 0.0
+    # Tolerance from the sampling (see the docstring): the CSTR reference on the
+    # same grid closes to 1.1e-2 in N.
+    assert abs(mb["COD"].relative_imbalance) < 1e-2
+    assert abs(mb["N"].relative_imbalance) < 1e-2
+
+
+def test_oxygen_transfer_follows_the_phase_rhs_is_in(asm1):
+    """The SBR's mass-balance aeration term is the rhs aeration term: kLa of the
+    active phase times (do_sat - SO), and zero in an unaerated phase."""
+    sbr = _sbr(asm1)                                  # react (0.1-0.4) aerated
+    state = sbr.initial_state()
+    o2 = asm1.species_index["SO"]
+    so = float(state[o2])
+    oxygen, stripped = sbr.oxygen_transfer(0.2, state, None)
+    assert float(oxygen[o2]) == pytest.approx(240.0 * (sbr.do_sat - so), rel=1e-12)
+    assert float(jnp.sum(jnp.abs(oxygen))) == pytest.approx(abs(float(oxygen[o2])), rel=1e-12)
+    assert float(jnp.max(jnp.abs(stripped))) == 0.0
+    # The fill phase (0-0.1) and the next cycle's settle (0.65+0.45) are unaerated.
+    assert float(jnp.max(jnp.abs(sbr.oxygen_transfer(0.05, state, None)[0]))) == 0.0
+    assert float(jnp.max(jnp.abs(sbr.oxygen_transfer(1.1, state, None)[0]))) == 0.0
+    assert sbr.required_signals == ()
+    # The reaction volume is the state's liquid volume, not the full volume.
+    assert np.all(sbr.reaction_volumes(state, asm1.default_parameters()) == 500.0)
+
+
 @pytest.mark.slow
 def test_grad_through_a_cycle_matches_finite_difference(asm1):
     """d(sum of squared end-of-cycle states)/d(parameter scale) through one ASM1
