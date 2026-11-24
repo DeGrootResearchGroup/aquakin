@@ -55,17 +55,11 @@ FAST_MARKERS = "not validation and not slow"
 # fixture, then delete its entry. Never add an entry to make a failure pass
 # without saying why in the PR.
 RECORDED = {
-    "tests/integration/test_plant_stable_adjoint.py::test_stable_adjoint_colored_jacobian_auto_decision_size_gated": 151.2,
-    "tests/integration/test_identifiability.py::test_from_calibration_result": 31.8,
     "tests/integration/test_precipitation.py::test_shared_ionic_strength_solves_and_differentiates": 29.2,
     "tests/integration/test_a2o.py::test_asm2d_grad_flows": 29.0,
-    "tests/integration/test_forward_fast.py::test_forward_fast_accepts_honored_knobs": 28.2,
-    "tests/integration/test_forward_fast.py::test_forward_fast_rejects_events_and_grad": 28.0,
     "tests/integration/test_experiment_design.py::test_rank_experiments_orders_by_information": 26.4,
     "tests/integration/test_bsm2_evaluation.py::test_time_unit_override_leaves_bsm2_metrics_unchanged": 25.8,
     "tests/integration/test_calibrate.py::test_compiled_cache_rebuilds_on_every_baked_in_change": 25.8,
-    "tests/integration/test_calibrate.py::test_start_list_matches_best_of_separate_calls[gauss_newton]": 25.5,
-    "tests/integration/test_calibrate.py::test_declared_bound_stops_the_fit[gauss_newton]": 25.1,
 }
 
 ADVICE = (

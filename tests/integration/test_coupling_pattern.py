@@ -134,12 +134,13 @@ def _superset_holds(unit, make_inputs, *, times=(0.0,), seed=0, n=8):
     base = np.maximum(np.abs(np.asarray(unit.initial_state())), 1e-3)
     params = net.default_parameters()
     rng = np.random.default_rng(seed)
+    # One compile per unit: the time is traced, as it is in a plant solve.
+    fj = jax.jit(lambda t, y: jax.jacfwd(
+        lambda z: unit.rhs(t, z, make_inputs(), params))(y))
     for t in times:
-        fj = jax.jit(lambda y, _t=t: jax.jacfwd(
-            lambda z: unit.rhs(jnp.asarray(_t), z, make_inputs(), params))(y))
         for _ in range(n):
             y = jnp.asarray(base * 10.0 ** rng.uniform(-2, 2, size=base.shape))
-            J = np.asarray(fj(y))
+            J = np.asarray(fj(jnp.asarray(t, dtype=float), y))
             active = np.abs(J) > 1e-9 * (np.abs(J).max() + 1e-300)
             assert not (active & ~cp.self_pattern).any()
 
