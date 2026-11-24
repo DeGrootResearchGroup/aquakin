@@ -243,8 +243,10 @@ gas phase has its own balance in the unit).
   an unaerated tank optionally by a surface kLa; the digester owns one
   headspace state per declared gas, held as a concentration in the gas volume
   as in BSM2, with one kLa for all gases and the BSM2 pressure-driven outflow.
-- **Order:** the `gases:` block and library (done), the digester headspace,
-  then aeration.
+- **Order:** the `gases:` block and library (done), the digester headspace
+  (`HeadspaceDigesterUnit`, done: equal to ADM1's BSM2 headspace when given
+  BSM2's constants; the plant-wide core's 20 d digester vents 64% CH4 / 36%
+  CO2 and closes its COD and N balances), then aeration.
 
 ## Engine and plant work the model needs
 

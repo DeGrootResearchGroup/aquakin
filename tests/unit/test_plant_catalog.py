@@ -10,6 +10,7 @@ unit built from those settings.
 import io
 import json
 import re
+from pathlib import Path
 
 import jax.numpy as jnp
 import pytest
@@ -30,6 +31,14 @@ from aquakin.plant.catalog import (
 
 T = {"T": 293.15}
 
+# Project models some kinds need: no shipped model declares dissolved gases yet,
+# so the headspace digester is built on the plant-wide example model.
+MODEL_FILES = {
+    "plantwide_core": str(
+        Path(__file__).parents[2] / "examples" / "plantwide" / "models" / "plantwide_core.yaml"
+    )
+}
+
 # Settings that build each kind from the front end (required values filled in).
 BUILDABLE = {
     "cstr": {"model": "asm1", "volume": 1000.0, "conditions": T},
@@ -43,6 +52,11 @@ BUILDABLE = {
         "biofilm_thickness": 1e-4,
     },
     "digester": {"model": "adm1", "volume": 3400.0, "conditions": {"T": 308.15, "T_ref": 298.15}},
+    "headspace_digester": {
+        "model": "plantwide_core",
+        "volume": 3400.0,
+        "conditions": {"T": 308.15, "pH": 7.1},
+    },
     "clarifier": {"model": "asm1", "area": 1500.0, "height": 4.0, "underflow_Q": 18000.0},
     "primary_clarifier": {"model": "asm1", "volume": 900.0},
     "ideal_clarifier": {"model": "asm1", "underflow_Q": 18000.0},
@@ -91,7 +105,7 @@ def test_every_kind_is_tested_and_every_category_known():
 @pytest.mark.parametrize("kind", sorted(BUILDABLE))
 def test_port_rules_give_the_built_units_ports(kind):
     settings = BUILDABLE[kind]
-    built = check_unit(kind, "u", settings)
+    built = check_unit(kind, "u", settings, model_files=MODEL_FILES)
     assert built["ok"], built
     assert unit_kind(kind).ports_for(settings) == (built["inputs"], built["outputs"])
 
@@ -99,7 +113,7 @@ def test_port_rules_give_the_built_units_ports(kind):
 @pytest.mark.parametrize("kind", sorted(RENAMED))
 def test_port_rules_follow_renamed_ports(kind):
     settings = {**BUILDABLE[kind], **RENAMED[kind]}
-    built = check_unit(kind, "u", settings)
+    built = check_unit(kind, "u", settings, model_files=MODEL_FILES)
     assert built["ok"], built
     assert unit_kind(kind).ports_for(settings) == (built["inputs"], built["outputs"])
 

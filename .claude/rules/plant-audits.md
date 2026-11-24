@@ -88,7 +88,9 @@ paths:
   species' transfer dotted with their content) — computed from the
   aeration term and a reaction-production integral over the reactive units, with
   the digester deliberately excluded from the N gas term since it has no N gas
-  phase) and **accumulation** (ΔInventory across every unit — reactor / clarifier
+  phase; plus what a `GasExportUnit` vents through its own gas phase,
+  `gas_detail["gas_export_<q>"]`, integrated from its `gas_export`) and
+  **accumulation** (ΔInventory across every unit — reactor / clarifier
   / digester liquid+headspace at `V_liq`/`V_gas` / storage / Takács blanket).
   `_unit_inventory` **dispatches on unit-implemented contracts, never on private
   state layout** (#505): a unit whose state layout is non-trivial declares

@@ -355,6 +355,7 @@ settings in the [API reference](api.md).
 | `SBRUnit` | a sequencing batch reactor with timed phases (`SBRPhase`) |
 | `MBRUnit` | a membrane bioreactor |
 | `ADM1DigesterUnit` | a continuously fed, mesophilic ADM1 digester with a gas headspace |
+| `HeadspaceDigesterUnit` | a digester whose gas headspace belongs to the unit, for any model that declares its dissolved gases (`gases:`) |
 | `TakacsClarifier` | a layered secondary clarifier |
 | `PrimaryClarifier` | a primary clarifier with a flow-dependent removal correlation |
 | `IdealThickener` | an ideal solids separator: thickener or dewatering |

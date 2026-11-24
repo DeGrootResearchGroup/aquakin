@@ -95,6 +95,8 @@ class Unit(Protocol):
       results-level mass balance and the per-species readers.
     - :class:`ComponentInventoryUnit` (``component_inventory``) -- owns its
       COD/N/P inventory for a non-concentration-vector state layout.
+    - :class:`GasExportUnit` (``gas_export``) -- vents material through its own
+      gas phase (a digester headspace), for the mass balance's gas term.
     - :class:`ApproximateInventoryUnit` (``inventory_caveats``) -- names the
       components its inventory only approximates, with why, for the mass
       balance to report.
@@ -213,6 +215,17 @@ class ComponentInventoryUnit(Protocol):
     def component_inventory(
         self, state: jnp.ndarray, content: dict, params: jnp.ndarray
     ) -> dict: ...
+
+
+@runtime_checkable
+class GasExportUnit(Protocol):
+    """A unit whose own gas phase carries material out of the plant (a digester
+    headspace venting biogas), outside the model's reaction term. The mass
+    balance integrates ``gas_export`` as gas leaving: per species, per plant
+    time unit, in each species' units times m³, so a species' component
+    content applies to its entry."""
+
+    def gas_export(self, state: jnp.ndarray, params: jnp.ndarray) -> jnp.ndarray: ...
 
 
 @runtime_checkable

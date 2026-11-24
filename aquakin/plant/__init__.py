@@ -66,6 +66,7 @@ from aquakin.plant.design import (
     sludge_metrics,
 )
 from aquakin.plant.digester import ADM1DigesterUnit
+from aquakin.plant.headspace import HeadspaceDigesterUnit
 from aquakin.plant.errors import (
     NoDigesterError,
     UnitsError,
@@ -195,6 +196,7 @@ __all__ = [
     "FlowContext",
     "FlowParameterized",
     "FlowSetpoint",
+    "HeadspaceDigesterUnit",
     "HeatBalanceTemperature",
     "HydraulicDelayUnit",
     "IFASUnit",

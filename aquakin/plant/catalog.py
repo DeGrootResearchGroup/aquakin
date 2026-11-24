@@ -41,6 +41,7 @@ from aquakin.plant.digester import ADM1DigesterUnit
 from aquakin.plant.disinfection import ChlorineContactUnit, UVUnit
 from aquakin.plant.dosing import DosingUnit
 from aquakin.plant.errors import error_reply
+from aquakin.plant.headspace import HeadspaceDigesterUnit
 from aquakin.plant.ifas import IFASUnit
 from aquakin.plant.mbr import MBRUnit
 from aquakin.plant.mixer import MixerUnit, RatioSplitter, SetpointSplitter, ThresholdSplitter
@@ -499,6 +500,12 @@ def _build_kinds() -> dict[str, UnitKind]:
         ),
         _kind("sbr", "Sequencing batch reactor", "reactor", SBRUnit),
         _kind("digester", "Anaerobic digester", "reactor", ADM1DigesterUnit),
+        _kind(
+            "headspace_digester",
+            "Digester with unit headspace",
+            "reactor",
+            HeadspaceDigesterUnit,
+        ),
         _kind(
             "clarifier",
             "Secondary clarifier",
