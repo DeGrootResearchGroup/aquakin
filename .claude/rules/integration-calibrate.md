@@ -30,7 +30,9 @@ Split out of `.claude/rules/integration.md`.
   no name is kept alive there for an importer. **New calibration code
   goes in the `integrate/calibration/` module for its concern** (`config`,
   `observation`, `loss`, `coords`, `result`, `problem`, `objective`,
-  `multistart`, `laplace`, `driver`), never back into `calibrate.py`.
+  `multistart`, `laplace`, `driver`, `criteria`), never back into
+  `calibrate.py`. A public name defined there (`criteria`'s `aic`, ...) is
+  imported by `aquakin` and `aquakin.integrate` from that module.
 - `calibration/*` modules must not import `calibrate.py` (it imports them), and
   `calibration/__init__.py` stays a docstring with no imports, so `fisher.py`
   can import the pieces without a cycle. Cross-module references that are only
@@ -63,6 +65,18 @@ Split out of `.claude/rules/integration.md`.
   and starts are compared on the unscaled loss** (`fun * loss_scale`): a start
   then runs exactly as it would alone, so a start list returns the best of
   separate fits from its starts, whatever their order.
+
+### Information criteria (`calibration/criteria.py`)
+
+- `_fit_statistics` (in `_fit_result`, so reactor and plant share it) takes the
+  log-likelihood as `loss - prior penalty - (N/2) log(2 pi)`, the penalty from
+  `_add_prior_term`, the function the objective adds: **a new prior term goes
+  there**, or the log-likelihood silently includes it.
+- Both resolvers set `_CalibrationProblem.is_likelihood`, `n_observations`
+  (non-NaN entries) and `observations_key` (observations and times only, not
+  `sigma` or the loss, so different models' fits of one dataset compare).
+- `k` = free rates + fitted IC coordinates + one noise level per output under
+  `sigma="estimate"`. Only `"nll"` is a likelihood: no AIC for `"mse"`/`"wmse"`.
 
 ### `calibrate()` internal structure
 
@@ -154,9 +168,7 @@ import from `integrate/_linalg.py`): an exactly null direction is left out of
 `RuntimeWarning`. `FisherInformation.covariance` (behind `std()`) uses the
 same `_NULL_RTOL` to raise `LinAlgError` on a singular matrix; do not rely on
 `np.linalg.inv` raising, which it does only on an exactly zero LU pivot and not
-on every LAPACK build. (`LaplaceConfig.eig_keep` once dropped every direction below
-1e-2 of the largest with zero variance, understating weakly identified stds by
-up to ~100×; it is now deprecated and ignored.) A quantity counts as
+on every LAPACK build. `LaplaceConfig.eig_keep` is deprecated and ignored. A quantity counts as
 "involved" in an exactly-null direction (rel. eigenvalue ≤ 1e-10) only if its
 loading there exceeds `null_loading_tol` (default 1e-2): a null eigenvector is
 only accurate to the sensitivities' round-off, and a 1e-6 cut marked

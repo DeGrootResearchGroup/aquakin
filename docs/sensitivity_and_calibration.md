@@ -18,6 +18,7 @@ to know *how* an output depends on its inputs, or to fit a model to data.
 | Which inputs matter over a whole range? | `aquakin.dgsm` | `plant.steady_state_dgsm`, `plant.dynamic_dgsm` |
 | Which parameter values fit my data? | `aquakin.calibrate` (`aquakin.fit` for a point estimate only) | `plant.calibrate` |
 | How well do the data determine them? | the Laplace posterior, `aquakin.profile_likelihood`, `aquakin.identifiability` | the same, with `plant_profile_likelihood` |
+| Which model structure do the data support? | `aquakin.aic`, `aicc`, `bic`, `compare_models` | the same |
 | What should I measure next? | `aquakin.fisher_information`, `rank_experiments`, `optimize_experiment`, `design_from_candidates` | `plant_fisher_information`, `plant_rank_sensor_sets` |
 | How uncertain is a prediction? Which design is best? | `aquakin.monte_carlo`, `compare_scenarios`, `optimize_design` | the same |
 
@@ -623,6 +624,67 @@ orthogonal and grows without bound as they become linearly dependent,
 regardless of how sensitive the output is to each parameter.
 `rep.identifiable_subsets()` lists every subset below a threshold (default
 15), largest first.
+
+## Comparing model structures
+
+When several model structures could explain the same data (a different rate
+law, an extra pathway, a parameter fitted or held at a literature value), an
+information criterion says which the data support, charging each structure for
+the quantities it estimates. A fit with `loss="nll"` carries what they need:
+
+- `result.log_likelihood`: the Gaussian log-likelihood of the observations at
+  the fit, complete with its `-(N/2) log(2π)` constant and without any prior.
+  It is not `-result.loss`, which leaves out the constant and includes the
+  prior penalty.
+- `result.n_observations`: the observed entries over every dataset (a `NaN` is
+  not counted).
+- `result.n_estimated`: the free rate parameters, plus the fitted initial
+  pools of every dataset, plus one noise level per observed output with
+  `sigma="estimate"`.
+
+`aquakin.aic(result)`, `aquakin.aicc(result)` and `aquakin.bic(result)` give
+the criteria, and `aquakin.compare_models` ranks several fits of the same
+observations. Here the question is whether the data call for fitting
+`k_dec`, or whether its default value will do:
+
+```python
+k1_only = aquakin.calibrate(reactor, C0, observations, t_obs, ["O3_Br_direct.k1"],
+                            observed_species=observed, loss="nll", sigma=sigma)
+table = aquakin.compare_models({"k1 and k_dec": result, "k1 only": k1_only},
+                               criterion="aicc")
+table.best       # 'k1 only'
+table.delta      # how far each is behind the best
+table.weights    # {'k1 only': 0.59, 'k1 and k_dec': 0.41} (to two decimals)
+```
+
+% invisible-code-block: python
+%     assert table.best == "k1 only"
+%     assert round(table.weights["k1 only"], 2) == 0.59
+%     assert round(table.weights["k1 and k_dec"], 2) == 0.41
+%     assert (result.n_estimated, k1_only.n_estimated, result.n_observations) == (2, 1, 24)
+
+Lower is better, and only differences between fits of the same observations
+mean anything, so `compare_models` refuses fits whose observations or
+observation times differ. Fitting `k_dec` as well raises the likelihood too
+little to pay for the extra parameter, though a weight of 0.41 says the data do
+not rule it out either. As a rule of thumb, a difference below 2 is weak
+evidence and one above 10 is decisive. AICc corrects AIC for small samples and
+is the safer default unless there are many more observations than estimated
+quantities (more than about 40 per quantity); BIC charges more for each
+parameter and favours the simpler structure more strongly as the data grow.
+
+Some fits cannot be compared this way:
+
+- `"mse"` and `"wmse"` are not likelihoods, so the criteria refuse them. Refit
+  with `loss="nll"` and `sigma="estimate"`, which is the least-squares form of
+  the criteria with one noise level estimated per output.
+- A prior (a model-declared one with `use_priors=True`, an explicit `priors=`,
+  or `FreeICConfig(prior_log_std=)`) moves the fit off the maximum-likelihood
+  point, so the criteria warn. Refit with `use_priors=False` and no priors to
+  compare structures.
+- `aicc` needs more observations than estimated quantities plus one.
+
+`plant.calibrate` results work the same way.
 
 ## Designing experiments
 

@@ -47,6 +47,13 @@ from aquakin.integrate.particle import (
 )
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.calibration.criteria import (
+    ModelComparison,
+    aic,
+    aicc,
+    bic,
+    compare_models,
+)
 from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
 from aquakin.integrate.experiment_design import (
     CandidateScore,
@@ -99,6 +106,7 @@ __all__ = [
     "IntegratorConfig",
     "KPIComparison",
     "LaplaceConfig",
+    "ModelComparison",
     "MonteCarloResult",
     "OptimizeResult",
     "OptimizerConfig",
@@ -111,8 +119,12 @@ __all__ = [
     "SensitivityResult",
     "Track",
     "TrackSolution",
+    "aic",
+    "aicc",
+    "bic",
     "calibrate",
     "check_finite_gradient",
+    "compare_models",
     "compare_scenarios",
     "design_criterion",
     "design_from_candidates",

@@ -127,7 +127,9 @@ aquakin/
 │   │   │   ├── objective.py         #   _FitConfig, jit-cached objective / residual / Jacobian
 │   │   │   ├── multistart.py        #   starts, optimizer bounds, the multistart loop
 │   │   │   ├── laplace.py           #   Laplace posterior, at-bound checks
-│   │   │   └── driver.py            #   _run_fit / _fit_result: shared with Plant.calibrate
+│   │   │   ├── driver.py            #   _run_fit / _fit_result: shared with Plant.calibrate
+│   │   │   └── criteria.py          #   log-likelihood / k / n of a fit; aic, aicc, bic,
+│   │   │                            #   compare_models (public, re-exported by aquakin)
 │   │   ├── seam.py                  # the private integrate names aquakin.plant reuses,
 │   │   │                            #   listed in one place (the only route; test-checked)
 │   │   ├── _linalg.py               # null-direction tolerances shared by the Laplace

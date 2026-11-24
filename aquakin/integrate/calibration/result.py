@@ -62,10 +62,12 @@ class CalibrationResult:
         Free parameters by namespaced name, in physical space.
     loss : float
         The full scalar objective at the MAP: the summed data loss plus any
-        prior penalty. It is the same value regardless of ``optimizer`` --- for
-        ``loss="nll"`` it is the complete Gaussian negative log-likelihood
-        (including the ``sum(log(sigma))`` normaliser), not the Gauss-Newton
-        ``0.5*||residual||^2`` (which drops that constant).
+        prior penalty. It is the same value regardless of ``optimizer``. For
+        ``loss="nll"`` the data loss is the Gaussian negative log-likelihood
+        less its constant ``(N/2) log(2 pi)``: it includes the
+        ``sum(log(sigma))`` normalizer, which the Gauss-Newton
+        ``0.5*||residual||^2`` drops. It is therefore not ``-log_likelihood``;
+        use ``log_likelihood`` for model comparison.
     converged : bool
         Whether SciPy declared convergence.
     message : str
@@ -146,6 +148,19 @@ class CalibrationResult:
         deviation of each observed output, ``sqrt(SSE_j / N_j)`` at the MAP
         (pooled over the datasets), shape ``(n_observed,)``. ``None``
         otherwise.
+    log_likelihood : float, optional
+        With ``loss="nll"``, the Gaussian log-likelihood of the observations at
+        the fitted parameters, complete with its ``-(N/2) log(2 pi)`` constant
+        and without any prior penalty (with ``sigma="estimate"``, at the
+        estimated noise levels). It is the maximized log-likelihood when the fit
+        had no prior. ``None`` for the other losses, which are not likelihoods.
+    n_observations : int, optional
+        The number of observed (non-``NaN``) entries over every dataset.
+    n_estimated : int, optional
+        The number of estimated quantities ``k`` the information criteria
+        count: the free rate parameters, the fitted initial-pool coordinates of
+        every dataset, and with ``sigma="estimate"`` one noise level per
+        observed output. See :func:`aquakin.aic`.
     """
 
     params: jnp.ndarray
@@ -171,6 +186,13 @@ class CalibrationResult:
     ic_fractions_std: list | None = None
     at_bound: dict[str, str] = field(default_factory=dict)
     sigma_estimate: np.ndarray | None = None
+    log_likelihood: float | None = None
+    n_observations: int | None = None
+    n_estimated: int | None = None
+    # What :func:`aquakin.compare_models` checks: a fingerprint of the
+    # observations and their times, and whether the objective carried a prior.
+    _observations_key: str | None = field(default=None, repr=False)
+    _prior_in_loss: bool = field(default=False, repr=False)
 
     def posterior_draws(self, model, n_draw: int = 200, *, seed: int = 0) -> np.ndarray:
         """Full parameter vectors drawn from the Laplace posterior.
