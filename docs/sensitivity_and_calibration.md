@@ -15,7 +15,7 @@ to know *how* an output depends on its inputs, or to fit a model to data.
 | Question | Reactor | Plant |
 |---|---|---|
 | How does an output change with each parameter, here? | `aquakin.sensitivity`, `reactor.solve_sensitivity` | `plant.steady_state_sensitivity`, `plant.dynamic_sensitivity`, `plant.solve_sensitivity` |
-| Which inputs matter over a whole range? | `aquakin.dgsm` | `plant.steady_state_dgsm`, `plant.dynamic_dgsm` |
+| Which inputs matter over a whole range? | `aquakin.dgsm`; `aquakin.sobol_indices` for first-order and interaction shares | `plant.steady_state_dgsm`, `plant.dynamic_dgsm` |
 | Which parameter values fit my data? | `aquakin.calibrate` (`aquakin.fit` for a point estimate only) | `plant.calibrate` |
 | How well do the data determine them? | the Laplace posterior, `aquakin.profile_likelihood`, `aquakin.identifiability` | the same, with `plant_profile_likelihood` |
 | Which model structure do the data support? | `aquakin.aic`, `aicc`, `bic`, `compare_models` | the same |
@@ -213,6 +213,62 @@ res.ranked()              # [(name, bound), ...] most influential first
 derivatives in forward mode. The result is the same; forward mode is faster
 when there are many outputs, or when the reverse pass through a stiff solve is
 expensive.
+
+### Variance-based global sensitivity (Sobol indices)
+
+DGSM gives an upper bound on each input's total effect. It does not say what
+fraction of the output variance an input explains on its own, or which inputs
+interact. `aquakin.sobol_indices` estimates both, for each input `z_j`:
+
+- the **first-order index** `S_j`, the fraction of the output variance that
+  `z_j` explains on its own (Saltelli et al. 2010 estimator);
+- the **total-order index** `S_j^tot`, the same fraction including every
+  interaction with other inputs (Jansen 1999 estimator);
+- their difference, `res.interaction`, the share that `z_j` explains only
+  through interactions.
+
+It takes the same function as `dgsm`, and its inputs are described as for
+`monte_carlo`: a `(low, high)` range, or a uniform, normal or lognormal
+distribution. The function does not need to be differentiable. As with
+`monte_carlo`, it can also wrap a dynamic plant solve
+([Uncertainty and scenarios](plants.md#uncertainty-and-scenarios)).
+
+The decomposition costs much more than DGSM. For `d` inputs and a base sample
+of `N` points it runs `N (d + 2)` forward solves, where DGSM runs about `N`
+differentiated ones. At `N = 1024` and 17 inputs that is about 19 000 solves.
+Check the count with `sobol_indices_cost` before you start:
+
+| Method | Gives | Solves for `d` inputs, base sample `N` |
+|---|---|---|
+| `aquakin.dgsm` | an upper bound on each `S_j^tot`; a ranking | about `N` differentiated solves |
+| `aquakin.sobol_indices` | `S_j`, `S_j^tot`, interactions, confidence intervals | `N (d + 2)` forward solves |
+
+Use DGSM to screen many inputs. Then use Sobol indices on the few that matter,
+or on a cheap model.
+
+```python
+aquakin.sobol_indices_cost(2, 64)     # 256 solves for the two rate constants
+
+sob = aquakin.sobol_indices(bromate_umol, {"k1": (80.0, 320.0), "k_dec": (35.0, 140.0)},
+                            n_samples=64, seed=0)
+sob.first_order          # (2,) share of Var(bromate) each rate explains alone
+sob.total_order          # (2,) the same including interactions
+sob.interaction          # (2,) total minus first order
+sob.total_order_ci       # (2, 2) bootstrap 95 % intervals
+```
+
+% invisible-code-block: python
+%     assert aquakin.sobol_indices_cost(2, 64) == 256 == sob.n_evaluations
+%     assert np.all(sob.total_order <= np.asarray(res.sobol_total_bound))
+
+The confidence intervals come from a bootstrap over the base sample. The
+bootstrap costs no extra solves. It treats the sample as independent random
+draws, so on the scrambled-Sobol design used here the intervals are
+conservative: they are usually wider than the actual error. Increase
+`n_samples` until the intervals are narrow enough to separate the inputs you
+want to compare. With a small sample an index near zero can come out slightly
+negative, which is sampling noise. The indices assume that the inputs are
+independent.
 
 ### Plant sensitivity
 

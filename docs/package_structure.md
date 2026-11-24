@@ -83,9 +83,11 @@ aquakin/
 │   │   ├── global_sensitivity.py    # dgsm(), DGSMResult: derivative-based
 │   │   │                            #   global (Sobol total-index) screen
 │   │   ├── _qmc.py                   # shared Sobol samplers + unit sampler +
-│   │   │                            #   fn(x)->output eval helpers (dgsm + DoE)
+│   │   │                            #   fn(x)->output eval helpers (dgsm, Sobol, DoE)
 │   │   ├── monte_carlo.py           # monte_carlo(): uncertainty propagation
 │   │   │                            #   (distribution samplers -> inverse-CDF)
+│   │   ├── variance_sensitivity.py  # sobol_indices(), SobolResult: Saltelli /
+│   │   │                            #   Jansen first-order + total Sobol indices
 │   │   ├── scenarios.py             # compare_scenarios() + kpi_comparison():
 │   │   │                            #   scenario / standardized-report KPI tables
 │   │   ├── design.py                # optimize_design() + Constraint: AD-gradient
