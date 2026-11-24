@@ -79,6 +79,41 @@ def _normalise_distributions(distributions):
     return names, ppfs
 
 
+def _resolve_distributions(distributions, input_names):
+    """Return ``(input_names, ppfs)`` for the inputs of a sampling workflow.
+
+    ``distributions`` is a ``name -> spec`` mapping or a sequence of specs (see
+    :func:`monte_carlo`); ``input_names``, when given, overrides the names and
+    must have one entry per distribution. Unnamed inputs are ``z0, z1, ...``.
+    Shared by :func:`monte_carlo` and :func:`aquakin.sobol_indices`, so both
+    read an input specification the same way.
+    """
+    names, ppfs = _normalise_distributions(distributions)
+    d = len(ppfs)
+    if input_names is not None:
+        if len(input_names) != d:
+            raise ValueError(
+                f"input_names has {len(input_names)} entries but there are {d} distributions."
+            )
+        names = list(input_names)
+    elif names is None:
+        names = [f"z{j}" for j in range(d)]
+    return names, ppfs
+
+
+def _map_unit_sample(U, ppfs):
+    """Map unit-cube points ``U`` (shape ``(n, d)``) to the inputs' distributions.
+
+    Each column goes through its own inverse CDF (inverse-transform sampling), so
+    a low-discrepancy design in the unit cube stays low-discrepancy in each
+    marginal.
+    """
+    X = np.empty_like(U)
+    for j, ppf in enumerate(ppfs):
+        X[:, j] = ppf(U[:, j])
+    return X
+
+
 # --- Monte-Carlo -------------------------------------------------------------
 
 
@@ -203,22 +238,9 @@ def monte_carlo(
     -------
     MonteCarloResult
     """
-    names, ppfs = _normalise_distributions(distributions)
-    d = len(ppfs)
-    if input_names is not None:
-        if len(input_names) != d:
-            raise ValueError(
-                f"input_names has {len(input_names)} entries but there are {d} distributions."
-            )
-        names = list(input_names)
-    elif names is None:
-        names = [f"z{j}" for j in range(d)]
-
-    U, n_drawn = _unit_sample(d, n_samples, sampler, seed)
-    # Map each column through its inverse CDF (inverse-transform sampling).
-    X = np.empty_like(U)
-    for j in range(d):
-        X[:, j] = ppfs[j](U[:, j])
+    names, ppfs = _resolve_distributions(distributions, input_names)
+    U, n_drawn = _unit_sample(len(ppfs), n_samples, sampler, seed)
+    X = _map_unit_sample(U, ppfs)
 
     Y, finite = _eval_fn_over(fn, X, batched)
     Xv, Yv = X[finite], Y[finite]
