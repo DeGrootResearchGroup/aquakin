@@ -105,7 +105,7 @@ reactions:                # list of reactions
 speciation: {...}         # a pH computed from the state (see below)
 precipitation: {...}      # mineral precipitation (see below)
 positivity_limiter: {threshold: <float>}  # see "Keeping states non-negative"
-clip_negative_states: <bool>              # default false
+clip_negative_states: <bool>              # default false; every shipped model sets it
 
 remove: {...}             # with `extends:` only (see below)
 ```
@@ -512,8 +512,8 @@ concentration is non-negative.
 
 - `clip_negative_states: true` evaluates the rates (and a state-derived pH)
   with negative concentrations treated as zero. Transport and the reported
-  states still use the unclipped values, so mass balances stay exact. The
-  shipped `asm1` model sets it.
+  states still use the unclipped values, so mass balances stay exact. Every
+  shipped model sets it.
 - `positivity_limiter: {threshold: 1.0e-3}` scales down the net consumption of
   a species once its concentration falls below `threshold`, so it approaches
   zero without crossing it. The shipped `asm2d` and WATS sewer models use it.

@@ -169,6 +169,7 @@ conditions:
   default: 7.5
 positivity_limiter:
   threshold: 0.001
+clip_negative_states: true
 expressions:
   bio_hf: '[X_BH] + eps * {X_BF} * {A_V}'
   no_gate: 0.01 / ([S_NO] + 0.01)

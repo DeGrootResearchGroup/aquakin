@@ -153,3 +153,13 @@ shipped model is: `docs/model_catalog.md`.
   what stops the Monod-at-negative-`C` blow-up, which the limiter does not
   (`asm1` needs it once a settler recycles concentrated solids into a small
   reactor).
+- **Every shipped model sets `clip_negative_states: true`**, and a new one must
+  too: `tests/unit/test_shipped_rate_singularities.py` requires every shipped
+  model's rates at a `-1e-9` state to equal those at `0`, because a Monod or
+  ratio term evaluated at a negative input runs the reaction backwards. The
+  clamp is all-or-nothing per model, which is safe only because no shipped
+  state is signed (charge and alkalinity balances are computed from
+  non-negative ion pools); a model with a genuinely signed state needs a
+  per-species exemption first, which is a model-format decision for the owner.
+  Set it in a generator's base YAML (`_make_khalil_*` copy top-level keys), not
+  only in the generated file.

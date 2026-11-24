@@ -54,8 +54,8 @@ class BatchSolution(_HasNamedSpecies, PlottableSolutionMixin, ExportableSolution
         Times at which the solution was recorded, shape ``(n_t,)``.
     C : jnp.ndarray
         Concentration trajectory, shape ``(n_t, n_species)``. This is the raw
-        integrated state. If the model sets ``clip_negative_states`` (on by
-        default for ASM1), individual entries may be **small transient
+        integrated state. If the model sets ``clip_negative_states`` (every
+        shipped model does), individual entries may be **small transient
         negatives**: the ``max(C, 0)`` clamp is applied only when evaluating the
         reaction rates (and state-derived conditions such as pH), not to the
         saved state, so the rates were computed on the clamped values while the
