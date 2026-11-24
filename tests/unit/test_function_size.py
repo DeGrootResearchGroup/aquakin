@@ -1,8 +1,9 @@
 """Functions in the package stay small enough to read, as a ratchet.
 
 CLAUDE.md, *Keep modules and functions small enough to read*: "A function past
-about 100 lines of body, or with more than about eight parameters, gets split
-or takes a config dataclass before it gets longer." This module checks it over
+100 lines of body, or with more than eight parameters, gets split into named
+steps or takes a config dataclass before it gets longer", and never gets under
+the limit by removing a capability. This module checks it over
 ``aquakin/`` and ``aquakin_ui/``, as ``test_size_limits.py`` does for files:
 
 - a function whose body (without its docstring) is over ``MAX_BODY_LINES``
@@ -141,7 +142,10 @@ RECORDED_PARAMS = {
 }
 
 ADVICE = (
-    "Split it into named steps, or group its parameters into a config dataclass "
+    "Split it into named steps, or group the parameters that belong together into "
+    "a config dataclass. Do not get under the limit by removing a capability "
+    "(dropping a parameter, hard-coding a value a caller could set, or packing "
+    "unrelated arguments together); if neither fix fits, stop and ask "
     "(CLAUDE.md, 'Keep modules and functions small enough to read')."
 )
 
