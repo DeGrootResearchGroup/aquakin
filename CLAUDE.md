@@ -308,9 +308,12 @@ codebase something; the examples are real.
   that grows. **Do not meet the limit by removing a capability**: dropping a
   parameter, hard-coding a value a caller could set, or packing unrelated
   arguments together. Group the parameters that belong together into a config
-  dataclass, or split the function; if neither fits, stop and ask, since an
-  exception to a convention is the owner's call. The limit flags a function to
-  restructure, not a number to get under.
+  dataclass, or split the function. A config dataclass for related options is
+  the established pattern (`IntegratorConfig`, `DifferentiationConfig`,
+  `OptimizerConfig`), not by itself an owner decision; if you think a grouping
+  is a costly-to-undo interface, or neither fix fits, stop and ask rather than
+  remove the option. The limit flags a function to restructure, not a number
+  to get under.
 
 ### Behaviour-preserving refactors
 

@@ -143,10 +143,12 @@ RECORDED_PARAMS = {
 
 ADVICE = (
     "Split it into named steps, or group the parameters that belong together into "
-    "a config dataclass. Do not get under the limit by removing a capability "
-    "(dropping a parameter, hard-coding a value a caller could set, or packing "
-    "unrelated arguments together); if neither fix fits, stop and ask "
-    "(CLAUDE.md, 'Keep modules and functions small enough to read')."
+    "a config dataclass (the established pattern, as IntegratorConfig and "
+    "OptimizerConfig; not by itself an owner decision). Do not get under the "
+    "limit by removing a capability (dropping a parameter, hard-coding a value a "
+    "caller could set, or packing unrelated arguments together); if neither fix "
+    "fits, stop and ask (CLAUDE.md, 'Keep modules and functions small enough to "
+    "read')."
 )
 
 
