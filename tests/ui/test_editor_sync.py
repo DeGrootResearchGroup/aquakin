@@ -79,6 +79,22 @@ def test_checks_wait_for_quiet_then_run_once_off_the_loop(make_editor):
     assert ed.state.errors == [] and ed.state.n_recycles == 2
 
 
+def test_the_redraw_after_the_checks_keeps_unapplied_edits_marked(make_editor):
+    """Edits typed while a round of checks runs are still unapplied after its
+    redraw (``sel_dirty``), so the next selection carries them; the browser test
+    of the same name shows them applied."""
+    ed, _ = make_editor(BSM1)
+    ed.on_select({"nodes": ["tank1"], "edges": []})
+
+    async def go():
+        ed.schedule_checks()
+        ed.state.sel_dirty = True  # the page marks a typed edit
+        await _until(lambda: not ed.state.checking)
+
+    asyncio.run(go())
+    assert ed.state.checked and ed.state.sel_dirty
+
+
 def test_a_unit_error_is_published_and_skips_the_plant_check(make_editor):
     """A unit that does not build is shown on its node and in the list, and the
     plant is not checked until every unit builds."""

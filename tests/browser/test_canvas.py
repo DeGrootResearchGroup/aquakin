@@ -155,6 +155,21 @@ def test_selecting_another_unit_applies_the_forms_edits_first(page):
     expect(page.get_by_label("identifier")).to_have_value("tank2")
 
 
+def test_edits_typed_while_the_checks_run_still_travel_with_the_next_selection(page):
+    """The checks an Apply starts end with a redraw of the flowsheet; edits typed
+    before it are still unapplied edits after it, so the next selection applies
+    them rather than dropping them."""
+    _checks_done(page)
+    _unit(page, "tank1").click()
+    page.get_by_label("volume *").fill("1500")
+    page.get_by_role("button", name="Apply changes").click()  # starts a round of checks
+    page.get_by_role("tab", name="Unit").click()
+    page.get_by_label("volume *").fill("1700")
+    _checks_done(page)  # the round has ended, with its redraw
+    _unit(page, "tank2").click()
+    expect(_unit(page, "tank1").locator(".ak-summary")).to_have_text("volume 1700")
+
+
 @pytest.mark.parametrize("bad", ["nan", "lots"])
 def test_an_unreadable_edit_keeps_its_unit_and_names_the_field(page, bad):
     """Edits that cannot be read are not applied, and not dropped: the form

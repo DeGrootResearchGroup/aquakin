@@ -132,7 +132,8 @@ that imports both. Keep it that way rather than copying knowledge across:
   field-named error). Save, Open, Simulate and Run apply them first
   (`_apply_pending`) and wait when they cannot be applied. A reset of the form
   (`cancel_apply`) marks its first row with a new `revision`; only there: a
-  background redraw must never overwrite typing.
+  background redraw must never overwrite typing, nor clear `sel_dirty` (the
+  redraw that ends a round of checks keeps it, `_run_checks`).
 - **Removing a wired port asks first** (`Flowsheet.dropped_by`; nothing changes
   until `confirm_apply`).
 - **aquakin's checks run in the background** (`schedule_checks`, after
