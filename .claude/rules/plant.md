@@ -179,6 +179,8 @@ are deliberate:
   sets the benchmark `t_m` and `initial_flow`.
 - `IdealClarifier` is the fast stateless separator; `TakacsClarifier` the
   layered settler (`plant-settling.md`).
+- **A model declaring `gases:` has its gas phase in the unit** (`HeadspaceDigesterUnit`,
+  `core/gases.py`); what a unit vents reaches the mass balance via `GasExportUnit`.
 
 **Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and
 `plant/measures.py` are expression languages whose grammars are their own but

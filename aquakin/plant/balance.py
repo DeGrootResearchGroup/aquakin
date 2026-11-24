@@ -52,6 +52,7 @@ import numpy as np
 from aquakin.plant.units import (
     ApproximateInventoryUnit,
     ComponentInventoryUnit,
+    GasExportUnit,
     LiquidVolumeUnit,
 )
 from aquakin.utils.composition import canonical_content
@@ -319,6 +320,26 @@ def _outflow_terms(plant, solution, t, comps, effluent_ports, content_by_model, 
     return outflow
 
 
+def _gas_export_terms(plant, solution, comps, content_by_model, params):
+    """Each component vented through the units' own gas phases over the window
+    (g): the integral of every :class:`~aquakin.plant.units.GasExportUnit`'s
+    ``gas_export`` dotted with its model's component content."""
+    exported = dict.fromkeys(comps, 0.0)
+    t = np.asarray(solution.t_native)
+    for unit_name, (start, size) in plant._state_layout.items():
+        unit = plant.units[unit_name]
+        if not isinstance(unit, GasExportUnit):
+            continue
+        unit_params = plant._params_for_unit(unit_name, params)
+        rows = np.asarray(
+            [unit.gas_export(state[start : start + size], unit_params) for state in solution.state]
+        )
+        content = content_by_model[unit.model.name]
+        for q in comps:
+            exported[q] += float(np.trapezoid(rows @ content[q], t))
+    return exported
+
+
 def _accumulation_terms(plant, solution, comps, content_by_model, params):
     """Change in each component's plant inventory, ``inventory(t1) − inventory(t0)`` (g)."""
     accumulation = dict.fromkeys(comps, 0.0)
@@ -368,6 +389,12 @@ def _gas_terms(plant, solution, comps, content_by_model, params):
         if val != 0.0:
             gas[q] += -val
             gas_detail[f"stripped_{q}"] = -val
+    # Material vented through a unit's own gas phase (a digester headspace that
+    # belongs to the unit rather than the model), outside any reaction term.
+    for q, val in _gas_export_terms(plant, solution, comps, content_by_model, params).items():
+        if val != 0.0:
+            gas[q] += val
+            gas_detail[f"gas_export_{q}"] = val
     biogas = _biogas_cod(plant, solution, params)  # informational only
     if biogas is not None:
         gas_detail["biogas_COD"] = biogas
