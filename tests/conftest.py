@@ -102,17 +102,37 @@ def make_cstr_plant(simple_model):
     return make
 
 
-@pytest.fixture
-def make_small_sbr_plant(simple_model):
+@pytest.fixture(scope="session")
+def sbr_model():
+    """The A -> B decay model with a COD content on both species (so a plant's
+    mass balance can be read), for the small SBR plant; loaded once."""
+    return aquakin.load_model_from_file(FIXTURES / "sbr_decay_model.yaml")
+
+
+#: The small SBR's fill-only feed: 10 m3/s during the first 5 s of each 27 s
+#: cycle and nothing otherwise (``step`` is 1 from zero up).
+SMALL_SBR_FILL_ONLY_Q = "10*(1 - step(mod(t, 27) - 5))"
+#: The same volume per cycle, arriving continuously (50 m3 over 27 s).
+SMALL_SBR_CONTINUOUS_Q = 50.0 / 27.0
+
+
+@pytest.fixture(scope="session")
+def make_small_sbr_plant(sbr_model):
     """Build a one-SBR plant on the A -> B decay model (in seconds, B taken as
-    the settling particulate): a heel of 50 m3 filled to 100 m3 and decanted
-    back to 50 m3 each 27 s cycle of fill / react / settle / decant / idle.
-    Each call returns a new plant; it compiles and solves in seconds.
+    the settling particulate): a heel of 50 m3 and 50 m3 fed and decanted each
+    27 s cycle of fill / react / settle / decant / idle. Each call returns a new
+    plant; it compiles and solves in seconds.
+
+    ``make(feed="batch")`` feeds 10 m3/s of A = 1 during the fill phase only,
+    so the tank fills to 100 m3 and decants back to 50 m3. ``feed="continuous"``
+    and ``feed="storage"`` (a 60 m3 holding volume, half full) feed the same
+    50 m3 per cycle continuously. Keyword arguments replace the SBR's settings;
+    ``Q=`` replaces the influent's flow (a number or an expression of time).
     """
     from aquakin.plant import InterfaceSettling, Plant, SBRPhase, SBRUnit
-    from aquakin.plant.influent import InfluentSeries
+    from aquakin.plant.influent import InfluentExpression
 
-    def make():
+    def make(feed="batch", Q=None, **settings):
         phases = [
             SBRPhase("fill", 5.0, feed=True),
             SBRPhase("react", 10.0, mixed=True),
@@ -120,22 +140,34 @@ def make_small_sbr_plant(simple_model):
             SBRPhase("decant", 5.0, decant=True),
             SBRPhase("idle", 2.0),
         ]
+        by_mode = {
+            "batch": ({"feed_flow": 10.0}, SMALL_SBR_FILL_ONLY_Q),
+            "continuous": ({"feed_flow": None}, SMALL_SBR_CONTINUOUS_Q),
+            "storage": ({"feed_flow": 10.0, "storage_volume": 60.0}, SMALL_SBR_CONTINUOUS_Q),
+        }
+        own, default_Q = by_mode[feed]
         sbr = SBRUnit(
             "sbr",
-            simple_model,
+            sbr_model,
             phases,
-            full_volume=100.0,
-            feed_flow=10.0,
-            decant_flow=10.0,
-            settling=InterfaceSettling(v_settle=2.0, area=10.0, remix_rate=1.0),
-            particulate_species=["B"],
-            initial_fraction=0.5,
-            conditions={"T": 293.15},
+            **{
+                "full_volume": 100.0,
+                "decant_flow": 10.0,
+                "settling": InterfaceSettling(v_settle=2.0, area=10.0, remix_rate=1.0),
+                "particulate_species": ["B"],
+                "initial_fraction": 0.5,
+                "conditions": {"T": 293.15},
+                "feed": feed,
+                **own,
+                **settings,
+            },
         )
         plant = Plant("small_sbr", time_unit="s")
         plant.add_unit(sbr)
-        feed = InfluentSeries.constant(simple_model, A=1.0, B=0.0, Q=10.0)
-        plant.add_influent("feed", feed, to="sbr.feed")
+        influent = InfluentExpression(
+            sbr_model, Q=default_Q if Q is None else Q, composition={"A": 1.0}
+        )
+        plant.add_influent("feed", influent, to="sbr.feed")
         return plant
 
     return make

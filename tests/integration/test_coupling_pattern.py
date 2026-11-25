@@ -194,7 +194,7 @@ def test_sbr_coupling_pattern(asm1_net):
                   LayeredSettling(n_layers=5, v_settle=400.0, area=200.0)):
         unit = SBRUnit("sbr", net, phases, full_volume=1000.0, feed_flow=500.0,
                        decant_flow=800.0, settling=model,
-                       particulate_species=_PARTS, conditions={"T": 293.15})
+                       particulate_species=_PARTS, conditions={"T": 293.15}, feed="batch")
         cp = unit.coupling_pattern()
         n, m = net.n_species, unit.state_size
         assert cp.self_pattern.shape == (m, m)
@@ -205,6 +205,36 @@ def test_sbr_coupling_pattern(asm1_net):
         _superset_holds(unit, lambda: {
             "feed": Stream(Q=jnp.asarray(500.0), C=base_C, model=net)},
             times=times, n=6)
+
+
+def test_storage_sbr_coupling_pattern_feeds_the_holding_volume(asm1_net):
+    """With a holding volume the inlet dilutes the holding volume's species only
+    (the tail block), the pattern covers the RHS Jacobian at diverse states in
+    every phase (the draw and overflow ramps included: the level is scaled over
+    four decades), and the overflow reads the holding volume."""
+    from aquakin.plant.sbr import SBRPhase, SBRUnit
+    from aquakin.plant.settling import InterfaceSettling
+    from aquakin.plant.streams import Stream
+
+    net = asm1_net
+    phases = [SBRPhase("fill", 1.0, feed=True), SBRPhase("react", 2.0, kla=200.0),
+              SBRPhase("settle", 0.5, settle=True),
+              SBRPhase("decant", 0.5, decant=True), SBRPhase("idle", 0.5)]
+    unit = SBRUnit("sbr", net, phases, full_volume=1000.0, feed_flow=500.0,
+                   decant_flow=800.0, settling=InterfaceSettling(v_settle=400.0, area=200.0),
+                   particulate_species=_PARTS, conditions={"T": 293.15},
+                   feed="storage", storage_volume=800.0)
+    cp = unit.coupling_pattern()
+    n, m = net.n_species, unit.state_size
+    assert m == 2 * n + 3                       # [C, V, clarity, C_s, V_s]
+    expected_inlet = np.zeros((m, n), dtype=bool)
+    expected_inlet[n + 2: 2 * n + 2] = np.eye(n, dtype=bool)
+    assert np.array_equal(cp.inlet_pattern, expected_inlet)
+    assert np.array_equal(cp.output_pattern[:, n + 2: 2 * n + 2], np.eye(n, dtype=bool))
+    base_C = jnp.asarray(np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3))
+    times = [s + 0.5 * float(phases[p].duration) for p, s in enumerate(unit._phase_starts)]
+    _superset_holds(unit, lambda: {
+        "feed": Stream(Q=jnp.asarray(300.0), C=base_C, model=net)}, times=times, n=6)
 
 
 def test_ifas_coupling_pattern(asm1_net):
@@ -380,7 +410,8 @@ def _build_single_unit_plant(kind):
                            aeration=Aeration(kla=200.0), conditions={"T": 293.15}))
         p.add_influent("feed", inf, to="u.in")
         span = 2.0
-    else:  # sbr -- a full cycle, so the trajectory crosses every phase
+    else:  # sbr -- a full cycle, so the trajectory crosses every phase; the
+        # continuous influent fills a holding volume the fill phase draws from.
         phases = [SBRPhase("fill", 0.4, feed=True),
                   SBRPhase("react", 0.6, kla=240.0),
                   SBRPhase("settle", 0.2, settle=True),
@@ -388,7 +419,8 @@ def _build_single_unit_plant(kind):
         p.add_unit(SBRUnit("u", net, phases, full_volume=1000.0, feed_flow=2000.0,
                           decant_flow=2000.0,
                           settling=InterfaceSettling(v_settle=400.0, area=200.0),
-                          particulate_species=_PARTS, conditions={"T": 293.15}))
+                          particulate_species=_PARTS, conditions={"T": 293.15},
+                          feed="storage", storage_volume=2000.0))
         p.add_influent("feed", inf, to="u.feed")
         span = 1.5
     return p, p.default_parameters(), span

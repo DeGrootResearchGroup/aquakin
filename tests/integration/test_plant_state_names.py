@@ -86,6 +86,7 @@ def test_layered_units_name_their_layers():
             1.0,
             settling,
             conditions={"T": 293.15},
+            feed="batch",
         )
         assert _check(sbr)[m.n_species :] == ("V", *extra)
 

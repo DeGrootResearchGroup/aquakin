@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.integrate._common import PlottableSolutionMixin
+from aquakin.integrate._solution import species_columns
 from aquakin.integrate.seam import _HasNamedSpecies
 from aquakin.plant._constants import EPS_Q
 
@@ -283,7 +284,7 @@ class StreamSeries(_HasNamedSpecies, PlottableSolutionMixin):
     # C_named / C_named_many / final_named / .final come from _HasNamedSpecies
     # (shared with the reactor solutions), keyed off .C and .model.
 
-    def to_dataframe(self, *, units_in_columns: bool = False):
+    def to_dataframe(self, *, units_in_columns: bool = False, units=None):
         """Return the stream trajectory as a pandas ``DataFrame``.
 
         One row per save time, indexed by time ``t``, with a flow column ``Q``
@@ -295,6 +296,12 @@ class StreamSeries(_HasNamedSpecies, PlottableSolutionMixin):
             If ``True``, append ``" [unit]"`` to each species column label;
             otherwise columns are bare species names and per-species units are
             stored in ``df.attrs["units"]``.
+        units : str or dict[str, str], optional
+            Units to tabulate the species in: one for every species, or
+            ``{species: unit}`` for some of them (the rest stay in the model's
+            units). Converted as by :meth:`C_named`; the labels and
+            ``df.attrs["units"]`` give the units used. ``Q`` stays in m3 per
+            the plant's time unit.
 
         Returns
         -------
@@ -307,8 +314,7 @@ class StreamSeries(_HasNamedSpecies, PlottableSolutionMixin):
         """
         from aquakin.integrate._common import build_dataframe
 
-        columns = [(sp, self.C[:, j]) for j, sp in enumerate(self.model.species)]
-        units = {sp: self.model.units_of(sp) for sp in self.model.species}
+        columns, units = species_columns(self.model, self.C, units)
         return build_dataframe(
             self.t,
             columns,
@@ -318,11 +324,13 @@ class StreamSeries(_HasNamedSpecies, PlottableSolutionMixin):
             extra=[("Q", self.Q)],
         )
 
-    def to_csv(self, path_or_buf=None, *, units_in_columns: bool = True, **kwargs):
+    def to_csv(self, path_or_buf=None, *, units_in_columns: bool = True, units=None, **kwargs):
         """Write the stream trajectory to CSV (delegates to :meth:`to_dataframe`).
 
         ``units_in_columns`` defaults to ``True`` so the written file is
-        self-describing (a CSV cannot carry ``df.attrs``). Extra keyword
-        arguments are forwarded to ``pandas.DataFrame.to_csv``.
+        self-describing (a CSV cannot carry ``df.attrs``); ``units`` picks the
+        units to write the species in. Extra keyword arguments are forwarded to
+        ``pandas.DataFrame.to_csv``.
         """
-        return self.to_dataframe(units_in_columns=units_in_columns).to_csv(path_or_buf, **kwargs)
+        df = self.to_dataframe(units_in_columns=units_in_columns, units=units)
+        return df.to_csv(path_or_buf, **kwargs)

@@ -171,14 +171,14 @@ optional hooks); these are the invariants around it.
 ### Shipped units
 
 The unit classes are exported from `aquakin.plant` (their docstrings describe
-them); the topic rules above cover IFAS / MBBR and the settlers. Two defaults
-are deliberate:
+them); the topic rules above cover IFAS / MBBR and the settlers. Deliberate:
 
 - **`PrimaryClarifier` defaults to `t_m = 0`** (no inflow filter), because a
   standalone unit has no design inflow to seed the filter with; `build_bsm2`
   sets the benchmark `t_m` and `initial_flow`.
-- `IdealClarifier` is the fast stateless separator; `TakacsClarifier` the
-  layered settler (`plant-settling.md`).
+- **A unit never drops inflow it does not take.** An `SBRUnit`'s required `feed`
+  mode routes it (tank, holding volume with an `overflow` port, or a batch
+  schedule that `InletFlowCheckedUnit` checks before `solve`, refusing a miss).
 - **A model declaring `gases:` has its gas phase in the unit** (`HeadspaceDigesterUnit`,
   `core/gases.py`); what a unit vents reaches the mass balance via `GasExportUnit`.
 

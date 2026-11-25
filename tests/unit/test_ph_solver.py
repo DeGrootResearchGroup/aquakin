@@ -9,8 +9,11 @@ import aquakin  # noqa: F401  (enables x64)
 from aquakin.core.ph_solver import (
     T_REF_20C,
     _adaptive_root_log_h,
+    _conditional_constants,
+    _ionic_strength_total,
     charge_balance_residual,
     charge_balance_residual_deriv,
+    debye_huckel_A,
     equilibrium_constants,
     solve_ph,
 )
@@ -25,13 +28,11 @@ def test_generic_root_finder_is_independent_of_the_chemistry():
     # h = h_root; df/dh = -1 so df/du = -h. Root u* = ln(h_root).
     h_root = jnp.asarray([1e-3, 1e-7, 1e-11])
 
-    def eval_fn(u, _aux):
+    def eval_fn(u):
         h = jnp.exp(u)
-        return (h_root - h), (-h), None  # (fv, dfdu = f'(h)*h, carry)
+        return (h_root - h), (-h)  # (fv, dfdu = f'(h)*h)
 
-    u, aux = _adaptive_root_log_h(
-        eval_fn, jnp.full(3, 1e-7), out_shape=(3,), max_iter=60
-    )
+    u = _adaptive_root_log_h(eval_fn, jnp.full(3, 1e-7), out_shape=(3,), max_iter=60)
     np.testing.assert_allclose(np.asarray(jnp.exp(u)), np.asarray(h_root), rtol=1e-9)
 
 
@@ -311,7 +312,6 @@ def test_gradient_correct_in_weak_buffer_regime():
 
 # ----- Ionic-strength activity corrections (issue #205) --------------------
 
-from aquakin.core.ph_solver import debye_huckel_A  # noqa: E402
 
 
 def test_activity_none_is_bit_identical_to_default():
@@ -425,6 +425,55 @@ def test_activity_no_nan_over_extreme_inputs(model):
 
 
 @pytest.mark.parametrize("model", ["davies", "debye_huckel"])
+@pytest.mark.parametrize("regime", ["digester", "extreme"])
+def test_activity_solve_zeroes_both_residuals(model, regime):
+    """The activity path returns a root of the coupled problem: zero charge
+    balance at the conditional constants of the returned ionic strength, and
+    that ionic strength reproduced by the returned speciation.
+
+    When the ionic strength was updated between steps of one bracketed loop,
+    the bracket could exclude the coupled root and the solve stalled at its
+    edge, at every cap: 47-48 of these 400 digester-like cases came back wrong,
+    by up to 10 pH units, and up to 0.11 among results between pH 5 and 9. A
+    cap-independence check cannot see that, since a stalled solve returns the
+    same answer at every cap; the residuals can."""
+    rng = np.random.default_rng(1)
+    n = 400
+    if regime == "digester":
+        totals = dict(
+            tot_carbonate=10.0 ** rng.uniform(-4, -0.7, n),
+            tot_acetate=10.0 ** rng.uniform(-6, -1.5, n),
+            tot_ammonia=10.0 ** rng.uniform(-5, -0.8, n),
+            tot_phosphate=10.0 ** rng.uniform(-6, -2, n),
+            tot_sulfide=10.0 ** rng.uniform(-7, -2, n),
+        )
+        charges = dict(strong_anion_eq=rng.uniform(0, 0.05, n), z_cation_eq=rng.uniform(0, 0.08, n))
+    else:
+        totals = dict(
+            tot_carbonate=10.0 ** rng.uniform(-6, 0, n),
+            tot_ammonia=10.0 ** rng.uniform(-6, 0, n),
+            tot_sulfide=10.0 ** rng.uniform(-6, -1, n),
+        )
+        charges = dict(strong_anion_eq=rng.uniform(-1, 1, n), z_cation_eq=rng.uniform(-1, 1, n))
+    totals = {k: jnp.asarray(v) for k, v in totals.items()}
+    charges = {k: jnp.asarray(v) for k, v in charges.items()}
+    pH, I = solve_ph(**totals, **charges, activity_model=model, return_ionic_strength=True)
+
+    K = equilibrium_constants(jnp.asarray(T_REF_20C))
+    Kc, g1 = _conditional_constants(K, I, debye_huckel_A(jnp.asarray(T_REF_20C)), model)
+    h = 10.0 ** (-pH) / g1  # the returned pH is -log10(g1 [H+])
+    all_totals = {k: totals.get(k, jnp.zeros(n)) for k in (
+        "tot_carbonate", "tot_acetate", "tot_propionate", "tot_butyrate",
+        "tot_valerate", "tot_ammonia", "tot_phosphate", "tot_sulfide")}
+    f1 = charge_balance_residual(h, K=Kc, **all_totals, **charges)
+    f2 = _ionic_strength_total(h, Kc, jnp.zeros(n), totals=all_totals) - I
+    scale = sum(totals.values()) + jnp.abs(charges["strong_anion_eq"]) + jnp.abs(charges["z_cation_eq"])
+    # A converged root leaves rounding only (measured below 1e-12 for both).
+    assert float(jnp.max(jnp.abs(f1) / scale)) < 1e-10
+    assert float(jnp.max(jnp.abs(f2) / I)) < 1e-10
+
+
+@pytest.mark.parametrize("model", ["davies", "debye_huckel"])
 def test_activity_gradient_finite_at_degenerate_point(model):
     """The activity-path IFT tangent is a 2x2 determinant solve; at a degenerate
     input -- all-zero totals with zero ionic strength -- the 2x2 can go near-
@@ -458,9 +507,9 @@ def test_activity_clamp_inactive_at_physical_root():
 
 
 def test_activity_pH_independent_of_iteration_cap():
-    """The adaptive coupled loop stops once both [H+] and the ionic strength have
-    settled, so the activity-path pH is independent of the n_iter cap once it
-    exceeds the (small) count needed."""
+    """The ionic-strength loop stops once the ionic strength has settled, and
+    each pH solve inside it once [H+] has, so the activity-path pH is independent
+    of the n_iter cap once it exceeds the (small) count needed."""
     kw = dict(tot_carbonate=5e-3, tot_ammonia=3e-3, z_cation_eq=5e-3,
               T_kelvin=308.15, activity_model="davies", ionic_strength_strong=0.1)
     ref = float(solve_ph(**kw, n_iter=200))

@@ -99,8 +99,11 @@ paths:
   layers, both `composition_mode`s + `soluble_holdup`) and the
   **`ADM1DigesterUnit`** (liquid states at `V_liq`, the three gas-headspace states
   at `V_gas`, via its own `_state_volume_vector(params)` which its `reaction_volumes`
-  also reuses for the reaction integral). A unit holding a single well-mixed
-  liquid volume (`StorageTank` / `MBRUnit` / `SBRUnit`, whose states are
+  also reuses for the reaction integral), and the **`SBRUnit`** (the tank at its
+  `V`, plus a `feed="storage"` holding volume, `[C_s, V_s]` at the state's
+  tail: an inflow the unit holds is inventory, so the balance needs no SBR
+  case). A unit holding a single well-mixed
+  liquid volume (`StorageTank` / `MBRUnit`, whose states are
   `[C…, scalar(s)]`) instead declares that volume through **`liquid_volume(state)`**,
   so its inventory is `V·C` (`PrimaryClarifier` too, returning its fixed `volume`,
   since its filter state trails the concentrations); a plain concentration-vector
@@ -146,7 +149,7 @@ paths:
   its volumes to `_state_volume_vector`) and `units.OxygenTransferUnit`
   (`oxygen_transfer(t, state, inputs, params, signals) -> (oxygen, stripped)`
   per volume, `required_signals`; `AerationUnit` and the SBR). Both are
-  evaluated over the saved times by `_unit_terms`, fed what `rhs` is fed, so
+  evaluated over the saved times by `unit_terms` (which `sbr.storage_report` shares), fed what `rhs` is fed, so
   `AerationUnit.oxygen_transfer` returns its `aeration_term` (temperature
   correction and declared gases included) rather than rebuilding `kla*(sat-C)`. A variable-volume or
   time-phased unit must read its volume and phase from the `state` and `t` it

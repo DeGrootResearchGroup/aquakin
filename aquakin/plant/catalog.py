@@ -10,7 +10,11 @@ here, per kind:
 
 - a label and a category,
 - how the unit's ports follow from its settings (a :class:`PortRule` per side),
-- which settings are mutually exclusive (``exactly_one_of``).
+- which settings are mutually exclusive (``exactly_one_of``),
+- which settings and ports apply only while another setting holds one of some
+  values (``when``: an SBR's holding-volume settings and overflow port exist
+  only with ``feed: storage``), and which a class defaults but must be given
+  (``required``: an SBR's ``feed`` mode).
 
 The port rules let a front end show a unit's ports while its settings are being
 edited, without building it. :func:`check_unit` is the authority: it builds the
@@ -23,6 +27,7 @@ arrays, no classes), so it can be sent to a front end in another process.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import inspect
 import math
@@ -78,6 +83,7 @@ SETTING_TYPES = {
     "integer": "an integer",
     "boolean": "true or false",
     "string": "free text",
+    "choice": "one of the setting's ``choices`` (text)",
     "model": "the name of a shipped kinetic model",
     "species": "one species name of the unit's model",
     "species_list": "a list of species names of the unit's model",
@@ -125,15 +131,21 @@ class PortRule:
         The setting the ports come from (not used by ``"fixed"``).
     names : tuple of str, optional
         The port names of a ``"fixed"`` rule.
+    when : dict, optional
+        ``{"setting": name, "values": [...]}``: the rule gives ports only while
+        that setting holds one of those values (see :func:`applies`).
     """
 
     side: str
     form: str
     field: str | None = None
     names: tuple[str, ...] = ()
+    when: dict | None = None
 
     def ports(self, settings: dict) -> list[str]:
         """The port names this rule gives for ``settings``."""
+        if not applies(self.when, settings):
+            return []
         if self.form == "fixed":
             return list(self.names)
         value = settings.get(self.field)
@@ -152,7 +164,15 @@ class PortRule:
             "form": self.form,
             "field": self.field,
             "names": list(self.names),
+            "when": self.when,
         }
+
+
+def applies(when: dict | None, settings: dict) -> bool:
+    """Whether a setting or port rule with condition ``when`` applies to a unit
+    with ``settings``: always without a condition, else while the named setting
+    holds one of the listed values."""
+    return when is None or settings.get(when["setting"]) in when["values"]
 
 
 @dataclass(frozen=True)
@@ -178,6 +198,12 @@ class Setting:
     fields : list or dict, optional
         What a ``records`` setting's records hold (a list of settings, as plain
         data), or for a ``tagged`` setting, that list for each kind.
+    choices : list of str, optional
+        The values a ``choice`` setting can take.
+    when : dict, optional
+        ``{"setting": name, "values": [...]}``: the setting applies only while
+        that setting holds one of those values; a front end hides it otherwise
+        and leaves it unset.
     """
 
     name: str
@@ -188,6 +214,8 @@ class Setting:
     help: str = ""
     python_type: str = ""
     fields: Any = None
+    choices: list[str] | None = None
+    when: dict | None = None
 
     def to_json(self) -> dict:
         """The setting as plain data."""
@@ -335,6 +363,8 @@ def _setting_type(name: str, annotation: str) -> tuple[str, bool]:
     """The front-end type of a constructor argument, and whether ``None`` is accepted."""
     optional = "None" in annotation
     base = _base(annotation)
+    if _choices(base) is not None:
+        return "choice", optional
     if base in _RECORDS:
         return "records", optional
     if base in _TAGGED:
@@ -363,6 +393,14 @@ def _setting_type(name: str, annotation: str) -> tuple[str, bool]:
     if base in simple:
         return simple[base], optional
     return "unsupported", optional
+
+
+def _choices(base: str) -> list[str] | None:
+    """The values of a ``Literal[...]`` annotation, as text, else ``None``."""
+    match = re.fullmatch(r"Literal\[(.*)\]", base)
+    if match is None:
+        return None
+    return [str(v) for v in ast.literal_eval(f"({match.group(1)},)")]
 
 
 def _generic_help(name: str, kind: str) -> str:
@@ -408,6 +446,7 @@ def _settings_of(cls, skip: tuple[str, ...] = ("name",)) -> tuple[Setting, ...]:
                 help=help_text,
                 python_type=annotation,
                 fields=_fields(kind, annotation),
+                choices=_choices(_base(annotation)),
             )
         )
     return tuple(out)
@@ -623,28 +662,51 @@ def _port_rules(settings: tuple[Setting, ...], fixed: tuple[PortRule, ...]) -> t
     rules = list(r for r in fixed if r.side == "input")
     for s in settings:
         if s.type == "port_names":
-            rules.append(PortRule("input", "names", s.name))
+            rules.append(PortRule("input", "names", s.name, when=s.when))
         elif s.type == "port_name" and s.name == "input_port":
-            rules.append(PortRule("input", "name", s.name))
+            rules.append(PortRule("input", "name", s.name, when=s.when))
     for s in settings:
         if s.type == "port_map":
-            rules.append(PortRule("output", "keys", s.name))
+            rules.append(PortRule("output", "keys", s.name, when=s.when))
         elif s.type == "port_name" and s.name != "input_port":
-            rules.append(PortRule("output", "name", s.name))
+            rules.append(PortRule("output", "name", s.name, when=s.when))
     rules += [r for r in fixed if r.side == "output"]
     return tuple(rules)
 
 
-def _kind(kind, label, category, cls, *, fixed=(), exactly_one_of=(), defaults=None) -> UnitKind:
+def _kind(
+    kind,
+    label,
+    category,
+    cls,
+    *,
+    fixed=(),
+    exactly_one_of=(),
+    defaults=None,
+    overrides=None,
+) -> UnitKind:
+    """A kind read from ``cls``, with what its signature cannot say.
+
+    ``defaults`` gives a required setting a GUI-friendly default. ``overrides``
+    maps a setting to :class:`Setting` fields to replace: ``required`` (and
+    ``optional``) for one the class defaults to ``None`` only to refuse it unset
+    with its own message (an SBR's ``feed`` mode), ``when`` for one that applies
+    in one mode only (see :func:`applies`).
+    """
     summary, _ = _docstring_parts(cls)
-    settings = _settings_of(cls)
-    if defaults:
-        settings = tuple(
-            dataclasses.replace(s, default=defaults[s.name], required=False)
-            if s.name in defaults
-            else s
-            for s in settings
+    defaults = defaults or {}
+    overrides = overrides or {}
+    settings = tuple(
+        dataclasses.replace(
+            s,
+            **{
+                "default": defaults.get(s.name, s.default),
+                "required": s.required and s.name not in defaults,
+                **overrides.get(s.name, {}),
+            },
         )
+        for s in _settings_of(cls)
+    )
     return UnitKind(
         kind=kind,
         label=label,
@@ -728,6 +790,29 @@ def _influent_kind() -> UnitKind:
 _SPLITTER_IN = (PortRule("input", "fixed", names=("in",)),)
 
 
+def _sbr_kind() -> UnitKind:
+    """The SBR: its ``feed`` mode is required (the class refuses it unset, listing
+    the modes), the fill pump's flow applies with a storage or batch feed, and
+    the holding volume's settings and overflow port with a storage feed."""
+    pumped = {"when": {"setting": "feed", "values": ["storage", "batch"]}}
+    storage = {"when": {"setting": "feed", "values": ["storage"]}}
+    return _kind(
+        "sbr",
+        "Sequencing batch reactor",
+        "reactor",
+        SBRUnit,
+        defaults={"feed_flow": None},
+        overrides={
+            "feed": {"required": True, "optional": False},
+            "feed_flow": pumped,
+            "storage_volume": storage,
+            "storage_initial_fraction": storage,
+            "storage_initial_concentrations": storage,
+            "overflow_port": storage,
+        },
+    )
+
+
 def _build_kinds() -> dict[str, UnitKind]:
     kinds = [
         _influent_kind(),
@@ -740,7 +825,7 @@ def _build_kinds() -> dict[str, UnitKind]:
             IFASUnit,
             defaults={"input_port_names": ["in"]},
         ),
-        _kind("sbr", "Sequencing batch reactor", "reactor", SBRUnit),
+        _sbr_kind(),
         _kind("digester", "Anaerobic digester", "reactor", ADM1DigesterUnit),
         _kind(
             "headspace_digester",
@@ -996,7 +1081,7 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
         s = known[name]
         if value is None:
             if s.required:
-                raise ValueError(f"'{name}' is required")
+                raise ValueError(_required(s))
             continue
         t = s.type
         if t in ("number",):
@@ -1023,6 +1108,10 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
             ok = isinstance(value, bool)
         elif t in ("string", "model", "species", "port_name"):
             ok = isinstance(value, str)
+        elif t == "choice":
+            if value not in (s.choices or []):
+                raise ValueError(f"'{name}' must be one of {_one_of(s)}, got {value!r}")
+            ok = True
         elif t in ("port_names", "species_list"):
             ok = isinstance(value, list) and all(isinstance(v, str) for v in value)
         elif t in ("port_map", "number_map", "conditions", "species_values"):
@@ -1049,6 +1138,17 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
             raise ValueError(f"'{name}' ({s.python_type}) can only be set from Python for now")
         if not ok:
             raise ValueError(f"'{name}' must be {SETTING_TYPES[t].split(' (')[0]}, got {value!r}")
+
+
+def _one_of(s: Setting) -> str:
+    return ", ".join(repr(c) for c in s.choices or [])
+
+
+def _required(s: Setting) -> str:
+    """The message for a required setting left unset (a choice lists its values)."""
+    if s.type == "choice":
+        return f"'{s.name}' is required: one of {_one_of(s)}"
+    return f"'{s.name}' is required"
 
 
 def _is_scheduled(name: str, value) -> bool:
@@ -1125,7 +1225,7 @@ def _arguments(kind: UnitKind, settings: dict, models: dict | None = None) -> di
                     raise ValueError(
                         f"'{s.name}' ({s.python_type}) can only be set from Python for now"
                     )
-                raise ValueError(f"'{s.name}' is required")
+                raise ValueError(_required(s))
             if s.name in groups:
                 continue
             if s.type == "unsupported":

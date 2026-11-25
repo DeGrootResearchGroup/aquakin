@@ -424,6 +424,67 @@ default), `"linear"` or `"constant"`, with `detachment_rate=`, let the thickness
 follow from the balance of growth and detachment; `"balance"` holds the total
 thickness at `biofilm_thickness` while the species still grow and stratify.
 
+### Sequencing batch reactors: how the feed arrives
+
+An `SBRUnit` cycles one tank through timed phases (`SBRPhase`: fill, react,
+settle, decant, idle). A real SBR only takes its feed during the fill, so what
+happens to wastewater that arrives at other times depends on the plant. The
+SBR's `feed` setting says which plant it is, and it has no default:
+
+| `feed=` | A plant like | What happens to the inflow |
+|---|---|---|
+| `"continuous"` | a continuous-inflow SBR (ICEAS or CFID type) | The tank takes the inflow whenever it arrives, in every phase; its volume follows the inflow minus the decant. `feed_flow` is left unset. |
+| `"storage"` | an equalization (holding) tank ahead of the SBR | A holding volume inside the unit, `storage_volume` m³, receives the inflow; the fill pump draws `feed_flow` from it during fill phases. What it cannot hold leaves through the `overflow` port; when it runs empty, the draw falls to what arrives. |
+| `"batch"` | a laboratory or reservoir-fed SBR | The inlet must deliver `feed_flow` during fill phases and nothing in any other phase. Each solve checks the influent feeding the SBR over the solve span and refuses one that does not, or an SBR fed by another unit, whose flow is not known before the solve. |
+
+Plants with several SBRs in parallel, the influent routed to whichever is
+filling, are not modelled yet.
+
+Here the influent arrives continuously and a holding volume buffers it for the
+fill pump:
+
+```python
+from aquakin.plant import InterfaceSettling, SBRPhase, SBRUnit, storage_report
+
+phases = [SBRPhase("fill", 0.1, feed=True), SBRPhase("react", 0.3, kla=240.0),
+          SBRPhase("settle", 0.1, settle=True), SBRPhase("decant", 0.1, decant=True),
+          SBRPhase("idle", 0.05)]                       # one cycle every 0.65 d
+sbr = SBRUnit("sbr", model, phases, full_volume=1000.0, feed_flow=5000.0,
+              decant_flow=5000.0, settling=InterfaceSettling(v_settle=400.0, area=200.0),
+              particulate_species=["XI", "XS", "XB_H", "XB_A", "XP", "XND"],
+              initial_fraction=0.5, conditions={"T": 293.15},
+              feed="storage", storage_volume=600.0)
+sbr_plant = aquakin.Plant("sbr_demo", time_unit="d")
+sbr_plant.add_unit(sbr)
+sbr_plant.add_influent("feed", model.influent(bsm1_feed, Q=769.0), to="sbr.feed")
+print(sbr.output_ports)
+# ['effluent', 'overflow']
+
+sbr_sol = sbr_plant.solve(t_span=(0.0, 1.3), t_eval=jnp.linspace(0.0, 1.3, 261))
+report = storage_report(sbr_plant, sbr_sol, "sbr")
+print(report.summary())
+```
+
+% invisible-code-block: python
+%     assert sbr.output_ports == ["effluent", "overflow"], "the ports stated above changed"
+%     assert report.level.max() <= 600.0 * (1 + 1e-6) and report.level.min() > 0.0
+%     assert abs(sbr_plant.mass_balance(sbr_sol)["COD"].relative_imbalance) < 2e-2
+
+`storage_report` gives the holding volume's level and its inflow, draw,
+overflow and shortfall over the saved times, with the overflow and the
+shortfall integrated. The overflow is also a stream (`sbr.overflow`) that can be
+wired onward, and `plant.mass_balance` counts it as an outflow when it is left
+unconnected, like the effluent. The holding volume is part of the SBR's state
+(`storage.<species>`, `storage.V`) and of its inventory in the mass balance.
+Its pump cuts out over the bottom 1 % of `storage_volume` and the overflow takes
+over in the top 1 %, so the level stays between them without a located event,
+and `jax.grad` flows through both.
+
+For `feed="batch"`, write a fill-only influent as an expression of time (see
+[A feed that follows a pattern](#a-feed-that-follows-a-pattern)), for the
+cycle above `Q="5000*(1 - step(mod(t, 0.65) - 0.1))"`, or as a table whose flow
+steps at the phase boundaries.
+
 ### Disinfection
 
 `UVUnit` and `ChlorineContactUnit` pass the process stream through unchanged and
@@ -788,7 +849,10 @@ An SBR's phases are a list with one mapping per phase, in `SBRPhase`'s own
 field names, and its settling model a mapping that names its `kind`
 (`interface` for `InterfaceSettling`, `layered` for `LayeredSettling`) and that
 model's arguments. A field left out takes its default (`mixed: null` lets the
-phase decide from `feed` and `kla`), and `to_spec` writes every field:
+phase decide from `feed` and `kla`), and `to_spec` writes every field. The
+`feed` mode is required (a flowsheet written before SBRs had one is refused,
+naming the three modes), and the holding volume's settings go with
+`feed: storage`:
 
 ```yaml
   sbr:
@@ -801,7 +865,10 @@ phase decide from `feed` and `kla`), and `to_spec` writes every field:
       - {name: decant, duration: 0.1, decant: true}
     settling: {kind: interface, v_settle: 400.0, area: 200.0}
     full_volume: 1000.0
+    feed: storage
     feed_flow: 5000.0
+    storage_volume: 600.0
+    storage_initial_fraction: 0.5
     decant_flow: 5000.0
 ```
 
