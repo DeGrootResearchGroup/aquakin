@@ -22,7 +22,12 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.core.hints import did_you_mean
-from aquakin.integrate._solution import name_list
+from aquakin.integrate._solution import (
+    name_list,
+    requested_units,
+    species_columns,
+    species_in_unit,
+)
 from aquakin.plant.errors import UnknownUnitError
 
 if TYPE_CHECKING:
@@ -194,13 +199,16 @@ class PlantSolution:
         """
         return self.plant.stream(self, endpoint, params)
 
-    def C_named(self, unit_name: str, species: str) -> jnp.ndarray:
+    def C_named(self, unit_name: str, species: str, *, units: str | None = None) -> jnp.ndarray:
         """Return a single species' trajectory in a single unit.
 
         Only valid for units whose state leads with a concentration vector in
         the unit's model (CSTRs, the digester, and well-mixed tanks such as the
         primary clarifier, storage, MBR and SBR). See ``plant.list_units()`` /
-        ``plant.list_species(unit)`` for the valid names.
+        ``plant.list_species(unit)`` for the valid names. ``units`` (e.g.
+        ``"mg/L"``) returns it in that unit instead of the one the unit's model
+        declares; only the scale changes, so a unit of another quantity raises
+        ``ValueError``.
         """
         unit = self.plant._unit_or_raise(unit_name)
         if not self.plant._is_concentration_unit(unit):
@@ -223,9 +231,9 @@ class PlantSolution:
                 f"{list(unit.model.species)}.{suffix}"
             )
         idx = unit.model.species_index[species]
-        return self.unit_state(unit_name)[:, idx]
+        return species_in_unit(unit.model, species, self.unit_state(unit_name)[:, idx], units)
 
-    def C_named_many(self, unit_name: str, species) -> dict[str, jnp.ndarray]:
+    def C_named_many(self, unit_name: str, species, *, units=None) -> dict[str, jnp.ndarray]:
         """Trajectories of several species in one unit, as ``{name: array}``.
 
         The multi-species companion to :meth:`C_named` -- read a handful of a
@@ -233,11 +241,14 @@ class PlantSolution:
         instead of a slice each. ``species`` may be a single name (a bare string
         is one name, giving the same one-entry dict as a one-element list). An
         unknown unit/species raises the same hinted ``KeyError`` :meth:`C_named`
-        gives.
+        gives. ``units`` is one unit for every species read, or ``{species:
+        unit}`` for some of them (the rest stay in the model's units).
         """
-        return {sp: self.C_named(unit_name, sp) for sp in name_list(species)}
+        names = name_list(species)
+        want = requested_units(names, units)
+        return {sp: self.C_named(unit_name, sp, units=want.get(sp)) for sp in names}
 
-    def final_named(self, unit_name: str, species=None) -> dict[str, float]:
+    def final_named(self, unit_name: str, species=None, *, units=None) -> dict[str, float]:
         """Values at the **last** save time for one unit, as ``{name: float}``.
 
         The reporting shortcut for a steady-state value: instead of
@@ -249,9 +260,11 @@ class PlantSolution:
         :meth:`Plant.list_species`). Values are plain Python floats
         (a post-processing read on an already-solved solution -- use
         ``C_named(unit, sp)[-1]`` if you need a differentiable last value).
+        ``units`` is as for :meth:`C_named_many`.
         """
         names = self.plant.list_species(unit_name) if species is None else name_list(species)
-        return {sp: float(self.C_named(unit_name, sp)[-1]) for sp in names}
+        want = requested_units(names, units)
+        return {sp: float(self.C_named(unit_name, sp, units=want.get(sp))[-1]) for sp in names}
 
     def plot(self, unit_name: str, species=None, *, ax=None, **kwargs):
         """Plot one unit's species trajectories over time.
@@ -305,7 +318,7 @@ class PlantSolution:
             ax.legend()
         return ax
 
-    def to_dataframe(self, unit: str, *, units_in_columns: bool = False):
+    def to_dataframe(self, unit: str, *, units_in_columns: bool = False, units=None):
         """Return one unit's state trajectory as a pandas ``DataFrame``.
 
         The plant integrates a heterogeneous flat state across many units, so a
@@ -321,6 +334,10 @@ class PlantSolution:
             If ``True``, append ``" [unit]"`` to each species column label
             (kinetic units only); otherwise units are stored in
             ``df.attrs["units"]``.
+        units : str or dict[str, str], optional
+            Units to tabulate a kinetic unit's species in: one for every
+            species, or ``{species: unit}`` for some of them (the rest stay in
+            the model's units). Converted as by :meth:`C_named`.
 
         Returns
         -------
@@ -341,10 +358,13 @@ class PlantSolution:
         sub = self.unit_state(unit)  # (n_t, unit.state_size)
         unit_obj = self.plant.units[unit]
         if hasattr(unit_obj, "model"):
-            net = unit_obj.model
-            columns = [(sp, sub[:, j]) for j, sp in enumerate(net.species)]
-            units = {sp: net.units_of(sp) for sp in net.species}
+            columns, units = species_columns(unit_obj.model, sub, units)
         else:
+            if units is not None:
+                raise ValueError(
+                    f"Unit '{unit}' has no model, so its state columns have no "
+                    f"species units to convert; leave units=None."
+                )
             columns = [(f"state_{j}", sub[:, j]) for j in range(sub.shape[1])]
             units = {}
         return build_dataframe(
@@ -355,16 +375,18 @@ class PlantSolution:
             units_in_columns=units_in_columns,
         )
 
-    def to_csv(self, path_or_buf=None, *, unit: str, units_in_columns: bool = True, **kwargs):
+    def to_csv(
+        self, path_or_buf=None, *, unit: str, units_in_columns: bool = True, units=None, **kwargs
+    ):
         """Write one unit's trajectory to CSV (delegates to :meth:`to_dataframe`).
 
         ``unit`` is required (the plant state is per-unit). ``units_in_columns``
-        defaults to ``True`` so the file is self-describing. Extra keyword
-        arguments are forwarded to ``pandas.DataFrame.to_csv``.
+        defaults to ``True`` so the file is self-describing; ``units`` picks the
+        units to write the species in. Extra keyword arguments are forwarded to
+        ``pandas.DataFrame.to_csv``.
         """
-        return self.to_dataframe(unit, units_in_columns=units_in_columns).to_csv(
-            path_or_buf, **kwargs
-        )
+        df = self.to_dataframe(unit, units_in_columns=units_in_columns, units=units)
+        return df.to_csv(path_or_buf, **kwargs)
 
 
 @dataclass

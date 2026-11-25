@@ -124,6 +124,78 @@ def name_list(names) -> list[str]:
     return [names] if isinstance(names, str) else list(names)
 
 
+def requested_units(names, units) -> dict[str, str]:
+    """``{species: unit}`` for the species a reader should convert.
+
+    Parameters
+    ----------
+    names : list of str
+        The species being read.
+    units : str, dict[str, str] or None
+        One unit for every species read, a ``{species: unit}`` dict naming
+        some of them (the rest stay in the model's units), or ``None``.
+
+    Raises
+    ------
+    ValueError
+        If the dict names a species that is not being read.
+    """
+    if units is None:
+        return {}
+    if isinstance(units, str):
+        return dict.fromkeys(names, units)
+    extra = sorted(set(units) - set(names))
+    if extra:
+        raise ValueError(
+            f"units names {extra}, which are not among the species read ({list(names)})."
+        )
+    return dict(units)
+
+
+def species_in_unit(model: CompiledModel, species: str, values, unit: str | None):
+    """``values`` of ``species`` (in ``model``'s declared unit) expressed in ``unit``.
+
+    Only the scale changes: ``g/m3`` to ``mg/L`` is 1, ``g_COD/m3`` to
+    ``kgCOD/m3`` is 0.001. ``values`` is returned untouched when ``unit`` is
+    ``None`` or the factor is exactly 1, and multiplied otherwise, so the
+    result stays differentiable.
+
+    Raises
+    ------
+    ValueError
+        If ``unit`` measures another quantity than the model's unit (moles
+        against grams, g N against g COD), or either cannot be read.
+    """
+    from aquakin.utils.units import conversion_factor
+
+    if unit is None:
+        return values
+    native = model.units_of(species)
+    try:
+        factor = conversion_factor(native, unit)
+    except ValueError as exc:
+        raise ValueError(f"Cannot give '{species}' in '{unit}': {exc}") from None
+    if factor is None:
+        raise ValueError(
+            f"Cannot give '{species}' in '{unit}': model '{model.name}' declares it in "
+            f"'{native}', and one of the two cannot be read."
+        )
+    return values if factor == 1.0 else values * factor
+
+
+def species_columns(model: CompiledModel, C, units=None):
+    """The ``(name, values)`` columns and ``{name: unit}`` labels of a table of
+    every species of ``model``, with ``C`` shape ``(n, n_species)``, in the
+    requested ``units`` (see :func:`requested_units`)."""
+    want = requested_units(list(model.species), units)
+    columns = [
+        (sp, species_in_unit(model, sp, C[:, j], want.get(sp)))
+        for j, sp in enumerate(model.species)
+    ]
+    labels = {sp: want.get(sp, model.units_of(sp)) for sp in model.species}
+    return columns, labels
+
+
 class _HasNamedSpecies:
     """Mixin: the pure species-by-name accessor over a ``.C`` array and ``.model``.
 
@@ -141,14 +213,32 @@ class _HasNamedSpecies:
     C: jnp.ndarray  # set by the dataclass subclass
     model: CompiledModel  # set by the dataclass subclass
 
-    def C_named(self, species: str) -> jnp.ndarray:
-        """Return the trajectory of a single species by name."""
+    def C_named(self, species: str, *, units: str | None = None) -> jnp.ndarray:
+        """Return the trajectory of a single species by name.
+
+        Parameters
+        ----------
+        species : str
+            The species name.
+        units : str, optional
+            Unit to return it in, e.g. ``"mg/L"`` or ``"kgCOD/m3"``. Converted
+            from the unit the model declares for the species (see
+            :meth:`units_named`); only the scale changes, so a unit of another
+            quantity raises ``ValueError``. ``None`` (default) returns the
+            model's unit.
+
+        Returns
+        -------
+        jnp.ndarray
+            The trajectory, shape ``(n_points,)``.
+        """
         if species not in self.model.species_index:
             suffix = did_you_mean(species, self.model.species)
             raise KeyError(f"Unknown species '{species}'. Available: {self.model.species}.{suffix}")
-        return self.C[:, self.model.species_index[species]]
+        values = self.C[:, self.model.species_index[species]]
+        return species_in_unit(self.model, species, values, units)
 
-    def C_named_many(self, species) -> dict[str, jnp.ndarray]:
+    def C_named_many(self, species, *, units=None) -> dict[str, jnp.ndarray]:
         """Trajectories of several species by name, as ``{name: array}``.
 
         The multi-species companion to :meth:`C_named` -- read a handful of
@@ -161,15 +251,20 @@ class _HasNamedSpecies:
         species : str or iterable of str
             The species names. A single string is one name, giving the same
             one-entry dict as a one-element list.
+        units : str or dict[str, str], optional
+            One unit for every species read, or ``{species: unit}`` for some of
+            them (the rest stay in the model's units); see :meth:`C_named`.
 
         Returns
         -------
         dict[str, jnp.ndarray]
             ``{name: trajectory}`` in the order given.
         """
-        return {sp: self.C_named(sp) for sp in name_list(species)}
+        names = name_list(species)
+        want = requested_units(names, units)
+        return {sp: self.C_named(sp, units=want.get(sp)) for sp in names}
 
-    def final_named(self, species=None) -> dict[str, float]:
+    def final_named(self, species=None, *, units=None) -> dict[str, float]:
         """Values at the **last** recorded point, as ``{name: float}``.
 
         The reporting shortcut for a steady-state / end-of-run value: instead of
@@ -184,6 +279,9 @@ class _HasNamedSpecies:
             The species names. A single string is one name
             (``final_named("SNH")`` equals ``final_named(["SNH"])``). ``None``
             (default) returns every model species.
+        units : str or dict[str, str], optional
+            One unit for every species read, or ``{species: unit}`` for some of
+            them; see :meth:`C_named`.
 
         Returns
         -------
@@ -191,7 +289,8 @@ class _HasNamedSpecies:
             ``{name: last value}`` in the order given.
         """
         names = list(self.model.species) if species is None else name_list(species)
-        return {sp: float(self.C_named(sp)[-1]) for sp in names}
+        want = requested_units(names, units)
+        return {sp: float(self.C_named(sp, units=want.get(sp))[-1]) for sp in names}
 
     @property
     def final(self) -> dict[str, float]:
@@ -300,7 +399,7 @@ class ExportableSolutionMixin:
     does not touch the core ``C_named`` accessor.
     """
 
-    def to_dataframe(self, *, units_in_columns: bool = False):
+    def to_dataframe(self, *, units_in_columns: bool = False, units=None):
         """Return the solution as a pandas ``DataFrame``.
 
         One row per recorded point, one column per species (in model
@@ -315,6 +414,11 @@ class ExportableSolutionMixin:
             species names and the per-species units are stored in
             ``df.attrs["units"]`` instead, which keeps columns selectable by
             species name.
+        units : str or dict[str, str], optional
+            Units to tabulate in: one for every species, or ``{species: unit}``
+            for some of them (the rest stay in the model's units). The values
+            are converted as by :meth:`C_named`, and the column labels and
+            ``df.attrs["units"]`` give the units used.
 
         Returns
         -------
@@ -327,8 +431,7 @@ class ExportableSolutionMixin:
             with ``pip install aquakin[dataframe]``).
         """
         model = self.model
-        columns = [(sp, self.C[:, j]) for j, sp in enumerate(model.species)]
-        units = {sp: model.units_of(sp) for sp in model.species}
+        columns, units = species_columns(model, self.C, units)
         name, index = self._table_index()
         return build_dataframe(
             index,
@@ -338,7 +441,7 @@ class ExportableSolutionMixin:
             units_in_columns=units_in_columns,
         )
 
-    def to_csv(self, path_or_buf=None, *, units_in_columns: bool = True, **kwargs):
+    def to_csv(self, path_or_buf=None, *, units_in_columns: bool = True, units=None, **kwargs):
         """Write the solution to CSV (delegates to :meth:`to_dataframe`).
 
         Parameters
@@ -350,7 +453,10 @@ class ExportableSolutionMixin:
             Defaults to ``True`` here (unlike :meth:`to_dataframe`): a CSV
             cannot carry ``df.attrs``, so the units are embedded in the column
             headers by default so the written file is self-describing.
+        units : str or dict[str, str], optional
+            Units to write the species in (see :meth:`to_dataframe`).
         **kwargs
             Forwarded to ``pandas.DataFrame.to_csv``.
         """
-        return self.to_dataframe(units_in_columns=units_in_columns).to_csv(path_or_buf, **kwargs)
+        df = self.to_dataframe(units_in_columns=units_in_columns, units=units)
+        return df.to_csv(path_or_buf, **kwargs)
