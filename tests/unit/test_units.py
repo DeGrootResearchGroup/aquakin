@@ -26,6 +26,9 @@ from aquakin.core.units import prettify_units
         # Multi-character symbols carry exponents too.
         ("kg2", "kg²"),
         ("Pa-1", "Pa⁻¹"),
+        # `dm` is the decimetre, so the whole symbol carries the exponent.
+        ("mol/dm3", "mol/dm³"),
+        ("g/dm3/d", "g/dm³/d"),
     ],
 )
 def test_prettify_units(plain, pretty):
