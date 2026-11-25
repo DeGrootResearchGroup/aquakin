@@ -28,6 +28,7 @@ model:
     - "Sotemann, Ristow, Wentzel & Ekama (2005). Integrated chemical, physical and biological processes modelling Part 2 - Anaerobic digestion of sewage sludges. Water SA 31(4), 545-568."
     - "Ikumi, Harding & Ekama (2014). Biodegradability of wastewater and activated sludge organics in anaerobic digestion. Water Res. 56, 267-279. doi:10.1016/j.watres.2014.02.008"
     - "Seco, Ribes, Serralta & Ferrer (2004). Biological nutrient removal model No.1 (BNRM1). Water Sci. Technol. 50(6), 69-78. doi:10.2166/wst.2004.0361"
+    - "Insel, Ozyildiz, Okutman-Tas, Guven, Zengin, Pala-Ozkok, Sagir Kurt, Atli, Artan, Takacs & Cokgor (2022). A comprehensive evaluation of process kinetics: a plant-wide approach for nutrient removal and biogas production. Water Res. 217, 118410. doi:10.1016/j.watres.2022.118410"
     - "Barker & Dold (1997). General model for biological nutrient removal activated-sludge systems: model presentation. Water Environ. Res. 69(5), 969-984."
 
 # Compositions: COD is the electron-equivalent content (oxygen and nitrate are
@@ -99,7 +100,13 @@ parameters:
   KNH4_AUT:   {value: 1.0,   units: "g_N/m3",   bounds: [0.1, 10.0],  transform: positive_log}
   etaNO3_H:   {value: 0.8,   units: "-", bounds: [0.1, 1.0], transform: logit}
   etaNO3_HYD: {value: 0.6,   units: "-", bounds: [0.1, 1.0], transform: logit}
-  etafe:      {value: 0.4,   units: "-", bounds: [0.05, 1.0], transform: logit}
+  # Heterotroph hydrolysis without oxygen or nitrate, relative to aerobic.
+  # ASM2d's 0.4 makes a digester on the BSM2 feed produce 3.7% more methane
+  # than BSM2's ADM1 digester; 0.15 matches its methane production and
+  # particulate COD destruction, consistent with full-scale plant-wide fits
+  # that find anaerobic hydrolysis well below the activated-sludge literature
+  # values (Insel et al. 2022).
+  etafe:      {value: 0.15,  units: "-", bounds: [0.05, 1.0], transform: logit}
   YH:         {value: 0.625, units: "g_COD/g_COD", bounds: [0.4, 0.8], transform: logit}
   YAUT:       {value: 0.24,  units: "g_COD/g_N",   bounds: [0.1, 0.4], transform: positive_log}
   fXI:        {value: 0.1,   units: "g_COD/g_COD", bounds: [0.02, 0.3], transform: logit}

@@ -86,6 +86,46 @@ against.
 5. **Branching:** model work continues on the session branch after the design
    note's PR merged.
 
+## Decisions made (owner, 2026-11-25), from the BSM2 digester comparison
+
+6. **Heterotroph anaerobic hydrolysis factor `etafe` = 0.15** (was ASM2d's 0.4),
+   from the comparison below; within the full-scale fits (Insel et al., 2022;
+   Ozyildiz et al., 2023).
+7. **Acidogen kinetics deferred to `plantwide_bio_p`:** the digester cannot
+   tell the candidates apart, so ADM1's sugar degraders stay until an
+   anaerobic-zone VFA comparison against `asm2d` on an A2O flowsheet.
+
+### The BSM2 digester comparison (2026-11-25)
+
+The BSM2 open-loop steady state's digester feed (aquakin's BSM2, the ASM1
+`sludge_mix` output, 178.37 m3/d; through BSM2's interface it reproduces the
+published ADM1 input to 0.2%) fed to the core in a `HeadspaceDigesterUnit` with
+BSM2's dimensions (3400 m3 liquid, 300 m3 gas, 35 C, pH 7.26), solved 900 d to
+steady state. ADM1 is the published BSM2 digester steady state. The feed maps
+ASM1 to core species directly (XI + XP to XI, alkalinity to SIC), with total N
+kept equal by putting the organic-N difference in ammonium.
+
+| | ADM1 (BSM2) | etafe 0.4 | 0.3 | **0.15** | 0.1 |
+|---|---|---|---|---|---|
+| Methane (kg CH4/d) | 1065.3 | 1104.3 | 1088.9 | **1063.6** | 1054.6 |
+| Particulate COD destroyed | 54.2% | 55.8% | 55.0% | **53.8%** | 53.3% |
+
+- Acidogen half-saturation `K_S_su` 500 against 50 g/m3: methane +0.04%,
+  destruction unchanged; only the residual SF moves (12.4 to 1.2 g/m3).
+- The totals agree by different routes: the core treats 90% of decaying
+  biomass as biodegradable (`fXI` 0.1) where BSM2's interface treats 68%
+  (`frxs_adm`), so it makes 2.4 kg/m3 less inert COD (XI out 14.9 against
+  ADM1's 17.2), and leaves 2.1 kg/m3 of XS unhydrolyzed (ADM1: 0.26 of
+  composites and their fractions). At 0.15 the acidogens do about 75% of the
+  hydrolysis.
+- Propionate 17.6 g/m3 in both; acetate 130 against ADM1's 89; methane partial
+  pressure 0.670 against 0.662 bar.
+- Ammonium released (effluent minus feed) 1198 g N/m3 against ADM1's 1295
+  (-7.5%). Effluent ammonium itself is not comparable: the core's inerts carry
+  0.02 g N/g COD (ASM2d) against BSM2's 0.06, so the difference enters the feed
+  as ammonium.
+- Pinned by `tests/validation/test_plantwide_core_digester.py`.
+
 ## Structure: a linear `extends:` chain
 
 ```
@@ -184,8 +224,8 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
   `asm2d`; the equivalence with `asm2d` holds under aerobic and anoxic
   conditions (and against `asm2d` with its fermentation switched off).
 - The acidogen kinetics are ADM1's sugar degraders (half-saturation 500 g/m³)
-  for now, provisional until a source tested in activated sludge is found
-  (see *Open decisions*).
+  for now, provisional until a source tested in activated sludge is found;
+  the digester cannot tell the candidates apart (decision 7).
 - Particulate organics the activated-sludge models treat as unbiodegradable
   stay largely unbiodegradable in a digester (Ikumi et al., 2014), so `XI` is
   inert in every unit and the first version has no anaerobic conversion of
@@ -297,19 +337,14 @@ gas phase has its own balance in the unit).
    population whose metabolism switches with conditions (Varga et al., 2018).
    Recommendation: separate PAOs and GAOs, the more established and more easily
    benchmarked form; read Varga et al. before deciding.
-2. **Acidogen kinetics.** BNRM2's parameter sources (Barat et al., 2013,
+2. **Acidogen kinetics** (deferred to `plantwide_bio_p`, decision 7). BNRM2's parameter sources (Barat et al., 2013,
    appendix p. x) name none for the anaerobic groups; Ribes et al. (2002, primary
    settler fermentation) is the likeliest source for acidogens tested in
    activated sludge. Candidates meanwhile: ADM1's sugar degraders (in use) or
    Siegrist et al.'s fermenters (half-saturation 50 g/m³). Both sustain the
    continuous digester; they differ in the VFA an anaerobic zone produces,
    which matters at the bio-P level.
-3. **Heterotroph anaerobic hydrolysis factor.** ASM2d's `etafe` is 0.4. Fits of
-   heterotroph-catalyzed hydrolysis to full-scale digesters give 0.11-0.30
-   (Ozyildiz et al., 2023, seven plants; Insel et al., 2022, 0.15), and the
-   UCT model uses 0.1 in activated sludge. With acidogens also hydrolyzing, the
-   core may hydrolyze a digester too completely (96% of the particulates fed at
-   20 d); settle in the ADM1 digester comparison.
+3. **Heterotroph anaerobic hydrolysis factor.** Settled: 0.15 (decision 6).
 4. **Iron chemistry.** Saturation-index precipitation (already in the
    repository) or surface complexation. Recommendation: start with the
    existing approach; add surface complexation as its own level if aged-iron
