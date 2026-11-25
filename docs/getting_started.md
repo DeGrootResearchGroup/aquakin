@@ -21,7 +21,9 @@ pip install "aquakin[plot]"        # solution.plot(...) via matplotlib
 pip install "aquakin[ui]"          # the browser flowsheet editor
 ```
 
-The flowsheet editor is described in [Plant-wide simulation](plants.md).
+The flowsheet editor is described in [Plant-wide simulation](plants.md). To
+install the editor on a computer without Python, for a colleague who does not
+use Python, see [Installing the editor without Python](installing_the_editor.md).
 
 ```{note}
 **`import aquakin` enables JAX 64-bit (x64) mode process-wide.** The stiff

@@ -180,7 +180,8 @@ them); the topic rules above cover IFAS / MBBR and the settlers. Deliberate:
   mode routes it (tank, holding volume with an `overflow` port, or a batch
   schedule that `InletFlowCheckedUnit` checks before `solve`, refusing a miss).
 - **A model declaring `gases:` has its gas phase in the unit** (`HeadspaceDigesterUnit`,
-  `core/gases.py`); what a unit vents reaches the mass balance via `GasExportUnit`.
+  `core/gases.py`); what a unit vents reaches the mass balance via `GasExportUnit`
+  and `plant.digester_gas` via `BiogasHeadspaceUnit`.
 
 **Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and
 `plant/measures.py` keep their own grammars but call `aquakin.core.lexer.tokenize`;

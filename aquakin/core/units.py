@@ -31,8 +31,9 @@ _SUPERSCRIPT = str.maketrans(
 )
 
 # Unit symbols that may carry an exponent. Longer symbols are listed first so
-# the alternation prefers ``mol`` over ``m`` and ``min`` over ``m``.
-_UNIT_SYMBOLS = r"(?:mol|min|kg|Pa|m|s|d|h|L|g|M)"
+# the alternation prefers ``mol`` over ``m``, ``min`` over ``m`` and ``dm``
+# (decimetre) over ``d`` (day), as :mod:`aquakin.utils.units` parses them.
+_UNIT_SYMBOLS = r"(?:mol|min|kg|Pa|dm|m|s|d|h|L|g|M)"
 
 # A unit symbol at a token boundary -- not preceded by a letter, digit, or
 # underscore, so the ``O2`` inside ``g_O2`` (preceded by ``_``) is never matched

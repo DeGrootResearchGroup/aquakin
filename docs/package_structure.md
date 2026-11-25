@@ -318,6 +318,8 @@ aquakin/
 │   ├── widget/                         # Vue Flow trame widget + built bundle (serve/)
 │   └── icons/                          # line icons per unit kind
 │
+├── installers/                         # install-aquakin.sh / .bat: uv-based editor installers for non-Python users;
+│                                       #   scripts/stamp_installers.py pins each release's copy (release.yml)
 ├── ui-widget/                          # Vue source of the canvas widget (npm run build)
 │
 ├── tests/

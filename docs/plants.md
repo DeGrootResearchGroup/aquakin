@@ -1008,6 +1008,9 @@ pip install "aquakin[ui]"
 aquakin-ui examples/projects/bsm2/flowsheet.yaml
 ```
 
+([Installing the editor without Python](installing_the_editor.md) covers a
+computer without Python: one download or one pasted line.)
+
 opens a flowsheet editor in your browser, served on this machine only. Drag
 units from the palette, wire their ports, and edit each unit in a form generated
 from its own documentation; aquakin builds each unit and then the whole plant as
