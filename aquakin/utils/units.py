@@ -19,6 +19,14 @@ treated as *unknown* and skipped, so the uneven parameter annotations in the
 shipped models never raise a false alarm. Only an actual inconsistency between
 two *known* units is reported.
 
+The symbol ``dm`` is always the decimetre (0.1 m), as in SI: ``dm3``,
+``dm^3``, ``mol/dm3`` and ``g/dm3`` are volumes and concentrations (``1 dm3`` is
+exactly ``1 L``). A bare ``d`` is the day wherever it is not followed by ``m``
+(``1/d``, ``m3/d``, ``g/m3/d``, ``kg/d``). A product of a day and a metre is
+written with a separator (``d*m`` or ``d m``); a word such as ``dmol`` or ``dmg``
+that runs a day into another unit is not parsed (it is *unknown*) rather than
+read as a product.
+
 This is distinct from :mod:`aquakin.core.units`, which only *formats* unit
 strings for display.
 """
@@ -125,8 +133,8 @@ DIMENSIONLESS = Dimension()
 
 # Unit symbols that may carry an exponent (a trailing signed integer, e.g. ``m3``
 # = m^3, ``s-1`` = s^-1, or a caret exponent ``^0.5``). Longest first so the
-# scan prefers ``mol`` over ``m`` and ``min`` over ``m``. ``M`` is molarity and
-# is normalised to ``mol/L`` after parsing.
+# scan prefers ``mol`` over ``m``, ``min`` over ``m`` and ``dm`` (decimetre) over
+# ``d`` (day). ``M`` is molarity and is normalised to ``mol/L`` after parsing.
 _UNIT_SYMBOLS = [
     "kmol",
     "mmol",
@@ -136,6 +144,7 @@ _UNIT_SYMBOLS = [
     "mg",
     "bar",
     "Pa",
+    "dm",
     "g",
     "m",
     "L",
@@ -259,8 +268,10 @@ def parse_units(text: str) -> Dimension | None:
     text : str
         A unit string in any of the shipped dialects, e.g. ``"g_COD/m3"``,
         ``"1/d"``, ``"M-1 s-1"``, ``"m3/(g_COD*d)"``, ``"gO2^0.5/m/d"``,
-        ``"mol/L"``. The display form is accepted too: Unicode superscripts
-        (``m³``) and the multiplication dot (``g_COD·m⁻³`` == ``g_COD*m-3``).
+        ``"mol/L"``, ``"mol/dm3"``. An exponent may be a trailing integer
+        (``m3``), a caret (``m^3``) or ``**`` (``m**3``). The display form is
+        accepted too: Unicode superscripts (``m³``) and the multiplication dot
+        (``g_COD·m⁻³`` == ``g_COD*m-3``).
 
     Returns
     -------
@@ -274,7 +285,10 @@ def parse_units(text: str) -> Dimension | None:
         return None
     # Accept the display multiplication dot (U+00B7 '·', U+22C5 '⋅') as '*', so
     # the prettified form round-trips through the parser.
-    s = text.translate(_SUPERSCRIPT_TO_ASCII).replace("·", "*").replace("⋅", "*").strip()
+    # ``**`` is the Python spelling of the caret exponent (``dm**3`` == ``dm^3``);
+    # it is rewritten first so the lexer never reads it as two multiplications.
+    s = text.translate(_SUPERSCRIPT_TO_ASCII).replace("**", "^")
+    s = s.replace("·", "*").replace("⋅", "*").strip()
     if s == "":
         return None
     if s == "-":
@@ -388,8 +402,11 @@ CELSIUS_SPELLINGS = frozenset(
 
 # Each scaled symbol -> (base symbol, base exponent, factor), so that one unit of
 # the symbol equals ``factor * base**exponent``. Unlisted symbols (``g``, ``mol``,
-# ``m``, ``s``, ``Pa``, ``K``) are already base symbols.
+# ``m``, ``s``, ``Pa``, ``K``) are already base symbols. A factor given as a
+# ``Fraction`` is exact, so an integer power of it is too: ``dm3`` is exactly
+# ``1e-3 m3`` (one litre), where the float ``0.1 ** 3`` is not.
 _TO_BASE = {
+    "dm": ("m", 1, Fraction(1, 10)),
     "kg": ("g", 1, 1.0e3),
     "mg": ("g", 1, 1.0e-3),
     "kmol": ("mol", 1, 1.0e3),
@@ -415,7 +432,10 @@ def _to_base_units(dim: Dimension) -> tuple[Dimension, float]:
     for tok, exp in dim.tokens:
         base, base_exp, f = _TO_BASE.get(tok, (tok, 1, 1.0))
         out[base] = out.get(base, Fraction(0)) + exp * base_exp
-        factor *= f ** float(exp)
+        if isinstance(f, Fraction) and exp.denominator == 1:
+            factor *= float(f**exp)
+        else:
+            factor *= f ** float(exp)
     return Dimension(out), factor
 
 
