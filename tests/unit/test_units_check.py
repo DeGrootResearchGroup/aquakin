@@ -19,6 +19,7 @@ from aquakin.utils.units import (
     DIMENSIONLESS,
     Dimension,
     check_rate_units,
+    conversion_factor,
     parse_units,
 )
 
@@ -72,6 +73,51 @@ def test_parse_half_order_exponent():
     dim = parse_units("gO2^0.5/m/d")
     assert dim is not None
     assert dim.as_dict()["O2"] == Fraction(1, 2)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("dm", {"dm": 1}),
+    ("dm3", {"dm": 3}),
+    ("dm^3", {"dm": 3}),
+    ("dm**3", {"dm": 3}),
+    ("mol/dm3", {"mol": 1, "dm": -3}),
+    ("g/dm3", {"g": 1, "dm": -3}),
+    ("m**3/d", {"m": 3, "d": -1}),                       # `**` is the caret exponent
+])
+def test_dm_is_the_decimetre(text, expected):
+    # `dm` is one symbol, not day x metre: `dm3` is a volume.
+    dim = parse_units(text)
+    assert dim is not None
+    assert dim.as_dict() == {k: Fraction(v) for k, v in expected.items()}
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("1/d", {"d": -1}),
+    ("g/m3/d", {"g": 1, "m": -3, "d": -1}),
+    ("m3/d", {"m": 3, "d": -1}),
+    ("kg/d", {"kg": 1, "d": -1}),
+    ("d m", {"d": 1, "m": 1}),                           # separated: a day times a metre
+])
+def test_d_stays_the_day(text, expected):
+    dim = parse_units(text)
+    assert dim is not None
+    assert dim.as_dict() == {k: Fraction(v) for k, v in expected.items()}
+    # the day still converts as a time
+    assert conversion_factor(text, text.replace("d", "s")) == pytest.approx(
+        86400.0 ** expected["d"], rel=1e-12
+    )
+
+
+@pytest.mark.parametrize("a, b, factor", [
+    ("mol/L", "mol/dm3", 1.0),
+    ("g/dm3", "g/m3", 1000.0),
+    ("dm3", "L", 1.0),
+    ("dm", "m", 0.1),
+    ("mg/dm3/d", "g/m3/d", 1.0),
+])
+def test_conversion_factor_decimetre_is_exact(a, b, factor):
+    # One dm3 is exactly one litre, so the factor carries no float residue.
+    assert conversion_factor(a, b) == factor
 
 
 @pytest.mark.parametrize("text", [
