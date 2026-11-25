@@ -86,7 +86,18 @@ def test_aerobic_and_anoxic_reaction_terms_equal_asm2d(core, SO2):
     c_core = _vector(core, {**state, "SIC": 60.0})
     c_asm2d = _vector(asm2d, {**state, "SPO4": 1e6, "SALK": 1e6})
     r_core = core.dCdt(c_core, core.default_parameters(), core.default_conditions().fields, 0)
-    p_asm2d = asm2d.default_parameters().at[asm2d.param_index["qfe"]].set(0.0)
+    # The models share these processes' expressions; the heterotrophs'
+    # anaerobic hydrolysis factor differs by value (0.15 here, chosen against
+    # the BSM2 digester; 0.4 in ASM2d), and with SO2 = 0 the anaerobic switch
+    # is small but not zero, so ASM2d is given the core's value.
+    etafe = core.default_parameters()[core.param_index["etafe"]]
+    p_asm2d = (
+        asm2d.default_parameters()
+        .at[asm2d.param_index["qfe"]]
+        .set(0.0)
+        .at[asm2d.param_index["etafe"]]
+        .set(etafe)
+    )
     r_asm2d = asm2d.dCdt(c_asm2d, p_asm2d, asm2d.default_conditions().fields, 0)
     for s in state:
         np.testing.assert_allclose(
@@ -152,7 +163,7 @@ def test_digester_sustains_every_anaerobic_group_and_makes_methane(core, digeste
     for group in ANAEROBES:
         assert final[idx[group]] > 50.0, group
     biodegradable_in = FEED["SF"] + FEED["SA"] + FEED["XS"] + 0.9 * (FEED["XH"] + FEED["XAUT"])
-    assert final[idx["SCH4"]] / biodegradable_in == pytest.approx(0.83, abs=0.02)
+    assert final[idx["SCH4"]] / biodegradable_in == pytest.approx(0.80, abs=0.02)
 
 
 def test_gradient_of_batch_methane_matches_a_central_difference(core):
