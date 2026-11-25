@@ -37,6 +37,7 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.plant.aeration_system import blower_airflow_total, blower_energy
+from aquakin.plant.balance import oxygen_transfer_history
 from aquakin.plant.errors import NoDigesterError
 from aquakin.plant.metrics import (
     _EQI_WEIGHTS,
@@ -912,10 +913,12 @@ def direct_n2o_emission(
     (:func:`aquakin.plant.ghg.stripped_n2o`).
 
     When a reactor strips the gas inside the solve (``Aeration(stripped=
-    {"SN2O": ratio})``), its own ratio and saturation are used, so the result is
-    the emission the solve actually removed. Otherwise the gas stayed in the
-    liquid during the solve, and this is a post-solve estimate of what aeration
-    would strip.
+    {"SN2O": ratio})``) and ``kla_ratio`` is not given, its flux is the transfer
+    the solve integrated (the same term :meth:`Plant.mass_balance` counts),
+    aeration temperature correction included, so the result is the emission the
+    solve actually removed. Otherwise the gas stayed in the liquid during the
+    solve, and this is a post-solve estimate of what aeration would strip, from
+    the oxygen kLa without the temperature correction.
 
     If the model has no ``n2o_species`` state (the standard ASM1 BSM2 plant,
     which does not resolve N₂O), the direct N₂O emission is **0** -- the model has
@@ -943,27 +946,59 @@ def direct_n2o_emission(
     float
         Time-averaged stripped N₂O-N mass flow (kg N/d).
     """
-    from aquakin.plant.ghg import stripped_n2o
-
     reactors = _as_reactors(plant)
     # Reactors whose model resolves the dissolved N₂O state.
     n2o_reactors = [n for n in reactors if n2o_species in plant.units[n].model.species_index]
     if not n2o_reactors:
         return 0.0
+    # The gas the solve stripped is read from the solve's own transfer term;
+    # the rest is estimated from the oxygen kLa.
+    in_solve = [
+        n
+        for n in n2o_reactors
+        if kla_ratio is None and n2o_species in plant.units[n].stripped_gases
+    ]
+    estimated = [n for n in n2o_reactors if n not in in_solve]
+    return _solved_n2o_emission(plant, solution, params, in_solve, n2o_species) + (
+        _estimated_n2o_emission(plant, solution, params, estimated, n2o_species, kla_ratio)
+    )
 
-    t = solution.t
-    kla_hist = _kla_history(plant, solution, params, n2o_reactors)
-    volumes = jnp.asarray([float(plant.units[n].volume) for n in n2o_reactors])
-    s_n2o = jnp.stack([solution.C_named(n, n2o_species) for n in n2o_reactors], axis=1)
-    ratios, sats = [], []
-    for n in n2o_reactors:
+
+def _solved_n2o_emission(plant, solution, params, tanks, n2o_species) -> float:
+    """Time-averaged N₂O-N (kg/d) the solve stripped from ``tanks``: minus each
+    tank's in-solve transfer of ``n2o_species`` times its volume."""
+    if not tanks:
+        return 0.0
+    transfers = oxygen_transfer_history(plant, solution, params, tanks)
+    flux = 0.0  # g N per time unit, at each saved time
+    for n in tanks:
         unit = plant.units[n]
-        in_solve = unit.stripped_gases.get(n2o_species)
-        ratios.append(in_solve if kla_ratio is None and in_solve is not None else kla_ratio)
+        stripped = transfers[n][1][:, unit.model.species_index[n2o_species]]
+        flux = flux - stripped * float(unit.volume)
+    return float(time_average(flux * 1e-3, solution.t))
+
+
+def _estimated_n2o_emission(plant, solution, params, tanks, n2o_species, kla_ratio) -> float:
+    """Time-averaged N₂O-N (kg/d) aeration would strip from ``tanks`` at
+    ``kla_ratio`` (default 1.0) times the oxygen kLa, toward each tank's
+    in-solve saturation of the gas if it has one, else zero."""
+    from aquakin.plant.ghg import stripped_n2o
+
+    if not tanks:
+        return 0.0
+    kla_hist = _kla_history(plant, solution, params, tanks)
+    volumes = jnp.asarray([float(plant.units[n].volume) for n in tanks])
+    s_n2o = jnp.stack([solution.C_named(n, n2o_species) for n in tanks], axis=1)
+    sats = []
+    for n in tanks:
+        unit = plant.units[n]
+        in_solve = n2o_species in unit.stripped_gases
         sats.append(
             float(unit.saturation_vector[unit.model.species_index[n2o_species]])
-            if in_solve is not None
+            if in_solve
             else 0.0
         )
-    ratios = jnp.asarray([1.0 if r is None else float(r) for r in ratios])
-    return stripped_n2o(t, kla_hist, s_n2o, volumes, kla_ratio=ratios, s_n2o_sat=jnp.asarray(sats))
+    ratio = 1.0 if kla_ratio is None else float(kla_ratio)
+    return stripped_n2o(
+        solution.t, kla_hist, s_n2o, volumes, kla_ratio=ratio, s_n2o_sat=jnp.asarray(sats)
+    )
