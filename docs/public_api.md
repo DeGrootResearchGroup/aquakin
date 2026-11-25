@@ -114,6 +114,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Point-estimate fit | `fit` → `FitResult` |
 | MAP fit of plant parameters | `Plant.calibrate` (also `aquakin.plant.calibrate_plant`) → `CalibrationResult` |
 | MAP fit + Laplace posterior | `calibrate` → `CalibrationResult` (→ `predictive_band` → `PredictiveBand`; `posterior_draws` for parameter samples) |
+| Sample the posterior of a fit (MCMC) | `sample_posterior` → `PosteriorSamples` (`draws` for `predictive_band(draws=)` and `param_draws`); `Plant.sample_posterior` for a plant fit |
 | Profile-likelihood identifiability | `profile_likelihood` → `ProfileResult` |
 | Fisher information of a design (before running it) | `fisher_information` with `Experiment` → `FisherInformation` |
 | Fisher information of any JAX observation function, optionally split by candidate measurement | `fisher_information_from_fn` → `FisherInformation` |
@@ -125,7 +126,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Choose between candidate experiments | `rank_experiments` → `CandidateScore` |
 | Choose the best set of measurements from a candidate pool under a budget | `design_from_candidates` → `CandidateDesign` |
 | Optimize sampling times and initial concentrations | `optimize_experiment` → `ExperimentDesignResult` |
-| Configure the fit | `LaplaceConfig`, `OptimizerConfig`, `FreeICConfig` |
+| Configure the fit | `LaplaceConfig`, `OptimizerConfig`, `FreeICConfig`; `SamplerConfig` for `sample_posterior` |
 | Name what a plant sensor measures | `aquakin.plant.PlantObservable` with species, a measurement keyword, a weighted sum of your own (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, read by `aquakin.plant.parse_measure`, which raises `aquakin.plant.MeasureSyntaxError`) or `aquakin.plant.Measure` |
 
 ## Uncertainty propagation and design

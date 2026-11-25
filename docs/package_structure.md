@@ -118,18 +118,21 @@ aquakin/
 │   │   │                            #   the entry point and its public names; private
 │   │   │                            #   helpers are imported from calibration/ directly
 │   │   ├── calibration/             # calibrate()'s implementation, one concern each:
-│   │   │   ├── config.py            #   OptimizerConfig / LaplaceConfig / FreeICConfig
+│   │   │   ├── config.py            #   OptimizerConfig / LaplaceConfig / FreeICConfig /
+│   │   │   │                        #   SamplerConfig
 │   │   │   ├── observation.py       #   observe(), observation_fn handling (+ fisher.py)
 │   │   │   ├── loss.py              #   loss / residual builders, NaN masking, sigma,
 │   │   │   │                        #   observation-unit conversion
 │   │   │   ├── coords.py            #   free-IC log-pool / simplex coordinates + names
-│   │   │   ├── result.py            #   CalibrationResult, PredictiveBand
+│   │   │   ├── result.py            #   CalibrationResult, PredictiveBand, PosteriorSamples
 │   │   │   ├── problem.py           #   _ReactorForwardModel (forward-solve seam),
 │   │   │   │                        #   _CalibrationProblem and its resolver helpers
 │   │   │   ├── objective.py         #   _FitConfig, jit-cached objective / residual / Jacobian
 │   │   │   ├── multistart.py        #   starts, optimizer bounds, the multistart loop
 │   │   │   ├── laplace.py           #   Laplace posterior, at-bound checks
 │   │   │   ├── driver.py            #   _run_fit / _fit_result: shared with Plant.calibrate
+│   │   │   ├── sampling.py          #   sample_posterior(): random-walk Metropolis on the
+│   │   │   │                        #   fit's density, R-hat / ESS (+ Plant.sample_posterior)
 │   │   │   └── criteria.py          #   log-likelihood / k / n of a fit; aic, aicc, bic,
 │   │   │                            #   compare_models (public, re-exported by aquakin)
 │   │   ├── seam.py                  # the private integrate names aquakin.plant reuses,
@@ -163,6 +166,7 @@ aquakin/
 │   │   │                            #   Plant.run_to_steady_state
 │   │   ├── sensitivity.py           # Plant steady / dynamic sensitivity + DGSM
 │   │   ├── calibrate.py             # Plant.calibrate
+│   │   ├── posterior.py             # Plant.sample_posterior
 │   │   ├── spec.py                  # Plant.from_spec / to_spec: the flowsheet spec
 │   │   ├── recycle.py               # RecycleResolver: recycle flows / concentrations
 │   │   ├── colored.py               # ColoredJacobianManager: sparse plant Jacobians

@@ -25,7 +25,7 @@ from aquakin.integrate.calibration.multistart import (
 )
 from aquakin.integrate.calibration.objective import _build_objective, _check_start_gradient
 from aquakin.integrate.calibration.problem import _noise_estimate
-from aquakin.integrate.calibration.result import CalibrationResult
+from aquakin.integrate.calibration.result import CalibrationResult, _FitRecord
 
 if TYPE_CHECKING:
     from aquakin.integrate.calibration.config import OptimizerConfig
@@ -235,4 +235,5 @@ def _fit_result(problem: _CalibrationProblem, fm, cfg: _FitConfig, bundle, resul
         ic_fractions=ic_fractions,
         at_bound=at_bound,
         **stats,
+        _fit_record=_FitRecord(problem, fm, np.asarray(theta_opt, dtype=float)),
     )

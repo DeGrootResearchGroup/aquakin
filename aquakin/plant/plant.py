@@ -37,6 +37,7 @@ from aquakin.integrate._common import (
 )
 from aquakin.plant import calibrate as _calibrate
 from aquakin.plant import dynamic_solve as _dynamic
+from aquakin.plant import posterior as _posterior
 from aquakin.plant import sensitivity as _sensitivity
 from aquakin.plant import spec as _spec
 from aquakin.plant import steady_solve as _steady
@@ -2891,10 +2892,9 @@ class Plant:
     # ------------------------------------------------------------------
     # Sensitivity / uncertainty-quantification surface.
     #
-    # Implemented as free functions taking the plant as their first argument
-    # in :mod:`aquakin.plant.sensitivity`, and bound here as methods so the
-    # public ``plant.steady_state_dgsm(...)`` API is unchanged. They only use
-    # the public solve API plus the parameter/state-layout helpers.
+    # Free functions taking the plant first, in :mod:`aquakin.plant.sensitivity`,
+    # bound here as methods (``plant.steady_state_dgsm(...)``). They use only the
+    # public solve API plus the parameter/state-layout helpers.
     # ------------------------------------------------------------------
     steady_state_sensitivity = _sensitivity.steady_state_sensitivity
     steady_state_dgsm = _sensitivity.steady_state_dgsm
@@ -2902,10 +2902,10 @@ class Plant:
     dynamic_sensitivity = _sensitivity.dynamic_sensitivity
     dynamic_dgsm = _sensitivity.dynamic_dgsm
 
-    # Plant MAP calibration (:mod:`aquakin.plant.calibrate`), bound as a method so
-    # ``plant.calibrate(...)`` reuses the reactor-calibration machinery through the
-    # forward-model seam.
+    # Plant calibration (:mod:`aquakin.plant.calibrate`) and posterior sampling
+    # (:mod:`aquakin.plant.posterior`), reusing the reactor machinery through the seam.
     calibrate = _calibrate.calibrate_plant
+    sample_posterior = _posterior.sample_posterior_plant
 
     # The flowsheet spec (:mod:`aquakin.plant.spec`): a plant as plain data and
     # back, the file format a flowsheet editor saves.

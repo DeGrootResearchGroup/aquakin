@@ -59,6 +59,9 @@ from aquakin.integrate.calibrate import (
     calibrate,
 )
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.calibration.config import SamplerConfig
+from aquakin.integrate.calibration.result import PosteriorSamples
+from aquakin.integrate.calibration.sampling import sample_posterior
 from aquakin.integrate.calibration.criteria import (
     ModelComparison,
     aic,
@@ -292,11 +295,13 @@ __all__ = [
     "PlantUnitIssue",
     "PlantUnitsReport",
     "PlugFlowReactor",
+    "PosteriorSamples",
     "PredictiveBand",
     "ProfileResult",
     "Progress",
     "RateFunction",
     "RatioSplitter",
+    "SamplerConfig",
     "ScenarioComparison",
     "SensitivityResult",
     "SetpointSplitter",
@@ -390,6 +395,7 @@ __all__ = [
     "register_rate_function",
     "registered_rate_functions",
     "required_airflow",
+    "sample_posterior",
     "sensitivity",
     "size_activated_sludge",
     "sludge_metrics",

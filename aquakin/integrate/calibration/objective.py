@@ -228,6 +228,40 @@ class _ObjectiveBundle:
         return self.scale_box[0]
 
 
+def _objective_fn(problem: _CalibrationProblem, fm: _ReactorForwardModel):
+    """The scalar calibration objective as a pure JAX function.
+
+    Parameters
+    ----------
+    problem : _CalibrationProblem
+        The resolved problem.
+    fm : forward model
+        The forward-solve seam (``_ReactorForwardModel`` or the plant's).
+
+    Returns
+    -------
+    callable
+        ``objective(theta, p0_full, C0s, ic_center) -> scalar``: the data term
+        summed over every dataset plus the prior penalty of
+        :func:`_add_prior_term`, at the unconstrained vector ``theta`` (the rate
+        coordinates, then the fitted initial-pool coordinates). For
+        ``loss="nll"`` it is the negative log posterior density of ``theta``
+        less a constant, before the transforms' Jacobian. The optimizer and
+        the posterior sampler both evaluate this one function.
+    """
+
+    def objective(theta, p0_full_arg, C0s, ic_center):
+        rate_thetas = theta[: problem.n_rate]
+        ic_thetas = theta[problem.n_rate :]
+        physical = problem.physical_from_theta(rate_thetas)
+        p = p0_full_arg.at[problem.free_indices].set(physical)
+        # Sum the data terms over every dataset (the batches share ``p``).
+        data_term = _data_term(problem, _predict(problem, fm, p, ic_thetas, C0s))
+        return _add_prior_term(problem, data_term, physical, ic_thetas, ic_center)
+
+    return objective
+
+
 def _build_objective(
     problem: _CalibrationProblem, fm: _ReactorForwardModel, cfg: _FitConfig
 ) -> _ObjectiveBundle:
@@ -248,15 +282,7 @@ def _build_objective(
             cfg.compiled_cache[key] = fn
         return fn
 
-    def objective(theta, p0_full_arg, C0s, ic_center):
-        rate_thetas = theta[: problem.n_rate]
-        ic_thetas = theta[problem.n_rate :]
-        physical = problem.physical_from_theta(rate_thetas)
-        p = p0_full_arg.at[problem.free_indices].set(physical)
-        # Sum the data terms over every dataset (the batches share ``p``).
-        data_term = _data_term(problem, _predict(problem, fm, p, ic_thetas, C0s))
-        return _add_prior_term(problem, data_term, physical, ic_thetas, ic_center)
-
+    objective = _objective_fn(problem, fm)
     _obj_vg_jit = _cached_jit(
         ("obj_vg",) + struct_key, lambda: jax.jit(jax.value_and_grad(objective))
     )

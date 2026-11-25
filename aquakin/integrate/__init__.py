@@ -47,6 +47,9 @@ from aquakin.integrate.particle import (
 )
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
+from aquakin.integrate.calibration.config import SamplerConfig
+from aquakin.integrate.calibration.result import PosteriorSamples
+from aquakin.integrate.calibration.sampling import sample_posterior
 from aquakin.integrate.calibration.criteria import (
     ModelComparison,
     aic,
@@ -120,8 +123,10 @@ __all__ = [
     "PFRSolution",
     "ParticleTrackReactor",
     "PlugFlowReactor",
+    "PosteriorSamples",
     "PredictiveBand",
     "ProfileResult",
+    "SamplerConfig",
     "ScenarioComparison",
     "SensitivityResult",
     "SobolResult",
@@ -152,6 +157,7 @@ __all__ = [
     "optimize_experiment",
     "profile_likelihood",
     "rank_experiments",
+    "sample_posterior",
     "sensitivity",
     "sobol_indices",
     "sobol_indices_cost",
