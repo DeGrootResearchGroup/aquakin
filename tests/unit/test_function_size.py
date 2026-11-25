@@ -79,9 +79,6 @@ RECORDED_PARAMS = {
     "aquakin/integrate/calibration/objective.py::_residual_parts": 9,
     "aquakin/integrate/calibration/problem.py::_resolve_datasets": 10,
     "aquakin/integrate/calibration/problem.py::_resolve_problem": 21,
-    # #686: the owner chose `draws=` on predictive_band; its deprecated, ignored
-    # `eig_keep` is the ninth. Delete this entry when `eig_keep` is removed.
-    "aquakin/integrate/calibration/result.py::CalibrationResult.predictive_band": 9,
     "aquakin/integrate/candidate_design.py::_solve_relaxed": 11,
     "aquakin/integrate/candidate_design.py::design_from_candidates": 14,
     "aquakin/integrate/design.py::optimize_design": 11,

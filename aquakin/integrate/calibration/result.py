@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -342,7 +341,6 @@ class CalibrationResult:
         n_draw: int = 200,
         percentiles: tuple[float, float] = (2.5, 97.5),
         seed: int = 0,
-        eig_keep: float | None = None,
         observed_species: list[str] | None = None,
         draws: np.ndarray | None = None,
     ) -> PredictiveBand:
@@ -375,10 +373,6 @@ class CalibrationResult:
             Lower / upper band percentiles (default the central 95%).
         seed : int
             Seed for the draws (reproducible).
-        eig_keep : float, optional
-            Deprecated and ignored. The band uses ``self.posterior_cov``, the
-            covariance behind ``params_named_std``. Passing a value here emits
-            a ``DeprecationWarning``.
         observed_species : list[str], optional
             Restrict the returned band to these species. ``None`` returns all.
         draws : np.ndarray, optional
@@ -400,13 +394,6 @@ class CalibrationResult:
         if draws is None and self.posterior_cov is None:
             raise ValueError(
                 "predictive_band requires a Laplace posterior; call calibrate(..., laplace=True)."
-            )
-        if eig_keep is not None:
-            warnings.warn(
-                "predictive_band(eig_keep=...) is deprecated and ignored; the band "
-                "is drawn from the calibration's posterior_cov.",
-                DeprecationWarning,
-                stacklevel=2,
             )
         model = reactor.model
         if draws is None:

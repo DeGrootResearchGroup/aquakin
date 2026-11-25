@@ -1482,12 +1482,6 @@ def test_predictive_band_all_species_shape(band_fit):
     assert band.species is None
 
 
-def test_predictive_band_eig_keep_is_deprecated(band_fit):
-    reactor, C0, t_obs, _, result = band_fit
-    with pytest.warns(DeprecationWarning, match="eig_keep"):
-        result.predictive_band(reactor, C0, t_obs, observed_species=["B"], n_draw=10, eig_keep=1e-2)
-
-
 # ---------- Laplace covariance regularisation (#7) ----------
 
 
