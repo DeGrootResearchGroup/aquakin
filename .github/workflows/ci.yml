@@ -903,12 +903,14 @@ jobs:
 
       - name: Run heavy tests shard
         # One heavy plant-gradient test in a fresh process. The per-test timeout
-        # covers the multi-GB plant-adjoint compile.
+        # covers the multi-GB plant-adjoint compile; the slowest test (the BSM2
+        # dense-vs-coloured stable adjoint) takes 640-1140 s depending on the
+        # runner, so 1800 s leaves headroom (#892) and fits the 45 min job.
         run: >-
           pytest -m "heavy and not xheavy" -q -n 1
           --splits 11 --group ${{ matrix.group }}
           --cov=aquakin --cov-report=xml
-          --durations=15 --timeout=1200 --timeout-method=thread
+          --durations=15 --timeout=1800 --timeout-method=thread
 
       - name: Upload coverage to Codecov
         # Reclaims coverage of the whole-plant stable-adjoint / dynamic-DGSM code
