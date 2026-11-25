@@ -7,8 +7,11 @@ model:
     stoichiometry derived from the PAO metabolism) in place of ASM2d's
     empirical bio-P kinetics. 18 state variables, 22 processes. The
     poly-P storage rates are inversely proportional to the stored fraction
-    XPP/XPAO, as published, so they are infinite at XPP = 0: give XPP a
-    positive initial value.
+    f_PP = XPP/XPAO, as published. As a numerical guard that is not part of
+    the published model, that 1/f_PP factor is floored at
+    f_min = 1e-3 g P/g COD, so the rates stay finite at XPP = 0; the floor is
+    inactive, and the rates are exactly the published ones, whenever
+    f_PP > f_min.
   references:
     - "Meijer, van Loosdrecht & Heijnen (2001). Metabolic modelling of full-scale biological nitrogen and phosphorus removing WWTP's. Water Res. 35(11), 2711-2723. doi:10.1016/S0043-1354(00)00567-4"
     - "Murnleitner, Kuba, van Loosdrecht & Heijnen (1997). An integrated metabolic model for the aerobic and denitrifying biological phosphorus removal. Biotechnol. Bioeng. 54(5), 434-450."
@@ -172,6 +175,15 @@ expressions:
   # and this one stays finite at XGLY = 0 (limit XPHA/KfGLY), where the product
   # form is 0 * inf = NaN. safe_div gives 0 when XPAO and XGLY are both 0.
   Glycogen_drive: "safe_div([XPHA] * [XPAO], KfGLY * [XPAO] + [XGLY])"
+  # Floored stored poly-P, the denominator of the poly-P storage rates:
+  # max(XPP, f_min * XPAO) with f_min = 1e-3 g P/g COD, written through the
+  # stored fraction f_PP = XPP/XPAO so the floor compares like units. Where
+  # f_PP > f_min the max(0, .) is exactly 0 and this is exactly XPP, so the
+  # rates are bit-identical to the published 1/f_PP form; below it, it is
+  # f_min * XPAO and the rates are capped at their f_PP = f_min value. f_min is
+  # a numerical guard, not part of the published model. safe_div takes f_PP to
+  # 0 when XPAO = 0, where this is XPP and the rates' XPAO factor makes them 0.
+  XPP_floored: "[XPP] + [XPAO] * max(0, 0.001 - safe_div([XPP], [XPAO]))"
 
 reactions:
   - name: Aerobic_hydrolysis
@@ -331,16 +343,20 @@ reactions:
 
   # PP storage follows Murnleitner et al. (1997, Eq. 19 and Table IV) and
   # van Veldhuizen et al. (1999, Table 2): the rate is inversely proportional to
-  # the stored fraction f_PP = XPP/XPAO, hence the [XPAO] / [XPP] factor. For the
+  # the stored fraction f_PP = XPP/XPAO, hence the XPAO / XPP factor. For the
   # rate to come out in g P/m3/d, matching the stoichiometry (XPP +1), qPP
   # carries (g_P/g_COD)^2/d. The literature quotes it in g P/(g COD d), treating
   # f_PP as a pure ratio; the value is the same.
-  # Unlike glycogen formation, this rate has no finite limit as XPP -> 0: the
-  # max-ratio term tends to fPP_max/(KfPP + fPP_max), so the rate grows as
-  # 1/XPP and is inf at XPP = 0 exactly. Start a simulation with XPP > 0.
+  # Unlike glycogen formation, the published rate has no finite limit as
+  # XPP -> 0: the max-ratio term tends to fPP_max/(KfPP + fPP_max), so it grows
+  # as 1/XPP. As a numerical guard that is not part of the published model, the
+  # 1/f_PP factor is floored at f_min = 1e-3 g P/g COD (XPP_floored divides
+  # instead of XPP), so the rate is capped and finite at XPP = 0. The floor is
+  # inactive whenever f_PP > f_min, where the rate is the published one exactly.
+  # safe_div gives 0 when XPAO and XPP are both 0.
   - name: Anoxic_storage_of_XPP
     description: "Anoxic storage of XPP"
-    rate: "qPP * etaNO_PAO * [XPAO] / [XPP] * Monod_KO_PAO * Monod_SNO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
+    rate: "safe_div(qPP * etaNO_PAO * [XPAO], XPP_floored) * Monod_KO_PAO * Monod_SNO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
     stoichiometry:
       SNH: "iN_BM / YPP_NO"
       SNO: "(-1) * 1 / YPP_NO / iNO3_N2"
@@ -390,7 +406,7 @@ reactions:
 
   - name: Aerobic_storage_of_XPP
     description: "Aerobic storage of XPP"
-    rate: "qPP * [XPAO] / [XPP] * Monod_SO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
+    rate: "safe_div(qPP * [XPAO], XPP_floored) * Monod_SO * Monod_SPO * Monod_XPHA * Monod_XPP_max * [XPAO]"
     stoichiometry:
       SO: "(-1) / YPP_O"
       SNH: "iN_BM / YPP_O"

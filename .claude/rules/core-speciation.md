@@ -44,7 +44,7 @@ root). The iteration count therefore never enters the AD graph: `jax.jvp` /
 iteration count** instead of differentiating through every Newton step. The root
 is the same one the old fixed scan converged to, so **every steady state is
 unchanged** (validated: BSM2 steady state and the ADM1 digester reproduce
-bit-for-bit). The convergence criterion is `in_bracket AND |Newton step| ≤ tol`
+bit-for-bit). A Newton step is taken only if it stays in the bracket **and** is at most half the step taken two iterations before (the `rtsafe` progress test); do not drop the second test — without it a step from the wrong side of a 1 M imbalance overshoots to the bracket edge and crawls back one unit of `u` per step, past the cap (#835). An element that has converged is frozen, since a broadcast loop runs until every element converges and a converged element's zero step would otherwise fail the progress test and bisect away from its root. The coupled `(h, I)` loop of the activity path uses neither: the progress test compares steps on one fixed residual, and its residual changes with `I` every step. The convergence criterion is `in_bracket AND |Newton step| ≤ tol`
 — a *bisection* step can be spuriously small far from the root, so the step size
 alone is not a safe criterion, but a tiny in-bracket Newton step `|f/f'|` (with
 `|f'| ≥ 1`) means a tiny residual, i.e. the root. *Why this is the lever:* a

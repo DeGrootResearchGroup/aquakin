@@ -70,8 +70,12 @@ g TSS/m³), and they integrate in **days**.
 : The Delft (TU Delft) variant of ASM2d, with a metabolic description of the
   PAO storage/growth cycle in place of ASM2d's black-box bio-P kinetics
   (Meijer et al. 2001; Murnleitner et al. 1997). As published, the poly-P
-  storage rate is inversely proportional to the stored fraction XPP/XPAO, so
-  it is infinite when XPP is exactly 0: start a simulation with XPP > 0.
+  storage rate is inversely proportional to the stored fraction
+  f_PP = XPP/XPAO, which makes it infinite when XPP is exactly 0. As a
+  numerical guard that is not part of the published model, aquakin floors
+  that 1/f_PP factor at f_min = 0.001 g P/g COD, so the rate is capped and
+  finite down to XPP = 0. The floor is inactive whenever f_PP is above
+  f_min, where the rate is exactly the published one.
   *(18 species, 22 reactions.)*
 
 `asm2d_chemp`
