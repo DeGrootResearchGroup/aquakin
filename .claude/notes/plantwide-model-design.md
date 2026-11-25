@@ -246,7 +246,8 @@ gas phase has its own balance in the unit).
 - **Order:** the `gases:` block and library (done), the digester headspace
   (`HeadspaceDigesterUnit`, done: equal to ADM1's BSM2 headspace when given
   BSM2's constants; the plant-wide core's 20 d digester vents 64% CH4 / 36%
-  CO2 and closes its COD and N balances), then aeration
+  CO2 and closes its COD and N balances; `plant.digester_gas` reports it,
+  through `BiogasHeadspaceUnit`), then aeration
   (`Aeration(stripped="model")`, done: dry air at one atmosphere, `air=` to
   change it; oxygen keeps `do_sat`; the surface kLa of an unaerated tank is
   an `Aeration(kla=...)`, zero unless given).

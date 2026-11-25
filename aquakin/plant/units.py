@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, NamedTuple, Protocol, runtime_checkable
 
 import jax.numpy as jnp
 
@@ -97,6 +97,8 @@ class Unit(Protocol):
       COD/N/P inventory for a non-concentration-vector state layout.
     - :class:`GasExportUnit` (``gas_export``) -- vents material through its own
       gas phase (a digester headspace), for the mass balance's gas term.
+    - :class:`BiogasHeadspaceUnit` (``biogas``) -- its headspace vents biogas,
+      which :meth:`Plant.digester_gas` reports.
     - :class:`ApproximateInventoryUnit` (``inventory_caveats``) -- names the
       components its inventory only approximates, with why, for the mass
       balance to report.
@@ -235,6 +237,42 @@ class GasExportUnit(Protocol):
     content applies to its entry."""
 
     def gas_export(self, state: jnp.ndarray, params: jnp.ndarray) -> jnp.ndarray: ...
+
+
+class Biogas(NamedTuple):
+    """The gas a :class:`BiogasHeadspaceUnit` vents, at one instant.
+
+    Attributes
+    ----------
+    flow : jnp.ndarray
+        Gas leaving the headspace, m³ per plant time unit, at the headspace
+        pressure (the overpressure outflow).
+    pressure : jnp.ndarray
+        Total headspace pressure, water vapour included (Pa).
+    vent_pressure : float
+        The pressure the gas vents to (Pa).
+    temperature : jnp.ndarray
+        Headspace temperature (K).
+    partial_pressures : dict[str, jnp.ndarray]
+        Partial pressure of each gas the headspace holds (Pa), keyed by gas
+        name (``"CH4"``, ``"CO2"``, ...).
+    """
+
+    flow: jnp.ndarray
+    pressure: jnp.ndarray
+    vent_pressure: float
+    temperature: jnp.ndarray
+    partial_pressures: dict
+
+
+@runtime_checkable
+class BiogasHeadspaceUnit(Protocol):
+    """A unit whose own gas headspace vents biogas (the headspace digester).
+    :meth:`Plant.digester_gas` reports the biogas from ``biogas(state)``, the
+    unit's :class:`Biogas` at its state ``state``, so it does not need to know
+    how the unit holds its gas phase."""
+
+    def biogas(self, state: jnp.ndarray) -> Biogas: ...
 
 
 @runtime_checkable
