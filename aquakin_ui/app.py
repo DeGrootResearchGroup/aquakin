@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 from trame.app import asynchronous
 
-from aquakin_ui import checks, files, forms, page, studies, study_page
+from aquakin_ui import checks, files, forms, page, studies, study_page, unit_form
 from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
@@ -334,30 +334,7 @@ class Editor:
         self._pending_rows = None
         self.state.confirm_open = False
         self.refresh_selection()
-        # The rows equal the last ones sent, and the page keeps the edits just
-        # declined unless it is sent something new: a revision mark makes them so.
-        self._form_revision += 1
-        rows = list(self.state.sel_rows)
-        if rows:
-            rows[0] = {**rows[0], "revision": self._form_revision}
-            self.state.sel_rows = rows
-
-    def reshape_form(self, rows: list[dict], i: int, value) -> None:
-        """A choice that changes which rows the form has (aeration mode, model)."""
-        rows = [dict(r) for r in rows]
-        rows[i]["value"] = value
-        if not self.apply_properties(rows):
-            return
-        # The new rows may suggest values the old ones could not (the aerated
-        # species of the unit's model): take them, so the unit builds at once.
-        uid = self.state.selected
-        try:
-            _, settings = forms.read_rows(self.doc, uid, self.state.sel_rows)
-        except ValueError:
-            return
-        if settings != self.doc.units[uid].settings:
-            self.doc.apply(uid, settings, self.doc.units[uid].label)
-            self.publish()
+        self._resend_rows(self.state.sel_rows)
 
     # -- work off the page's thread -----------------------------------------
 
@@ -501,6 +478,11 @@ class Editor:
     _unsaved_dialog = page._unsaved_dialog
     _confirm_dialog = page._confirm_dialog
     _unit_form = page._unit_form
+
+    # -- the unit form's redrawing choices (unit_form.py) ------------------
+
+    reshape_form = unit_form.reshape_form
+    _resend_rows = unit_form.resend_rows
 
     # -- the Studies tab and dialogs (study_page.py) -----------------------
 

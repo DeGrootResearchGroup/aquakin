@@ -9,7 +9,8 @@ import re
 
 import pytest
 
-expect = pytest.importorskip("playwright.sync_api").expect
+sync_api = pytest.importorskip("playwright.sync_api")
+expect = sync_api.expect
 
 
 def _open_with_a_dosing_unit(page, tmp_path):
@@ -136,3 +137,27 @@ def test_choosing_a_settling_kind_draws_its_arguments(page, tmp_path):
     # both kinds take.
     expect(page.get_by_label("settling n_layers")).to_be_visible()
     expect(page.get_by_label("settling v_settle")).to_have_value("400")
+
+
+def test_nothing_entered_while_a_choice_redraws_the_form_is_lost(page, relay, tmp_path):
+    """Choosing the reagent's model redraws the form from Python's rows; an
+    entry the form took before they arrived would vanish under them, so until
+    then it takes none, and afterwards it takes them again."""
+    _open_with_a_dosing_unit(page, tmp_path)
+    page.locator('.vue-flow__node[data-id="dose"]').click()
+    add = page.get_by_role("button", name="Add a species")
+    species = page.get_by_label("species", exact=True)
+    expect(add).to_be_visible()  # the unit's form is drawn
+    relay.hold()
+    _choose(page, page.get_by_label("reagent model *"), "asm1")
+    try:
+        add.click(timeout=1000)
+        taken = 1
+    except sync_api.TimeoutError:
+        taken = 0
+    relay.release()
+    # The choice is shown once Python's rows are drawn (the select shows theirs).
+    expect(page.locator(".v-select__selection-text", has_text="asm1")).to_be_visible()
+    expect(species).to_have_count(taken)
+    add.click()
+    expect(species).to_have_count(taken + 1)
