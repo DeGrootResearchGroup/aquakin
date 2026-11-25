@@ -28,6 +28,7 @@ _CASES = [
     ("asm2d", ["XPAO"]),
     ("asm2d_chemp", ["SF", "SA"]),
     ("asm2d_tud", ["SF", "SA"]),
+    ("asm2d_tud", ["XPP", "XPAO"]),
     ("wats_sewer", ["S_B", "S_VFA"]),
     ("wats_sewer_extended", ["S_B", "S_VFA"]),
     ("wats_sewer_khalil_thesis", ["S_B", "S_VFA"]),
@@ -199,3 +200,140 @@ def test_asm2d_tud_glycogen_formation_is_finite_with_no_stored_glycogen():
     sol = reactor.solve(c, params=p, t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 5))
     assert np.all(np.isfinite(np.asarray(sol.C)))
     assert float(sol.C_named("XGLY")[-1]) > 0.0
+
+
+#: The floor on the stored poly-P fraction f_PP = XPP / XPAO in the asm2d_tud
+#: storage rates (g P / g COD).
+_F_MIN = 1e-3
+
+#: The PAO biomass of the poly-P storage checks (g COD/m3), so XPP = f * 200.
+_XPAO = 200.0
+
+
+def _polyp_state(net, f):
+    """The default state + 1, with XPAO = 200 and XPP = f * XPAO."""
+    c = net.default_concentrations() + 1.0
+    c = c.at[net.species_index["XPAO"]].set(_XPAO)
+    return c.at[net.species_index["XPP"]].set(f * _XPAO)
+
+
+def _polyp_storage_by_hand(net, c, p, divisor):
+    """The two poly-P storage rates in the published form, written out by hand.
+
+    ``qPP [* etaNO_PAO] * XPAO / divisor * ... * Monod_XPP_max * XPAO``, with the
+    factors in the YAML's order so the floating-point operations are the same.
+    ``divisor`` is XPP for the published rate, or the floored XPP to check the
+    cap; the max-ratio term always sees the true f_PP.
+    """
+
+    def value(name):
+        return float(c[net.species_index[name]])
+
+    def param(name):
+        return float(p[net.param_index[name]])
+
+    def monod(x, k):
+        return x / (k + x)
+
+    xpp, xpao = value("XPP"), value("XPAO")
+    f = xpp / xpao
+    fmax, kfpp = param("fPP_max"), param("KfPP")
+    max_ratio = (fmax - f) / (kfpp + fmax - f)
+    so, sno = value("SO"), value("SNO")
+    anoxic = (
+        param("qPP") * param("etaNO_PAO") * xpao / divisor
+        * (param("KO_PAO") / (param("KO_PAO") + so))
+        * monod(sno, param("KNO_HYD"))
+        * monod(value("SPO"), param("KP_H"))
+        * monod(value("XPHA"), param("KPHA"))
+        * max_ratio
+        * xpao
+    )
+    aerobic = (
+        param("qPP") * xpao / divisor
+        * monod(so, param("KO_HYD"))
+        * monod(value("SPO"), param("KP_H"))
+        * monod(value("XPHA"), param("KPHA"))
+        * max_ratio
+        * xpao
+    )
+    return {"Anoxic_storage_of_XPP": anoxic, "Aerobic_storage_of_XPP": aerobic}
+
+
+def _storage_rates(net, c, p):
+    rates = np.asarray(net.rates(c, p, net.default_conditions().fields, 0))
+    return {r: float(rates[net.reaction_names.index(r)])
+            for r in ("Anoxic_storage_of_XPP", "Aerobic_storage_of_XPP")}
+
+
+@pytest.mark.parametrize("f", [1.0001e-3, 2e-3, 0.05, 0.3])
+def test_asm2d_tud_polyp_storage_is_the_published_rate_above_the_floor(f):
+    """Above f_min the floor is inactive: each poly-P storage rate is the
+    published ``1/f_PP`` form, bit for bit (``==``, no tolerance)."""
+    net = aquakin.load_model("asm2d_tud")
+    p = net.default_parameters()
+    c = _polyp_state(net, f)
+    expected = _polyp_storage_by_hand(net, c, p, float(c[net.species_index["XPP"]]))
+    got = _storage_rates(net, c, p)
+    assert got == expected
+    assert all(v > 0.0 for v in got.values())
+
+
+@pytest.mark.parametrize("f", [0.0, 1e-6, 5e-4, 0.9999e-3])
+def test_asm2d_tud_polyp_storage_is_capped_below_the_floor(f):
+    """Below f_min the ``1/f_PP`` factor is ``1/f_min``: XPP divides as
+    ``f_min * XPAO`` while the max-ratio term keeps the true f_PP. At XPP = 0
+    the published rate is infinite; here it is that finite cap."""
+    net = aquakin.load_model("asm2d_tud")
+    p = net.default_parameters()
+    c = _polyp_state(net, f)
+    expected = _polyp_storage_by_hand(net, c, p, _F_MIN * _XPAO)
+    got = _storage_rates(net, c, p)
+    # The floored divisor is formed as XPP + XPAO * (f_min - XPP / XPAO), a few
+    # roundings away from f_min * XPAO.
+    for name, rate in got.items():
+        assert rate == pytest.approx(expected[name], rel=1e-12, abs=0), name
+        assert rate > 0.0
+
+
+def test_asm2d_tud_polyp_storage_gradient_below_the_floor_matches_fd():
+    """Below the floor the storage rate depends on XPP only through the
+    max-ratio term; its AD derivative matches a central difference there, and
+    every rate gradient is finite at XPP = 0 itself."""
+    net = aquakin.load_model("asm2d_tud")
+    p = net.default_parameters()
+    cf = net.default_conditions().fields
+    i = net.reaction_names.index("Aerobic_storage_of_XPP")
+    j = net.species_index["XPP"]
+
+    def rate(xpp):
+        c = _polyp_state(net, 0.0).at[j].set(xpp)
+        return net.rates(c, p, cf, 0)[i]
+
+    x0, h = 0.5 * _F_MIN * _XPAO, 1e-4
+    ad = float(jax.grad(rate)(x0))
+    fd = (float(rate(x0 + h)) - float(rate(x0 - h))) / (2 * h)
+    # The rate is smooth in XPP away from the floor: a central difference with
+    # h = 1e-4 on XPP = 0.1 is accurate to ~1e-8 relative.
+    assert ad == pytest.approx(fd, rel=1e-6)
+    assert ad < 0.0
+
+    c0 = _polyp_state(net, 0.0)
+    jac = np.asarray(jax.jacfwd(lambda c: net.rates(c, p, cf, 0))(c0))
+    assert np.all(np.isfinite(jac))
+    grad = np.asarray(jax.grad(lambda c: jnp.sum(net.dCdt(c, p, cf, 0)))(c0))
+    assert np.all(np.isfinite(grad))
+
+
+def test_asm2d_tud_batch_solve_from_no_stored_polyp_stays_finite():
+    """A batch solve started at XPP = 0 is finite and stores poly-P: XPP rises
+    from 0 under the aerobic storage rate, which the floor keeps finite."""
+    net = aquakin.load_model("asm2d_tud")
+    p = net.default_parameters()
+    c = net.default_concentrations().at[net.species_index["XPP"]].set(0.0)
+    reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
+    sol = reactor.solve(c, params=p, t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 5))
+    assert np.all(np.isfinite(np.asarray(sol.C)))
+    xpp = np.asarray(sol.C_named("XPP")).ravel()
+    assert xpp[0] == 0.0
+    assert np.all(np.diff(xpp) > 0.0)
