@@ -218,8 +218,8 @@ unmasked path is unchanged); `Experiment(mask=)` sets the unmeasured entries'
 sigma to `inf` in `_FisherSetup` and is part of the design `_structure_key`; it is a defaulted field on
 `_CalibrationProblem` (and part of `struct_key`), so plant calibration, which
 builds its own problem, is unaffected. `CalibrationResult.posterior_draws(model, ...)`
-is the single Laplace sampler; `predictive_band` propagates its rows, so the two
-cannot drift. All are unit-tested directly in
+is the single Laplace sampler; `predictive_band` propagates its rows (or the given
+`draws=`). MCMC (`sample_posterior`) is in `integration-sampling.md`. All are unit-tested directly in
 `tests/unit/test_calibrate_internals.py` (no fit/solve). **The forward-solve is a
 seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
 — it turns `(params, C0)` into an observed-species trajectory (via the reactor's
