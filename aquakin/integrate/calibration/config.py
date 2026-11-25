@@ -1,4 +1,5 @@
-"""The public configuration objects of :func:`aquakin.calibrate`."""
+"""The public configuration objects of :func:`aquakin.calibrate` and
+:func:`aquakin.sample_posterior`."""
 
 from __future__ import annotations
 
@@ -202,6 +203,49 @@ class FreeICConfig:
     bounds: tuple | dict = (1e-3, 1e4)
     prior_log_std: float | None = None
     fixed_total: bool = False
+
+
+@dataclass(frozen=True)
+class SamplerConfig:
+    """Settings of the posterior sampler, :func:`aquakin.sample_posterior`.
+
+    Parameters
+    ----------
+    n_chains : int
+        Number of independent chains, each started from a draw of the Laplace
+        posterior around the MAP. At least 2, so that the R-hat diagnostic can
+        compare chains. Default 4.
+    n_draws : int
+        Draws kept per chain, after the warm-up. At least 4 (each chain is split
+        in two halves for R-hat). Default 1000.
+    n_warmup : int
+        Warm-up steps per chain, discarded, during which each chain adapts the
+        scale of its proposal towards the target acceptance rate. Default 500.
+    seed : int
+        Seed of the random numbers; the same seed gives the same draws.
+        Default 0.
+
+    Raises
+    ------
+    ValueError
+        If ``n_chains < 2``, ``n_draws < 4`` or ``n_warmup < 0``.
+    """
+
+    n_chains: int = 4
+    n_draws: int = 1000
+    n_warmup: int = 500
+    seed: int = 0
+
+    def __post_init__(self):
+        if self.n_chains < 2:
+            raise ValueError(
+                f"SamplerConfig.n_chains must be at least 2 (R-hat compares chains); "
+                f"got {self.n_chains}."
+            )
+        if self.n_draws < 4:
+            raise ValueError(f"SamplerConfig.n_draws must be at least 4; got {self.n_draws}.")
+        if self.n_warmup < 0:
+            raise ValueError(f"SamplerConfig.n_warmup must be >= 0; got {self.n_warmup}.")
 
 
 def _resolve_laplace(laplace) -> tuple[bool, LaplaceConfig]:

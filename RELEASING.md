@@ -100,6 +100,11 @@ On a release-prep branch:
       sdist and the wheel, then the **`publish-pypi`** job waits on the `pypi`
       environment's required reviewer. **Approve the deployment** (Actions →
       the run → Review deployments).
+- [ ] After the PyPI upload, the **`installers`** job attaches
+      `install-aquakin.sh` and `install-aquakin.bat` to the Release, stamped to
+      install `X.Y.Z` with the `constraints.txt` of tag `vX.Y.Z`. Check that
+      both are listed under the Release's assets: the user guide's download
+      links (`releases/latest/download/…`) serve them.
 
 ### 5. Post-release verification
 

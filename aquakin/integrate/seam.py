@@ -1,7 +1,7 @@
 """The private ``aquakin.integrate`` internals that the plant layer builds on.
 
-``Plant.calibrate``, ``plant_fisher_information`` and
-``plant_profile_likelihood`` reuse the reactor calibration machinery instead
+``Plant.calibrate``, ``Plant.sample_posterior``, ``plant_fisher_information``
+and ``plant_profile_likelihood`` reuse the reactor calibration machinery instead
 of copying it: the problem resolution helpers, the shared fit driver, the
 objective and multistart, the Fisher-information helpers, the profile sweep and
 the design criteria. The plant's solves likewise reuse the reactor solve
@@ -47,6 +47,7 @@ from aquakin.integrate.calibration.problem import (
     _resolve_priors,
     _resolve_rate_bounds,
 )
+from aquakin.integrate.calibration.sampling import _check_sampling_result, _run_sampler
 from aquakin.integrate.discrete_adjoint import _autonomize
 from aquakin.integrate.experiment_design import (
     _LARGER_IS_BETTER,
@@ -78,6 +79,7 @@ __all__ = [
     "_build_residual",
     "_check_criterion",
     "_check_profile_args",
+    "_check_sampling_result",
     "_check_sigma_arg",
     "_check_start_args",
     "_check_start_in_domain",
@@ -108,6 +110,7 @@ __all__ = [
     "_run_diffeqsolve",
     "_run_fit",
     "_run_multistart",
+    "_run_sampler",
     "_sigma_per_dataset",
     "_subset_indices",
 ]

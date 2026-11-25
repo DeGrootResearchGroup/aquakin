@@ -17,7 +17,7 @@ to know *how* an output depends on its inputs, or to fit a model to data.
 | How does an output change with each parameter, here? | `aquakin.sensitivity`, `reactor.solve_sensitivity` | `plant.steady_state_sensitivity`, `plant.dynamic_sensitivity`, `plant.solve_sensitivity` |
 | Which inputs matter over a whole range? | `aquakin.dgsm`; `aquakin.sobol_indices` for first-order and interaction shares | `plant.steady_state_dgsm`, `plant.dynamic_dgsm` |
 | Which parameter values fit my data? | `aquakin.calibrate` (`aquakin.fit` for a point estimate only) | `plant.calibrate` |
-| How well do the data determine them? | the Laplace posterior, `aquakin.profile_likelihood`, `aquakin.identifiability` | the same, with `plant_profile_likelihood` |
+| How well do the data determine them? | the Laplace posterior, `aquakin.sample_posterior`, `aquakin.profile_likelihood`, `aquakin.identifiability` | the same, with `plant.sample_posterior` and `plant_profile_likelihood` |
 | Which model structure do the data support? | `aquakin.aic`, `aicc`, `bic`, `compare_models` | the same |
 | What should I measure next? | `aquakin.fisher_information`, `rank_experiments`, `optimize_experiment`, `design_from_candidates` | `plant_fisher_information`, `plant_rank_sensor_sets` |
 | How uncertain is a prediction? Which design is best? | `aquakin.monte_carlo`, `compare_scenarios`, `optimize_design` | the same |
@@ -621,6 +621,70 @@ band.median, band.lo, band.hi        # each (12, 6): (n_t, n_species)
 
 draws = result.posterior_draws(model, n_draw=50, seed=0)   # (50, 7) parameter vectors
 ```
+
+### Sampling the posterior
+
+The Laplace posterior is a Gaussian at the MAP, built from the local
+curvature. It describes the posterior well when the data determine the
+parameters precisely enough that the model is close to linear over their
+uncertainty, in the coordinates of their transforms. It misdescribes a
+posterior that is curved (a ridge where only a product or a sum of
+parameters is seen), skewed, or cut by a bound, and those errors carry into
+everything built on its draws: predictive bands and robust experiment
+designs.
+
+`aquakin.sample_posterior` draws from the posterior itself by Markov chain
+Monte Carlo, starting from a fit:
+
+```python
+samples = aquakin.sample_posterior(
+    result, reactor,
+    config=aquakin.SamplerConfig(n_chains=2, n_draws=200, n_warmup=100, seed=0),
+)
+samples.params_named["O3_Br_direct.k1"]   # (400,) draws, physical units
+samples.draws                             # (400, 7) parameter vectors, as posterior_draws
+samples.r_hat, samples.ess_bulk           # convergence diagnostics, by coordinate
+samples.acceptance_rate                   # per chain
+```
+
+The run above is short to keep this page quick. For a real analysis keep the
+default `SamplerConfig()` (4 chains of 1000 draws after 500 warm-up steps) and,
+before using the draws, check that every `r_hat` is below about 1.01 and that
+`ess_bulk` is large enough for what you report: the Monte Carlo error of a
+posterior mean is about its standard deviation over `sqrt(ess_bulk)`. A larger
+`r_hat` means the chains disagree; run them longer.
+
+The sampled density is the one `calibrate` maximized, so the likelihood, the
+priors and the transforms are the same. It needs `loss="nll"` (the other
+losses are not likelihoods) and a Laplace posterior, which supplies the
+starting points and the proposal. Fitted initial pools are sampled together
+with the rates, which needs `LaplaceConfig(include_ic=True)`. With
+`sigma="estimate"` the density is the posterior with each output's noise level
+integrated out under the prior `p(sigma) ∝ 1/sigma`, so its intervals are
+wider than the Laplace ones by the extra uncertainty of an estimated noise
+level. The draws stay inside the bounds the fit used.
+
+The sampler is a random-walk Metropolis. Each chain starts from a draw of the
+Laplace posterior and proposes Gaussian steps shaped by the Laplace
+covariance, adapting their size during the warm-up. Each step costs one
+forward solve per chain and no gradient, so it suits a stiff model, but a few
+thousand solves add up: a plant, or a model whose posterior is far from the
+Laplace shape, needs patience. A plant fit is sampled with
+`plant.sample_posterior(result)`, through the plant's own solves.
+
+The draws plug into what takes Laplace draws:
+
+```python
+band = result.predictive_band(reactor, C0, t_obs, draws=samples.draws)
+robust_draws = samples.draws[::40]      # e.g. param_draws for optimize_experiment
+```
+
+When the Laplace intervals are enough, read them in the coordinates the fit
+ran in. For a parameter with `transform: positive_log`, the interval
+`exp(log(p) ± 1.96 sd)`, with `sd` the square root of the diagonal of
+`result.posterior_cov`, follows a skewed posterior far better than `p ± 1.96 *
+params_named_std`, which is the same uncertainty mapped linearly to physical
+units.
 
 ### Profile likelihood
 
