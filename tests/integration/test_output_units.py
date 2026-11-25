@@ -174,8 +174,13 @@ class _Clock:
 
     name = "clock"
     state_size = 1
-    input_ports: list = []
-    output_ports: list = []
+    @property
+    def input_ports(self):
+        return []
+
+    @property
+    def output_ports(self):
+        return []
 
     def initial_state(self):
         return jnp.zeros(1)
