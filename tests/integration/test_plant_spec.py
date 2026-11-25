@@ -1018,8 +1018,10 @@ _SBR_SOLIDS = ["XI", "XS", "XB_H", "XB_A", "XP", "XND"]
 
 
 def _sbr_plant(settling):
-    """One SBR on a constant feed (its last-but-one phase not mixed explicitly)."""
+    """One batch-fed SBR on a fill-only feed (its last-but-one phase not mixed
+    explicitly)."""
     from aquakin.plant import SBRPhase, SBRUnit
+    from aquakin.plant.influent import InfluentExpression
 
     phases = [
         SBRPhase("fill", 0.10, feed=True),
@@ -1039,10 +1041,15 @@ def _sbr_plant(settling):
         particulate_species=_SBR_SOLIDS,
         initial_fraction=0.5,
         conditions={"T": 293.15},
+        feed="batch",
     )
     p = Plant("sbr_plant", time_unit="d")
     p.add_unit(sbr)
-    feed = InfluentSeries.constant(_asm1(), SS=200.0, SNH=40.0, XS=150.0, XB_H=50.0, Q=5000.0)
+    feed = InfluentExpression(
+        _asm1(),
+        Q="5000*(1 - step(mod(t, 0.65) - 0.1))",
+        composition={"SS": 200.0, "SNH": 40.0, "XS": 150.0, "XB_H": 50.0},
+    )
     p.add_influent("feed", feed, to="sbr.feed")
     return p
 
@@ -1088,7 +1095,7 @@ def test_an_sbr_round_trips_through_a_spec_file(tmp_path, written):
 
 
 def test_an_sbr_read_from_a_spec_file_solves_bit_identically(
-    tmp_path, simple_model, make_small_sbr_plant
+    tmp_path, sbr_model, make_small_sbr_plant
 ):
     """A whole cycle (fill, react, settle, decant, idle) of the plant and of the
     plant its spec file builds give the same states, bit for bit."""
@@ -1103,8 +1110,47 @@ def test_an_sbr_read_from_a_spec_file_solves_bit_identically(
     b = q.solve(t_span=(0.0, 27.0), t_eval=t)
     np.testing.assert_array_equal(np.asarray(b.state), np.asarray(a.state))
     # The tank filled to 100 m3 and was decanted back: the solve did something.
-    volume = np.asarray(a.unit_state("sbr")[:, simple_model.n_species])
+    volume = np.asarray(a.unit_state("sbr")[:, sbr_model.n_species])
     assert volume.max() == pytest.approx(100.0) and volume[-1] == pytest.approx(50.0)
+
+
+@pytest.mark.parametrize("feed", ["batch", "continuous", "storage"])
+def test_each_sbr_feed_mode_round_trips_through_a_spec(make_small_sbr_plant, feed):
+    """The feed mode and the holding volume's settings are written, and the plant
+    read back has the same spec, fingerprint, initial state and right-hand side;
+    the three modes are three different plants."""
+    from aquakin.plant.spec import spec_fingerprint
+
+    settings = {"storage_initial_fraction": 0.75} if feed == "storage" else {}
+    p = make_small_sbr_plant(feed, **settings)
+    spec = p.to_spec()
+    unit = spec["units"]["sbr"]
+    assert unit["feed"] == feed
+    assert unit["feed_flow"] == (None if feed == "continuous" else 10.0)
+    assert unit["storage_volume"] == (60.0 if feed == "storage" else None)
+    assert unit["storage_initial_fraction"] == (0.75 if feed == "storage" else 0.5)
+    q = Plant.from_spec(spec)
+    _assert_same_plant(p, q)
+    assert q.units["sbr"].output_ports == p.units["sbr"].output_ports
+    others = {f: spec_fingerprint(make_small_sbr_plant(f).to_spec()) for f in
+              ("batch", "continuous", "storage") if f != feed}  # fmt: skip
+    assert spec_fingerprint(q.to_spec()) not in others.values()
+
+
+def test_an_sbr_spec_without_a_feed_mode_is_refused_naming_the_modes(make_small_sbr_plant):
+    """A spec written before SBRs took a feed mode does not say how the tank is
+    fed: reading it is refused, naming the three modes; giving one reads it."""
+    spec = make_small_sbr_plant().to_spec()
+    unit = {k: v for k, v in spec["units"]["sbr"].items() if k != "feed"}
+    old = {**spec, "units": {**spec["units"], "sbr": unit}}
+    with pytest.raises(
+        SpecError,
+        match=r"^units\.sbr: ValueError: 'feed' is required: one of 'continuous', 'storage', "
+        r"'batch'",
+    ):
+        Plant.from_spec(old)
+    fixed = {**spec, "units": {**spec["units"], "sbr": {**unit, "feed": "batch"}}}
+    assert Plant.from_spec(fixed).units["sbr"].feed == "batch"
 
 
 def test_an_sbr_spec_with_defaults_left_out_has_the_same_fingerprint():

@@ -536,10 +536,33 @@ def _unit_terms_at(plant, t, state_full, params_full, names, term, maps=(None, N
     return out
 
 
-def _unit_terms(plant, solution, params, names, term):
-    """:func:`_unit_terms_at` over every saved time, ``{unit: (n_t,
-    n_species)}`` (a tuple term stacks per entry), batched by ``jax.vmap`` as
-    the stream reconstruction is."""
+def unit_terms(plant, solution, params, names, term):
+    """:func:`_unit_terms_at` over every saved time, batched by ``jax.vmap`` as
+    the stream reconstruction is.
+
+    Shared by the mass balance's reaction and aeration integrals and the SBR's
+    :func:`~aquakin.plant.sbr.storage_report`, so each evaluates its unit with
+    the inputs and signals the solve's right-hand side gave it.
+
+    Parameters
+    ----------
+    plant : Plant
+        The solved plant.
+    solution : PlantSolution
+        Its solution.
+    params : jnp.ndarray
+        The plant parameter vector the solve used.
+    names : list of str
+        The units to evaluate.
+    term : callable
+        ``term(unit, t, state, inputs, signals, unit_params)``.
+
+    Returns
+    -------
+    dict
+        ``{unit: term over the saved times}``, each array with a leading
+        ``n_t`` axis (a tuple term stacks per entry).
+    """
     import jax
     import jax.numpy as jnp
 
@@ -590,8 +613,8 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
     gas_comps = {
         n: [q for q in rqs if q in plant.units[n].reaction_gas_components] for n in reactive
     }
-    reactions = _unit_terms(plant, solution, params, reactive, _reaction_term)
-    transfers = _unit_terms(plant, solution, params, aerated, _oxygen_transfer_term)
+    reactions = unit_terms(plant, solution, params, reactive, _reaction_term)
+    transfers = unit_terms(plant, solution, params, aerated, _oxygen_transfer_term)
     weights = {}  # unit -> (volumes, volumes as jnp, {component: content x volume})
     o2_rows, R_rows, strip_rows = [], {q: [] for q in rqs}, {q: [] for q in rqs}
     for i in range(t.shape[0]):

@@ -65,7 +65,8 @@ only Python can give (arrays of initial concentrations).
 An SBR's ``phases`` are a list of mappings with :class:`~aquakin.plant.sbr.SBRPhase`'s field names
 and its ``settling`` a mapping naming a ``kind`` (``interface`` or ``layered``)
 with that model's arguments; a field left out takes its default, and every
-field is written.
+field is written. Its ``feed`` mode (``continuous``, ``storage`` or ``batch``)
+is required, and the holding volume's settings go with ``feed: storage``.
 """
 
 from __future__ import annotations

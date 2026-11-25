@@ -21,6 +21,7 @@ from aquakin.__main__ import serve
 from aquakin.plant.catalog import (
     CATEGORIES,
     SETTING_TYPES,
+    build_unit,
     catalog,
     check_unit,
     model_info,
@@ -93,6 +94,7 @@ BUILDABLE = {
         "feed_flow": 1.0,
         "decant_flow": 1.0,
         "settling": {"kind": "interface", "v_settle": 1.0, "area": 10.0},
+        "feed": "batch",
     },
 }
 
@@ -534,6 +536,66 @@ def test_a_scheduled_composition_is_keyed_by_species_name():
         validate_settings(
             unit_kind("influent"), {"model": "asm1", "Q": 1.0, "composition": {3: 1.0}}
         )
+
+
+# -- an SBR's feed mode: a required choice, and settings of one mode ---------
+
+
+def test_an_sbrs_feed_is_a_required_choice_and_its_mode_settings_say_when():
+    """``feed`` is a choice of the three modes with no default; feed_flow applies
+    with a fill pump (storage, batch) and the holding volume's settings and
+    overflow port with a storage feed only."""
+    settings = {s.name: s for s in unit_kind("sbr").settings}
+    feed = settings["feed"]
+    assert (feed.type, feed.required, feed.optional, feed.default) == ("choice", True, False, None)
+    assert feed.choices == ["continuous", "storage", "batch"]
+    assert feed.to_json()["choices"] == ["continuous", "storage", "batch"]
+    pumped = {"setting": "feed", "values": ["storage", "batch"]}
+    storage = {"setting": "feed", "values": ["storage"]}
+    assert (settings["feed_flow"].required, settings["feed_flow"].when) == (False, pumped)
+    for name in ("storage_volume", "storage_initial_fraction", "storage_initial_concentrations",
+                 "overflow_port"):  # fmt: skip
+        assert settings[name].when == storage, name
+    assert settings["decant_flow"].when is None
+    kind = unit_kind("sbr")
+    assert kind.ports_for({"feed": "storage"}) == (["feed"], ["effluent", "overflow"])
+    assert kind.ports_for({"feed": "storage", "overflow_port": "spill"})[1] == ["effluent", "spill"]
+    for feed_mode in ("continuous", "batch", None):
+        assert kind.ports_for({"feed": feed_mode}) == (["feed"], ["effluent"])
+
+
+def test_a_storage_fed_sbrs_port_rules_give_the_built_units_ports():
+    settings = {**BUILDABLE["sbr"], "feed": "storage", "storage_volume": 50.0,
+                "overflow_port": "spill"}  # fmt: skip
+    out = check_unit("sbr", "s", settings)
+    assert out["ok"], out
+    assert (out["inputs"], out["outputs"]) == (["feed"], ["effluent", "spill"])
+    assert unit_kind("sbr").ports_for(settings) == (out["inputs"], out["outputs"])
+    built = build_unit("sbr", "s", settings)
+    assert (built.storage_volume, built.storage_initial_fraction) == (50.0, 0.5)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"feed": None}, "'feed' is required: one of 'continuous', 'storage', 'batch'"),
+        ({"feed": "pump"}, "'feed' must be one of 'continuous', 'storage', 'batch', got 'pump'"),
+        ({"feed": "continuous"}, "feed_flow does not apply"),
+        ({"feed": "storage"}, "storage_volume must be a positive number; got None"),
+        ({"storage_volume": 5.0}, "so storage_volume does not apply"),
+    ],
+)
+def test_an_sbrs_feed_settings_are_checked(change, message):
+    settings = {k: v for k, v in {**BUILDABLE["sbr"], **change}.items() if v is not None}
+    out = check_unit("sbr", "s", settings)
+    assert not out["ok"] and message in out["error"], out
+
+
+def test_a_continuous_sbr_needs_no_feed_flow():
+    settings = {k: v for k, v in BUILDABLE["sbr"].items() if k != "feed_flow"}
+    out = check_unit("sbr", "s", {**settings, "feed": "continuous"})
+    assert out["ok"] and out["outputs"] == ["effluent"], out
+    assert build_unit("sbr", "s", {**settings, "feed": "continuous"}).feed_flow is None
 
 
 # -- settings that are records: an SBR's phases and settling model -----------

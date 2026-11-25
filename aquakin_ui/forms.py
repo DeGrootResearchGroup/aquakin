@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import re
 
+from aquakin_ui.catalog import applies
 from aquakin_ui.document import Flowsheet
 
 AERATION_MODES = ("none", "kla", "do_setpoint")
@@ -146,7 +147,11 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
         _row("id", "identifier", "readonly", uid, hint="The unit's stable name in aquakin."),
         _row("label", "label", value=u.label or "", hint="Free display text.", placeholder=uid),
     ]
-    for s in doc.catalog.settings(u.kind):
+    current = doc.catalog.defaults(u.kind) | u.settings
+    kind_settings = doc.catalog.settings(u.kind)
+    for s in kind_settings:
+        if not applies(s.get("when"), current):
+            continue  # a setting of another mode (an SBR's holding volume)
         key, value, t = s["name"], u.settings.get(s["name"]), s["type"]
         label = key + (" *" if s["required"] else "")
         clock = (doc.meta.get("options") or {}).get("time_unit") or "d"
@@ -197,6 +202,13 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
         elif t == "boolean":
             text = "" if value is None else str(value).lower()
             rows.append(_row(key, label, "select", text, items=["true", "false"], **common))
+        elif t == "choice":
+            # A choice other settings depend on redraws the form when it changes.
+            governs = any((o.get("when") or {}).get("setting") == key for o in kind_settings)
+            rows.append(
+                _row(key, label, "select", value or "", items=list(s["choices"]), **common)
+                | ({"reshape": True} if governs else {})
+            )
         elif t == "reagent":
             rows += _reagent_rows(doc, s, value or {}, model_info)
         elif t == "records":
@@ -597,6 +609,12 @@ def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, 
             v = _field(name, _parse, s, values[name])
             if v is not None:
                 settings[name] = v
+    # A setting of a mode not chosen (an SBR's holding volume, without a
+    # storage feed) is left unset, so switching mode does not leave it behind.
+    current = doc.catalog.defaults(u.kind) | settings
+    for s in doc.catalog.settings(u.kind):
+        if not applies(s.get("when"), current):
+            settings.pop(s["name"], None)
     label = str(values.get("label", "")).strip() or None
     return label, settings
 

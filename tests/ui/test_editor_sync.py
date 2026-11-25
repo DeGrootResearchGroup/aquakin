@@ -464,6 +464,15 @@ def test_an_sbr_set_up_in_the_form_builds_and_survives_save_and_open(make_editor
     uid = ed.state.selected
     assert ed._check_unit(uid) == "'phases' is required"
     rows = ed.state.sel_rows
+    assert _with(rows, "feed_flow", None) is None  # no fill pump until a mode says so
+    ed.reshape_form(rows, next(i for i, r in enumerate(rows) if r["key"] == "feed"), "storage")
+    assert _with(ed.state.sel_rows, "storage_volume", None) is not None
+    assert _node(ed, uid)["data"]["outputs"] == ["effluent", "overflow"]
+    rows = ed.state.sel_rows
+    ed.reshape_form(rows, next(i for i, r in enumerate(rows) if r["key"] == "feed"), "batch")
+    assert _with(ed.state.sel_rows, "storage_volume", None) is None
+    assert _node(ed, uid)["data"]["outputs"] == ["effluent"]
+    rows = ed.state.sel_rows
     ed.reshape_form(rows, next(i for i, r in enumerate(rows) if r["key"] == "settling.kind"), "layered")
     assert _with(ed.state.sel_rows, "settling.n_layers", None)["placeholder"] == "4 (default)"
     phases = _with(ed.state.sel_rows, "phases", None)
@@ -488,6 +497,7 @@ def test_an_sbr_set_up_in_the_form_builds_and_survives_save_and_open(make_editor
     ed.save()
     ed.open(tmp_path / "flowsheet.yaml")
     written = yaml.safe_load((tmp_path / "flowsheet.yaml").read_text())["units"][uid]
+    assert (written["feed"], written["feed_flow"], written["storage_volume"]) == ("batch", 1.0, None)
     # Saved with every field, the kla left empty at its default included.
     assert ed.doc.units[uid].settings["phases"] == written["phases"]
     assert written["phases"] == [{**p, "kla": 0.0} for p in settings["phases"]]

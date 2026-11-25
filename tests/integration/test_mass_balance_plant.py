@@ -249,7 +249,7 @@ def test_unit_capabilities_for_the_gas_term():
                  specific_surface_area=500.0, fill_fraction=0.4,
                  biofilm_thickness=5e-4, n_layers=2, conditions=T),
         SBRUnit("s", asm1, [SBRPhase("react", 1.0, kla=10.0)], full_volume=100.0,
-                feed_flow=0.0, decant_flow=0.0,
+                feed_flow=None, decant_flow=0.0, feed="continuous",
                 settling=InterfaceSettling(v_settle=1.0, area=1.0), conditions=T),
     ]
     for u in units:
