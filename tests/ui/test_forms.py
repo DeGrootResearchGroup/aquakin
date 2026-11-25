@@ -238,6 +238,54 @@ def test_a_scheduled_value_keeps_a_number_a_number_and_an_expression_text():
         _parse(composition, "SS 60")
 
 
+def test_a_pump_map_entry_may_be_an_expression_with_commas_inside():
+    """A setpoint splitter's flows are a scheduled port map: each entry a number
+    or an expression, and a comma inside an expression's brackets does not end
+    the entry."""
+    from aquakin_ui.forms import _parse
+
+    pumps = {"type": "scheduled_port_map"}
+    assert _parse(pumps, "ras: 300 + 100*clip(t - 10, 0, 1), waste: 40") == {
+        "ras": "300 + 100*clip(t - 10, 0, 1)",
+        "waste": 40.0,
+    }
+    with pytest.raises(ValueError, match=re.escape("(not 'ras 300')")):
+        _parse(pumps, "ras 300")
+    # The same splitting serves a composition.
+    composition = {"type": "scheduled_species_values"}
+    assert _parse(composition, "SNH: max(20, 30*sin(2*pi*t)), SS: 60") == {
+        "SNH": "max(20, 30*sin(2*pi*t))",
+        "SS": 60.0,
+    }
+
+
+def test_setpoint_expressions_are_shown_and_read_back_as_text(bsm1):
+    """The clarifier underflow and a pump flow of BSM1 written as expressions:
+    the form shows the text, gives it back unchanged, and the plant it describes
+    builds with them."""
+    bsm1.apply("clarifier", {**bsm1.units["clarifier"].settings, "underflow_Q": "18831 + 385*sin(2*pi*t)"}, None)
+    split = bsm1.units["tank5_split"].settings
+    flows = {**split["output_port_flows"]}
+    port = next(iter(flows))
+    flows[port] = "55338*(1 + 0.1*step(t - 7))"
+    bsm1.apply("tank5_split", {**split, "output_port_flows": flows}, None)
+
+    rows = _rows(bsm1, "clarifier")
+    assert rows["underflow_Q"]["value"] == "18831 + 385*sin(2*pi*t)"
+    assert rows["underflow_Q"]["suffix"] == "m³/d"
+    _, settings = forms.read_rows(bsm1, "clarifier", list(rows.values()))
+    assert settings["underflow_Q"] == "18831 + 385*sin(2*pi*t)"
+
+    rows = _rows(bsm1, "tank5_split")
+    assert rows["output_port_flows"]["value"] == f"{port}: 55338*(1 + 0.1*step(t - 7))"
+    _, settings = forms.read_rows(bsm1, "tank5_split", list(rows.values()))
+    assert settings["output_port_flows"] == flows
+
+    plant = Plant.from_spec(bsm1.to_spec(), base_dir=PROJECTS / "bsm1")
+    assert plant.units["clarifier"].scheduled_setpoints() == ("underflow_Q",)
+    assert plant.units["tank5_split"].scheduled_setpoints() == (port,)
+
+
 # -- a dosing unit's reagent --------------------------------------------------
 
 

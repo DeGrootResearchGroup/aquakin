@@ -287,6 +287,19 @@ def test_a_node_summarizes_its_main_settings(make_editor):
     assert _node(ed, uid)["data"]["summary"] == "volume 1500 · kLa 240"
 
 
+def test_a_splitters_summary_names_its_constant_pumps_only(make_editor):
+    """A setpoint splitter's reminder lists its pump flows; a flow written as an
+    expression of time has no one number to show, so it is left out."""
+    ed, _ = make_editor(BSM1)
+    settings = ed.doc.units["tank5_split"].settings
+    port, flow = next(iter(settings["output_port_flows"].items()))
+    assert _node(ed, "tank5_split")["data"]["summary"] == f"{port} {flow:g}"
+    flows = {port: f"{flow:g} + 100*sin(2*pi*t)"}
+    ed.doc.apply("tank5_split", {**settings, "output_port_flows": flows}, None)
+    ed.publish(checks=False)
+    assert _node(ed, "tank5_split")["data"]["summary"] == ""
+
+
 def test_the_palette_marks_kinds_the_form_cannot_finish(make_editor):
     ed, _ = make_editor()
     marked = {k["kind"] for cat in ed.state.palette for k in cat["kinds"] if k["python"]}

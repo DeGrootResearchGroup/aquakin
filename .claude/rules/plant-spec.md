@@ -57,6 +57,16 @@ the sampled constant series exactly as before, so every existing spec reads back
 bit-identically. `spec._influent_entry` writes a pattern straight back as its own
 settings (no `data/` table).
 
+**Flow setpoints may be expressions too.** A setpoint annotated `float | str`
+is the catalogue's `scheduled_number`, and `SetpointSplitter.output_port_flows`
+is `scheduled_port_map` (a `port_map` whose values may be expressions; its keys
+are output ports like a `port_map`'s). `_arguments` passes a number as a float
+and an expression as its text, which the unit compiles
+(`flow_setpoint.build_setpoints`), and `_canonical_settings` writes a number
+through `_canonical_number`, so a constant setpoint fingerprints exactly as it
+did when it was a `number`. Unlike an influent's, a setpoint expression has no
+clock of its own: it is on the plant's clock, like every unit setting.
+
 **Unit catalogue (`plant/catalog.py`, the `aquakin` command).** Front ends
 (the flowsheet editor prototype) learn the unit types from
 `aquakin.plant.catalog`, never by importing unit classes. A kind's *settings* are

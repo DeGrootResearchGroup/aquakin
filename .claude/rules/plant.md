@@ -183,17 +183,18 @@ them); the topic rules above cover IFAS / MBBR and the settlers. Deliberate:
   `core/gases.py`); what a unit vents reaches the mass balance via `GasExportUnit`
   and `plant.digester_gas` via `BiogasHeadspaceUnit`.
 
-**Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and
-`plant/measures.py` are expression languages whose grammars are their own but
-whose *tokenizer* is not: both call `aquakin.core.lexer.tokenize`. Do not write
-another one — see the "One tokenizer, three languages" note in
-`.claude/rules/core.md`, which `aquakin/plant/**` does not auto-load.
+**Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and `plant/measures.py`
+call `aquakin.core.lexer.tokenize`; do not write another tokenizer (`core.md`, not auto-loaded).
 
-**Units in the help.** A setting's numpydoc entry names its unit in
-parentheses, flows and times per day as aquakin runs them on the plant's clock
-(`Volume (m³).`, `Fixed dose flow (m³/d).`, `Integral time (d).`); the editor
-shows that description beside the field. Give each setting its own entry (a
-shared `Kp, Ti, Tt : float` cannot name one unit each).
+**Flow setpoints are built by `flow_setpoint.build_setpoints` and read with
+`resolve(flow_params, t)`** in `flow_outputs` (`ctx.t`) and `compute_outputs`
+alike, so a number stays a parameter and an expression of time is clipped to its
+range in one place; any expression disables the cached recycle maps (`plant-solve.md`).
+
+**Units in the help.** A setting's numpydoc entry names its unit in parentheses,
+flows and times per day on the plant's clock (`Volume (m³).`, `Fixed dose flow
+(m³/d).`), shown beside the field in the editor. Give each setting its own entry
+(a shared `Kp, Ti, Tt : float` cannot name one unit each).
 
 **Kinetic units share one reaction term (`plant/kinetic.py`).** Every unit that
 evaluates a model in its `rhs` inherits `KineticUnit` and builds its reaction
@@ -213,10 +214,9 @@ slaves `V_liq`). A unit whose temperature an operator sets inherits
 unit: the SBR runs at its static `T`, and IFAS evaluates its reaction per
 compartment inside the biofilm RHS (which also calls `model.dCdt`).
 
-**Sizes are checked at construction.** Every unit with a volume calls
-`_constants.check_positive(name, "volume", value)` first in `__post_init__`
-(a zero, negative or infinite volume makes a steady-state solve never end). A
-new unit with a volume, area or other size does the same.
+**Sizes are checked at construction.** Every unit with a volume, area or other
+size calls `_constants.check_positive(name, "volume", value)` first in
+`__post_init__` (a zero, negative or infinite volume makes a steady state never end).
 
 **Co-stripped gases (`Aeration(stripped=...)`).** A gas stripped with oxygen
 is folded into the same per-species aeration vectors as oxygen by

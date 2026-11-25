@@ -500,23 +500,42 @@ def _parse(s: dict, text):
         return [p.strip() for p in text.split(",") if p.strip()]
     if t == "scheduled_number":
         return _scheduled(text)
-    if t == "scheduled_species_values":
-        out = {}
-        for pair in (p for p in text.split(",") if p.strip()):
-            name, colon, value = pair.partition(":")
-            if not colon or not name.strip():
-                raise ValueError(f"write each entry as 'name: value' (not {pair.strip()!r})")
-            out[name.strip()] = _scheduled(value.strip())
-        return out
+    if t in ("scheduled_species_values", "scheduled_port_map"):
+        return _mapping(text, _scheduled)
     if t in ("port_map", "species_values", "number_map"):
-        out = {}
-        for pair in (p for p in text.split(",") if p.strip()):
-            name, colon, value = pair.partition(":")
-            if not colon or not name.strip():
-                raise ValueError(f"write each entry as 'name: value' (not {pair.strip()!r})")
-            out[name.strip()] = _number(value.strip())
-        return out
+        return _mapping(text, _number)
     return text
+
+
+def _entries(text: str) -> list[str]:
+    """A mapping field's ``name: value`` entries, split at the commas between them.
+
+    A comma inside brackets belongs to a value (an expression's
+    ``clip(t, 0, 1)``), so only a comma outside every bracket ends an entry.
+    This only finds where entries end; the values are read by aquakin.
+    """
+    entries, depth, start = [], 0, 0
+    for i, ch in enumerate(text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(depth - 1, 0)
+        elif ch == "," and depth == 0:
+            entries.append(text[start:i])
+            start = i + 1
+    entries.append(text[start:])
+    return [e for e in entries if e.strip()]
+
+
+def _mapping(text: str, read) -> dict:
+    """A mapping field's text (``name: value, ...``), each value read by ``read``."""
+    out = {}
+    for pair in _entries(text):
+        name, colon, value = pair.partition(":")
+        if not colon or not name.strip():
+            raise ValueError(f"write each entry as 'name: value' (not {pair.strip()!r})")
+        out[name.strip()] = read(value.strip())
+    return out
 
 
 def read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, dict]:
