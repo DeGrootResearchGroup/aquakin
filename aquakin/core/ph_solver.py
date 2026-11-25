@@ -31,12 +31,12 @@ root. The iteration count therefore never enters the autodiff graph: ``jax.grad`
 iterations (forward and reverse), rather than differentiating through every
 Newton step, and the result is the exact implicit-function-theorem pH
 sensitivity. It composes inside a Diffrax RHS and survives a charge balance far
-outside the buffered regime without NaNs. The opt-in activity-corrected path uses
-the same adaptive scheme lifted to the coupled ``(h, I)`` fixed point (its
-conditional constants couple ``[H+]`` and the ionic strength): an adaptive
-``jax.lax.while_loop`` wrapped in ``jax.lax.custom_root`` over the pair, with the
-sensitivity the exact 2x2 implicit-function-theorem tangent — so it too is O(1)
-in the iteration count, forward and reverse.
+outside the buffered regime without NaNs. The opt-in activity-corrected path
+solves the coupled ``(h, I)`` fixed point (its conditional constants couple
+``[H+]`` and the ionic strength) as an outer fixed-point loop over ``I`` around
+the same bracketed pH solve, wrapped in ``jax.lax.custom_root`` over the pair,
+with the sensitivity the exact 2x2 implicit-function-theorem tangent — so it too
+is O(1) in the iteration count, forward and reverse.
 
 All inputs and outputs are plain JAX scalars (or broadcastable arrays); there
 is no Pydantic or dataclass dependency, keeping this usable from the core
@@ -408,7 +408,7 @@ def charge_balance_residual_deriv(
     return df
 
 
-def _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu, du_prev=None):
+def _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu, du_prev):
     """One safeguarded Newton-bisection step in ``u = ln[H+]`` space.
 
     Tightens the root bracket by the sign of the (strictly decreasing) residual,
@@ -420,8 +420,7 @@ def _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu, du_prev=None):
     in-bracket (so the iteration is pure Newton there and AD yields the exact
     implicit-function-theorem sensitivity).
 
-    Given ``du_prev``, an in-bracket Newton step is also refused when it is not
-    converging: when it is longer than half the step taken two iterations before
+    An in-bracket Newton step is also refused when it is not converging: when it is longer than half the step taken two iterations before
     (the progress test of ``rtsafe``), the iteration bisects instead. Without it,
     a Newton step from the wrong side of a strongly unbuffered root overshoots to
     the bracket edge and crawls back about one unit of ``u`` per step, since
@@ -430,8 +429,7 @@ def _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu, du_prev=None):
     halves every two steps. Far from such a root the test seldom fires; near
     machine precision it can refuse a last, rounding-sized Newton step and bisect
     the remaining bracket instead, which moves the result by about 1e-14 in pH.
-    The test assumes one fixed residual from step to step, so the coupled
-    ``(h, I)`` loop, whose residual changes with ``I``, omits ``du_prev``.
+    The test, like the bracket, assumes one fixed residual from step to step.
 
     Returns ``(u_lo, u_hi, u_next, u_newton, newton, du)``: the tightened
     bracket, the accepted next point, the raw Newton candidate, whether the
@@ -451,16 +449,12 @@ def _safeguarded_newton_step(u_lo, u_hi, u, fv, dfdu, du_prev=None):
     u_hi = jnp.where(pos, u_hi, u)
     u_newton = u - fv / dfdu
     in_bracket = (u_newton - u_lo) * (u_newton - u_hi) <= 0.0
-    newton = in_bracket
-    if du_prev is not None:
-        newton = newton & (jnp.abs(2.0 * fv) <= jnp.abs(du_prev * dfdu))
+    newton = in_bracket & (jnp.abs(2.0 * fv) <= jnp.abs(du_prev * dfdu))
     u_next = jnp.where(newton, u_newton, 0.5 * (u_lo + u_hi))
     return u_lo, u_hi, u_next, u_newton, newton, u_next - u
 
 
-def _adaptive_root_log_h(
-    eval_fn, h_init, out_shape, max_iter, *, utol=1e-11, aux0=None, update_aux=None
-):
+def _adaptive_root_log_h(eval_fn, h_init, out_shape, max_iter, *, utol=1e-11):
     """Adaptive safeguarded Newton-bisection root find in ``u = ln[H+]`` space.
 
     The generic iteration driver behind both pH-solver regimes: it owns *how* to
@@ -469,18 +463,13 @@ def _adaptive_root_log_h(
     soon as the log-space step falls below ``utol``** (a handful of Newton steps
     in the buffered regime) and is **capped at ``max_iter``** for the bisection
     worst case -- and knows nothing about the chemistry. The caller supplies
-    *what* to solve as hooks:
+    *what* to solve as ``eval_fn(u) -> (fv, dfdu)``: the residual and its
+    ``u``-derivative ``dfdu = f'(h)*h`` at the current point. The residual must
+    be the same function at every step, since the bracket is built from its
+    signs; the activity path re-solves at each new ionic strength rather than
+    changing it mid-loop (:func:`_adaptive_activity_solve`).
 
-    - ``eval_fn(u, aux) -> (fv, dfdu, carry)`` -- the residual ``fv`` and its
-      ``u``-derivative ``dfdu = f'(h)*h`` at the current point, recomputing any
-      state-dependent constants from ``aux`` (the per-step ``Kc`` recompute the
-      activity path needs). ``carry`` is per-step data passed on to ``update_aux``.
-    - ``update_aux(u_next, aux, carry) -> (aux_next, aux_converged)`` (optional)
-      -- advance a coupled auxiliary state (the ionic strength) after the step and
-      report its own convergence. Omit it (``None``) for a plain single-variable
-      root, where ``aux`` is unused.
-
-    Returns ``(u, aux)``. The variable iteration length is *not* a differentiation
+    Returns ``u``. The variable iteration length is *not* a differentiation
     problem: the driver runs inside :func:`jax.lax.custom_root` under
     ``stop_gradient`` at both call sites, and the sensitivity is supplied
     analytically by the implicit-function-theorem tangent solve, so the iteration
@@ -489,7 +478,7 @@ def _adaptive_root_log_h(
     Parameters
     ----------
     eval_fn : Callable
-        ``(u, aux) -> (fv, dfdu, carry)`` residual/derivative hook (see above).
+        ``u -> (fv, dfdu)`` residual/derivative hook.
     h_init : jnp.ndarray
         Initial ``[H+]`` guess (the warm-start hook; a guess near the operating
         pH cuts the step count, but the bracketing makes the result independent
@@ -501,11 +490,6 @@ def _adaptive_root_log_h(
     utol : float, optional
         Convergence tolerance on the ``u = ln[H+]`` step (default 1e-11; a pH
         change of ~4e-12, i.e. machine precision).
-    aux0 : jnp.ndarray, optional
-        Initial coupled auxiliary state (the ionic strength); ignored without
-        ``update_aux``.
-    update_aux : Callable, optional
-        ``(u_next, aux, carry) -> (aux_next, aux_converged)`` coupled-state hook.
     """
     u_lo = jnp.broadcast_to(jnp.asarray(_U_LO), out_shape).astype(float)
     u_hi = jnp.broadcast_to(jnp.asarray(_U_HI), out_shape).astype(float)
@@ -514,43 +498,32 @@ def _adaptive_root_log_h(
         _U_LO,
         _U_HI,
     )
-    coupled = update_aux is not None
-    aux0 = jnp.zeros(out_shape) if aux0 is None else aux0
 
     def cond(state):
         *_, it, converged = state
         return (it < max_iter) & jnp.any(~converged)
 
     def body(state):
-        u_lo, u_hi, u, aux, du_prev, du_last, it, done = state
-        fv, dfdu, carry = eval_fn(u, aux)
+        u_lo, u_hi, u, du_prev, du_last, it, done = state
+        fv, dfdu = eval_fn(u)
         lo_n, hi_n, u_next, u_newton, newton, du = _safeguarded_newton_step(
-            u_lo, u_hi, u, fv, dfdu, None if coupled else du_prev
+            u_lo, u_hi, u, fv, dfdu, du_prev
         )
-        step_converged = newton & (jnp.abs(u_newton - u) <= utol)
-        if coupled:
-            aux_next, aux_converged = update_aux(u_next, aux, carry)
-            converged = step_converged & aux_converged
-        else:
-            aux_next, converged = aux, step_converged
-        new = (lo_n, hi_n, u_next, aux_next, du_last, du)
-        if coupled:
-            return (*new, it + 1, converged)
+        converged = newton & (jnp.abs(u_newton - u) <= utol)
         # A broadcast solve runs until every element has converged, so an element
         # that already has must stay put: its next Newton step is zero, which the
         # progress test refuses, and the bisection would move it off the root.
-        old = (u_lo, u_hi, u, aux, du_prev, du_last)
+        new = (lo_n, hi_n, u_next, du_last, du)
+        old = (u_lo, u_hi, u, du_prev, du_last)
         kept = tuple(jnp.where(done, o, n) for o, n in zip(old, new))
         return (*kept, it + 1, done | converged)
 
     # The first two steps are measured against the full bracket width, so only
-    # a Newton step longer than half the bracket is refused at the start. The
-    # step history is carried on the coupled path too, unused, so both share
-    # one loop state.
+    # a Newton step longer than half the bracket is refused at the start.
     width = u_hi - u_lo
-    init = (u_lo, u_hi, u0, aux0, width, width, jnp.asarray(0), jnp.zeros(out_shape, dtype=bool))
-    _, _, u, aux, *_ = jax.lax.while_loop(cond, body, init)
-    return u, aux
+    init = (u_lo, u_hi, u0, width, width, jnp.asarray(0), jnp.zeros(out_shape, dtype=bool))
+    _, _, u, *_ = jax.lax.while_loop(cond, body, init)
+    return u
 
 
 def _adaptive_newton_bisection(f, dfdh, h_init, max_iter, out_shape, *, utol=1e-11):
@@ -578,12 +551,11 @@ def _adaptive_newton_bisection(f, dfdh, h_init, max_iter, out_shape, *, utol=1e-
         Convergence tolerance on the ``u = ln[H+]`` step (default 1e-11).
     """
 
-    def eval_fn(u, _aux):
+    def eval_fn(u):
         h = jnp.exp(u)
-        return f(h), dfdh(h) * h, None
+        return f(h), dfdh(h) * h
 
-    u, _ = _adaptive_root_log_h(eval_fn, h_init, out_shape, max_iter, utol=utol)
-    return jnp.exp(u)
+    return jnp.exp(_adaptive_root_log_h(eval_fn, h_init, out_shape, max_iter, utol=utol))
 
 
 def _adaptive_activity_solve(
@@ -604,38 +576,56 @@ def _adaptive_activity_solve(
     """Coupled ``(h, I)`` fixed point for the activity-corrected path.
 
     The conditional dissociation constants depend on the ionic strength ``I``,
-    which depends on the speciation, which depends on ``[H+]`` -- a joint fixed
-    point, solved by the same :func:`_adaptive_root_log_h` driver lifted with an
-    auxiliary ``I`` state. ``eval_fn`` forms the conditional constants ``Kc`` at
-    the carried ``I`` and returns the charge-balance residual and its ``u``
-    derivative (with ``Kc`` held fixed within the step); ``update_aux`` recomputes
-    ``I`` from the new speciation and reports the ``I`` convergence (relative,
-    since ``I`` spans orders of magnitude). Returns ``(h*, I*)``.
+    which depends on the speciation, which depends on ``[H+]``. Solved as two
+    nested loops: each outer pass holds ``I`` fixed, finds the pH root of the
+    charge balance at the conditional constants ``Kc(I)`` with the ideal path's
+    bracketed driver (:func:`_adaptive_newton_bisection`, warm-started at the
+    previous pass's ``[H+]``), then recomputes ``I`` from that speciation. The
+    outer loop stops when ``I`` stops changing (relative, since ``I`` spans orders
+    of magnitude); it is a contraction at physical ionic strengths and takes a
+    handful of passes.
+
+    The inner solve must see one fixed residual: its bracket is built from the
+    residual's signs, so updating ``I`` between steps of one bracketed loop lets
+    the bracket exclude the root of the coupled problem and the solve stall at
+    its edge -- a pH up to ~0.2 off at ordinary digester ionic strengths.
 
     Run inside :func:`jax.lax.custom_root` under ``stop_gradient``; the joint
     pH/ionic-strength sensitivity is supplied by the 2x2 implicit-function-theorem
-    tangent solve, so the iteration count never enters the AD graph.
+    tangent solve, so the iteration count never enters the AD graph. ``max_iter``
+    caps the outer passes and each inner solve.
     """
+    h0 = jnp.broadcast_to(jnp.asarray(h_init), out_shape).astype(float)
     I0 = jnp.broadcast_to(jnp.asarray(I_init), out_shape).astype(float)
 
-    def eval_fn(u, I):
-        h = jnp.exp(u)
+    def cond(state):
+        *_, it, converged = state
+        return (it < max_iter) & jnp.any(~converged)
+
+    def body(state):
+        h, I, it, done = state
         Kc, _g1 = _conditional_constants(K, I, A, activity_model)
-        fv = charge_balance_residual(
-            h, strong_anion_eq=strong_anion_eq, z_cation_eq=z_cation_eq, K=Kc, **totals
-        )
-        dfdu = charge_balance_residual_deriv(h, K=Kc, **totals) * h
-        return fv, dfdu, Kc
 
-    def update_aux(u_next, I, Kc):
-        I_next = _ionic_strength_total(jnp.exp(u_next), Kc, I_strong, totals=totals)
-        I_converged = jnp.abs(I_next - I) <= utol * (jnp.abs(I) + 1.0)
-        return I_next, I_converged
+        def f(hh):
+            return charge_balance_residual(
+                hh, strong_anion_eq=strong_anion_eq, z_cation_eq=z_cation_eq, K=Kc, **totals
+            )
 
-    u, I = _adaptive_root_log_h(
-        eval_fn, h_init, out_shape, max_iter, utol=utol, aux0=I0, update_aux=update_aux
-    )
-    return jnp.exp(u), I
+        def dfdh(hh):
+            return charge_balance_residual_deriv(hh, K=Kc, **totals)
+
+        h_next = _adaptive_newton_bisection(f, dfdh, h, max_iter, out_shape, utol=utol)
+        I_next = _ionic_strength_total(h_next, Kc, I_strong, totals=totals)
+        converged = jnp.abs(I_next - I) <= utol * (jnp.abs(I) + 1.0)
+        # As in the inner driver, an element that has converged stays put while
+        # the rest of a broadcast solve finishes.
+        h_next = jnp.where(done, h, h_next)
+        I_next = jnp.where(done, I, I_next)
+        return (h_next, I_next, it + 1, done | converged)
+
+    init = (h0, I0, jnp.asarray(0), jnp.zeros(out_shape, dtype=bool))
+    h, I, _, _ = jax.lax.while_loop(cond, body, init)
+    return h, I
 
 
 def solve_ph(
@@ -668,8 +658,9 @@ def solve_ph(
     ``vmap`` / ``grad`` cost O(1) in it), and the bracketing makes the routine
     globally convergent — it cannot overshoot to ``NaN`` even when the strong-ion
     charge far exceeds the buffering. The activity-corrected path
-    (``activity_model != "none"``) uses the same adaptive ``custom_root`` scheme
-    lifted to the coupled ``(h, I)`` fixed point.
+    (``activity_model != "none"``) wraps the same bracketed solve in an outer
+    fixed-point loop over the ionic strength, under ``custom_root`` over the
+    coupled ``(h, I)`` pair.
 
     All concentration arguments are in mol/L; charge arguments in eq/L.
 
@@ -690,8 +681,8 @@ def solve_ph(
         buffered regime) and uses ``n_iter`` only as the hard cap that guarantees
         the bisection fallback pins the pH to ``bracket_width / 2**n_iter`` for any
         charge balance (40 is the bisection worst-case bound for the bracket). The
-        activity-corrected path uses the same adaptive loop and cap, lifted to the
-        coupled ``(h, I)`` fixed point.
+        activity-corrected path applies the same cap to each pH solve and to the
+        number of ionic-strength passes around it.
     h_init : float, optional
         Initial guess for ``[H+]`` (mol/L). Default 1e-7 (pH 7). With the
         bracketed iteration the result no longer depends on a good initial
@@ -817,10 +808,9 @@ def solve_ph(
     # speciation, which depends on [H+] -- a coupled (h, I) fixed point:
     #   f1(h, I) = charge_balance_residual(h, Kc(I)) = 0      (electroneutrality)
     #   f2(h, I) = ionic_strength_total(h, Kc(I)) - I = 0     (self-consistent I)
-    # It is solved by the same adaptive + IFT scheme as the ideal path, lifted to
-    # the 2-vector root: an adaptive coupled while_loop
-    # (``_adaptive_activity_solve``) wrapped in ``jax.lax.custom_root`` over the
-    # pair (h, I). The pH / ionic-strength sensitivity is the exact
+    # It is solved by an outer fixed-point loop over I around the ideal path's
+    # bracketed pH solve (``_adaptive_activity_solve``), wrapped in
+    # ``jax.lax.custom_root`` over the pair (h, I). The pH / ionic-strength sensitivity is the exact
     # implicit-function-theorem tangent -- here a 2x2 linear solve of the joint
     # Jacobian at the root -- so AD is O(1) in the iteration count in both modes,
     # as on the ideal path.

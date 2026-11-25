@@ -44,7 +44,7 @@ root). The iteration count therefore never enters the AD graph: `jax.jvp` /
 iteration count** instead of differentiating through every Newton step. The root
 is the same one the old fixed scan converged to, so **every steady state is
 unchanged** (validated: BSM2 steady state and the ADM1 digester reproduce
-bit-for-bit). A Newton step is taken only if it stays in the bracket **and** is at most half the step taken two iterations before (the `rtsafe` progress test); do not drop the second test — without it a step from the wrong side of a 1 M imbalance overshoots to the bracket edge and crawls back one unit of `u` per step, past the cap (#835). An element that has converged is frozen, since a broadcast loop runs until every element converges and a converged element's zero step would otherwise fail the progress test and bisect away from its root. The coupled `(h, I)` loop of the activity path uses neither: the progress test compares steps on one fixed residual, and its residual changes with `I` every step. The convergence criterion is `in_bracket AND |Newton step| ≤ tol`
+bit-for-bit). A Newton step is taken only if it stays in the bracket **and** is at most half the step taken two iterations before (the `rtsafe` progress test); do not drop the second test — without it a step from the wrong side of a 1 M imbalance overshoots to the bracket edge and crawls back one unit of `u` per step, past the cap (#835). An element that has converged is frozen, since a broadcast loop runs until every element converges and a converged element's zero step would otherwise fail the progress test and bisect away from its root. The convergence criterion is `in_bracket AND |Newton step| ≤ tol`
 — a *bisection* step can be spuriously small far from the root, so the step size
 alone is not a safe criterion, but a tiny in-bracket Newton step `|f/f'|` (with
 `|f'| ≥ 1`) means a tiny residual, i.e. the root. *Why this is the lever:* a
@@ -52,11 +52,16 @@ Step-0 profile of the BSM2 plant found the pH solve was **~35% of the Jacobian
 materialization** purely because `n_iter` was 40 while it converges in ~6; the
 adaptive + IFT rewrite drops the pH share to **~8%** (per-tangent pH cost
 O(40)→O(1)) and the whole 20-day BSM2 transient by **~20–25%** (default solver),
-with bit-identical results. The opt-in **activity-corrected path** uses the same
-adaptive + IFT scheme lifted to a **2-variable coupled root**: its conditional
-constants couple `[H+]` and the ionic strength `I`, so it solves the joint fixed
-point `(f1 = charge balance, f2 = I − I(h)) = 0` with an adaptive coupled
-`while_loop` wrapped in `custom_root` over the pair `(h, I)`, and the sensitivity
+with bit-identical results. The opt-in **activity-corrected path** solves a
+**2-variable coupled root**: its conditional constants couple `[H+]` and the
+ionic strength `I`, so it solves the joint fixed point
+`(f1 = charge balance, f2 = I − I(h)) = 0` as an **outer fixed-point loop over
+`I` around the ideal path's bracketed pH solve**, wrapped in `custom_root` over
+the pair `(h, I)`. **Do not update `I` inside the bracketed loop**: a bracket is
+built from the signs of one residual, and changing `Kc(I)` between steps lets it
+exclude the coupled root, so the solve stalls at the bracket edge at any cap
+(#835: ~12% of digester-like inputs, up to 10 pH units off). Each outer pass
+re-solves pH at a fixed `I`, warm-started. The sensitivity
 is the exact IFT tangent via a **2×2 linear solve** of the joint Jacobian at the
 root (so it too is O(1) in the iteration count, forward and reverse). Equilibrium
 constants are temperature-corrected via van't Hoff. The chemistry mirrors the
@@ -89,8 +94,7 @@ to I ≈ 0.5 M), or `"debye_huckel"` (extended Debye–Hückel / Güntelberg, to
 I ≈ 0.1 M). With a non-`none` model the dissociation constants become *conditional*
 (concentration-basis) constants `Kc = K·γ_acid/(γ_H·γ_base)` at the
 **self-consistent** ionic strength — the coupled `I`↔`[H+]` fixed point is solved
-*inside* the same bracketed scan by carrying `I` (it converges together with
-`[H+]`), and the returned pH is the **measurable** `−log10(a_H) = −log10(γ_H·[H+])`
+by the outer loop over `I` described above, and the returned pH is the **measurable** `−log10(a_H) = −log10(γ_H·[H+])`
 (which reduces to `−log10[H+]` at γ = 1). The Debye–Hückel `A(T)` comes from the
 water dielectric (`debye_huckel_A`). NH₄⁺/NH₃ is charge-symmetric so its Ka is
 unchanged; the strong-ion contribution to `I` (`½Σc z²`) is supplied by the
