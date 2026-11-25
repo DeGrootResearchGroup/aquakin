@@ -183,9 +183,8 @@ them); the topic rules above cover IFAS / MBBR and the settlers. Deliberate:
   `core/gases.py`); what a unit vents reaches the mass balance via `GasExportUnit`
   and `plant.digester_gas` via `BiogasHeadspaceUnit`.
 
-**Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and
-`plant/measures.py` keep their own grammars but call `aquakin.core.lexer.tokenize`;
-do not write another tokenizer (`.claude/rules/core.md`, not auto-loaded here).
+**Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and `plant/measures.py`
+call `aquakin.core.lexer.tokenize`; do not write another tokenizer (`core.md`, not auto-loaded).
 
 **Flow setpoints are built by `flow_setpoint.build_setpoints` and read with
 `resolve(flow_params, t)`** in `flow_outputs` (`ctx.t`) and `compute_outputs`
