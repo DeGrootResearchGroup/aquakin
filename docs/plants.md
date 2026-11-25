@@ -165,9 +165,11 @@ without an `Aeration` a tank exchanges no gas.
 
 Wire an influent in that model's species (`bsm1_n2o.add_influent(...)`) and
 solve as for ASM1. `direct_n2o_emission(bsm1_n2o, sol)` then reports the N₂O-N
-the solve stripped (kg N/d), time-averaged over the solution; it reads each
-tank's oxygen kLa from the species its `Aeration` names, so it works whatever
-the model calls oxygen.
+the solve stripped (kg N/d), time-averaged over the solution: for a tank whose
+`Aeration` strips the gas it is the transfer the solve applied, temperature
+correction included. For a tank that does not strip it, or when you pass
+`kla_ratio=`, it is an estimate from that tank's oxygen kLa (read from the
+species its `Aeration` names, so it works whatever the model calls oxygen).
 
 ## Steady state, faster
 

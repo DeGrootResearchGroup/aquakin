@@ -37,13 +37,13 @@ def toy():
     return aquakin.load_model_from_file(FIXTURE)
 
 
-def _tank(model, aeration, name="tank"):
+def _tank(model, aeration, name="tank", T=293.15):
     return CSTRUnit(
         name=name,
         model=model,
         volume=V,
         input_port_names=["in"],
-        conditions={"T": 293.15},
+        conditions={"T": T},
         aeration=aeration,
     )
 
@@ -142,9 +142,9 @@ def test_temperature_correction_scales_gas_kla_not_gas_saturation(toy):
 # --- one-tank plant ------------------------------------------------------------
 
 
-def _plant(model, aeration):
+def _plant(model, aeration, T=293.15):
     plant = Plant("strip", time_unit="d")
-    plant.add_unit(_tank(model, aeration))
+    plant.add_unit(_tank(model, aeration, T=T))
     C_in = model.concentrations({"SS": 200.0, "SO": 0.0, "SN2O": SN2O_IN, "SN2": 0.0})
     influent = InfluentSeries(
         t=jnp.asarray([0.0, 100.0]),
@@ -176,14 +176,19 @@ def test_open_loop_steady_state_matches_analytic(toy):
     assert float(sol.C_named("tank", "SN2O")[-1]) == pytest.approx(expected, rel=1e-6)
 
 
+@pytest.mark.parametrize("warm", [False, True])
 @pytest.mark.parametrize("closed_loop", [False, True])
-def test_stripped_gas_mass_balance_and_emission(toy, closed_loop):
+def test_stripped_gas_mass_balance_and_emission(toy, closed_loop, warm):
+    """The balance closes and ``direct_n2o_emission`` equals the in-solve
+    stripped N; ``warm`` runs the tank 10 K above ``ref_T`` with the aeration
+    temperature correction on, which both must apply as the solve does."""
+    corrected = {"temperature_correction": True} if warm else {}
     aer = (
-        Aeration(do_setpoint=2.0, stripped={"SN2O": RATIO})
+        Aeration(do_setpoint=2.0, stripped={"SN2O": RATIO}, **corrected)
         if closed_loop
-        else Aeration(kla=KLA, stripped={"SN2O": RATIO})
+        else Aeration(kla=KLA, stripped={"SN2O": RATIO}, **corrected)
     )
-    plant = _plant(toy, aer)
+    plant = _plant(toy, aer, T=303.15 if warm else 293.15)
     # Settle first, then balance a window from the settled state: the balance's
     # flux integrals are trapezoids over the saved times, which a fast start-up
     # transient would under-resolve.
@@ -335,6 +340,25 @@ def test_direct_n2o_emission_open_loop_so2_matches_hand_flux(n2o_model):
     expected = np.trapezoid(flux, t) / (t[-1] - t[0])
     assert expected > 0.1
     assert direct_n2o_emission(plant, sol) == pytest.approx(expected, rel=1e-12)
+
+
+@pytest.mark.parametrize("stripped, kla_ratio", [(None, None), ({"SN2O": RATIO}, 0.5)])
+def test_direct_n2o_emission_estimates_gas_the_solve_did_not_strip(
+    n2o_model, stripped, kla_ratio
+):
+    """A tank that keeps its N2O in the solve, or an explicit ``kla_ratio``,
+    gives the post-solve estimate ``ratio * kLa * SN2O * V`` (ratio 1 by
+    default), not the in-solve transfer."""
+    aer = Aeration(kla=KLA, species="SO2", stripped=stripped)
+    plant = _so2_plant(n2o_model, aer)
+    sol = _solve(plant, t_end=1.0, n=11)
+    t = np.asarray(sol.t)
+    ratio = 1.0 if kla_ratio is None else kla_ratio
+    flux = ratio * KLA * np.asarray(sol.C_named("tank", "SN2O")) * V * 1e-3
+    expected = np.trapezoid(flux, t) / (t[-1] - t[0])
+    assert expected > 0.1
+    got = direct_n2o_emission(plant, sol, kla_ratio=kla_ratio)
+    assert got == pytest.approx(expected, rel=1e-12)
 
 
 def test_direct_n2o_emission_closed_loop_so2_equals_stripped_n(n2o_model):
