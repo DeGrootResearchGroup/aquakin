@@ -554,6 +554,35 @@ def _unit_terms(plant, solution, params, names, term):
     )(ts, states_flat)
 
 
+def oxygen_transfer_history(plant, solution, params, names):
+    """Each named unit's aeration transfer over the saved trajectory, as its
+    ``rhs`` added it in the solve.
+
+    Parameters
+    ----------
+    plant : Plant
+        The solved plant.
+    solution : PlantSolution
+        The saved trajectory.
+    params : jnp.ndarray or None
+        The plant parameters the solve used (``None`` for the defaults).
+    names : list[str]
+        Units declaring :class:`~aquakin.plant.units.OxygenTransferUnit`.
+
+    Returns
+    -------
+    dict[str, tuple[jnp.ndarray, jnp.ndarray]]
+        ``{unit: (oxygen, stripped)}``, each shape ``(n_t, n_species)``: the
+        transfer rate per unit volume (per the plant's time unit) on the aerated
+        oxygen species only, and on the co-stripped gases only. It includes the
+        aeration temperature correction and the closed-loop kLa, since it is the
+        term the solve integrated.
+    """
+    if params is None:
+        params = plant.default_parameters()
+    return _unit_terms(plant, solution, params, names, _oxygen_transfer_term)
+
+
 def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps):
     """Integrate, over the saved trajectory, the aeration oxygen transfer (g O2/d
     == g COD/d removed) and the reaction-production of each component summed over
@@ -591,7 +620,7 @@ def _reaction_and_aeration_gas(plant, solution, params, content_by_model, comps)
         n: [q for q in rqs if q in plant.units[n].reaction_gas_components] for n in reactive
     }
     reactions = _unit_terms(plant, solution, params, reactive, _reaction_term)
-    transfers = _unit_terms(plant, solution, params, aerated, _oxygen_transfer_term)
+    transfers = oxygen_transfer_history(plant, solution, params, aerated)
     weights = {}  # unit -> (volumes, volumes as jnp, {component: content x volume})
     o2_rows, R_rows, strip_rows = [], {q: [] for q in rqs}, {q: [] for q in rqs}
     for i in range(t.shape[0]):
