@@ -164,7 +164,8 @@ Every single-vector solution (batch, plug-flow, particle-track, biofilm bulk)
 shares the by-name accessors listed in
 [Reading results](getting_started.md#reading-results): `C_named`,
 `C_named_many`, `final_named`, `final`, `units_named`, `to_dataframe`, `to_csv`
-and `plot`. The independent axis is `sol.t` for a solve in time and `sol.x`
+and `plot`; the readers take `units=` to return species in another unit. The
+independent axis is `sol.t` for a solve in time and `sol.x`
 for the plug-flow reactor's position.
 
 ```{note}

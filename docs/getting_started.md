@@ -157,6 +157,27 @@ model.units_of("SNH")              # the same, from the model
 model.description_of("SNH")        # "Ammonia + ammonium nitrogen"
 ```
 
+To read results in another unit, pass `units=`. It takes one unit for every
+species read, or a `{species: unit}` dict for some of them; the rest stay in
+the model's units:
+
+```python
+snh_mg = sol.C_named("SNH", units="mg/L")                  # g/m³ and mg/L agree
+sol.final_named(["SS", "SNH"], units={"SS": "kgCOD/m3"})   # SS in kg/m³, SNH as declared
+```
+
+% invisible-code-block: python
+%     import numpy as np
+%     assert np.allclose(snh_mg, sol.C_named("SNH"))
+%     _f = sol.final_named(["SS", "SNH"], units={"SS": "kgCOD/m3"})
+%     assert np.isclose(_f["SS"], 1e-3 * sol.final["SS"])
+%     assert np.isclose(_f["SNH"], sol.final["SNH"])
+
+Only the scale changes, so a unit of another quantity (moles where the model
+has grams, g N where it has g COD) raises. `C_named_many`, `to_dataframe` and
+`to_csv` take `units=` too, as do a plant solution's readers and a plant
+stream's (`sol.C_named("tank5", "SNH", units="mg/L")`).
+
 With the optional extras installed you can export or plot directly:
 
 ```python
