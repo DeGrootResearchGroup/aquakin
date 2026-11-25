@@ -85,6 +85,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from aquakin.plant.errors import NAME_PATTERN, error_reply
+from aquakin.plant.time_expr import is_time_expression
 
 __all__ = [
     "SPEC_FORMAT",
@@ -1012,6 +1013,13 @@ def _canonical_number(v):
     return v if math.isfinite(v) else ("inf" if v > 0 else "-inf")
 
 
+def _canonical_scheduled(v):
+    """A number-or-expression setting in one spelling: a number (``2000``,
+    ``"2000"``, ``"inf"``) as :func:`_canonical_number` writes it, an expression
+    as the text it was written as."""
+    return v if is_time_expression(v) else _canonical_number(float(v))
+
+
 def _canonical_settings(kind, settings: dict, where: str) -> dict:
     """``settings`` checked strictly against ``kind`` and with every number a float.
 
@@ -1035,6 +1043,10 @@ def _canonical_settings(kind, settings: dict, where: str) -> dict:
             out[k] = _canonical_number(v)
         elif t in ("port_map", "number_map", "conditions", "species_values"):
             out[k] = {key: _canonical_number(x) for key, x in v.items()}
+        elif t == "scheduled_number":
+            out[k] = _canonical_scheduled(v)
+        elif t == "scheduled_port_map":
+            out[k] = {key: _canonical_scheduled(x) for key, x in v.items()}
         elif t == "aeration":
             out[k] = {
                 key: _canonical_number(x)

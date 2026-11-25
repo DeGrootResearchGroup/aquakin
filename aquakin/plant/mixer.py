@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.plant._constants import EPS_Q
-from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
+from aquakin.plant.flow_setpoint import FlowParameterized, Setpoint, build_setpoints
 from aquakin.plant.streams import Stream, mixed_scalars
 from aquakin.plant.units import StatelessUnit
 
@@ -186,22 +186,23 @@ class SetpointSplitter(_SplitterBase):
     carries more than it receives. The recycle-flow rule (:meth:`flow_outputs`)
     stays the exact *affine* ``Q_in − Σsetpoints`` remainder (which the linear
     recycle solve requires); the two coincide whenever ``Q_in ≥ Σsetpoints``, true
-    at any steady state. The setpoints are :class:`FlowSetpoint` s, so a plant is
-    differentiable w.r.t. them (SRT / recycle-ratio design sweeps).
+    at any steady state. A constant setpoint is a :class:`FlowSetpoint`, so a plant
+    is differentiable w.r.t. it (SRT / recycle-ratio design sweeps).
 
     Parameters
     ----------
     name : str
         Unit identifier.
     model : CompiledModel
-    output_port_flows : dict[str, float]
-        Output port name -> fixed setpoint flow (m³/d).
+    output_port_flows : dict[str, float or str]
+        Output port name -> fixed setpoint flow (m³/d). A flow may be an
+        expression of time (``"385 + 75*sin(2*pi*t)"``), clipped to ``>= 0``.
     remainder_port : str
         The output port carrying the remaining flow. Must not also be a setpoint
         port.
     """
 
-    output_port_flows: dict[str, float]
+    output_port_flows: dict[str, float | str]
     remainder_port: str
 
     def __post_init__(self) -> None:
@@ -210,15 +211,13 @@ class SetpointSplitter(_SplitterBase):
                 f"SetpointSplitter '{self.name}': remainder_port "
                 f"'{self.remainder_port}' must not also be a setpoint port."
             )
-        # Wrap the absolute setpoints as FlowSetpoints (a fixed order) so the
-        # recycle-flow rule and the material split read one shared, differentiable
-        # value.
-        self._setpoints = {
-            port: FlowSetpoint(float(q), i)
-            for i, (port, q) in enumerate(self.output_port_flows.items())
-        }
+        # Wrap the absolute setpoints (a fixed order) so the recycle-flow rule and
+        # the material split read one shared value.
+        self._setpoints = build_setpoints(
+            self.output_port_flows, owner=f"SetpointSplitter '{self.name}'"
+        )
 
-    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
+    def _flow_setpoints(self) -> dict[str, Setpoint]:
         return self._setpoints
 
     @property
@@ -244,7 +243,7 @@ class SetpointSplitter(_SplitterBase):
         # unit is not starved, i.e. at any steady state.)
         s_in = inputs["in"]
         fp = self._flow_params(params)
-        setpts = {port: sp.resolve(fp) for port, sp in self._setpoints.items()}
+        setpts = {port: sp.resolve(fp, t) for port, sp in self._setpoints.items()}
         total_set = jnp.zeros(())
         for q in setpts.values():
             total_set = total_set + q
@@ -261,7 +260,8 @@ class SetpointSplitter(_SplitterBase):
         the two agree wherever the unit is not starved."""
         Q_in = input_flows["in"]
         fp = self._flow_params(params)
-        out = {port: sp.resolve(fp) for port, sp in self._setpoints.items()}
+        t = None if ctx is None else ctx.t
+        out = {port: sp.resolve(fp, t) for port, sp in self._setpoints.items()}
         out[self.remainder_port] = Q_in - sum(out.values())
         return out
 
@@ -277,15 +277,16 @@ class ThresholdSplitter(_SplitterBase):
     ``threshold``), so the exact recycle-flow solve (:meth:`Plant._resolve_flows`)
     is only exact when the inlet flow is *independent of the recycle flows* -- e.g.
     fed directly by an external influent, as in :func:`build_bsm2`. The threshold
-    is a :class:`FlowSetpoint`, so a plant is differentiable w.r.t. it.
+    is a :class:`FlowSetpoint` when constant, so a plant is differentiable w.r.t. it.
 
     Parameters
     ----------
     name : str
         Unit identifier.
     model : CompiledModel
-    threshold : float
-        Inlet-flow limit (m³/d).
+    threshold : float or str
+        Inlet-flow limit (m³/d). May be an expression of time, clipped to
+        ``>= 0``.
     threshold_port : str
         The output port carrying the above-threshold flow.
     remainder_port : str
@@ -293,7 +294,7 @@ class ThresholdSplitter(_SplitterBase):
         from ``threshold_port``.
     """
 
-    threshold: float
+    threshold: float | str
     threshold_port: str
     remainder_port: str
 
@@ -302,17 +303,19 @@ class ThresholdSplitter(_SplitterBase):
             raise ValueError(
                 f"ThresholdSplitter '{self.name}': threshold_port and remainder_port must differ."
             )
-        self._setpoints = {"threshold": FlowSetpoint(float(self.threshold), 0)}
+        self._setpoints = build_setpoints(
+            {"threshold": self.threshold}, owner=f"ThresholdSplitter '{self.name}'"
+        )
 
-    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
+    def _flow_setpoints(self) -> dict[str, Setpoint]:
         return self._setpoints
 
     @property
     def output_ports(self) -> list[str]:
         return [self.threshold_port, self.remainder_port]
 
-    def _limit(self, params) -> jnp.ndarray:
-        return self._setpoints["threshold"].resolve(self._flow_params(params))
+    def _limit(self, params, t) -> jnp.ndarray:
+        return self._setpoints["threshold"].resolve(self._flow_params(params), t)
 
     def compute_outputs(
         self,
@@ -323,7 +326,7 @@ class ThresholdSplitter(_SplitterBase):
         signals: dict | None = None,
     ) -> dict[str, Stream]:
         s_in = inputs["in"]
-        limit = self._limit(params)
+        limit = self._limit(params, t)
         return {
             self.threshold_port: self._outlet(jnp.maximum(s_in.Q - limit, 0.0), s_in),
             self.remainder_port: self._outlet(jnp.minimum(s_in.Q, limit), s_in),
@@ -332,7 +335,7 @@ class ThresholdSplitter(_SplitterBase):
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Output port flows: the above/below-threshold split (piecewise-linear)."""
         Q_in = input_flows["in"]
-        limit = self._limit(params)
+        limit = self._limit(params, None if ctx is None else ctx.t)
         return {
             self.threshold_port: jnp.maximum(Q_in - limit, 0.0),
             self.remainder_port: jnp.minimum(Q_in, limit),

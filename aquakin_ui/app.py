@@ -160,7 +160,7 @@ class Editor:
                     parts.append(f"kLa {v['kla']:g}")
                 elif v.get("do_setpoint") is not None:
                     parts.append(f"DO {v['do_setpoint']:g}")
-            elif s["type"] == "port_map":
+            elif s["type"] in ("port_map", "scheduled_port_map"):
                 parts += [f"{p} {q:g}" for p, q in v.items() if isinstance(q, (int, float))]
         return " · ".join(parts[:3])
 

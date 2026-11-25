@@ -37,12 +37,19 @@ import jax.numpy as jnp
 
 from aquakin.plant._constants import (
     ASM1_SETTLING_SPECIES,
+    EPS_Q,
     MINUTES_PER_DAY,
     check_positive,
     species_mask,
 )
-from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
+from aquakin.plant.flow_setpoint import (
+    FRACTION_RANGE,
+    FlowParameterized,
+    Setpoint,
+    build_setpoints,
+)
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
+from aquakin.plant.time_expr import is_time_expression
 from aquakin.utils.units import conversion_factor
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -66,8 +73,10 @@ class PrimaryClarifier(FlowParameterized):
         Efficiency correction factor ``rho`` (BSM2: 0.65).
     f_X : float
         Mean particulate-COD / total-COD ratio ``K`` (BSM2: 0.85).
-    f_PS : float
+    f_PS : float or str
         Primary-sludge (underflow) flow as a fraction of the feed (BSM2: 0.007).
+        May be an expression of time (``"0.007 + 0.002*step(t - 30)"``),
+        clipped to ``[0, 1]``.
     t_m : float
         Time constant (d) of the first-order inflow filter the HRT is computed
         from (BSM2: 0.125). Default ``0``: no filter, the HRT follows the
@@ -88,7 +97,7 @@ class PrimaryClarifier(FlowParameterized):
     input_port_names: list[str] = field(default_factory=lambda: ["inlet"])
     f_corr: float = 0.65
     f_X: float = 0.85
-    f_PS: float = 0.007
+    f_PS: float | str = 0.007
     t_m: float = 0.0
     initial_flow: float | None = None
     settling_species: tuple[str, ...] = ASM1_SETTLING_SPECIES
@@ -97,7 +106,7 @@ class PrimaryClarifier(FlowParameterized):
 
     def __post_init__(self) -> None:
         check_positive(self.name, "volume", self.volume)
-        if not (0.0 < self.f_PS < 1.0):
+        if not is_time_expression(self.f_PS) and not (0.0 < float(self.f_PS) < 1.0):
             raise ValueError(
                 f"PrimaryClarifier '{self.name}': f_PS must be in (0, 1); got {self.f_PS}"
             )
@@ -111,9 +120,13 @@ class PrimaryClarifier(FlowParameterized):
         self._settle_mask = species_mask(self.model, self.settling_species, what="settling species")
         # Primary-sludge fraction as a differentiable setpoint, read by both the
         # flow rule and the material split.
-        self._setpoints = {"f_PS": FlowSetpoint(float(self.f_PS), 0)}
+        self._setpoints = build_setpoints(
+            {"f_PS": self.f_PS},
+            owner=f"PrimaryClarifier '{self.name}'",
+            value_range=FRACTION_RANGE,
+        )
 
-    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
+    def _flow_setpoints(self) -> dict[str, Setpoint]:
         return self._setpoints
 
     @property
@@ -204,9 +217,11 @@ class PrimaryClarifier(FlowParameterized):
         # through to both outlets.
         scalars_out = mixed_scalars(inputs, self.input_port_names)
 
-        f_PS = self._setpoints["f_PS"].resolve(self._flow_params(params))
+        f_PS = self._setpoints["f_PS"].resolve(self._flow_params(params), t)
         Qu = f_PS * Q_in
-        E = 1.0 / f_PS  # thickening factor Q_in/Q_u
+        # Thickening factor Q_in/Q_u. The guard only bites for an expression
+        # clipped to a zero fraction (a constant is refused outside (0, 1)).
+        E = 1.0 / jnp.maximum(f_PS, EPS_Q)
         n_x = self._removal_fraction(self._hrt_flow(state, Q_in))
 
         # ff_i = fraction of species i that stays in the effluent. Solubles
@@ -223,7 +238,8 @@ class PrimaryClarifier(FlowParameterized):
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Exact linear flow rule: underflow = f_PS·Q_in, effluent the rest."""
         Q_in = total_flow(input_flows[name] for name in self.input_port_names)
-        f_PS = self._setpoints["f_PS"].resolve(self._flow_params(params))
+        t = None if ctx is None else ctx.t
+        f_PS = self._setpoints["f_PS"].resolve(self._flow_params(params), t)
         Qu = f_PS * Q_in
         return {self.effluent_port: Q_in - Qu, self.sludge_port: Qu}
 

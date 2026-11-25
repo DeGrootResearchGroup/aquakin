@@ -12,10 +12,22 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
+from aquakin.plant.time_expr import is_time_expression
+
 
 def _min_setpoint(q) -> float:
     """Lower bound of a setpoint that may be a float or a time schedule."""
     return q.min_value if hasattr(q, "min_value") else float(q)
+
+
+def _negative(q) -> bool:
+    """Whether a constant or scheduled setpoint goes below zero.
+
+    A schedule is judged by its minimum. An expression of time is not judged
+    here: it is clipped to ``>= 0`` as it is evaluated
+    (:class:`~aquakin.plant.flow_setpoint.ExpressionSetpoint`).
+    """
+    return not is_time_expression(q) and _min_setpoint(q) < 0
 
 
 def validate_controlled_split(name: str, overflow_Q, underflow_Q) -> None:
@@ -23,8 +35,9 @@ def validate_controlled_split(name: str, overflow_Q, underflow_Q) -> None:
 
     Exactly one of ``overflow_Q`` / ``underflow_Q`` is the controlled setpoint;
     the other is the free remainder. Both must be non-negative. A setpoint may
-    be a constant or a time schedule (any object exposing ``min_value``); a
-    schedule is validated by its minimum.
+    be a constant, a time schedule (any object exposing ``min_value``; it is
+    validated by its minimum) or an expression of time (clipped when evaluated,
+    so not checked here).
 
     Raises
     ------
@@ -33,9 +46,9 @@ def validate_controlled_split(name: str, overflow_Q, underflow_Q) -> None:
     """
     if (overflow_Q is None) == (underflow_Q is None):
         raise ValueError(f"{name}: supply exactly one of overflow_Q or underflow_Q.")
-    if overflow_Q is not None and _min_setpoint(overflow_Q) < 0:
+    if overflow_Q is not None and _negative(overflow_Q):
         raise ValueError(f"{name}: overflow_Q must be non-negative; got {overflow_Q}")
-    if underflow_Q is not None and _min_setpoint(underflow_Q) < 0:
+    if underflow_Q is not None and _negative(underflow_Q):
         raise ValueError(f"{name}: underflow_Q must be non-negative; got {underflow_Q}")
 
 

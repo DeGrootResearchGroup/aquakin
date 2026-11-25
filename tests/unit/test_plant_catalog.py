@@ -28,6 +28,7 @@ from aquakin.plant.catalog import (
     shipped_models,
     unit_kind,
     unit_kinds,
+    unit_settings,
 )
 
 T = {"T": 293.15}
@@ -536,6 +537,65 @@ def test_a_scheduled_composition_is_keyed_by_species_name():
         validate_settings(
             unit_kind("influent"), {"model": "asm1", "Q": 1.0, "composition": {3: 1.0}}
         )
+
+
+@pytest.mark.parametrize(
+    ("kind", "setting", "expected"),
+    [
+        ("ideal_clarifier", "underflow_Q", "scheduled_number"),
+        ("ideal_clarifier", "overflow_Q", "scheduled_number"),
+        ("clarifier", "underflow_Q", "scheduled_number"),
+        ("primary_clarifier", "f_PS", "scheduled_number"),
+        ("threshold_splitter", "threshold", "scheduled_number"),
+        ("setpoint_splitter", "output_port_flows", "scheduled_port_map"),
+        ("splitter", "output_port_ratios", "port_map"),
+    ],
+)
+def test_flow_setpoints_may_be_expressions_of_time(kind, setting, expected):
+    """Every flow setpoint is a number-or-expression setting; a ratio split is not."""
+    assert {s.name: s.type for s in unit_kind(kind).settings}[setting] == expected
+    assert expected in SETTING_TYPES
+
+
+def test_a_setpoint_expression_builds_and_reads_back_as_written():
+    """A unit built from an expression setting holds it as text, and writes it
+    back as the text; a number is read as a float."""
+    settings = {
+        "model": "asm1",
+        "output_port_flows": {"ras": "300 + 100*step(t - 10)", "waste": 40},
+        "remainder_port": "rest",
+    }
+    unit = build_unit("setpoint_splitter", "split", settings)
+    assert unit.output_port_flows == {"ras": "300 + 100*step(t - 10)", "waste": 40.0}
+    assert unit.scheduled_setpoints() == ("ras",)
+    assert unit_settings(unit)[1]["output_port_flows"] == {
+        "ras": "300 + 100*step(t - 10)",
+        "waste": 40.0,
+    }
+    clarifier = build_unit(
+        "ideal_clarifier", "c", {"model": "asm1", "underflow_Q": "400 + 75*sin(2*pi*t)"}
+    )
+    assert unit_settings(clarifier)[1]["underflow_Q"] == "400 + 75*sin(2*pi*t)"
+
+
+def test_a_scheduled_port_map_names_the_port_that_holds_a_bad_value():
+    from aquakin.plant.catalog import validate_settings
+
+    kind = unit_kind("setpoint_splitter")
+    base = {"model": "asm1", "remainder_port": "rest"}
+    with pytest.raises(ValueError, match=re.escape("'output_port_flows.ras'") + ".*wobble"):
+        validate_settings(kind, {**base, "output_port_flows": {"ras": "wobble(t)"}})
+    with pytest.raises(ValueError, match=re.escape("'output_port_flows.ras' must be")):
+        validate_settings(kind, {**base, "output_port_flows": {"ras": [1]}})
+    with pytest.raises(ValueError, match="key 3 must be a string \\(a port name\\)"):
+        validate_settings(kind, {**base, "output_port_flows": {3: 1.0}})
+    assert check_unit(
+        "setpoint_splitter", "s", {**base, "output_port_flows": {"ras": "1/t"}}
+    ) == {
+        "ok": False,
+        "error": "SetpointSplitter 's': 'ras': '1/t' is not finite at t = 0",
+        "type": "ValueError",
+    }
 
 
 # -- an SBR's feed mode: a required choice, and settings of one mode ---------

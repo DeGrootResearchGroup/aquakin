@@ -56,6 +56,7 @@ from aquakin.plant.separators import IdealThickener
 from aquakin.plant.settling import InterfaceSettling, LayeredSettling
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.takacs import TakacsClarifier
+from aquakin.plant.time_expr import is_time_expression
 
 __all__ = [
     "CATEGORIES",
@@ -95,6 +96,10 @@ SETTING_TYPES = {
     "scheduled_species_values": (
         "a mapping of species name to a number or an expression of time (a composition "
         "that may follow a schedule)"
+    ),
+    "scheduled_port_map": (
+        "a mapping of port name to a number or an expression of time (one port per "
+        "key; pump flows that may follow a schedule)"
     ),
     "conditions": "a mapping of condition name to a number (e.g. temperature)",
     "aeration": "``None`` or a mapping of :class:`Aeration` arguments",
@@ -379,7 +384,9 @@ def _setting_type(name: str, annotation: str) -> tuple[str, bool]:
         return "port_names", optional
     if name.endswith("_port") and base == "str":
         return "port_name", optional
-    if name in ("output_port_ratios", "output_port_flows"):
+    if name == "output_port_flows":
+        return "scheduled_port_map", optional
+    if name == "output_port_ratios":
         return "port_map", optional
     if base == "Reagent":
         return "reagent", optional
@@ -389,7 +396,13 @@ def _setting_type(name: str, annotation: str) -> tuple[str, bool]:
         return "species", optional
     if "species" in name and re.fullmatch(r"(Sequence|list|tuple)\[str(, \.\.\.)?\]", base):
         return "species_list", optional
-    simple = {"float": "number", "int": "integer", "bool": "boolean", "str": "string"}
+    simple = {
+        "float": "number",
+        "float | str": "scheduled_number",
+        "int": "integer",
+        "bool": "boolean",
+        "str": "string",
+    }
     if base in simple:
         return simple[base], optional
     return "unsupported", optional
@@ -666,7 +679,7 @@ def _port_rules(settings: tuple[Setting, ...], fixed: tuple[PortRule, ...]) -> t
         elif s.type == "port_name" and s.name == "input_port":
             rules.append(PortRule("input", "name", s.name, when=s.when))
     for s in settings:
-        if s.type == "port_map":
+        if s.type in ("port_map", "scheduled_port_map"):
             rules.append(PortRule("output", "keys", s.name, when=s.when))
         elif s.type == "port_name" and s.name != "input_port":
             rules.append(PortRule("output", "name", s.name, when=s.when))
@@ -1089,19 +1102,9 @@ def validate_settings(kind: UnitKind, settings: dict) -> None:
         elif t == "scheduled_number":
             ok = _is_scheduled(name, value)
         elif t == "scheduled_species_values":
-            # Checked key by key rather than through _check_map, so an
-            # unreadable expression names the species that holds it.
-            if not isinstance(value, dict):
-                raise ValueError(f"'{name}' must be a mapping, got {type(value).__name__}")
-            for species, entry in value.items():
-                if not isinstance(species, str):
-                    raise ValueError(f"'{name}' key {species!r} must be a string (a species)")
-                if not _is_scheduled(f"{name}.{species}", entry):
-                    raise ValueError(
-                        f"'{name}.{species}' must be "
-                        f"{SETTING_TYPES['scheduled_number'].split(' (')[0]}, got {entry!r}"
-                    )
-            ok = True
+            ok = _check_scheduled_map(name, value, "a species")
+        elif t == "scheduled_port_map":
+            ok = _check_scheduled_map(name, value, "a port name")
         elif t == "integer":
             ok = isinstance(value, int) and not isinstance(value, bool)
         elif t == "boolean":
@@ -1149,6 +1152,37 @@ def _required(s: Setting) -> str:
     if s.type == "choice":
         return f"'{s.name}' is required: one of {_one_of(s)}"
     return f"'{s.name}' is required"
+
+
+def _check_scheduled_map(name: str, value, what: str) -> bool:
+    """Check a mapping of name to a number or an expression of time.
+
+    Checked key by key rather than through :func:`_check_map`, so an unreadable
+    expression names the key that holds it.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a mapping, a key is not text, or an entry is neither
+        a number nor a readable expression.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(f"'{name}' must be a mapping, got {type(value).__name__}")
+    for key, entry in value.items():
+        if not isinstance(key, str):
+            raise ValueError(f"'{name}' key {key!r} must be a string ({what})")
+        if not _is_scheduled(f"{name}.{key}", entry):
+            raise ValueError(
+                f"'{name}.{key}' must be "
+                f"{SETTING_TYPES['scheduled_number'].split(' (')[0]}, got {entry!r}"
+            )
+    return True
+
+
+def _scheduled_value(value):
+    """A number-or-expression setting in one spelling: a number as a float
+    (``"inf"`` as infinity), an expression as the text it was written as."""
+    return value if is_time_expression(value) else float(_number(value))
 
 
 def _is_scheduled(name: str, value) -> bool:
@@ -1240,6 +1274,10 @@ def _arguments(kind: UnitKind, settings: dict, models: dict | None = None) -> di
             args[s.name] = load_model(value)
         elif s.type == "number":
             args[s.name] = float(_number(value))
+        elif s.type == "scheduled_number":
+            args[s.name] = _scheduled_value(value)
+        elif s.type == "scheduled_port_map":
+            args[s.name] = {k: _scheduled_value(v) for k, v in value.items()}
         elif s.type == "integer":
             args[s.name] = int(value)
         elif s.type == "aeration":
@@ -1313,7 +1351,6 @@ def _influent(args: dict, base_dir):
     from pathlib import Path
 
     from aquakin.plant.influent import InfluentSeries, read_influent_table
-    from aquakin.plant.time_expr import is_time_expression
 
     if args.get("series") is not None:
         if args.get("T") is not None or args.get("composition"):

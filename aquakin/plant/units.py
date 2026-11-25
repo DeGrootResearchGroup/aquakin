@@ -105,6 +105,9 @@ class Unit(Protocol):
     - :class:`InletFlowCheckedUnit` (``check_inlet_flows``) -- requires its
       inlet flows to follow a schedule it declares, checked before a solve (a
       batch-fed SBR).
+    - :class:`ScheduledSetpointUnit` (``scheduled_setpoints``) -- names the
+      flow setpoints it has written as expressions of time, which keep the plant
+      from caching its recycle maps.
     - :class:`TemperatureSettable` (``set_temperature``) -- its operating
       temperature can be set by :meth:`Plant.set_temperature`.
     - :class:`ReactionBalanceUnit` (``reaction_term`` / ``reaction_volumes`` /
@@ -271,6 +274,21 @@ class InletFlowCheckedUnit(Protocol):
     """
 
     def check_inlet_flows(self, inlets: dict, t0: float, t1: float) -> None: ...
+
+
+@runtime_checkable
+class ScheduledSetpointUnit(Protocol):
+    """A unit whose flow setpoints may be expressions of time
+    (:class:`~aquakin.plant.flow_setpoint.FlowParameterized`).
+
+    ``scheduled_setpoints()`` names the ones that are. The recycle resolver
+    caches the recycle flow map ``A`` and concentration map ``M`` once per solve
+    only when they cannot change during it, and a setpoint that varies in time
+    can change either (a fraction scales ``A``; any flow sets the mixing weights
+    in ``M``), so a plant with one re-probes both on every evaluation.
+    """
+
+    def scheduled_setpoints(self) -> tuple[str, ...]: ...
 
 
 @runtime_checkable

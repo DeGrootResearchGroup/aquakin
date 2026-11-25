@@ -33,7 +33,7 @@ import jax.numpy as jnp
 from jax.flatten_util import ravel_pytree
 
 from aquakin.plant.streams import Stream, make_scalars
-from aquakin.plant.units import FlowContext
+from aquakin.plant.units import FlowContext, ScheduledSetpointUnit
 
 if TYPE_CHECKING:
     from aquakin.plant.plant import Plant
@@ -616,6 +616,10 @@ class RecycleResolver:
             self._recycle_map_constant = True
             self._recycle_T_map_constant = True
             return
+        if self.has_scheduled_setpoints():
+            self._recycle_map_constant = False
+            self._recycle_T_map_constant = False
+            return
 
         keys = self.plant._recycle_keys
 
@@ -845,6 +849,28 @@ class RecycleResolver:
         """
         return (self._recycle_map_constant, self._recycle_T_map_constant, self._flow_map_constant)
 
+    def has_scheduled_setpoints(self) -> bool:
+        """Whether any unit has a flow setpoint written as an expression of time.
+
+        The constancy guards compare the maps over states at one time, so they
+        cannot see a map that changes with time. A time-varying setpoint can
+        change both: a fraction (a primary-sludge split) scales the flow map
+        ``A``, and any flow, absolute ones included, sets the mixing and
+        thickening weights of the concentration map ``M`` inside a loop of
+        stateless units. So a plant with one never caches either map. Decided
+        from what the units declare (:class:`ScheduledSetpointUnit`), not by
+        probing, which could miss a step at any time a probe does not sample.
+
+        Returns
+        -------
+        bool
+            ``True`` when a unit names a scheduled setpoint.
+        """
+        return any(
+            isinstance(unit, ScheduledSetpointUnit) and unit.scheduled_setpoints()
+            for unit in self.plant.units.values()
+        )
+
     def _check_flow_map_constant(self, t, y0, params_full, *, rtol: float = 1e-9):
         """Set ``_flow_map_constant`` -- is the recycle flow map ``A``
         state-fixed? ``A`` is fixed by the recycle flows + topology; for a
@@ -858,6 +884,9 @@ class RecycleResolver:
         :meth:`_check_recycle_map_constant`.)"""
         if not self.plant._recycle_conns:
             self._flow_map_constant = True
+            return
+        if self.has_scheduled_setpoints():
+            self._flow_map_constant = False
             return
         A0 = self._compute_flow_map(t, params_full, self.plant._split_state(y0))
         if not A0.size:
