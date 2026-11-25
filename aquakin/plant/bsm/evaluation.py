@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 import jax
 import jax.numpy as jnp
 
+from aquakin.integrate._common import native_time_factor
 from aquakin.plant.aeration_system import blower_airflow_total, blower_energy
 from aquakin.plant.balance import oxygen_transfer_history
 from aquakin.plant.errors import NoDigesterError
@@ -944,7 +945,9 @@ def direct_n2o_emission(
     Returns
     -------
     float
-        Time-averaged stripped N₂O-N mass flow (kg N/d).
+        Time-averaged stripped N₂O-N mass flow (kg N/d), whatever the plant's
+        time unit; on a plant without one (``plant.time_unit`` is ``None``), kg N
+        per unit of its clock.
     """
     reactors = _as_reactors(plant)
     # Reactors whose model resolves the dissolved N₂O state.
@@ -959,13 +962,17 @@ def direct_n2o_emission(
         if kla_ratio is None and n2o_species in plant.units[n].stripped_gases
     ]
     estimated = [n for n in n2o_reactors if n not in in_solve]
-    return _solved_n2o_emission(plant, solution, params, in_solve, n2o_species) + (
+    per_time_unit = _solved_n2o_emission(plant, solution, params, in_solve, n2o_species) + (
         _estimated_n2o_emission(plant, solution, params, estimated, n2o_species, kla_ratio)
     )
+    # The transfers are rates per the plant's time unit; report per day.
+    if plant.time_unit is None:
+        return per_time_unit
+    return per_time_unit * native_time_factor(plant.time_unit, "d")
 
 
 def _solved_n2o_emission(plant, solution, params, tanks, n2o_species) -> float:
-    """Time-averaged N₂O-N (kg/d) the solve stripped from ``tanks``: minus each
+    """Time-averaged N₂O-N (kg per plant time unit) the solve stripped from ``tanks``: minus each
     tank's in-solve transfer of ``n2o_species`` times its volume."""
     if not tanks:
         return 0.0
@@ -979,7 +986,7 @@ def _solved_n2o_emission(plant, solution, params, tanks, n2o_species) -> float:
 
 
 def _estimated_n2o_emission(plant, solution, params, tanks, n2o_species, kla_ratio) -> float:
-    """Time-averaged N₂O-N (kg/d) aeration would strip from ``tanks`` at
+    """Time-averaged N₂O-N (kg per plant time unit) aeration would strip from ``tanks`` at
     ``kla_ratio`` (default 1.0) times the oxygen kLa, toward each tank's
     in-solve saturation of the gas if it has one, else zero."""
     from aquakin.plant.ghg import stripped_n2o

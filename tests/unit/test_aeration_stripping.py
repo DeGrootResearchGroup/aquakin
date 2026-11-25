@@ -142,8 +142,8 @@ def test_temperature_correction_scales_gas_kla_not_gas_saturation(toy):
 # --- one-tank plant ------------------------------------------------------------
 
 
-def _plant(model, aeration, T=293.15):
-    plant = Plant("strip", time_unit="d")
+def _plant(model, aeration, T=293.15, time_unit="d"):
+    plant = Plant("strip", time_unit=time_unit)
     plant.add_unit(_tank(model, aeration, T=T))
     C_in = model.concentrations({"SS": 200.0, "SO": 0.0, "SN2O": SN2O_IN, "SN2": 0.0})
     influent = InfluentSeries(
@@ -224,6 +224,43 @@ def test_stripped_gas_mass_balance_and_emission(toy, closed_loop, warm):
         assert float(transfer[toy.species_index["SN2O"]]) == pytest.approx(
             -RATIO * float(sig) * c_g, rel=1e-9
         )
+
+
+def _stripped_n_and_emission(model, time_unit):
+    """The mass balance's stripped N (g) and ``direct_n2o_emission`` over a
+    one-unit window of the stripping one-tank plant."""
+    plant = _plant(model, Aeration(kla=KLA, stripped={"SN2O": RATIO}), time_unit=time_unit)
+    sol = _solve(plant, t_end=1.0, n=11)
+    mb = plant.mass_balance(sol, components=("N",), effluent_ports=["tank.out"])
+    return plant, sol, mb.gas_detail["stripped_N"], direct_n2o_emission(plant, sol)
+
+
+@pytest.mark.parametrize("time_unit, per_day", [("d", 1.0), ("h", 24.0)])
+def test_direct_n2o_emission_is_per_day_whatever_the_plant_clock(toy, time_unit, per_day):
+    """The emission is kg N/d on a plant in days or hours: times the window in
+    days it is the stripped N the mass balance counts (grams, independent of
+    the clock)."""
+    _, sol, stripped_g, emission = _stripped_n_and_emission(toy, time_unit)
+    assert stripped_g > 0.0
+    window_days = float(sol.t[-1] - sol.t[0]) / per_day
+    assert emission * 1e3 * window_days == pytest.approx(stripped_g, rel=1e-9)
+
+
+def test_direct_n2o_emission_without_a_plant_clock_is_per_clock_unit(tmp_path):
+    """A plant with no time unit (its model gives no units on its rate
+    constants, so none can be inferred) is reported per unit of its clock,
+    since there is no day to convert to."""
+    text = FIXTURE.read_text().replace("stripped_gas_toy", "undated_stripped_gas_toy")
+    text = text.replace('        units: "g/m3/d"\n', "").replace('        units: "1/d"\n', "")
+    path = tmp_path / "undated.yaml"
+    path.write_text(text)
+    model = aquakin.load_model_from_file(path)
+    with pytest.warns(FutureWarning, match="created without time_unit"):
+        plant, sol, stripped_g, emission = _stripped_n_and_emission(model, None)
+    assert plant.time_unit is None
+    assert stripped_g > 0.0
+    window = float(sol.t[-1] - sol.t[0])
+    assert emission * 1e3 * window == pytest.approx(stripped_g, rel=1e-9)
 
 
 def test_gradient_through_stripping_solve_matches_closed_form(toy):
