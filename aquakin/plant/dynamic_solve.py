@@ -47,7 +47,28 @@ from aquakin.plant.results import (
 )
 from aquakin.plant.units import (
     CycleEventSource,
+    InletFlowCheckedUnit,
 )
+
+
+def _check_inlet_flows(self, t0: float, t1: float) -> None:
+    """Let every :class:`~aquakin.plant.units.InletFlowCheckedUnit` check its
+    inlets over the solve span ``(t0, t1)`` (plant clock) before integrating.
+
+    Each input port is given the influent feeding it (already on the plant's
+    clock) or ``None`` when another unit feeds it. Raises what the unit raises.
+    """
+    for name, unit in self.units.items():
+        if not isinstance(unit, InletFlowCheckedUnit):
+            continue
+        inlets = {}
+        for port in unit.input_ports:
+            source = next(
+                (c for c in self.connections if c.to_unit == name and c.to_port == port), None
+            )
+            fed_by_influent = source is not None and source.from_unit is None
+            inlets[port] = self.influents[source.from_port] if fed_by_influent else None
+        unit.check_inlet_flows(inlets, t0, t1)
 
 
 def _concrete_teval_key(t_eval):
@@ -240,6 +261,7 @@ def solve(
     # native first (the unit events are already native).
     if events is not None:
         events = events_to_native_time(events, _time_factor)
+    _check_inlet_flows(self, t0, t1)
     unit_events: list[Event] = []
     for unit in self.units.values():
         if isinstance(unit, CycleEventSource):

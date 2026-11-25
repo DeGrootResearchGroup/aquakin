@@ -56,7 +56,9 @@ class Catalog:
         full = self.defaults(kind) | settings
         out: dict[str, list[str]] = {"input": [], "output": []}
         for rule in self.kinds[kind]["ports"]:
-            if rule["form"] == "fixed":
+            if not applies(rule.get("when"), full):
+                names = []
+            elif rule["form"] == "fixed":
                 names = rule["names"]
             else:
                 value = full.get(rule["field"])
@@ -68,6 +70,14 @@ class Catalog:
                     names = list(value)
             out[rule["side"]] += [str(n) for n in names]
         return out["input"], out["output"]
+
+
+def applies(when: dict | None, settings: dict) -> bool:
+    """Whether a setting or port rule with the catalogue's condition ``when``
+    applies to a unit with ``settings``: always without one, else while the
+    setting it names holds one of its ``values`` (an SBR's holding-volume
+    settings and overflow port, with ``feed: storage``)."""
+    return when is None or settings.get(when["setting"]) in when["values"]
 
 
 def _plain_kind(kind: dict) -> dict:

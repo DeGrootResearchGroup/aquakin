@@ -102,6 +102,9 @@ class Unit(Protocol):
       balance to report.
     - :class:`CycleEventSource` (``cycle_events``) -- schedules located phase
       events (an SBR's fill/react/settle/decant boundaries).
+    - :class:`InletFlowCheckedUnit` (``check_inlet_flows``) -- requires its
+      inlet flows to follow a schedule it declares, checked before a solve (a
+      batch-fed SBR).
     - :class:`TemperatureSettable` (``set_temperature``) -- its operating
       temperature can be set by :meth:`Plant.set_temperature`.
     - :class:`ReactionBalanceUnit` (``reaction_term`` / ``reaction_volumes`` /
@@ -252,6 +255,22 @@ class CycleEventSource(Protocol):
     the integrator's event set so it lands exactly on every phase switch."""
 
     def cycle_events(self, t0: float, t1: float) -> list: ...
+
+
+@runtime_checkable
+class InletFlowCheckedUnit(Protocol):
+    """A unit that only conserves mass when its inlet flows follow a schedule it
+    declares (an SBR fed in batches: flow during its fill phases only), so the
+    plant checks the inlets before a solve rather than assuming them.
+
+    ``check_inlet_flows(inlets, t0, t1)`` is given, for each input port, the
+    influent feeding it on the plant's clock, or ``None`` when another unit
+    feeds it (its flow is not known before the solve), and the solve span on
+    the plant's clock. It raises ``ValueError`` when the inlets do not, or
+    cannot be shown to, follow the schedule.
+    """
+
+    def check_inlet_flows(self, inlets: dict, t0: float, t1: float) -> None: ...
 
 
 @runtime_checkable

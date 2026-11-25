@@ -20,7 +20,7 @@ from aquakin.plant import (
     SBRPhase,
     SBRUnit,
 )
-from aquakin.plant.influent import InfluentSeries
+from aquakin.plant.influent import InfluentExpression, InfluentSeries
 from aquakin.plant.plant import Plant
 
 _PARTS = ["XI", "XS", "XB_H", "XB_A", "XP", "XND"]
@@ -46,14 +46,19 @@ def _sbr(asm1, settling=None, **kw):
     return SBRUnit("sbr", asm1, _phases(), full_volume=1000.0, feed_flow=5000.0,
                    decant_flow=5000.0, settling=settling,
                    particulate_species=_PARTS, initial_fraction=0.5,
-                   conditions={"T": 293.15}, **kw)
+                   conditions={"T": 293.15}, feed="batch", **kw)
+
+
+#: 5000 m3/d during the 0.1 d fill of each 0.65 d cycle, nothing otherwise.
+_FILL_ONLY_Q = "5000*(1 - step(mod(t, 0.65) - 0.1))"
 
 
 def _plant(asm1, sbr):
     p = Plant("sbr_plant", time_unit="d")
     p.add_unit(sbr)
-    p.add_influent("feed", InfluentSeries.constant(
-        asm1, SS=200.0, SNH=40.0, XS=150.0, XB_H=50.0, Q=5000.0), to="sbr.feed")
+    p.add_influent("feed", InfluentExpression(
+        asm1, Q=_FILL_ONLY_Q, composition=dict(SS=200.0, SNH=40.0, XS=150.0, XB_H=50.0)),
+        to="sbr.feed")
     return p
 
 
@@ -70,21 +75,21 @@ def test_state_layout(asm1):
 def test_spec_validation(asm1):
     with pytest.raises(ValueError, match="at least one phase"):
         SBRUnit("s", asm1, [], 1000.0, 1.0, 1.0,
-                InterfaceSettling(1.0, 1.0), conditions={"T": 293.15})
+                InterfaceSettling(1.0, 1.0), conditions={"T": 293.15}, feed="batch")
     with pytest.raises(ValueError, match="durations must be > 0"):
         SBRUnit("s", asm1, [SBRPhase("p", 0.0)], 1000.0, 1.0, 1.0,
-                InterfaceSettling(1.0, 1.0), conditions={"T": 293.15})
+                InterfaceSettling(1.0, 1.0), conditions={"T": 293.15}, feed="batch")
     with pytest.raises(ValueError, match="initial_fraction"):
         SBRUnit("s", asm1, _phases(), 1000.0, 1.0, 1.0,
                 InterfaceSettling(1.0, 1.0), particulate_species=_PARTS,
-                initial_fraction=1.5, conditions={"T": 293.15})
+                initial_fraction=1.5, conditions={"T": 293.15}, feed="batch")
     with pytest.raises(ValueError, match="missing required condition values"):
         SBRUnit("s", asm1, _phases(), 1000.0, 1.0, 1.0,
-                InterfaceSettling(1.0, 1.0))
+                InterfaceSettling(1.0, 1.0), feed="batch")
     with pytest.raises(ValueError, match="particulate species"):
         SBRUnit("s", asm1, _phases(), 1000.0, 1.0, 1.0,
                 InterfaceSettling(1.0, 1.0), particulate_species=["NOPE"],
-                conditions={"T": 293.15})
+                conditions={"T": 293.15}, feed="batch")
 
 
 def test_cycle_events_at_phase_boundaries(asm1):
@@ -229,14 +234,14 @@ def _volume_closed_form(sbr, t):
     return V
 
 
-def test_small_sbr_volume_follows_fill_and_decant(simple_model, make_small_sbr_plant):
+def test_small_sbr_volume_follows_fill_and_decant(sbr_model, make_small_sbr_plant):
     """Over one cycle the small SBR's volume equals its piecewise-linear closed
     form at every save point, the phase boundaries included; the decant is
     clarified (B, the particulate, well below the bulk) while A passes through."""
     p = make_small_sbr_plant()
     t = np.linspace(0.0, 27.0, 55)                # 0.5 s grid, on every boundary
     sol = p.solve(t_span=(0.0, 27.0), t_eval=jnp.asarray(t), rtol=1e-8)
-    V = np.asarray(sol.state[:, simple_model.n_species])
+    V = np.asarray(sol.state[:, sbr_model.n_species])
     # dV/dt is piecewise constant between located events; the implicit solve
     # reproduces the closed form to within its tolerance (rtol 1e-8).
     np.testing.assert_allclose(V, _volume_closed_form(p.units["sbr"], t), rtol=1e-6)
@@ -245,21 +250,21 @@ def test_small_sbr_volume_follows_fill_and_decant(simple_model, make_small_sbr_p
     eff = p.stream(sol, "sbr.effluent")
     decant = np.where(np.asarray(eff.Q) > 0.0)[0]
     assert decant.size >= 8                       # the decant phase is sampled
-    a, b = simple_model.species_index["A"], simple_model.species_index["B"]
+    a, b = sbr_model.species_index["A"], sbr_model.species_index["B"]
     C = np.asarray(sol.state)
     C_eff = np.asarray(eff.C)
     assert np.all(C_eff[decant, b] < 0.5 * C[decant, b])
     np.testing.assert_allclose(C_eff[decant, a], C[decant, a], rtol=1e-12)
 
 
-def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simple_model, make_small_sbr_plant):
+def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(sbr_model, make_small_sbr_plant):
     """d(A + 2B at the end of the decant)/dk from a full tank through the settle
     and decant phases (two located-event segments, the settling state and the
     clarified draw) matches a central finite difference."""
     p = make_small_sbr_plant()
     base = p.default_parameters()
-    a, b = simple_model.species_index["A"], simple_model.species_index["B"]
-    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(p.units["sbr"].full_volume)
+    a, b = sbr_model.species_index["A"], sbr_model.species_index["B"]
+    full = p.units["sbr"].initial_state().at[sbr_model.n_species].set(p.units["sbr"].full_volume)
     y0 = p.initial_state(overrides={"sbr": full})
 
     def loss(k):
@@ -277,7 +282,7 @@ def test_small_sbr_grad_through_settle_and_decant_matches_finite_difference(simp
     assert g != 0.0
 
 
-def test_small_sbr_solve_traces_under_jit_and_matches_eager(simple_model, make_small_sbr_plant):
+def test_small_sbr_solve_traces_under_jit_and_matches_eager(sbr_model, make_small_sbr_plant):
     """A whole-cycle SBR solve wrapped in ``jax.jit`` -- the default ``y0``,
     traced parameters and a save grid built inside the trace -- traces and gives
     the eager solve's trajectory (one computation compiled whole instead of
@@ -294,12 +299,12 @@ def test_small_sbr_solve_traces_under_jit_and_matches_eager(simple_model, make_s
                                rtol=1e-10, atol=1e-12)
     # The jitted cycle is the SBR cycle: the volume follows its closed form
     # (an adaptive solve at the default rtol = 1e-6: two decades above it).
-    np.testing.assert_allclose(np.asarray(eager[:, simple_model.n_species]),
+    np.testing.assert_allclose(np.asarray(eager[:, sbr_model.n_species]),
                                _volume_closed_form(p.units["sbr"], np.linspace(0.0, 27.0, 55)),
                                rtol=1e-4)
 
 
-def test_small_sbr_jitted_gradient_matches_finite_difference(simple_model, make_small_sbr_plant):
+def test_small_sbr_jitted_gradient_matches_finite_difference(sbr_model, make_small_sbr_plant):
     """``jax.jit(jax.grad(...))`` of the settle + decant loss of the
     finite-difference test above (a save grid built inside the trace) matches a
     central finite difference of the eager loss. (About 15 s, like that test:
@@ -307,8 +312,8 @@ def test_small_sbr_jitted_gradient_matches_finite_difference(simple_model, make_
     the fast tier's only check that a jitted SBR gradient traces.)"""
     p = make_small_sbr_plant()
     base = p.default_parameters()
-    a, b = simple_model.species_index["A"], simple_model.species_index["B"]
-    full = p.units["sbr"].initial_state().at[simple_model.n_species].set(p.units["sbr"].full_volume)
+    a, b = sbr_model.species_index["A"], sbr_model.species_index["B"]
+    full = p.units["sbr"].initial_state().at[sbr_model.n_species].set(p.units["sbr"].full_volume)
     y0 = p.initial_state(overrides={"sbr": full})
 
     def loss(k):
@@ -322,6 +327,275 @@ def test_small_sbr_jitted_gradient_matches_finite_difference(simple_model, make_
     # As in the finite-difference test above: O(h^2) truncation plus the
     # solver's 1e-10 tolerance over a 1e-4 step, ~1e-6.
     assert float(jax.jit(jax.grad(loss))(k0)) == pytest.approx(fd, rel=1e-5)
+
+
+# --- the feed modes (#857) ------------------------------------------------------
+#
+# The small SBR (tests/conftest.py) in each mode: a fill-only influent for
+# batch, the same 50 m3 per 27 s cycle arriving continuously for continuous and
+# storage (a 60 m3 holding volume, half full, drawn at 10 m3/s during the 5 s
+# fill).
+
+def _fill_time(t, start, duration, period):
+    """Time spent inside the phase ``[start, start + duration)`` of each cycle
+    up to each ``t`` (closed form)."""
+    n_cycles, tau = np.divmod(np.asarray(t, dtype=float), period)
+    return n_cycles * duration + np.clip(tau - start, 0.0, duration)
+
+
+def test_omitting_the_feed_mode_raises_and_lists_the_modes(sbr_model):
+    """An SBR has no default feed mode: leaving it out, or naming another, is
+    refused with the three modes listed; following the message (naming one)
+    builds the unit."""
+    args = ("s", sbr_model, [SBRPhase("fill", 1.0, feed=True)], 100.0, 1.0, 1.0,
+            InterfaceSettling(1.0, 1.0))
+    kw = {"conditions": {"T": 293.15}}
+    for feed in (None, "pump"):
+        with pytest.raises(ValueError, match=r"'continuous' \(.*\); 'storage' \(.*\); "
+                                             r"'batch' \(.*\)") as err:
+            SBRUnit(*args, **kw, feed=feed)
+        assert ("needs a feed mode" if feed is None else "is not a feed mode") in str(err.value)
+    assert SBRUnit(*args, **kw, feed="batch").feed_flow == 1.0
+
+
+def test_a_feed_mode_refuses_the_settings_it_does_not_use(sbr_model):
+    """feed_flow does not apply to a continuous feed, a storage or batch feed
+    needs it, and only a storage feed takes the holding-volume settings."""
+    phases = [SBRPhase("fill", 1.0, feed=True)]
+
+    def build(feed, feed_flow, **kw):
+        return SBRUnit("s", sbr_model, phases, 100.0, feed_flow, 1.0,
+                       InterfaceSettling(1.0, 1.0), conditions={"T": 293.15}, feed=feed, **kw)
+
+    with pytest.raises(ValueError, match="feed_flow does not apply"):
+        build("continuous", 1.0)
+    with pytest.raises(ValueError, match="feed_flow must be a positive number; got None"):
+        build("batch", None)
+    with pytest.raises(ValueError, match="storage_volume must be a positive number; got None"):
+        build("storage", 1.0)
+    with pytest.raises(ValueError, match="storage_initial_fraction must be in"):
+        build("storage", 1.0, storage_volume=10.0, storage_initial_fraction=0.0)
+    with pytest.raises(ValueError, match="so storage_volume, storage_initial_fraction does not"):
+        build("batch", 1.0, storage_volume=10.0, storage_initial_fraction=0.2)
+    with pytest.raises(ValueError, match="so storage_initial_concentrations does not apply"):
+        build("continuous", None, storage_initial_concentrations=jnp.ones(2))
+    assert build("continuous", None).output_ports == ["effluent"]
+    storage = build("storage", 1.0, storage_volume=10.0)
+    assert storage.output_ports == ["effluent", "overflow"]
+    assert storage.state_names()[-3:] == ("storage.A", "storage.B", "storage.V")
+    np.testing.assert_array_equal(np.asarray(storage.initial_state()[-3:]), [1.0, 0.0, 5.0])
+
+
+@pytest.fixture(scope="module")
+def feed_mode_runs(make_small_sbr_plant):
+    """The small SBR solved over two cycles in each feed mode, on a 0.05 s grid:
+    ``{feed: (plant, solution)}``."""
+    t = jnp.linspace(0.0, 54.0, 1081)
+    runs = {}
+    for feed in ("batch", "continuous", "storage"):
+        p = make_small_sbr_plant(feed)
+        runs[feed] = p, p.solve(t_span=(0.0, 54.0), t_eval=t, rtol=1e-8, atol=1e-10)
+    return runs
+
+
+@pytest.mark.parametrize("feed", ["batch", "continuous", "storage"])
+def test_each_feed_mode_conserves_mass(feed_mode_runs, feed):
+    """What the influent brings in leaves through the decant (and overflow) or
+    is held in the tank and the holding volume: the COD balance closes. The
+    reaction conserves COD, so no gas term enters. The flow integrals are
+    trapezoids over the 0.05 s saves, across steps at the phase boundaries, so
+    the closure is set by the sampling (1e-3 to 2e-3 here, ten times smaller on
+    a ten times finer grid); before the feed modes the discarded inflow left an
+    imbalance of order one."""
+    p, sol = feed_mode_runs[feed]
+    mb = p.mass_balance(sol, components=("COD",))
+    assert mb["COD"].inflow == pytest.approx(100.0, rel=1e-9)   # 50 m3 of A = 1 per cycle
+    assert abs(mb["COD"].relative_imbalance) < 3e-3
+
+
+def test_a_continuous_feed_fills_the_tank_with_the_inflow_minus_the_decant(
+    sbr_model, feed_mode_runs
+):
+    """With feed='continuous' the volume follows V0 + Q_in t - decant_flow x
+    (time spent decanting), whatever the phase (the fill pump does not apply)."""
+    p, sol = feed_mode_runs["continuous"]
+    t = np.asarray(sol.t)
+    V = np.asarray(sol.state[:, sbr_model.n_species])
+    expected = 50.0 + (50.0 / 27.0) * t - 10.0 * _fill_time(t, 20.0, 5.0, 27.0)
+    # dV/dt is piecewise constant between located events: the solve (rtol 1e-8)
+    # holds it to its tolerance.
+    np.testing.assert_allclose(V, expected, rtol=1e-6)
+
+
+def test_a_holding_volume_level_follows_the_inflow_minus_the_draw(make_small_sbr_plant):
+    """Started at 90 % (54 m3), the holding volume neither runs empty nor
+    overflows: its level is 54 + Q_in t - feed_flow x (time spent filling), and
+    the report says nothing overflowed and nothing was short."""
+    from aquakin.plant import storage_report
+
+    p = make_small_sbr_plant("storage", storage_initial_fraction=0.9)
+    t = np.linspace(0.0, 54.0, 217)
+    sol = p.solve(t_span=(0.0, 54.0), t_eval=jnp.asarray(t), rtol=1e-8, atol=1e-10)
+    report = storage_report(p, sol, "sbr")
+    expected = 54.0 + (50.0 / 27.0) * t - 10.0 * _fill_time(t, 0.0, 5.0, 27.0)
+    np.testing.assert_allclose(report.level, expected, rtol=1e-6)
+    np.testing.assert_array_equal(np.asarray(sol.unit_state("sbr")[:, -1]), report.level)
+    assert report.overflow_volume == 0.0 and report.shortfall_volume == 0.0
+    assert report.capacity == 60.0
+
+
+def test_a_full_holding_volume_overflows_through_its_port(sbr_model, make_small_sbr_plant):
+    """At 4 m3/s (108 m3 per cycle against a 50 m3 draw) the holding volume
+    fills: its level never exceeds its capacity, the surplus leaves through the
+    overflow port, and the mass balance closes with it as an outflow. The
+    reported overflow volume equals what the volumes alone say overflowed: the
+    inflow, less what the tank drew (its volume change plus the decant), less
+    the holding volume's change."""
+    from aquakin.plant import storage_report
+
+    p = make_small_sbr_plant("storage", Q=4.0, storage_initial_fraction=0.9)
+    t = np.linspace(0.0, 54.0, 1081)
+    sol = p.solve(t_span=(0.0, 54.0), t_eval=jnp.asarray(t), rtol=1e-8, atol=1e-10)
+    report = storage_report(p, sol, "sbr")
+    # Full, to the solve's tolerance (rtol 1e-8): the overflow takes all the
+    # surplus at the top of its band.
+    assert report.level.max() == pytest.approx(60.0, rel=1e-6)
+    overflow = p.stream(sol, "sbr.overflow")
+    np.testing.assert_array_equal(np.asarray(overflow.Q), report.overflow)
+    V = np.asarray(sol.unit_state("sbr")[:, sbr_model.n_species])
+    drawn = V[-1] - V[0] + 10.0 * 10.0                    # two 5 s decants at 10 m3/s
+    expected = 4.0 * 54.0 - drawn - (report.level[-1] - report.level[0])
+    # The report integrates the overflow by trapezoids over the 0.05 s saves, and
+    # the overflow steps by 4 m3/s where a fill starts and ends while full: each
+    # step costs up to 0.1 m3 of the 110 m3, so 5e-3.
+    assert report.overflow_volume == pytest.approx(expected, rel=5e-3)
+    assert expected > 50.0
+    mb = p.mass_balance(sol, components=("COD",))
+    assert abs(mb["COD"].relative_imbalance) < 3e-3   # sampling, as in the test above
+    assert "overflowed: 1" in report.summary()
+
+
+def test_an_empty_holding_volume_limits_the_draw_and_reports_it(
+    sbr_model, make_small_sbr_plant
+):
+    """Half full (30 m3) and fed 9.3 m3 during the 50 m3 fill, the holding
+    volume runs empty: it stops at its pump's dead volume (1 % of 60 m3), the
+    draw falls to the inflow, the tank fills short of full, and the shortfall
+    reported over the cycle is what the tank did not receive."""
+    from aquakin.plant import storage_report
+
+    p = make_small_sbr_plant("storage")
+    t = np.linspace(0.0, 27.0, 2701)
+    sol = p.solve(t_span=(0.0, 27.0), t_eval=jnp.asarray(t), rtol=1e-8, atol=1e-10)
+    report = storage_report(p, sol, "sbr")
+    assert report.level.min() == pytest.approx(0.6, rel=1e-6)
+    # By the end of the fill the draw has fallen to the inflow (the level decays
+    # onto the dead volume at (10 - 1.85)/0.6 per second).
+    end_of_fill = np.searchsorted(t, 4.99)
+    assert report.draw[end_of_fill] == pytest.approx(50.0 / 27.0, rel=1e-6)
+    assert report.shortfall[end_of_fill] == pytest.approx(10.0 - 50.0 / 27.0, rel=1e-6)
+    V = np.asarray(sol.unit_state("sbr")[:, sbr_model.n_species])
+    received = V[np.searchsorted(t, 5.0)] - 50.0
+    assert received < 40.0
+    # The shortfall jumps to zero when the fill ends, which the trapezoids over
+    # the 0.01 s saves smear by about a half step (0.4 %).
+    assert report.shortfall_volume == pytest.approx(50.0 - received, rel=1e-2)
+    assert "ran empty: 11" in report.summary()
+
+
+def test_the_storage_report_refuses_an_sbr_without_a_holding_volume(make_small_sbr_plant):
+    from aquakin.plant import storage_report
+
+    p = make_small_sbr_plant("batch")
+    with pytest.raises(ValueError, match="'sbr' is not an SBRUnit with feed='storage'"):
+        storage_report(p, None, "sbr")
+
+
+def test_grad_through_a_storage_fed_cycle_matches_finite_difference(
+    sbr_model, make_small_sbr_plant
+):
+    """d(A + 2B at the end of a cycle)/dk through a storage-fed cycle -- the draw
+    from the holding volume, its running empty, and the settle and decant --
+    matches a central finite difference. (About 15 s, like the other small-SBR
+    gradient tests: compiling the reverse pass through the stiff solve; it is
+    the fast tier's only gradient through the holding volume.)"""
+    p = make_small_sbr_plant("storage")
+    base = p.default_parameters()
+    a, b = sbr_model.species_index["A"], sbr_model.species_index["B"]
+
+    def loss(k):
+        sol = p.solve(t_span=(0.0, 27.0), t_eval=jnp.array([27.0]),
+                      params=base.at[0].set(k), rtol=1e-10, atol=1e-12)
+        return sol.state[-1, a] + 2.0 * sol.state[-1, b]
+
+    k0 = float(base[0])
+    h = 1e-4 * k0
+    g = float(jax.grad(loss)(k0))
+    fd = (float(loss(k0 + h)) - float(loss(k0 - h))) / (2.0 * h)
+    # Central difference: O(h^2) ~ 1e-8 relative truncation, plus the solver's
+    # 1e-10 tolerance over a 1e-4 step, ~1e-6.
+    assert g == pytest.approx(fd, rel=1e-5)
+    assert abs(g) > 1e-3
+
+
+def _step_series(model, fill_Q):
+    """A sampled fill-only feed over two cycles: ``fill_Q`` during each 5 s
+    fill, stepping within 1e-9 s at the boundaries, and a spike of 1 m3/s at
+    t = 11 s (inside a react phase) when ``fill_Q`` is negative."""
+    spike = fill_Q < 0
+    fill_Q = abs(fill_Q)
+    eps = 1e-9
+    t = [0.0, 5.0, 5.0 + eps, 27.0, 27.0 + eps, 32.0, 32.0 + eps, 54.0]
+    Q = [fill_Q, fill_Q, 0.0, 0.0, fill_Q, fill_Q, 0.0, 0.0]
+    if spike:
+        t[3:3] = [10.5, 11.0, 11.5]
+        Q[3:3] = [0.0, 1.0, 0.0]
+    C = np.tile([1.0, 0.0], (len(t), 1))
+    return InfluentSeries(t=jnp.asarray(t), Q=jnp.asarray(Q), C=jnp.asarray(C), model=model)
+
+
+def test_a_batch_feed_is_checked_against_a_sampled_influent(sbr_model, make_small_sbr_plant):
+    """A sampled feed that steps between 10 m3/s in the fill and nothing else
+    passes; one that delivers 9 m3/s, or flows at one sample time inside a
+    react phase, is refused, naming the time and the flow."""
+    sbr = make_small_sbr_plant("batch").units["sbr"]
+    sbr.check_inlet_flows({"feed": _step_series(sbr_model, 10.0)}, 0.0, 54.0)
+    with pytest.raises(ValueError, match=r"delivers Q=9 at t=5e-06, in a fill phase, where "
+                                         r"the schedule wants 10"):
+        sbr.check_inlet_flows({"feed": _step_series(sbr_model, 9.0)}, 0.0, 54.0)
+    with pytest.raises(ValueError, match=r"delivers Q=1 at t=11, in a phase that is not a fill"):
+        sbr.check_inlet_flows({"feed": _step_series(sbr_model, -10.0)}, 0.0, 54.0)
+
+
+def test_a_batch_feed_refuses_a_continuous_influent_and_its_advice_runs(
+    sbr_model, make_small_sbr_plant
+):
+    """A continuous influent into a batch-fed SBR is refused before the solve;
+    following the message (feed='continuous') solves, with the tank's volume
+    after one cycle what the inflow less the decant says."""
+    p = make_small_sbr_plant("batch", Q=50.0 / 27.0)
+    with pytest.raises(ValueError, match=r"has feed='batch', but its inlet delivers Q=1\.85185 "
+                                         r"at t=5e-06, in a fill phase.*use feed='continuous'"):
+        p.solve(t_span=(0.0, 27.0))
+    p = make_small_sbr_plant("continuous", Q=50.0 / 27.0)
+    sol = p.solve(t_span=(0.0, 27.0), t_eval=jnp.asarray([27.0]), rtol=1e-8)
+    assert float(sol.state[-1, sbr_model.n_species]) == pytest.approx(50.0, rel=1e-6)
+
+
+def test_a_batch_feed_from_another_unit_is_refused(sbr_model, make_small_sbr_plant):
+    """Fed by another unit, a batch SBR's inlet flow is not known before the
+    solve, so it cannot be checked and the solve is refused."""
+    from aquakin.plant import MixerUnit, WiringError
+    from aquakin.plant.influent import InfluentExpression
+
+    p = Plant("fed", time_unit="s")
+    p.add_unit(make_small_sbr_plant("batch").units["sbr"])
+    p.add_unit(MixerUnit("mix", ["in"], sbr_model))
+    p.add_influent("feed", InfluentExpression(sbr_model, Q=1.0, composition={"A": 1.0}),
+                   to="mix.in")
+    p.connect("mix.out", "sbr.feed")
+    with pytest.raises(WiringError, match=r"needs an influent on 'feed'.*another unit feeds it"):
+        p.solve(t_span=(0.0, 27.0))
 
 
 def test_mass_balance_reads_sbr_inventory(asm1):
@@ -376,11 +650,12 @@ def test_mass_balance_closes_over_aerobic_anoxic_decant_cycles(asm1):
               SBRPhase("anoxic", 0.15, mixed=True),
               SBRPhase("settle", 0.05, settle=True),
               SBRPhase("decant", 0.05, decant=True)]
-    sbr = SBRUnit("sbr", asm1, phases, full_volume=1000.0, feed_flow=0.0,
+    sbr = SBRUnit("sbr", asm1, phases, full_volume=1000.0, feed_flow=None,
                   decant_flow=5000.0,
                   settling=InterfaceSettling(v_settle=400.0, area=200.0),
                   particulate_species=_PARTS, initial_fraction=1.0,
-                  conditions={"T": 293.15}, initial_concentrations=jnp.asarray(C0))
+                  conditions={"T": 293.15}, initial_concentrations=jnp.asarray(C0),
+                  feed="continuous")
     p = Plant("sbr_batch", time_unit="d")
     p.add_unit(sbr)
     p.add_influent("feed", InfluentSeries.constant(asm1, Q=0.0), to="sbr.feed")

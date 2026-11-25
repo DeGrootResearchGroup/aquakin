@@ -104,7 +104,7 @@ from aquakin.plant.plant import (
 )
 from aquakin.plant.primary_clarifier import PrimaryClarifier
 from aquakin.plant.schedule import PiecewiseConstantSchedule
-from aquakin.plant.sbr import SBRPhase, SBRUnit
+from aquakin.plant.sbr import SBRPhase, SBRUnit, StorageReport, storage_report
 from aquakin.plant.separators import IdealThickener
 from aquakin.plant.settling import (
     InterfaceSettling,
@@ -239,6 +239,7 @@ __all__ = [
     "StateTranslator",
     "StatelessUnit",
     "SteadyStateResult",
+    "StorageReport",
     "StorageTank",
     "Stream",
     "StreamSeries",
@@ -306,6 +307,7 @@ __all__ = [
     "spec_changes",
     "spec_fingerprint",
     "spec_inputs",
+    "storage_report",
     "stripped_n2o",
     "t10_from_baffling",
     "t10_from_rtd",

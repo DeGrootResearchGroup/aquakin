@@ -366,6 +366,7 @@ _SBR = {
     "full_volume": 1000.0,
     "feed_flow": 5000.0,
     "decant_flow": 5000.0,
+    "feed": "batch",
     "phases": _PHASES,
     "settling": {"kind": "interface", "v_settle": 400.0, "area": 200.0},
     # ASM1's particulates, which the form would otherwise suggest for an empty list.
@@ -442,6 +443,45 @@ def test_an_unedited_sbr_form_gives_back_the_same_settings_and_plant(sbr):
     full = Plant.from_spec(sbr.to_spec()).to_spec()
     sbr.apply("sbr", settings, None)
     assert Plant.from_spec(sbr.to_spec()).to_spec() == full
+
+
+def test_the_feed_mode_is_a_choice_that_shows_only_its_own_settings(sbr):
+    """``feed`` is a select of the three modes that redraws the form; the fill
+    pump's flow shows with a storage or batch feed, the holding volume's
+    settings with a storage feed only, and neither with a continuous feed."""
+    rows = _rows(sbr, "sbr")
+    feed = rows["feed"]
+    assert (feed["widget"], feed["value"], feed["reshape"]) == ("select", "batch", True)
+    assert feed["items"] == ["continuous", "storage", "batch"]
+    assert feed["label"] == "feed *" and feed["placeholder"] == "required"
+    storage = {"storage_volume", "storage_initial_fraction", "overflow_port"}
+    assert "feed_flow" in rows and not storage & set(rows)
+    settings = sbr.units["sbr"].settings
+    sbr.apply("sbr", {**settings, "feed": "storage", "storage_volume": 80.0}, None)
+    rows = _rows(sbr, "sbr")
+    assert storage <= set(rows) and "feed_flow" in rows
+    assert rows["storage_volume"]["value"] == "80" and rows["storage_volume"]["suffix"] == "m³"
+    assert rows["storage_initial_fraction"]["placeholder"] == "0.5 (default)"
+    # Python-only, like the tank's own initial concentrations.
+    assert rows["storage_initial_concentrations"]["widget"] == "readonly"
+    sbr.apply("sbr", {**settings, "feed": "continuous", "feed_flow": None}, None)
+    rows = _rows(sbr, "sbr")
+    assert not (storage | {"feed_flow"}) & set(rows)
+
+
+def test_switching_feed_mode_leaves_the_other_modes_settings_unset(sbr):
+    """Read back after the mode changes, the settings only the old mode had are
+    dropped (they would be refused), and the ports follow the mode."""
+    settings = sbr.units["sbr"].settings
+    sbr.apply("sbr", {**settings, "feed": "storage", "storage_volume": 80.0}, None)
+    assert sbr.catalog.ports_for("sbr", sbr.units["sbr"].settings)[1] == ["effluent", "overflow"]
+    rows = _edit(forms.rows_for(sbr, "sbr", _info), feed="continuous")
+    _, back = forms.read_rows(sbr, "sbr", rows)
+    assert back["feed"] == "continuous"
+    assert not {"feed_flow", "storage_volume"} & set(back)
+    sbr.apply("sbr", back, None)
+    assert sbr.catalog.ports_for("sbr", back)[1] == ["effluent"]
+    assert Plant.from_spec(sbr.to_spec()).units["sbr"].feed == "continuous"
 
 
 def test_phases_edited_reordered_and_added_in_the_form_build_those_phases(sbr):

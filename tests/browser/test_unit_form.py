@@ -71,6 +71,7 @@ _SBR = """  sbr:
     full_volume: 1000.0
     feed_flow: 5000.0
     decant_flow: 5000.0
+    feed: batch
     phases:
       - {name: fill, duration: 0.1, feed: true}
       - {name: react, duration: 0.3, kla: 240.0}
@@ -137,6 +138,28 @@ def test_choosing_a_settling_kind_draws_its_arguments(page, tmp_path):
     # both kinds take.
     expect(page.get_by_label("settling n_layers")).to_be_visible()
     expect(page.get_by_label("settling v_settle")).to_have_value("400")
+
+
+def test_choosing_a_storage_feed_draws_the_holding_volume_and_its_overflow_port(
+    page, tmp_path
+):
+    """The feed mode redraws the form: a storage feed shows the holding volume's
+    settings, and once applied the unit has an overflow port on the canvas and
+    Python holds the volume typed."""
+    _open_with_an_sbr(page, tmp_path)
+    node = page.locator('.vue-flow__node[data-id="sbr"]')
+    node.click()
+    expect(page.get_by_label("feed_flow")).to_have_value("5000")
+    expect(page.get_by_label("storage_volume")).to_have_count(0)
+    _choose(page, page.get_by_label("feed *"), "storage")
+    volume = page.get_by_label("storage_volume")
+    expect(volume).to_be_visible()
+    volume.fill("800")
+    page.get_by_role("button", name="Apply changes").click()
+    expect(node.locator('.vue-flow__handle[data-handleid="overflow"]')).to_have_count(1)
+    page.get_by_role("tab", name="Spec").click()
+    spec = page.locator("#app pre")
+    expect(spec).to_contain_text(re.compile(r"feed: storage[\s\S]*storage_volume: 800\.0"))
 
 
 def test_nothing_entered_while_a_choice_redraws_the_form_is_lost(page, relay, tmp_path):
