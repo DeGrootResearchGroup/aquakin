@@ -41,6 +41,12 @@ SECONDS_PER_DAY: float = 86400.0
 HOURS_PER_DAY: float = 24.0
 MINUTES_PER_DAY: float = 1440.0
 
+# Pressure: the headspace digester's settings are in bar, the gas library in Pa.
+PA_PER_BAR: float = 1.0e5
+
+# Molar mass of methane (g/mol), as BSM2 rounds it in its biogas evaluation.
+CH4_G_PER_MOL: float = 16.0
+
 # ASM1 particulates that settle in a secondary clarifier (includes XND).
 ASM1_SETTLING_SPECIES: tuple[str, ...] = ("XS", "XI", "XB_H", "XB_A", "XP", "XND")
 

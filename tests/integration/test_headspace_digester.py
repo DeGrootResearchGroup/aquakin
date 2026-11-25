@@ -120,8 +120,8 @@ def _vector(model, values):
     return jnp.array([values.get(s, 0.0) for s in model.species])
 
 
-def _digester_plant(core):
-    plant = Plant("digester", time_unit="d")
+def _digester_plant(core, time_unit="d"):
+    plant = Plant("digester", time_unit=time_unit)
     unit = HeadspaceDigesterUnit(
         name="digester",
         model=core,
@@ -186,6 +186,47 @@ def test_steady_biogas_is_methane_and_carbon_dioxide(core, steady_digester):
     transferred = np.asarray(unit._transfer(C, G, core.default_parameters())) * unit.volume
     vented = float(unit.gas_flow(jnp.asarray(state))) * np.asarray(G)
     np.testing.assert_allclose(transferred[2:], vented[2:], rtol=1e-4)  # CH4, H2, CO2
+
+
+def test_digester_gas_reports_the_headspace_in_the_bsm2_convention(core, steady_digester):
+    """``plant.digester_gas`` reads the headspace digester. Checked by hand from
+    the saved headspace states: each partial pressure is the ideal-gas
+    ``G / M * R T`` in bar; the flow is the vented ``k_p (P - p_atm)``
+    normalized to the vent pressure by ``P / p_atm``, with ``P`` the gases plus
+    BSM2's water vapour; and the methane mass flow is the methane COD the
+    biogas carries out (``gas_export``) at 4 g COD per g CH4."""
+    plant, unit, sol = steady_digester
+    gas = plant.digester_gas(sol)
+    states = np.asarray(sol.unit_state("digester"))
+    n, T, R = core.n_species, 308.15, 8.314462618
+    bar = {
+        g.gas: states[:, n + k] * 1000.0 / g.molar_mass * R * T / 1e5
+        for k, g in enumerate(unit._gases)
+    }
+    P = sum(bar.values()) + 0.0313 * np.exp(5290.0 * (1.0 / 298.15 - 1.0 / T))
+    np.testing.assert_array_equal(gas.t, sol.t)
+    for name, got in (("CH4", gas.p_ch4), ("CO2", gas.p_co2), ("H2", gas.p_h2)):
+        np.testing.assert_allclose(got, bar[name], rtol=1e-12, err_msg=name)
+    np.testing.assert_allclose(gas.Q, unit.k_p * (P - unit.p_atm) * P / unit.p_atm, rtol=1e-12)
+    params = core.default_parameters()
+    export = np.stack([np.asarray(unit.gas_export(jnp.asarray(s), params)) for s in states])
+    ch4_cod = export[:, core.species_index["SCH4"]]  # g COD per day
+    np.testing.assert_allclose(gas.ch4, ch4_cod / 4.0 / 1e3, rtol=1e-12)
+    assert gas.methane_production() > 0.0
+
+
+def test_digester_gas_is_per_day_on_a_plant_in_hours(core, steady_digester):
+    """On a plant in hours the headspace vents m3 per hour; ``digester_gas``
+    reports it per day. Started from the steady digester, so gas is venting."""
+    _, _, steady = steady_digester
+    plant, unit, _ = _digester_plant(core, time_unit="h")
+    y0 = jnp.asarray(steady.unit_state("digester"))[-1]
+    sol = plant.solve(t_span=(0.0, 1.0), t_eval=jnp.asarray([0.0, 1.0]), y0=y0)
+    gas = plant.digester_gas(sol)
+    vented = unit.biogas(jnp.asarray(sol.unit_state("digester"))[-1])
+    assert float(vented.flow) > 0.0
+    per_hour = float(vented.flow * vented.pressure / vented.vent_pressure)
+    assert float(gas.Q[-1]) == pytest.approx(24.0 * per_hour, rel=1e-12)
 
 
 def test_coupling_pattern_covers_the_dense_jacobian(core):

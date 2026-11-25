@@ -2297,8 +2297,8 @@ class Plant:
         A :class:`~aquakin.plant.bsm.evaluation.DigesterGas` with the biogas flow
         ``Q`` (m³/d), the CH₄/CO₂/H₂ partial pressures and the CH₄ mass flow
         ``ch4`` (kg/d), plus ``.methane_production()`` (time-averaged kg CH₄/d).
-        Unlike :meth:`stream`, the biogas is *derived* from the ADM1 headspace
-        state (not a material port). Raises if the plant has no ADM1 digester.
+        Unlike :meth:`stream`, derived from the headspace state of an ADM1 or a
+        :class:`~aquakin.plant.headspace.HeadspaceDigesterUnit` digester; raises if none.
         """
         from aquakin.plant.bsm.evaluation import digester_gas
 

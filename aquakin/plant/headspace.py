@@ -33,16 +33,14 @@ from aquakin.core.gases import (
     volatile_concentration,
     water_vapour_pressure,
 )
-from aquakin.plant._constants import check_positive
+from aquakin.plant._constants import PA_PER_BAR, check_positive
 from aquakin.plant.coupling import CouplingAware
 from aquakin.plant.kinetic import KineticUnit
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
+from aquakin.plant.units import Biogas
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from aquakin.core.model import CompiledModel
-
-# Pa per bar.
-_PA_PER_BAR = 1.0e5
 
 
 @dataclass
@@ -136,12 +134,45 @@ class HeadspaceDigesterUnit(KineticUnit, CouplingAware):
         """Partial pressure (Pa) of each headspace gas."""
         return jnp.stack([partial_pressure(g, T, G[k]) for k, g in enumerate(self._gases)])
 
+    def _temperature(self):
+        """The headspace temperature (K): the digester's fixed temperature."""
+        return self.model.gases.kelvin(
+            self._condition_arrays[self.model.gases.temperature_field][0]
+        )
+
+    def _vented(self, pressure):
+        """Biogas flow (m³ per plant time unit) at headspace pressure ``pressure`` (Pa)."""
+        return self.k_p * jnp.maximum(0.0, pressure - self.p_atm * PA_PER_BAR) / PA_PER_BAR
+
     def gas_flow(self, state: jnp.ndarray) -> jnp.ndarray:
         """Biogas flow leaving the headspace (m³ per plant time unit)."""
-        G = state[self.n_species :]
-        T = self.model.gases.kelvin(self._condition_arrays[self.model.gases.temperature_field][0])
-        P_gas = jnp.sum(self._partial_pressures(G, T)) + water_vapour_pressure(T)
-        return self.k_p * jnp.maximum(0.0, P_gas - self.p_atm * _PA_PER_BAR) / _PA_PER_BAR
+        return self.biogas(state).flow
+
+    def biogas(self, state: jnp.ndarray) -> Biogas:
+        """The biogas the headspace vents at ``state``
+        (:class:`~aquakin.plant.units.BiogasHeadspaceUnit`).
+
+        Parameters
+        ----------
+        state : jnp.ndarray
+            The unit's state, shape ``(state_size,)``.
+
+        Returns
+        -------
+        Biogas
+            Its outflow, total and vent pressures, temperature and the partial
+            pressure of each declared gas.
+        """
+        T = self._temperature()
+        p = self._partial_pressures(state[self.n_species :], T)
+        pressure = jnp.sum(p) + water_vapour_pressure(T)
+        return Biogas(
+            flow=self._vented(pressure),
+            pressure=pressure,
+            vent_pressure=self.p_atm * PA_PER_BAR,
+            temperature=T,
+            partial_pressures={g.gas: p[k] for k, g in enumerate(self._gases)},
+        )
 
     def _transfer(self, C: jnp.ndarray, G: jnp.ndarray, params: jnp.ndarray) -> jnp.ndarray:
         """Gas-liquid transfer of each declared gas, per m³ of liquid per plant

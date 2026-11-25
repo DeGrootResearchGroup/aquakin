@@ -36,7 +36,9 @@ from dataclasses import dataclass, field
 import jax
 import jax.numpy as jnp
 
+from aquakin.core.gases import R_GAS
 from aquakin.integrate._common import native_time_factor
+from aquakin.plant._constants import CH4_G_PER_MOL, PA_PER_BAR
 from aquakin.plant.aeration_system import blower_airflow_total, blower_energy
 from aquakin.plant.balance import oxygen_transfer_history
 from aquakin.plant.errors import NoDigesterError
@@ -58,6 +60,7 @@ from aquakin.plant.metrics import (
     pumping_energy_bsm2,
     time_average,
 )
+from aquakin.plant.units import BiogasHeadspaceUnit
 
 # Default BSM1 port names (as wired by build_bsm1).
 _BSM1_EFFLUENT_PORT = "clarifier.overflow"
@@ -348,28 +351,39 @@ class DigesterGas:
 
 
 def _digester_unit_name(plant) -> str:
-    """The name of the ADM1 anaerobic digester (the unit carrying the headspace
-    gas states), or a clear error if the plant has none."""
+    """The name of the anaerobic digester: the first unit whose headspace vents
+    biogas (:class:`~aquakin.plant.units.BiogasHeadspaceUnit`) or that runs an
+    ADM1 model with its gas headspace states, or a clear error if the plant has
+    none."""
     for name in plant.list_units():
-        net = getattr(plant.units[name], "model", None)
+        unit = plant.units[name]
+        if isinstance(unit, BiogasHeadspaceUnit):
+            return name
+        net = getattr(unit, "model", None)
         if net is not None and "S_gas_ch4" in net.species_index:
             return name
     raise NoDigesterError(
-        "This plant has no anaerobic digester (no unit with an ADM1 gas "
-        "headspace), so it has no biogas. digester_gas() needs a build_bsm2 "
-        "plant with an ADM1DigesterUnit."
+        "This plant has no anaerobic digester (no unit with a gas headspace), so "
+        "it has no biogas. digester_gas() needs an ADM1DigesterUnit (as in a "
+        "build_bsm2 plant) or a HeadspaceDigesterUnit."
     )
 
 
 def digester_gas(plant, solution, params=None) -> DigesterGas:
     """The digester biogas trajectory (flow, partial pressures, CH₄ mass flow).
 
-    From the ADM1 headspace state and gas parameters: the partial pressures give
-    the biogas flow ``Q_gas = k_P·(P_gas − P_atm)`` and the CH₄ fraction, so
-    ``CH4 = (p_ch4/P_gas)·P_atm·16/R_T · Q_gas`` (the BSM2 evaluation formula).
-    Reached as ``plant.digester_gas(solution)``.
+    For an ADM1 digester, from its headspace states and gas parameters: the
+    partial pressures give the biogas flow ``Q_gas = k_P·(P_gas − P_atm)`` and
+    the CH₄ fraction, so ``CH4 = (p_ch4/P_gas)·P_atm·16/R_T · Q_gas`` (the BSM2
+    evaluation formula). For a unit whose own headspace vents the biogas
+    (:class:`~aquakin.plant.units.BiogasHeadspaceUnit`, such as
+    :class:`~aquakin.plant.headspace.HeadspaceDigesterUnit`), the same quantities
+    from the unit's :class:`~aquakin.plant.units.Biogas`, per day whatever the
+    plant's time unit. Reached as ``plant.digester_gas(solution)``.
     """
     name = _digester_unit_name(plant)
+    if isinstance(plant.units[name], BiogasHeadspaceUnit):
+        return _headspace_digester_gas(plant, solution, name)
     adm1 = plant.units[name].model
     params_full = plant.default_parameters() if params is None else jnp.asarray(params)
     plant._build_parameter_layout()
@@ -395,9 +409,34 @@ def digester_gas(plant, solution, params=None) -> DigesterGas:
     # and its OCI credit, by P_gas/P_atm (about 5% at the benchmark operating
     # point), while leaving the gas-phase concentrations unchanged.
     Q_gas = k_P * (P_gas - P_atm) * P_gas / P_atm  # m3/d, normalized to P_atm
-    ch4_density = (p_ch4 / P_gas) * P_atm * 16.0 / R_T  # kg CH4/m3
+    ch4_density = (p_ch4 / P_gas) * P_atm * CH4_G_PER_MOL / R_T  # kg CH4/m3
     return DigesterGas(
         t=solution.t, Q=Q_gas, p_ch4=p_ch4, p_co2=p_co2, p_h2=p_h2, ch4=ch4_density * Q_gas
+    )
+
+
+def _headspace_digester_gas(plant, solution, name) -> DigesterGas:
+    """:func:`digester_gas` of a :class:`~aquakin.plant.units.BiogasHeadspaceUnit`,
+    in the BSM2 convention: the flow normalized to the vent pressure, partial
+    pressures in bar, and the CH₄ mass flow, all per day."""
+    unit = plant.units[name]
+    gas = jax.vmap(unit.biogas)(jnp.asarray(solution.unit_state(name)))
+    zero = jnp.zeros_like(gas.pressure)
+
+    def bar(g):
+        return gas.partial_pressures.get(g, zero) / PA_PER_BAR
+
+    # The unit's flows are per its plant time unit; report per day.
+    flow = gas.flow * _per_day(plant)
+    # Moles of CH4 per m3 of headspace gas (ideal gas), times the vented flow.
+    ch4 = flow * bar("CH4") * PA_PER_BAR / (R_GAS * gas.temperature) * CH4_G_PER_MOL / 1e3
+    return DigesterGas(
+        t=solution.t,
+        Q=flow * gas.pressure / gas.vent_pressure,
+        p_ch4=bar("CH4"),
+        p_co2=bar("CO2"),
+        p_h2=bar("H2"),
+        ch4=ch4,
     )
 
 
@@ -966,9 +1005,14 @@ def direct_n2o_emission(
         _estimated_n2o_emission(plant, solution, params, estimated, n2o_species, kla_ratio)
     )
     # The transfers are rates per the plant's time unit; report per day.
-    if plant.time_unit is None:
-        return per_time_unit
-    return per_time_unit * native_time_factor(plant.time_unit, "d")
+    return per_time_unit * _per_day(plant)
+
+
+def _per_day(plant) -> float:
+    """The factor taking a rate per the plant's time unit to a rate per day:
+    1 on a plant in days, and on one with no time unit (no day to convert to).
+    """
+    return 1.0 if plant.time_unit is None else native_time_factor(plant.time_unit, "d")
 
 
 def _solved_n2o_emission(plant, solution, params, tanks, n2o_species) -> float:
