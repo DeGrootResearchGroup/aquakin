@@ -4,6 +4,7 @@ paths:
   - "tests/ui/**"
   - "tests/browser/**"
   - "ui-widget/**"
+  - "installers/**"
 ---
 
 # Rules — `aquakin_ui/` (the browser flowsheet editor, `aquakin-ui`)
@@ -230,3 +231,15 @@ editor needs at run time goes in its `REQUIRED`.
   depends on them; read Python's document from the header chip ("N units · M
   connections · K recycles") and messages through a recorder (the snackbar
   closes after four seconds); never a negative check with no sync point after it.
+
+## The installers (`installers/`)
+
+`install-aquakin.sh` (macOS, Linux) and `install-aquakin.bat` (Windows) install
+the editor with uv for people who do not use Python. **The two must install the
+same thing**: the same `PYTHON_VERSION`, the same uv options, and, once
+`scripts/stamp_installers.py` fills in `AQUAKIN_VERSION` at release, that
+release's `constraints.txt`, so a colleague gets the versions CI tested.
+`tests/unit/test_installers.py` compares them and runs the shell one against a
+stand-in uv; the batch file cannot run in CI, so test a change to it on Windows
+and say so. The batch file is checked out with CRLF (`.gitattributes`); cmd
+misreads one with bare LF.

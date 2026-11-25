@@ -186,7 +186,9 @@ aquakin-ui examples/projects/bsm2/flowsheet.yaml
 
 The editor lets you drag units from a palette, wire their ports, edit each unit
 in a form built from its documentation, see errors as you edit, and set up and
-run studies with their results plotted.
+run studies with their results plotted. Colleagues who do not use Python can
+install it with one download (Windows) or one pasted line (macOS, Linux): see
+[Installing the editor without Python](https://aquakin.readthedocs.io/en/latest/installing_the_editor.html).
 
 ## Documentation
 

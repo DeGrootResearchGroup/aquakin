@@ -29,6 +29,7 @@ tools to work with them:
 :caption: Guide
 
 getting_started
+installing_the_editor
 reactors
 plants
 sensitivity_and_calibration

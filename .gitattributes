@@ -1,0 +1,2 @@
+# cmd.exe misreads a batch file with LF line endings (labels and goto break).
+installers/*.bat text eol=crlf

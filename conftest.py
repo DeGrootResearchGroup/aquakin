@@ -33,6 +33,7 @@ from sybil.parsers import markdown, myst
 GUIDE_PAGES = [
     "docs/index.md",
     "docs/getting_started.md",
+    "docs/installing_the_editor.md",
     "docs/reactors.md",
     "docs/plants.md",
     "docs/sensitivity_and_calibration.md",
