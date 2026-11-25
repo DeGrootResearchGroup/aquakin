@@ -308,19 +308,25 @@ class OxygenTransferUnit(Protocol):
     co-stripped gas carries its content out.
 
     - ``required_signals``: the control signals ``oxygen_transfer`` reads (the
-      closed-loop kLa); the balance builds the signal bus only when one is named.
-    - ``oxygen_transfer(t, state, signals)``: ``(oxygen, stripped)``, each a
-      per-species transfer rate per unit volume, shape ``(n_species,)``: the
-      aeration term on the aerated oxygen species only, and on the co-stripped
-      gases only (zero when there are none). ``t`` is the plant time, which a
-      time-phased unit (the SBR) reads to pick the active phase as its ``rhs``
-      does.
+      closed-loop kLa).
+    - ``oxygen_transfer(t, state, inputs, params, signals)``: ``(oxygen,
+      stripped)``, each a per-species transfer rate per unit volume, shape
+      ``(n_species,)``: the aeration term the unit's ``rhs`` adds, on the
+      aerated oxygen species only, and on the co-stripped gases only (zero when
+      there are none). It is given what ``rhs`` is given, so it applies the same
+      temperature correction and conditions; ``t`` is the plant time, which a
+      time-phased unit (the SBR) reads to pick the active phase.
     """
 
     required_signals: tuple
 
     def oxygen_transfer(
-        self, t: jnp.ndarray, state: jnp.ndarray, signals: dict | None
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+        signals: dict | None,
     ) -> tuple[jnp.ndarray, jnp.ndarray]: ...
 
 

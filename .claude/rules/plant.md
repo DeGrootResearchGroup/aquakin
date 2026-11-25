@@ -220,10 +220,9 @@ new unit with a volume, area or other size does the same.
 **Co-stripped gases (`Aeration(stripped=...)`).** A gas stripped with oxygen
 is folded into the same per-species aeration vectors as oxygen by
 `build_aeration_vectors` (open loop: kLa times ratio; closed loop: the same
-signal at gain times ratio), so `aeration_transfer` has no gas branch and every
-`AerationUnit` (CSTR, IFAS, MBR) gets it. The `C_s(T)` saturation correction
-applies to the oxygen entry only; `required_signals` must de-duplicate, since
-the gas and oxygen read one signal.
+signal at gain times ratio); `stripped="model"` too, its T- and pH-dependent
+saturation filled in per call. `C_s(T)` corrects oxygen only; `required_signals`
+must de-duplicate. **`rhs` and `mass_balance` both call `aeration_term`**.
 
 - **Read a tank's aeration through the `AerationUnit` readers** (`oxygen_kla`,
   `kla_vector`, `saturation_vector`, `stripped_gases`), never by a species name:

@@ -85,8 +85,8 @@ paths:
   streams — effluent, wasted sludge, disposal cake), **gas** (O₂ transferred in
   by aeration, the digester biogas, denitrification N₂, and any gas co-stripped
   by `Aeration(stripped=...)` (`gas_detail["stripped_<q>"]`, the stripped
-  species' transfer dotted with their content) — computed from the
-  aeration term and a reaction-production integral over the reactive units, with
+  species' transfer dotted with their content) — computed from each unit's
+  own `aeration_term`, as its `rhs` adds it, and a reaction-production integral over the reactive units, with
   the digester deliberately excluded from the N gas term since it has no N gas
   phase; plus what a `GasExportUnit` vents through its own gas phase,
   `gas_detail["gas_export_<q>"]`, integrated from its `gas_export`) and
@@ -144,8 +144,11 @@ paths:
   params)`, `reaction_gas_components`; `KineticUnit` implements it, so every
   kinetic unit takes part, and the digester narrows the components to COD and
   its volumes to `_state_volume_vector`) and `units.OxygenTransferUnit`
-  (`oxygen_transfer(t, state, signals) -> (oxygen, stripped)` per volume,
-  `required_signals`; `AerationUnit` and the SBR). A variable-volume or
+  (`oxygen_transfer(t, state, inputs, params, signals) -> (oxygen, stripped)`
+  per volume, `required_signals`; `AerationUnit` and the SBR). Both are
+  evaluated over the saved times by `_unit_terms`, fed what `rhs` is fed, so
+  `AerationUnit.oxygen_transfer` returns its `aeration_term` (temperature
+  correction and declared gases included) rather than rebuilding `kla*(sat-C)`. A variable-volume or
   time-phased unit must read its volume and phase from the `state` and `t` it
   is given, through the same helper its `rhs` uses (the SBR's `_aeration`,
   `_phase_index`), so the balance integrates the term the solve did. **This is

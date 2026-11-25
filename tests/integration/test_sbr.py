@@ -405,13 +405,13 @@ def test_oxygen_transfer_follows_the_phase_rhs_is_in(asm1):
     state = sbr.initial_state()
     o2 = asm1.species_index["SO"]
     so = float(state[o2])
-    oxygen, stripped = sbr.oxygen_transfer(0.2, state, None)
+    oxygen, stripped = sbr.oxygen_transfer(0.2, state, {}, None, None)
     assert float(oxygen[o2]) == pytest.approx(240.0 * (sbr.do_sat - so), rel=1e-12)
     assert float(jnp.sum(jnp.abs(oxygen))) == pytest.approx(abs(float(oxygen[o2])), rel=1e-12)
     assert float(jnp.max(jnp.abs(stripped))) == 0.0
     # The fill phase (0-0.1) and the next cycle's settle (0.65+0.45) are unaerated.
-    assert float(jnp.max(jnp.abs(sbr.oxygen_transfer(0.05, state, None)[0]))) == 0.0
-    assert float(jnp.max(jnp.abs(sbr.oxygen_transfer(1.1, state, None)[0]))) == 0.0
+    assert float(jnp.max(jnp.abs(sbr.oxygen_transfer(0.05, state, {}, None, None)[0]))) == 0.0
+    assert float(jnp.max(jnp.abs(sbr.oxygen_transfer(1.1, state, {}, None, None)[0]))) == 0.0
     assert sbr.required_signals == ()
     # The reaction volume is the state's liquid volume, not the full volume.
     assert np.all(sbr.reaction_volumes(state, asm1.default_parameters()) == 500.0)

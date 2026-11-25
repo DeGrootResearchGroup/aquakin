@@ -330,7 +330,14 @@ class SBRUnit(AdjustableTemperatureUnit, CouplingAware):
         """No control signals: the SBR's aeration follows its phase schedule."""
         return ()
 
-    def oxygen_transfer(self, t, state: jnp.ndarray, signals: dict | None):
+    def oxygen_transfer(
+        self,
+        t,
+        state: jnp.ndarray,
+        inputs: dict,
+        params: jnp.ndarray,
+        signals: dict | None,
+    ):
         """The aeration transfer the mass balance integrates
         (:class:`~aquakin.plant.units.OxygenTransferUnit`): the same term
         :meth:`rhs` adds, at the phase :meth:`rhs` is in at ``t``.
@@ -341,6 +348,10 @@ class SBRUnit(AdjustableTemperatureUnit, CouplingAware):
             Plant time, which selects the active phase.
         state : jnp.ndarray
             The unit's state ``[C, V, <settling state>]``.
+        inputs : dict[str, Stream]
+            The unit's input streams (unused).
+        params : jnp.ndarray
+            The unit's parameter vector (unused).
         signals : dict or None
             The control-signal bus (unused).
 
