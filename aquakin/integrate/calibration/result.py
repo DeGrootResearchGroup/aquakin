@@ -1,11 +1,11 @@
-"""The calibration result: :class:`CalibrationResult` and the posterior-predictive
-:class:`PredictiveBand`."""
+"""The calibration result: :class:`CalibrationResult`, the posterior-predictive
+:class:`PredictiveBand` and the sampled posterior :class:`PosteriorSamples`."""
 
 from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -17,6 +17,70 @@ if TYPE_CHECKING:
 
 
 # --- Result dataclasses ------------------------------------------------
+
+
+class _FitRecord(NamedTuple):
+    """What a fit leaves on its :class:`CalibrationResult` for the posterior
+    sampler: the resolved problem, the forward model it was fitted through, and
+    the MAP in the unconstrained coordinates (rates, then fitted pools)."""
+
+    problem: object
+    forward_model: object
+    theta_map: np.ndarray
+
+
+@dataclass
+class PosteriorSamples:
+    """Draws from the posterior of a calibration, from :func:`aquakin.sample_posterior`.
+
+    Attributes
+    ----------
+    draws : np.ndarray
+        Full parameter vectors, shape ``(n_chains * n_draws, n_params)``, laid
+        out as :meth:`CalibrationResult.posterior_draws` lays them out: the free
+        parameters drawn, the fixed ones at their calibrated values. Chain 0's
+        draws come first. Pass it as ``draws=`` to
+        :meth:`CalibrationResult.predictive_band`, or as ``param_draws`` to the
+        experiment-design functions.
+    parameter_names : list[str]
+        The free rate parameters, in the order of ``params_named``.
+    params_named : dict[str, np.ndarray]
+        The draws of each free parameter in physical units, shape
+        ``(n_chains * n_draws,)``, by name.
+    ic_draws : list[dict[str, np.ndarray]] or None
+        With fitted initial pools, the draws of each dataset's pools in physical
+        units, by species (the layout of ``CalibrationResult.ic_named``).
+        ``None`` when no pools were fitted.
+    chains : np.ndarray
+        The chains in the sampled (unconstrained) coordinates, shape
+        ``(n_chains, n_draws, n_coordinates)``, columns as ``coordinate_names``.
+    coordinate_names : list[str]
+        The sampled coordinates: the rate names, then ``"ic[k].<species>"`` for
+        the log of each fitted pool (``"ic[k].<c_j>:<c_0>"`` for the log-ratio
+        coordinates of a fixed-total split).
+    r_hat : dict[str, float]
+        Rank-normalized split R-hat of each coordinate, the larger of its bulk
+        and folded (tail) values. Close to 1 when the chains agree; above about
+        1.01 the chains have not converged to the same distribution.
+    ess_bulk : dict[str, float]
+        Bulk effective sample size of each coordinate, over every chain: the
+        number of independent draws carrying the same information about the
+        centre of the distribution. The Monte Carlo error of a posterior mean is
+        about ``std / sqrt(ess_bulk)``.
+    acceptance_rate : np.ndarray
+        Fraction of proposals each chain accepted after the warm-up, shape
+        ``(n_chains,)``.
+    """
+
+    draws: np.ndarray
+    parameter_names: list[str]
+    params_named: dict[str, np.ndarray]
+    ic_draws: list | None
+    chains: np.ndarray
+    coordinate_names: list[str]
+    r_hat: dict[str, float]
+    ess_bulk: dict[str, float]
+    acceptance_rate: np.ndarray
 
 
 @dataclass
@@ -193,6 +257,9 @@ class CalibrationResult:
     # observations and their times, and whether the objective carried a prior.
     _observations_key: str | None = field(default=None, repr=False)
     _prior_in_loss: bool = field(default=False, repr=False)
+    # The resolved problem and forward model the fit ran on, for
+    # :func:`aquakin.sample_posterior` (``None`` on a result built by hand).
+    _fit_record: _FitRecord | None = field(default=None, repr=False, compare=False)
 
     def posterior_draws(self, model, n_draw: int = 200, *, seed: int = 0) -> np.ndarray:
         """Full parameter vectors drawn from the Laplace posterior.
@@ -277,21 +344,22 @@ class CalibrationResult:
         seed: int = 0,
         eig_keep: float | None = None,
         observed_species: list[str] | None = None,
+        draws: np.ndarray | None = None,
     ) -> PredictiveBand:
-        """Posterior-predictive band by propagating Laplace draws through a solve.
+        """Posterior-predictive band by propagating posterior draws through a solve.
 
         Samples the calibrated parameters from the Laplace posterior with
-        :meth:`posterior_draws`, integrates ``reactor``
-        from ``C0`` over ``t_eval``, and returns the pointwise percentile
-        envelope across draws. The draws are taken from ``self.posterior_cov``,
-        the covariance behind ``params_named_std``. A parameter on an exactly
-        null Hessian direction (infinite std) is not sampled, so the draws stay
-        finite.
+        :meth:`posterior_draws` (or takes the given ``draws``), integrates
+        ``reactor`` from ``C0`` over ``t_eval``, and returns the pointwise
+        percentile envelope across draws. The Laplace draws are taken from
+        ``self.posterior_cov``, the covariance behind ``params_named_std``. A
+        parameter on an exactly null Hessian direction (infinite std) is not
+        sampled, so the draws stay finite.
 
-        Requires that the calibration was run with ``laplace=True`` (so a Hessian
-        is available). The supplied ``C0`` may differ from the calibration
-        initial state --- e.g. propagate the calibrated-rate uncertainty through a
-        held-out / validation batch.
+        Without ``draws``, requires that the calibration was run with
+        ``laplace=True`` (so a Hessian is available). The supplied ``C0`` may
+        differ from the calibration initial state --- e.g. propagate the
+        calibrated-rate uncertainty through a held-out / validation batch.
 
         Parameters
         ----------
@@ -313,12 +381,23 @@ class CalibrationResult:
             a ``DeprecationWarning``.
         observed_species : list[str], optional
             Restrict the returned band to these species. ``None`` returns all.
+        draws : np.ndarray, optional
+            Full parameter vectors to propagate, shape ``(n, n_params)``, such
+            as ``PosteriorSamples.draws`` from :func:`aquakin.sample_posterior`.
+            ``n_draw`` and ``seed`` are then not used. ``None`` (default) draws
+            from the Laplace posterior.
 
         Returns
         -------
         PredictiveBand
+
+        Raises
+        ------
+        ValueError
+            If ``draws`` is not given and there is no Laplace posterior, or
+            ``draws`` does not have one column per model parameter.
         """
-        if self.posterior_cov is None:
+        if draws is None and self.posterior_cov is None:
             raise ValueError(
                 "predictive_band requires a Laplace posterior; call calibrate(..., laplace=True)."
             )
@@ -330,7 +409,15 @@ class CalibrationResult:
                 stacklevel=2,
             )
         model = reactor.model
-        draws = self.posterior_draws(model, n_draw, seed=seed)
+        if draws is None:
+            draws = self.posterior_draws(model, n_draw, seed=seed)
+        draws = np.atleast_2d(np.asarray(draws, dtype=float))
+        if draws.shape[1] != model.n_params:
+            raise ValueError(
+                f"draws has {draws.shape[1]} columns; the model has "
+                f"{model.n_params} parameters (pass full parameter vectors, "
+                "such as PosteriorSamples.draws)."
+            )
         C0_j = jnp.asarray(C0)
         t_eval_j = jnp.asarray(t_eval)
         t_end = float(np.asarray(t_eval)[-1])
