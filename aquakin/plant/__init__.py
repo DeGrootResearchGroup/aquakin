@@ -57,6 +57,7 @@ from aquakin.plant.disinfection import (
 )
 from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
+from aquakin.plant.clarifier import IdealClarifier
 from aquakin.plant.delay import HydraulicDelayUnit
 from aquakin.plant.ifas import IFASUnit, MBBRUnit
 from aquakin.plant.design import (
@@ -118,6 +119,7 @@ from aquakin.plant.time_expr import (
     compile_time_expression,
 )
 from aquakin.plant.streams import Stream, StreamSeries
+from aquakin.plant.takacs import TakacsClarifier
 from aquakin.plant.temperature import (
     AlgebraicTemperature,
     HeatBalanceTemperature,
@@ -200,6 +202,7 @@ __all__ = [
     "HeatBalanceTemperature",
     "HydraulicDelayUnit",
     "IFASUnit",
+    "IdealClarifier",
     "IdealThickener",
     "IdentityTranslator",
     "InfluentExpression",
@@ -243,6 +246,7 @@ __all__ = [
     "StorageTank",
     "Stream",
     "StreamSeries",
+    "TakacsClarifier",
     "TemperatureModel",
     "ThresholdSplitter",
     "TimeExpressionError",
