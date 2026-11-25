@@ -192,9 +192,11 @@ that imports both. Keep it that way rather than copying knowledge across:
   `flowsheet` is another file is pointed back, and a frozen one is refused (it
   would run its snapshot, not the drawing).
 - **A scheduled value is text, read by aquakin** (an influent's `Q`, `T` and
-  `composition` entries): `forms._scheduled` keeps a number a number (a
-  constant feed is written exactly as before) and anything else as typed.
-  Never parse an expression here; the background check or Save reports it.
+  `composition` entries, a flow setpoint, a `scheduled_port_map`'s pumps):
+  `forms._scheduled` keeps a number a number (a constant is written exactly as
+  before) and anything else as typed. Never parse an expression here; the
+  background check or Save reports it. A mapping field is split into entries by
+  `forms._entries` at commas outside brackets only (`clip(t, 0, 1)` is one value).
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
 - **A stored aeration species the model lacks** is replaced by the model's

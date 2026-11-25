@@ -624,6 +624,51 @@ feed:
   composition: {SNH: 31.6 + 8*sin(2*pi*t - 0.5), SS: 69.5}
 ```
 
+### Pumps and splits that follow a schedule
+
+The same expressions drive the plant's own flow setpoints: a clarifier's
+`underflow_Q` or `overflow_Q`, a `SetpointSplitter`'s pump flows, a
+`ThresholdSplitter`'s `threshold` and a primary clarifier's sludge fraction
+`f_PS`. Write the expression where the number would go:
+
+```python
+from aquakin.plant import PrimaryClarifier, SetpointSplitter
+
+sludge = SetpointSplitter("sludge_split", model,
+                          {"waste": "385 + 75*step(t - 30)"},   # wastage up on day 30
+                          remainder_port="ras")
+primary = PrimaryClarifier("primary", model, volume=900.0,
+                           f_PS="0.007*(1 + 0.2*sin(2*pi*t))")  # a diurnal sludge draw
+print(sludge.scheduled_setpoints(), primary.scheduled_setpoints())
+# ('waste',) ('f_PS',)
+```
+
+% invisible-code-block: python
+%     assert sludge.scheduled_setpoints() == ("waste",)
+%     assert primary.scheduled_setpoints() == ("f_PS",)
+
+Like every unit setting, a setpoint is on the plant's clock: `t` is in the
+plant's time unit and a flow in m³ per that unit. Its value is clipped as it is
+evaluated, a flow to zero or more and a fraction to between 0 and 1, because no
+check made when the unit is built can tell what an expression does over a whole
+run; a constant that is out of range is still refused. In a flowsheet file the
+expression is the setting's value:
+
+```yaml
+sludge_split:
+  kind: setpoint_splitter
+  model: asm1
+  output_port_flows: {waste: 385 + 75*step(t - 30)}
+  remainder_port: ras
+```
+
+A run driven by such a setpoint differentiates with respect to the model
+parameters and the other setpoints; the numbers inside an expression are not
+parameters, so to differentiate with respect to a pump flow, keep that flow a
+number. A plant with a setpoint that varies in time works out its recycle
+streams afresh at every step instead of reusing a map computed once per run, so
+it solves somewhat more slowly than the same plant with constant setpoints.
+
 ### A feed from laboratory measurements
 
 `characterize_influent` splits the aggregate measurements a laboratory reports
