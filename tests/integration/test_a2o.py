@@ -16,6 +16,7 @@ import pytest
 
 import aquakin
 from aquakin.plant import FerricDose, a2o_influent, a2o_warm_start, build_a2o
+from tests.conftest import TSS_FACTOR_PARAMS
 
 
 @pytest.fixture(scope="module")
@@ -260,6 +261,54 @@ def test_a2o_alkalinity_is_municipal_in_the_models_declared_unit(asm2d):
     for unit, state in plant.states_by_unit(a2o_warm_start(plant)).items():
         if unit in plant.activated_sludge_reactors():
             assert 2.0 <= float(state[salk]) * to_mol <= 10.0, unit
+
+
+def _itss_sum(model, C):
+    """The TSS of a composition through asm2d's own iTSS parameters, written out
+    by name: XMeOH / XMeP are already in g TSS."""
+    p = dict(zip(model.parameters, map(float, model.default_parameters()), strict=True))
+    tss, factors = TSS_FACTOR_PARAMS["asm2d"]
+    weights = {s: p[f] for s, f in factors.items()} | {"XMeOH": 1.0, "XMeP": 1.0}
+    return sum(w * float(C[model.species_index[s]]) for s, w in weights.items())
+
+
+def test_a2o_influent_tss_is_the_itss_weighted_particulates(asm2d):
+    """The influent's XTSS is the TSS of its particulates, the value the
+    reactions keep XTSS at: 0.75·(XI + XS) + 0.9·XH = 193.5 g TSS/m³, not 0. An
+    override of a particulate moves it, an override of XTSS is kept."""
+    C = a2o_influent(asm2d).at(0.0).C
+    xtss = asm2d.species_index["XTSS"]
+    assert float(C[xtss]) == pytest.approx(_itss_sum(asm2d, C), rel=1e-12)
+    assert float(C[xtss]) == pytest.approx(193.5, rel=1e-12)
+    more = a2o_influent(asm2d, overrides={"XI": 130.0}).at(0.0).C
+    assert float(more[xtss]) == pytest.approx(193.5 + 0.75 * 100.0, rel=1e-12)
+    given = a2o_influent(asm2d, overrides={"XTSS": 50.0}).at(0.0).C
+    assert float(given[xtss]) == 50.0
+
+
+def test_a2o_warm_start_tss_is_the_itss_weighted_particulates(asm2d):
+    plant = build_a2o(asm2d, use_takacs=False)
+    states = plant.states_by_unit(a2o_warm_start(plant))
+    for unit in plant.activated_sludge_reactors():
+        C = states[unit]
+        assert float(C[asm2d.species_index["XTSS"]]) == pytest.approx(
+            _itss_sum(asm2d, C), rel=1e-12
+        ), unit
+
+
+def test_a2o_settler_weighs_the_solids_by_their_itss_factors(asm2d):
+    """The Takács settler's TSS, which sets its settling velocity, weighs each
+    particulate by its iTSS factor and XTSS (which already sums them) by 0, so a
+    settler layer's TSS is the solids' TSS rather than COD, P and TSS added
+    together."""
+    clar = build_a2o(asm2d).units["clarifier"]
+    p = dict(zip(asm2d.parameters, map(float, asm2d.default_parameters()), strict=True))
+    _, factors = TSS_FACTOR_PARAMS["asm2d"]
+    expected = {s: p[f] for s, f in factors.items()} | {"XTSS": 0.0, "XMeOH": 1.0, "XMeP": 1.0}
+    got = dict(zip(clar.particulate_species, clar._part_tss_factors, strict=True))
+    assert set(got) == set(expected)
+    for s, w in expected.items():
+        assert got[s] == pytest.approx(w, rel=1e-12, abs=1e-12), s
 
 
 def test_ferric_dose_defaults_and_frozen():

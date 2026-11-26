@@ -40,6 +40,7 @@ from aquakin.plant._builder_support import (
     recycle_pump_flows,
     register_recycle_streams,
 )
+from aquakin.plant._constants import lumped_tss_weights, with_lumped_tss
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.mixer import MixerUnit, SetpointSplitter
@@ -86,7 +87,9 @@ A2O_CLARIFIER_HEIGHT = 4.0  # m
 # model declares: g/m³ of COD, N or P, except the alkalinity SALK in kmol
 # HCO₃⁻/m³ (0.007 kmol/m³ = 7 mol/m³, a moderately buffered municipal sewage).
 # The fermentation product SA (volatile fatty acids) is what drives biological P
-# removal in the anaerobic selector, so it is non-trivial.
+# removal in the anaerobic selector, so it is non-trivial. The suspended solids
+# XTSS are not listed: ``a2o_influent`` sets them from these particulates with
+# the model's own TSS factors.
 A2O_INFLUENT = {
     "SO2": 0.0,
     "SF": 40.0,  # fermentable COD
@@ -151,12 +154,14 @@ def a2o_influent(
     Returns
     -------
     InfluentSeries
-        A constant-in-time, zero-based influent (unlisted species are 0).
+        A constant-in-time, zero-based influent (unlisted species are 0). Its
+        suspended solids ``XTSS`` are the TSS of its particulates through the
+        model's ``iTSS`` factors, unless ``overrides`` gives them.
     """
     comp = dict(A2O_INFLUENT)
     if overrides:
         comp.update(overrides)
-    return model.influent(comp, Q=Q, T=T)
+    return model.influent(with_lumped_tss(model, comp), Q=Q, T=T)
 
 
 #: A healthy bio-P mixed-liquor seed (g/m³, SALK in kmol/m³): an established EBPR
@@ -168,7 +173,8 @@ def a2o_influent(
 #: solve relaxes any healthy seed to the same operating point; the algebraic
 #: ``Plant.steady_state`` needs the seed near it, since from a seed far off its
 #: Newton steps can reach the other steady state, where the nitrifiers have
-#: washed out.
+#: washed out. The suspended solids XTSS are not listed: ``a2o_warm_start`` sets
+#: them from the particulates with the model's own TSS factors.
 A2O_WARM_REACTOR_COMPOSITION = {
     "SO2": 2.0,
     "SF": 2.0,
@@ -186,7 +192,6 @@ A2O_WARM_REACTOR_COMPOSITION = {
     "XPP": 200.0,
     "XPHA": 25.0,
     "XAUT": 90.0,
-    "XTSS": 20.0,
     "XMeOH": 0.0,
     "XMeP": 0.0,
 }
@@ -214,7 +219,7 @@ def a2o_warm_start(plant: Plant) -> jnp.ndarray:
     if not reactors:  # pragma: no cover - a build_a2o plant always has reactors
         raise ValueError("no activated-sludge reactor found in the plant")
     model = plant.units[reactors[0]].model
-    ml = model.concentrations(A2O_WARM_REACTOR_COMPOSITION, base="zero")
+    ml = model.concentrations(with_lumped_tss(model, A2O_WARM_REACTOR_COMPOSITION), base="zero")
     return plant.initial_state(overrides=dict.fromkeys(reactors, ml))
 
 
@@ -255,7 +260,8 @@ def build_a2o(
         If True (default), use the ten-layer Takács secondary clarifier, with
         its own per-layer solids state, settling between layers with the
         Godunov interface flux (:class:`~aquakin.plant.takacs.TakacsClarifier`'s
-        defaults). If False, use the fast stateless ``IdealClarifier``, which
+        defaults), at a settling velocity set by the solids' TSS through the
+        model's ``iTSS`` factors. If False, use the fast stateless ``IdealClarifier``, which
         captures a fixed fraction of the particulates and has no state of its
         own.
 
@@ -371,6 +377,10 @@ def build_a2o(
             height=A2O_CLARIFIER_HEIGHT,
             init_underflow_Q=Q_underflow,
             particulate_species=list(ASM2D_PARTICULATES),
+            # The settling velocity reads the solids as TSS: each particulate
+            # through the model's iTSS factor, and XTSS itself (which already
+            # sums them) at 0, so no solid is counted twice.
+            tss_factors=lumped_tss_weights(model),
         ),
         ideal_kwargs=dict(particulate_species=list(ASM2D_PARTICULATES)),
     )
