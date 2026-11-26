@@ -45,10 +45,11 @@ connections:
 
 Every model a unit uses is listed under `models:`, either a shipped model or a
 model YAML file beside the flowsheet. A model file can `extends:` a shipped
-model, so a variant is a few lines: `examples/projects/bsm2/` holds BSM2 this
-way, with its 15 °C ASM1 parameter set as `models/asm1_bsm2.yaml`. Each model
-carries a fingerprint of its content, and reading a flowsheet whose model has
-changed since it was written warns.
+model, so a variant is a few lines: BSM2's ASM1, with its parameters referenced
+to 15 °C, is a `models/asm1_bsm2.yaml` that names `extends: asm1` and lists the
+parameters it changes ([Inheriting a model](model_format.md#inheriting-a-model-extends)).
+Each model carries a fingerprint of its content, and reading a flowsheet whose
+model has changed since it was written warns.
 
 A time-varying influent is kept as a table file beside the flowsheet (columns
 `t`, `Q`, optionally `T`, and species; see `aquakin.plant.read_influent_table`).
@@ -93,6 +94,32 @@ builds: its settings, wiring and the content of its models and influent tables,
 but not its layout, labels or where its files sit. Record it beside a result to
 tell later whether the result still matches the flowsheet.
 
+## The project folder
+
+A flowsheet and everything it reads sit in one folder, the *project*, with the
+studies of it beside them:
+
+```text
+my_project/
+├── flowsheet.yaml          the plant
+├── models/                 model files the flowsheet uses (shipped models stay in aquakin)
+│   └── asm1_bsm2.yaml
+├── data/                   influent tables
+│   └── feed.csv
+└── studies/
+    └── effluent/           one study (below)
+        ├── study.yaml      what to run
+        ├── data.csv        observations, for a fit
+        ├── run.yaml        the record of the last run
+        ├── results/        its results
+        ├── frozen.yaml     present while the study is frozen
+        └── snapshot/       the frozen copy of the plant: flowsheet, models, data
+```
+
+`to_spec(path)` and the editor's **Save** copy a model or an influent table from
+outside the folder into `models/` and `data/`, so the folder can be moved or
+shared whole.
+
 ## Studies
 
 A *study* is one analysis of a flowsheet saved in the project with its results.
@@ -116,7 +143,8 @@ aquakin study run studies/effluent      # writes results/ and run.yaml
 aquakin study check studies/effluent    # fresh, stale (and why), damaged or failed
 ```
 
-or `aquakin.study.run_study(path)` / `check_study(path)` from Python. Every
+or `aquakin.study.run_study(path)` / `check_study(path)` from Python (the
+commands are listed in [The command line](#the-command-line)). Every
 result is keyed by name (parameters by `model.param`, states by unit and state
 name, trajectories as CSV columns such as `effluent.SNH`), so results stay
 readable after the flowsheet is reorganized. A channel is a species, a
@@ -170,13 +198,14 @@ may name, and `study_results(path)` reads a study's results back.
 
 ```bash
 pip install "aquakin[ui]"
-aquakin-ui examples/projects/bsm2/flowsheet.yaml
+aquakin-ui flowsheet.yaml
 ```
 
 ([Installing the editor without Python](installing_the_editor.md) covers a
 computer without Python: one download or one pasted line.)
 
-opens a flowsheet editor in your browser, served on this machine only. Drag
+opens a flowsheet editor in your browser on the flowsheet saved above (or an
+empty one, without a file), served on this machine only. Drag
 units from the palette, wire their ports, and edit each unit in a form generated
 from its own documentation; aquakin builds each unit and then the whole plant as
 you edit and lists any errors.
@@ -226,3 +255,21 @@ choose from; **Edit** opens a study's settings in the same dialog. The dialog
 writes the same `study.yaml` you would write by hand, and a data table or saved
 state chosen from elsewhere is copied into the study folder. A study set up in
 the editor follows the flowsheet file that is open.
+
+## The command line
+
+Installing aquakin installs two commands:
+
+| Command | What it does |
+|---|---|
+| `aquakin study run <study> [--replace]` | runs a study and writes its results; a study that has results is run again only with `--replace` |
+| `aquakin study run <study> --json` | the same, reporting progress as JSON lines for a program that drives it; a line `cancel` on standard input, or closing it, stops the run at its next checkpoint |
+| `aquakin study check <study>` | prints whether the results are fresh, stale (and why), not run, failed or cancelled; exits with 0 when fresh or not run, 1 otherwise |
+| `aquakin study freeze <study>` | pins the study to a snapshot of its plant |
+| `aquakin study unfreeze <study> --discard-results` | makes it follow the flowsheet again and deletes its results |
+| `aquakin study copy <study> <name>` | copies the study, results included, beside it under `<name>`, and prints the new folder |
+| `aquakin catalog` | prints every unit kind a flowsheet file may use, with its settings and ports, as JSON |
+| `aquakin-ui [<flowsheet>] [--port <n>] [--no-browser]` | opens the editor; `--port` serves it on a fixed port (by default a free one), and `--no-browser` prints the address instead of opening a browser |
+
+`<study>` is the study's folder, such as `studies/effluent`. A command that
+fails exits with 2 and prints the reason.

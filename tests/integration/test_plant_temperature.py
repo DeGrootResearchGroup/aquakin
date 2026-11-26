@@ -1,6 +1,7 @@
 """Plant.set_temperature and the influent/plant model-mismatch error."""
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 import aquakin
@@ -106,6 +107,41 @@ def test_set_temperature_rejects_bad_units(asm1):
         plant.set_temperature(10.0, units=["nope"])
     with pytest.raises(aquakin.WiringError, match="does not support"):
         plant.set_temperature(10.0, units=["clarifier"])  # a separator, no T
+
+
+def _one_tank(asm1, inflow_T):
+    """A single ASM1 CSTR on a constant influent at ``inflow_T`` (K, or ``None``
+    for a temperature-agnostic influent)."""
+    plant = Plant("one-tank", time_unit="d")
+    plant.add_unit(CSTRUnit("tank", asm1, volume=1000.0, input_port_names=["inlet"],
+                            conditions={"T": 293.15}))
+    inf = {"SS": 60.0, "SNH": 30.0, "XB_H": 500.0, "XB_A": 50.0, "SO": 2.0}
+    plant.add_influent("feed", InfluentSeries.constant(asm1, Q=1000.0, T=inflow_T, **inf),
+                       to="tank.inlet")
+    return plant
+
+
+def test_inflow_temperature_takes_precedence_over_set_temperature(asm1):
+    """The precedence the ``set_temperature`` docstring states: a reactor whose
+    inflow carries a temperature runs at the inlet temperature, so the static
+    ``T`` set on it does not change its RHS; without an inflow temperature the
+    static ``T`` drives the kinetics, and a plant set to 15 degC gives exactly the
+    RHS of one fed at 15 degC."""
+    fed = _one_tank(asm1, 288.15)
+    y0 = fed.initial_state()
+    fed.set_temperature(10.0)
+    d_cold = fed.derivative(y0)
+    fed.set_temperature(25.0)
+    d_warm = fed.derivative(y0)
+    np.testing.assert_array_equal(np.asarray(d_cold), np.asarray(d_warm))
+
+    agnostic = _one_tank(asm1, None)
+    agnostic.set_temperature(10.0)
+    d_static_cold = agnostic.derivative(y0)
+    assert not np.allclose(np.asarray(d_static_cold), np.asarray(d_cold))
+    agnostic.set_temperature(15.0)
+    np.testing.assert_allclose(np.asarray(agnostic.derivative(y0)), np.asarray(d_cold),
+                               rtol=1e-12, atol=0)
 
 
 # ----- model-mismatch error --------------------------------------------

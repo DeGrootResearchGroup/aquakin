@@ -259,7 +259,9 @@ def test_plant_calibrate_bsm1_gradient_matches_fd(monkeypatch):
     from aquakin.plant.bsm import bsm1_warm_start, build_bsm1, load_bsm1_influent
 
     asm1 = load_model("asm1")
-    plant = build_bsm1(asm1)
+    # The ideal clarifier: the check is of the calibration gradient, and the step
+    # study in the docstring was made on this plant.
+    plant = build_bsm1(asm1, use_takacs=False)
     # A constant influent (the dry-weather first sample) gives a clean transient.
     dry = load_bsm1_influent("dry", asm1)
     plant.add_influent(

@@ -70,16 +70,18 @@ plant gradient is finite by default with no `dtmax` to tune.
 below): for a **multi-output sensitivity screen of a stiff model** forward mode
 can be *faster and lighter* than reverse — the reverse adjoint is paid once per
 output and is inflated by the `dtmax` step cap, whereas forward pushes all `d`
-tangents through one solve, independent of the output count. (Benchmarked at
-~2× faster, less memory, for the 4-output/17-input Khalil batch screen; for a
-single scalar output reverse still wins. Forward and reverse agree to machine
-precision — the choice is purely performance, and the right one depends on the
-output/input counts and the adjoint stiffness, so both are exposed.) The
-**full** second-order AD Hessian (`jax.hessian`) is best avoided entirely: with
-the default adjoint it hits the `custom_vjp` wall, and even with `DirectAdjoint`
-the second derivatives through the stiff implicit solve are unreliable
-(they disagree with finite differences). Use a first-order Gauss–Newton
+tangents through one solve, independent of the output count (both are exposed;
+measured in `.claude/notes/differentiation-log.md`). The **full** second-order
+AD Hessian (`jax.hessian`) is best avoided: with the default adjoint it hits
+the `custom_vjp` wall, and even with `DirectAdjoint` the second derivatives
+through the stiff solve disagree with finite differences. Use a first-order Gauss–Newton
 `H = JᵀJ` instead (see `calibrate(laplace=LaplaceConfig(method="gauss_newton"))`).
+
+**A failed solve is checked on the host.** `_run_diffeqsolve`, the forward
+sensitivity and the lean `forward_solve` loop return a failed solve with its
+diffrax `result`, so every caller must pass it to `check_solve_result` in
+`integrate/_solver.py`: raising inside the program makes JAX log Equinox's
+banner first. Under a trace it restores the runtime check (gradients still fail).
 
 ### Operator Splitting
 
@@ -163,11 +165,9 @@ guard, and plant resets checked against the closed form).
 
 ### Compiled-solve caching
 
-Compiling a stiff solve (JAX trace + lower + XLA) dominates its cost — the run
-itself is comparatively free (measured ~1.6 s compile vs ~0.02 s run for an
-ASM1 batch solve; ~34 s vs ~4 s for the full BSM2 plant). So the cost of code
-that solves repeatedly is *recompilation*, and the integrators cache the
-compiled solve to avoid it:
+Compiling a stiff solve (JAX trace + lower + XLA) dominates its cost, so code
+that solves repeatedly pays in *recompilation*; the integrators cache the
+compiled solve (timings: `docs/plant_performance.md`):
 
 - **Models** (`load_model`) are cached by name, so repeated
   `load_model("asm1")` returns the **same** object (and skips re-parsing the

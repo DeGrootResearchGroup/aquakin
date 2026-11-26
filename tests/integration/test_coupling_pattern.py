@@ -83,6 +83,43 @@ def test_settler_coupling_pattern_is_superset_of_dense_jacobian():
         assert not (active & ~cp.self_pattern).any()      # superset
 
 
+@pytest.mark.parametrize("mode", ["lumped_tss", "per_species"])
+def test_settler_inlet_pattern_covers_the_feed_coupling_of_every_layer(mode):
+    """The feed reaches every layer's settling flux through the non-settleable
+    floor ``X_min``, so the inlet pattern must cover ``d(rhs)/d(feed C)`` when the
+    layer profile and the feed vary together -- and every particulate row must
+    read the feed solids. Derived at a single (uniform-seed) profile, the
+    interior layers' flux changes cancel and the pattern kept only the bottom,
+    feed and top layers, which the Takács BSM1 trajectory then exceeded."""
+    from aquakin.plant.streams import Stream
+    from aquakin.plant.takacs import TakacsClarifier
+
+    net = aquakin.load_model("asm1")
+    s = TakacsClarifier(name="s", model=net, area=1500.0, height=4.0,
+                        underflow_Q=1.8e4, soluble_holdup=True, composition_mode=mode)
+    ip = s.coupling_pattern().inlet_pattern
+    m = s.state_size
+
+    def rhs_wrt_feed(y, C):
+        inlet = {s.input_port: Stream(Q=jnp.asarray(2.0e4), C=C, model=net)}
+        return s.rhs(jnp.asarray(0.0), y, inlet, None)
+
+    fj = jax.jit(jax.jacfwd(rhs_wrt_feed, argnums=1))
+    rng = np.random.default_rng(3)
+    base_y = np.maximum(np.abs(np.asarray(s.initial_state())), 1e-3)
+    base_C = np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3)
+    for _ in range(8):
+        y = jnp.asarray(base_y * 10.0 ** rng.uniform(-2, 2, size=base_y.shape))
+        C = jnp.asarray(base_C * 10.0 ** rng.uniform(-2, 2, size=base_C.shape))
+        J = np.asarray(fj(y, C))
+        active = np.abs(J) > 1e-9 * (np.abs(J).max() + 1e-300)
+        assert not (active & ~ip).any()                    # superset
+
+    n_part = m - s.n_layers * len(s._soluble_indices)     # particulate head rows
+    feed_solids = np.asarray(s._part_indices)
+    assert ip[:n_part][:, feed_solids].any(axis=1).all()  # every layer reads X_min
+
+
 def test_settler_output_pattern_covers_outlets_and_skips_interior_layers():
     """The settler declares which layer states its outlets read: a superset of
     d(outlet C)/d(state) at diverse profiles, yet not the whole state -- the
@@ -462,3 +499,114 @@ def test_single_unit_plant_no_within_unit_coupling_missing(kind):
         active = np.abs(J) > 1e-9 * (np.abs(J).max() + 1e-300)
         missing += int((active & ~P).sum())
     assert missing == 0
+
+
+# --------------------------------------------------------------------------
+# Every AD-derived pattern covers the Jacobian when state and inlet vary together.
+# --------------------------------------------------------------------------
+#
+# ``ad_union`` exercises only the inputs it samples: a branch that depends on an
+# input held fixed stays on one side. The settler's pattern once sampled the feed
+# at a fixed layer profile and missed couplings that only switch on as both move,
+# so each unit is checked here at joint (state, inlet) samples drawn with a seed
+# its derivation does not use.
+
+
+def _sbr_phases():
+    from aquakin.plant.sbr import SBRPhase
+
+    return [SBRPhase("fill", 1.0, feed=True), SBRPhase("react", 2.0, kla=200.0),
+            SBRPhase("settle", 0.5, settle=True),
+            SBRPhase("decant", 0.5, decant=True), SBRPhase("idle", 0.5)]
+
+
+def _ad_union_units(net):
+    """Each unit whose ``coupling_pattern`` calls ``ad_union``, in every
+    configuration that changes which blocks it derives: ``(unit, Q, times)``."""
+    from aquakin.plant import Aeration, IFASUnit
+    from aquakin.plant.sbr import SBRUnit
+    from aquakin.plant.settling import InterfaceSettling, LayeredSettling
+    from aquakin.plant.takacs import TakacsClarifier
+
+    def sbr(settling, **kw):
+        unit = SBRUnit("sbr", net, _sbr_phases(), full_volume=1000.0, feed_flow=500.0,
+                       decant_flow=800.0, settling=settling, particulate_species=_PARTS,
+                       conditions={"T": 293.15}, **kw)
+        times = [s + 0.5 * float(p.duration)
+                 for p, s in zip(unit.phases, unit._phase_starts, strict=True)]
+        return unit, 500.0, times
+
+    units = {}
+    for mode in ("lumped_tss", "per_species"):
+        for holdup in (False, True):
+            units[f"takacs_{mode}_holdup{holdup}"] = (
+                TakacsClarifier(name="s", model=net, area=1500.0, height=4.0,
+                                underflow_Q=1.8e4, soluble_holdup=holdup,
+                                composition_mode=mode),
+                2.0e4, [0.0])
+    units["sbr_interface"] = sbr(InterfaceSettling(v_settle=400.0, area=200.0), feed="batch")
+    units["sbr_layered"] = sbr(LayeredSettling(n_layers=5, v_settle=400.0, area=200.0),
+                               feed="batch")
+    units["sbr_storage"] = sbr(InterfaceSettling(v_settle=400.0, area=200.0),
+                               feed="storage", storage_volume=800.0)
+    units["ifas"] = (
+        IFASUnit("ifas", net, volume=1000.0, input_port_names=["in"],
+                 specific_surface_area=500.0, fill_fraction=0.5, biofilm_thickness=8e-4,
+                 n_layers=4, aeration=Aeration(kla=200.0), conditions={"T": 293.15}),
+        500.0, [0.0])
+    return units
+
+
+_AD_UNION_UNITS = [
+    "takacs_lumped_tss_holdupFalse", "takacs_lumped_tss_holdupTrue",
+    "takacs_per_species_holdupFalse", "takacs_per_species_holdupTrue",
+    "sbr_interface", "sbr_layered", "sbr_storage", "ifas",
+]
+
+
+@pytest.mark.parametrize("name", _AD_UNION_UNITS)
+def test_ad_union_pattern_covers_joint_state_and_inlet_samples(asm1_net, name):
+    """Both the self and the inlet pattern are supersets of the RHS Jacobian
+    when the unit's state and its inlet concentrations vary together over four
+    decades, at a representative time in each phase."""
+    from aquakin.plant.streams import Stream
+
+    unit, Q, times = _ad_union_units(asm1_net)[name]
+    net = unit.model
+    cp = unit.coupling_pattern()
+    (port,) = unit.input_ports
+    params = net.default_parameters()
+
+    def rhs(t, y, C):
+        return unit.rhs(t, y, {port: Stream(Q=jnp.asarray(Q), C=C, model=net)}, params)
+
+    jac = jax.jit(jax.jacfwd(rhs, argnums=(1, 2)))
+    base_y = np.maximum(np.abs(np.asarray(unit.initial_state())), 1e-3)
+    base_C = np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3)
+    rng = np.random.default_rng(1234)
+    for t in times:
+        for _ in range(6):
+            y = jnp.asarray(base_y * 10.0 ** rng.uniform(-2, 2, size=base_y.shape))
+            C = jnp.asarray(base_C * 10.0 ** rng.uniform(-2, 2, size=base_C.shape))
+            for J, pattern, what in zip(jac(jnp.asarray(t, dtype=float), y, C),
+                                        (cp.self_pattern, cp.inlet_pattern),
+                                        ("self", "inlet"), strict=True):
+                J = np.asarray(J)
+                active = np.abs(J) > 1e-9 * (np.abs(J).max() + 1e-300)
+                missed = np.argwhere(active & ~pattern)
+                assert not missed.size, f"{name} {what} pattern misses {missed[:5].tolist()}"
+
+
+def test_every_ad_union_unit_is_checked_jointly():
+    """A unit module that derives its pattern with ``ad_union`` must have a case
+    in the joint-sample test above, so a new one cannot skip it."""
+    import pathlib
+
+    import aquakin.plant as plant_pkg
+
+    users = {
+        p.stem for p in pathlib.Path(plant_pkg.__file__).parent.glob("*.py")
+        if p.stem != "coupling" and "ad_union(" in p.read_text()
+    }
+    covered = {"takacs", "sbr", "ifas"}
+    assert users == covered, f"ad_union users without a joint-sample case: {users - covered}"

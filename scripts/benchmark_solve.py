@@ -21,7 +21,7 @@ import aquakin
 def setup():
     model = aquakin.load_model("ozone_bromate")
     conditions = aquakin.SpatialConditions.uniform(
-        n_locations=1, pH=7.5, T=293.15, OH_scavenging=5.0e4
+        n_locations=1, pH=7.5, OH_scavenging=5.0e4
     )
     atol = jnp.full((model.n_species,), 1e-12)
     atol = atol.at[model.species_index["OH"]].set(1e-20)

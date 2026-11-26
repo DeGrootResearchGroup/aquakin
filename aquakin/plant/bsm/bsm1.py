@@ -16,7 +16,10 @@ Reference design parameters (Copp 2002 / Alex 2008 Table 1.1):
   Q_w = 385 m³/d.
 - Clarifier: A = 1500 m², H = 4 m, 10 layers, feed at layer 5.
 
-**One deliberate departure from the benchmark:** with ``use_takacs=True``, the
+The secondary clarifier is the benchmark's ten-layer Takács settler by default;
+``use_takacs=False`` swaps in the fast stateless ``IdealClarifier``.
+
+**One deliberate departure from the benchmark:** the ten-layer
 secondary clarifier settles solids between its layers with the Godunov flux of the
 settling conservation law rather than the benchmark settler's Takács minimum-flux
 rule (see :class:`~aquakin.plant.takacs.TakacsClarifier` ``interface_flux``). The
@@ -65,7 +68,7 @@ def build_bsm1(
     Q_avg: float = BSM1_Q_AVG,
     wastage_flow: float = BSM1_WASTAGE_FLOW,
     conditions: dict[str, float] | None = None,
-    use_takacs: bool = False,
+    use_takacs: bool = True,
     settler_soluble_holdup: bool = True,
     settler_composition_mode: str = "lumped_tss",
     settler_interface_flux: str = "godunov",
@@ -104,12 +107,11 @@ def build_bsm1(
         Override the per-tank conditions vector (e.g. set ``T=288.15`` for
         winter). Defaults to model's declared defaults.
     use_takacs : bool
-        If True, use the full Takács 1-D layered secondary clarifier (the BSM1
-        reference settler, with its own per-layer solids state). If False
-        (default), use the fast stateless ``IdealClarifier``. The Takács settler
-        is stiffer, so its ``solve()`` needs a larger ``max_steps`` (the
-        clarifier alone is cheap, but the full plant with recycles benefits from
-        ``max_steps`` of a few hundred thousand).
+        If True (default), use the benchmark's ten-layer Takács secondary
+        clarifier, with its own per-layer solids state (and soluble state, see
+        ``settler_soluble_holdup``). If False, use the fast stateless
+        ``IdealClarifier``, which captures a fixed fraction of the particulates
+        and has no state of its own.
     settler_soluble_holdup : bool
         When ``use_takacs=True``, carry the soluble species through the ten
         settler layers as well-mixed convective states, so the clarifier liquid

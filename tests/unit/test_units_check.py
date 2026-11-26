@@ -481,6 +481,35 @@ def test_conversion_factor(a, b, factor):
     assert conversion_factor(a, b) == pytest.approx(factor, rel=1e-12)
 
 
+MICRO_SIGN, GREEK_MU = "\u00b5", "\u03bc"
+
+
+@pytest.mark.parametrize("micro", ["u", MICRO_SIGN, GREEK_MU])
+@pytest.mark.parametrize("a, b, factor", [
+    ("{u}mol/L", "mol/m3", 1.0e-3),       # 1e-6 mol per 1e-3 m3
+    ("{u}mol/L", "mmol/L", 1.0e-3),
+    ("kmol/m3", "{u}mol/L", 1.0e6),
+    ("{u}g/L", "g/m3", 1.0e-3),
+    ("{u}g_N/L", "mg_N/L", 1.0e-3),
+    ("mg/L", "{u}g/L", 1.0e3),
+])
+def test_micro_prefix_converts_on_every_prefixed_unit(micro, a, b, factor):
+    """``u`` and both micro characters (U+00B5, U+03BC) are the micro prefix on
+    every unit that takes the k / m prefixes (``g`` and ``mol``), and parse to the
+    same dimension; the factor is the hand-computed one."""
+    a, b = a.format(u=micro), b.format(u=micro)
+    assert conversion_factor(a, b) == pytest.approx(factor, rel=1e-12)
+    assert parse_units(a.replace(micro, "u")) == parse_units(a)
+
+
+def test_micro_prefixed_rate_units_pass_the_root_check():
+    """A rate in umol/L/s is a concentration per time, like mmol/L/s."""
+    from aquakin.utils.units import _root_issue
+
+    assert _root_issue(parse_units("umol/L/s")) is None
+    assert _root_issue(parse_units(f"{MICRO_SIGN}g_N/L/d")) is None
+
+
 def test_conversion_factor_unknown_and_incompatible():
     from aquakin.utils import conversion_factor
 

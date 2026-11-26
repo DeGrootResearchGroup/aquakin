@@ -26,6 +26,7 @@ from aquakin.integrate._common import (
     solve_chemistry,
     validate_C0_params,
 )
+from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.forward_sensitivity import prepare_sensitivity, run_forward_sensitivity
 
 
@@ -194,8 +195,11 @@ class PlugFlowReactor(GradientCheckMixin):
             )
         )
         jitted = cached_jitted_solver(cache_key, self._build_jitted_solve, self.model, self.adjoint)
-        with friendly_solve_errors(self.max_steps, what="plug-flow reactor solve"):
-            ts, ys = jitted(C0, params, fields)
+        with friendly_solve_errors(what="plug-flow reactor solve"):
+            ts, ys, result = jitted(C0, params, fields)
+            ts, ys = check_solve_result(
+                result, (ts, ys), max_steps=self.max_steps, what="plug-flow reactor solve"
+            )
         return PFRSolution(x=ts, C=ys, model=self.model)
 
     def solve_sensitivity(
@@ -340,6 +344,6 @@ class PlugFlowReactor(GradientCheckMixin):
                 factormax=factormax,
                 solver=solver,
             )
-            return sol.ts, sol.ys
+            return sol.ts, sol.ys, sol.result
 
         return _solve

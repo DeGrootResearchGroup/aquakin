@@ -161,6 +161,55 @@ def test_ranked_params(simple_model):
     assert ranked[0][0] == "A_to_B.k"
 
 
+def test_elasticity_matches_closed_form(simple_model):
+    """For A -> B at rate k[A] from [A]0 = 1, [B](t) = 1 - exp(-k t), so the
+    elasticity of [B](t) in k is k t exp(-k t) / (1 - exp(-k t))."""
+    conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
+    reactor = aquakin.BatchReactor(simple_model, conditions)
+    params = simple_model.default_parameters()
+    t_end = 5.0
+    result = aquakin.sensitivity(
+        reactor,
+        jnp.asarray([1.0, 0.0]),
+        params,
+        output_fn=lambda sol: sol.C_named("B")[-1],
+        t_span=(0.0, t_end),
+        t_eval=jnp.asarray([t_end]),
+    )
+    i_k = simple_model.param_index["A_to_B.k"]
+    kt = float(params[i_k]) * t_end
+    expected = kt * np.exp(-kt) / (1.0 - np.exp(-kt))
+    assert float(result.elasticities()[i_k]) == pytest.approx(expected, rel=1e-5)
+    assert result.ranked_params()[0] == ("A_to_B.k", pytest.approx(expected, rel=1e-5))
+
+
+def _result(output, grads, values):
+    return aquakin.SensitivityResult(
+        output=output,
+        doutput_dparams=jnp.asarray(grads),
+        doutput_dconditions={},
+        parameter_names=["small", "large", "zero"],
+        params=jnp.asarray(values),
+    )
+
+
+def test_ranking_by_elasticity_is_independent_of_parameter_units():
+    """A parameter of size 1e6 with a small gradient outranks one of size 1e-3
+    with a large gradient once the gradients are scaled by p / y."""
+    result = _result(2.0, [10.0, 1e-4, 5.0], [1e-3, 1e6, 0.0])
+    assert result.ranked_params(elasticity=False) == [
+        ("small", 10.0), ("zero", 5.0), ("large", pytest.approx(1e-4))]
+    assert result.ranked_params() == [
+        ("large", pytest.approx(50.0)), ("small", pytest.approx(5e-3)), ("zero", 0.0)]
+
+
+def test_elasticity_of_a_zero_output_raises_and_the_raw_ranking_still_works():
+    result = _result(0.0, [10.0, 1e-4, 5.0], [1e-3, 1e6, 0.0])
+    with pytest.raises(ValueError, match="output is zero"):
+        result.ranked_params()
+    assert result.ranked_params(elasticity=False)[0] == ("small", 10.0)
+
+
 @pytest.mark.slow  # heavy: sensitivity vs FD
 def test_sensitivity_doutput_dconditions_matches_finite_diff():
     """The gradient with respect to a condition field matches a central finite

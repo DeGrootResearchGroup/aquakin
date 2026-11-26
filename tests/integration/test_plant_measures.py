@@ -118,7 +118,9 @@ def test_a_model_file_extending_a_shipped_model_has_its_composition():
 
 def test_bsm1_effluent_measures_match_the_stream():
     m = aquakin.load_model("asm1")
-    plant = build_bsm1(model=m)
+    # The ideal clarifier: the channels are read off whatever effluent the plant
+    # makes, and its cold start solves much faster than the layered settler's.
+    plant = build_bsm1(model=m, use_takacs=False)
     plant.add_influent(
         "feed", InfluentSeries.constant(m, Q=18446.0, **FEED), to=plant.influent_endpoint
     )

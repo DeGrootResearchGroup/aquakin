@@ -5,7 +5,9 @@ the ASM1 constants when the model's particulates are exactly ASM1's, otherwise
 every ``X``-prefixed species settles and those carrying COD are TSS (read from
 the declared units when the model has no composition table). ``build_bsm1`` takes
 explicit ``settling_species`` / ``tss_species`` and per-tank ``aeration``
-overrides. These tests only build plants; nothing is solved.
+overrides. ``lumped_tss_weights`` reads the TSS weights of a model that tracks
+its TSS as a state from its stoichiometry. These tests only build plants;
+nothing is solved.
 """
 
 from pathlib import Path
@@ -18,9 +20,12 @@ from aquakin.plant._constants import (
     ASM1_SETTLING_SPECIES,
     ASM1_TSS_FACTOR,
     ASM1_TSS_SPECIES,
+    lumped_tss_weights,
     solids_species,
+    with_lumped_tss,
 )
 from aquakin.plant.bsm import build_bsm1
+from tests.conftest import TSS_FACTOR_PARAMS
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -180,3 +185,104 @@ def test_build_bsm1_explicit_solids(use_takacs):
 def test_build_bsm1_tss_must_settle():
     with pytest.raises(ValueError, match="not settling species"):
         build_bsm1(settling_species=("XS", "XI"), tss_species=("XS", "XB_H"))
+
+
+# --- lumped_tss_weights ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", sorted(TSS_FACTOR_PARAMS))
+def test_lumped_tss_weights_are_the_models_tss_factors(name):
+    """The weights solved from the stoichiometry are the model's own iTSS / iSS
+    parameters, the TSS state weighs 0, and a precipitate declared in g TSS
+    (asm2d's XMeOH / XMeP) weighs 1."""
+    model = aquakin.load_model(name)
+    tss, factors = TSS_FACTOR_PARAMS[name]
+    p = dict(zip(model.parameters, map(float, model.default_parameters()), strict=True))
+    expected = {s: p[f] for s, f in factors.items()} | {tss: 0.0}
+    expected |= {s: 1.0 for s in ("XMeOH", "XMeP") if s in model.species}
+    weights = lumped_tss_weights(model)
+    assert set(weights) == set(expected)
+    for s, w in expected.items():
+        assert weights[s] == pytest.approx(w, rel=1e-12, abs=1e-12), s
+
+
+def test_lumped_tss_weights_follow_the_parameters():
+    """A changed iTSS factor in the parameter vector changes its weight."""
+    model = aquakin.load_model("asm2d")
+    params = model.default_parameters().at[model.param_index["iTSS_XPP"]].set(2.0)
+    assert lumped_tss_weights(model, params)["XPP"] == pytest.approx(2.0, rel=1e-12)
+
+
+def test_with_lumped_tss_sums_the_particulates_and_keeps_a_given_value():
+    model = aquakin.load_model("asm2d")
+    comp = with_lumped_tss(model, {"XI": 30.0, "XS": 180.0, "XH": 40.0, "SNH4": 25.0})
+    assert comp["XTSS"] == pytest.approx(0.75 * 30.0 + 0.75 * 180.0 + 0.9 * 40.0, rel=1e-12)
+    assert comp["SNH4"] == 25.0
+    assert with_lumped_tss(model, {"XI": 30.0, "XTSS": 7.0})["XTSS"] == 7.0
+
+
+# Two particulates that are only ever made together: their weights are not separable.
+_TOGETHER = """
+model: {name: tss_together, version: "1.0", description: "test", references: []}
+species:
+  - {name: SS,   units: "g_COD/m3", default_concentration: 1.0}
+  - {name: XB,   units: "g_COD/m3", default_concentration: 1.0}
+  - {name: XC,   units: "g_COD/m3", default_concentration: 1.0}
+  - {name: XTSS, units: "g_TSS/m3", default_concentration: 1.0}
+conditions: [{name: T, default: 293.15}]
+reactions:
+  - name: growth
+    rate: "k * [SS]"
+    parameters: {k: {value: 1.0}}
+    stoichiometry: {SS: -2, XB: 1, XC: 1, XTSS: 1.7}
+"""
+
+# One particulate whose TSS state changes at two different ratios.
+_INCONSISTENT = """
+model: {name: tss_inconsistent, version: "1.0", description: "test", references: []}
+species:
+  - {name: SS,   units: "g_COD/m3", default_concentration: 1.0}
+  - {name: XB,   units: "g_COD/m3", default_concentration: 1.0}
+  - {name: XTSS, units: "g_TSS/m3", default_concentration: 1.0}
+conditions: [{name: T, default: 293.15}]
+reactions:
+  - name: growth
+    rate: "k * [SS]"
+    parameters: {k: {value: 1.0}}
+    stoichiometry: {SS: -1, XB: 1, XTSS: 0.9}
+  - name: decay
+    rate: "b * [XB]"
+    parameters: {b: {value: 0.1}}
+    stoichiometry: {SS: 1, XB: -1, XTSS: -0.5}
+"""
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "match"),
+    [
+        ("bare", _BARE, "has no TSS state"),
+        ("together", _TOGETHER, "does not determine the TSS weight"),
+        ("inconsistent", _INCONSISTENT, "no particulate TSS weights reproduce"),
+    ],
+)
+def test_lumped_tss_weights_refuses_what_the_model_does_not_determine(
+    tmp_path, name, text, match
+):
+    """Each refusal says to give the settler's TSS factors explicitly; doing so
+    builds a settler that weighs the solids as given."""
+    from aquakin.plant import TakacsClarifier
+
+    model = _load(tmp_path, name, text)
+    with pytest.raises(ValueError, match=match):
+        lumped_tss_weights(model)
+    parts = [s for s in model.species if s.startswith("X")]
+    clar = TakacsClarifier(
+        "c",
+        model,
+        area=1.0,
+        height=4.0,
+        underflow_Q=1.0,
+        particulate_species=parts,
+        tss_factors=dict.fromkeys(parts, 0.8),
+    )
+    assert clar._part_tss_factors == [0.8] * len(parts)

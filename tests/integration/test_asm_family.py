@@ -64,7 +64,10 @@ def test_ad_grad_through_solve(name):
     most influential parameter (largest ``|g_i p_i|``)."""
     net = aquakin.load_model(name)
     reactor = aquakin.BatchReactor(net, net.default_conditions())
-    C0 = net.default_concentrations()
+    # The ASM2d / ASM3 models start from every species at 1.0: their first
+    # species is oxygen, which their default mixed liquor uses up within
+    # minutes, leaving a loss of round-off that no finite difference can check.
+    C0 = jnp.ones(len(net.species)) if name != "adm1" else net.default_concentrations()
     t_eval = jnp.linspace(0.0, 0.05, 6)
 
     # Pick any species that's likely to be sensitive — first one will do.
@@ -93,7 +96,10 @@ def test_asm3_short_integration_and_ad_grad_finite():
     """
     net = aquakin.load_model("asm3")
     reactor = aquakin.BatchReactor(net, net.default_conditions())
-    C0 = net.default_concentrations()
+    # Every species at 1.0, so the oxygen the loss reads lasts the whole span;
+    # the default mixed liquor uses it up within minutes, leaving a loss of
+    # round-off that no finite difference can check.
+    C0 = jnp.ones(len(net.species))
     t_eval = jnp.linspace(0.0, 0.05, 6)
 
     def loss(params):

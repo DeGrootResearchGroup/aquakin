@@ -798,8 +798,8 @@ def test_takacs_solve_is_jittable_and_differentiable(asm1):
     a tracer.
 
     None of this depends on the plant's size, so it runs on the one-clarifier
-    plant. Its 80 states are below the colored-backward size gate, which is
-    lowered on this instance so the colored builder is built. The gradient w.r.t.
+    plant. The colored-backward size gate is lowered on this instance so the
+    colored builder is built wherever the gate sits. The gradient w.r.t.
     the overflow setpoint (the one plant parameter the clarifier reads) matches a
     central finite difference: steps of 1e-3 and 1e-4 of the setpoint agree to
     about 1e-6, so ``rel=1e-5``."""

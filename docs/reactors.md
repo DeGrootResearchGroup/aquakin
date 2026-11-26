@@ -38,7 +38,7 @@ include every field the model requires, and edit what differs:
 
 ```python
 conditions = model.default_conditions()                    # all declared defaults
-conditions = model.default_conditions().with_(T=283.15)    # ...run it at 10 °C
+conditions = model.default_conditions().with_(pH=8.0)      # ...run it at pH 8
 ```
 
 For a simple case you can also build one from scratch with
@@ -47,7 +47,7 @@ supply **every** field the model needs, or building a reactor from it raises a
 `ValueError` naming the missing ones:
 
 ```python
-conditions = aquakin.OperatingConditions(pH=7.5, T=293.15, OH_scavenging=5.0e4)
+conditions = aquakin.OperatingConditions(pH=7.5, OH_scavenging=5.0e4)   # OH_scavenging in 1/s
 ```
 
 Both are single-location conditions. For a spatially varying case (a plug-flow
@@ -57,12 +57,11 @@ over `n_locations`:
 ```python
 # The same value at every one of 101 locations:
 uniform = aquakin.SpatialConditions.uniform(
-    n_locations=101, pH=7.5, T=293.15, OH_scavenging=5.0e4)
+    n_locations=101, pH=7.5, OH_scavenging=5.0e4)
 
 # A pH that rises from 7.0 to 8.0 along those locations:
 gradient = aquakin.SpatialConditions(fields={
     "pH": jnp.linspace(7.0, 8.0, 101),
-    "T": jnp.full(101, 293.15),
     "OH_scavenging": jnp.full(101, 5.0e4),
 })
 ```
@@ -81,6 +80,17 @@ reactor = aquakin.BatchReactor(model, conditions)
 sol = reactor.solve(C0, t_span=(0.0, 600.0), t_eval=t_eval)   # params optional
 ```
 
+`t_eval` sets the times the solution keeps. Without it the solution holds only
+the end of the solve, which is enough for a final value:
+
+```python
+end = reactor.solve(C0, t_span=(0.0, 600.0))
+end.t        # [600.]
+```
+
+% invisible-code-block: python
+%     assert end.t.tolist() == [600.0]
+
 Useful construction options (all keyword-only):
 
 - `rtol`, `atol` — solver tolerances. `atol` may be a per-species array (use
@@ -89,7 +99,8 @@ Useful construction options (all keyword-only):
 - `integrator=IntegratorConfig(...)` — the ESDIRK order, step caps, and Jacobian
   strategy. See [Choosing the integrator](#choosing-the-integrator).
 - `diff=DifferentiationConfig(...)` — how a solve under `jax.grad` is
-  differentiated. For a stiff model (ASM, ADM, WATS) a reverse-mode gradient
+  differentiated. For a stiff model (the activated-sludge models ASM1–ASM3, the
+  anaerobic digestion model ADM1, the WATS sewer models) a reverse-mode gradient
   through a reactor solve needs a step cap; see
   [Differentiating a solve](sensitivity_and_calibration.md#differentiating-a-solve).
 
@@ -233,20 +244,48 @@ aquakin.IntegratorConfig(order=3, factormax=3.0, colored_jacobian="auto",
                          dtmax=None, max_steps=100_000, solver=None)
 ```
 
-- `order`: the ESDIRK method, `3` (`Kvaerno3`, the default) or `5` (`Kvaerno5`,
-  higher order and more robust). Raise it to 5 if a solve struggles to
-  converge.
+- `order`: the ESDIRK method, `3` (`Kvaerno3`, the default, with fewer stages
+  per step) or `5` (`Kvaerno5`, fifth order: more work per step, but fewer steps
+  at tight tolerances and more robust on a hard transient). Try `5` when a solve
+  struggles to converge.
 - `factormax`: caps how fast the step size may grow from one step to the next.
 - `dtmax`: caps the step. Set it **only** for a reverse-mode gradient taken
   *through* a stiff solve (`method="through_solve"`); it is in the model's
   time unit. The cap-free gradient methods in
   [Differentiating a solve](sensitivity_and_calibration.md#differentiating-a-solve)
   do not need it.
-- `colored_jacobian`: builds the implicit-step Jacobian sparsely. It applies to
-  plants only; reactors ignore it.
+- `colored_jacobian`: builds the Jacobian of each implicit step sparsely, by
+  graph colouring, which pays on plants with many states. It applies to plants
+  only; reactors ignore it. The default `"auto"` uses it for the reverse-mode
+  gradient of a large plant (BSM1 and BSM2, but not BSM1 with
+  `use_takacs=False`) and leaves the forward solve dense; `True` forces it on,
+  `False` off.
 - `max_steps`: the step budget; `solver` overrides `order` with an explicit
   Diffrax solver.
 
 `rtol` and `atol` stay separate arguments of the reactor and of `plant.solve`.
 For faster plant solves, including `forward_fast`, see
 [Plant-wide simulation](plants.md#faster-dynamic-solves).
+
+## When a solve fails
+
+A solve that cannot finish within its step budget raises a `RuntimeError`
+saying that it hit `max_steps`. That is almost always a stiff transient rather
+than a bug. Try, in order:
+
+1. **Start closer to where the system operates.** For a plant, pass `y0` from a
+   steady state or an earlier run
+   ([Initial states and warm starts](plants.md#initial-states-and-warm-starts)).
+2. **Loosen `rtol`** (default `1e-6`). The default `atol` scales itself to the
+   magnitude of each state; pass a per-species `atol` (`model.atol({...})`) when
+   a trace species needs a finer one.
+3. **Use the fifth-order method**, `IntegratorConfig(order=5)`.
+4. **Raise the budget**, `IntegratorConfig(max_steps=...)` (default 100 000).
+
+If none of these help, the model may be unstable at those parameters or
+inputs. A gradient that comes out non-finite is a different problem, a stiff
+solve differentiated in reverse mode; `dtmax` and the cap-free methods that
+avoid it are in
+[Differentiating a solve](sensitivity_and_calibration.md#differentiating-a-solve).
+A plant solve that finishes but slowly can use `forward_fast=True`
+([Faster dynamic solves](plants.md#faster-dynamic-solves)).

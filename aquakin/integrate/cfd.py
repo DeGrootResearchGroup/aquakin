@@ -43,6 +43,7 @@ from aquakin.integrate._common import (
     resolve_state_atol,
     solve_chemistry,
 )
+from aquakin.integrate._solver import check_solve_result
 
 
 class CFDReactor:
@@ -224,8 +225,11 @@ class CFDReactor:
             inner = self._build_step()
             self._jit_cache[n_cells] = inner
 
-        with friendly_solve_errors(self.max_steps, what="CFD reactor step"):
-            C_new = inner(jnp.asarray(C_np), cond_jax, jnp.asarray(dt_f), params_jax)
+        with friendly_solve_errors(what="CFD reactor step"):
+            C_new, result = inner(jnp.asarray(C_np), cond_jax, jnp.asarray(dt_f), params_jax)
+            C_new = check_solve_result(
+                result, C_new, max_steps=self.max_steps, what="CFD reactor step"
+            )
             C_new_np = np.asarray(C_new)
 
         # The finiteness scan is only needed to raise or to build the mask;
@@ -278,7 +282,7 @@ class CFDReactor:
                 factormax=factormax,
                 solver=solver,
             )
-            return sol.ys[-1]
+            return sol.ys[-1], sol.result
 
         vmapped = jax.vmap(_per_cell, in_axes=(0, 0, None, None))
         return jax.jit(vmapped)

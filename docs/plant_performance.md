@@ -334,8 +334,10 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   decision is a per-host *performance* choice, never a tested outcome — the tests
   assert its self-consistency and gradient correctness, not which branch it picks.
   That measured-ratio decision has since been replaced by a deterministic size
-  gate (`Plant._COLORED_BACKWARD_MIN_STATES`, 100 states: BSM1 dense, BSM2
-  colored), and `plant.colored_jacobian_decision()` returns
+  gate (`Plant._COLORED_BACKWARD_MIN_STATES`, first 100 states, lowered to 50
+  on the 2026-11-26 remeasurement in `.claude/notes/plant-solve-log.md`, which
+  found the colored backward ~1.5× faster on the 65-state ideal-clarifier BSM1),
+  and `plant.colored_jacobian_decision()` returns
   `("colored"|"dense", n_states)`. **`"auto"` governs only the
   `stable_adjoint` backward** — it leaves the **forward** `jax_adjoint` solve dense
   (forward coloring swaps the implicit linear solver and so is not guaranteed
@@ -938,12 +940,12 @@ integrator step budget -- `Plant.solve` **and every reactor**
 re-raises the Diffrax/Equinox failure as a domain `RuntimeError` naming the
 remedies (warm-start via `run_to_steady_state`, loosen `rtol`, raise
 `max_steps`), with the noisy equinox exception chain suppressed (`from None`).
-This is the shared `integrate/_common.friendly_solve_errors(max_steps, what=...)`
-context manager wrapped around each solve's *execution* (the call to the jitted
-solve / `diffeqsolve`, where the runtime error surfaces -- not the traced
-`_run_diffeqsolve`). The jitted reactors emit one extra equinox *stderr* line
-about `filter_jit` that the exception machinery cannot suppress; the raised
-exception itself is clean. The **same** context manager also catches the other
+Each compiled solve runs with `throw=False` and returns its diffrax `result`,
+which the caller checks on the host with `integrate/_solver.check_solve_result`,
+so no Equinox banner is printed before the error; under an outer trace the check
+is put back into the program, so a gradient still fails on a failed solve.
+The `integrate/_common.friendly_solve_errors(what=...)` context manager, wrapped
+around each solve's execution, catches the other
 opaque solve-time failure — a `jax.jacfwd`/`jax.jvp` (forward-mode AD) through
 the default reverse-only adjoint, which JAX rejects with "can't apply
 forward-mode autodiff (jvp) to a custom_vjp function". That is re-raised as a
@@ -1000,11 +1002,22 @@ phosphorus in one plant. `a2o_influent(net)` is a matching constant municipal
 (VFA-bearing) influent and `a2o_warm_start(plant)` seeds the AS reactors with an
 established EBPR mixed liquor (a large PAO population + stored poly-P), so a solve
 starts from healthy bio-P sludge rather than the slow, seed-sensitive cold-start
-PAO establishment. The default config reaches a feasible steady state with full
-nitrification (effluent SNH4 ≈ 0.1 g N/m³), partial denitrification (effluent
-SNO3 ≈ 10 g N/m³ from 25 g N/m³ influent ammonia) and **partial biological P
-removal** (effluent SPO4 ≈ 5 g P/m³ from 8; clear anaerobic release and aerobic
-uptake). The RAS returns nitrate to the anaerobic zone, where denitrifying
+PAO establishment. The default config (ten-layer Takács settler) reaches a
+feasible steady state with full nitrification (effluent SNH4 ≈ 0.2 g N/m³),
+partial denitrification (effluent SNO3 ≈ 10 g N/m³ from 25 g N/m³ influent
+ammonia) and **partial biological P removal** (effluent SPO4 ≈ 3.9 g P/m³ from 8;
+clear anaerobic release and aerobic uptake). The settler reads its solids as
+TSS through the `asm2d` `iTSS` factors (MLSS ≈ 4750 g TSS/m³ in the last
+aerated tank); at that loading the sludge blanket reaches the eighth of its ten
+layers and the effluent carries ≈ 54 g TSS/m³. With `use_takacs=False` the ideal
+clarifier gives SNH4 ≈ 0.1, SNO3 ≈ 10 and SPO4 ≈ 5. A 200-day dynamic solve to
+that steady state takes ~1 min with either settler (60 s Takács, 51 s ideal,
+compile included, on a 4-core machine; under a concurrent load the Takács solve
+took 3 min), and `Plant.steady_state` from `a2o_warm_start` ~40 s against
+~30 s. The plant also has a second steady state, where the nitrifiers
+have washed out (SNH4 ≈ 31, SNO3 = 0): `Plant.steady_state` from a seed far
+from the operating point can converge there, which is why the warm start's
+particulates are the operating point's. The RAS returns nitrate to the anaerobic zone, where denitrifying
 heterotrophs take part of the VFA the PAOs would store, the classic A²O
 limitation. (Before the `asm2d` heterotroph growth rates were corrected, anoxic
 growth had no nitrate term, so nitrate never reached the selector and the plant
@@ -1284,8 +1297,12 @@ as `aquakin.characterize_influent` / `fractionate` / `InfluentFractions` /
 Setting a plant's temperature used to mean writing the static `T` condition of
 every reactor by hand (in Kelvin, at the correction `ref_T`). `set_temperature`
 takes **°C**, converts to Kelvin, and writes the static `T` of every
-temperature-bearing reactor — so a re-solve runs the Arrhenius
-`temperature_corrections` at that temperature (`build_bsm2(...)` then
+temperature-bearing reactor. A re-solve runs the Arrhenius
+`temperature_corrections` at that temperature only in a reactor whose inflow
+carries no temperature: an inflow temperature (the flow-weighted inlet `T`, or
+the tank's temperature state under `HeatBalanceTemperature`, which the static
+`T` only seeds) takes precedence, and the SBR always runs at its static `T`
+(`build_bsm2(...)` then
 `plant.set_temperature(15)` is the BSM2 15 °C operating point; `set_temperature(10)`
 drives nitrification down — verified in
 `tests/integration/test_plant_temperature.py`). It targets the activated-sludge
@@ -1900,3 +1917,9 @@ Dynamic-solve performance numbers formerly in `.claude/rules/plant-solve.md`
   coloured-backward entries above for the re-measured numbers).
 - **Cached recycle flow map `A`:** 1.076× (7.6%) on the 60-day dynamic BSM2
   forward solve.
+
+## Compile versus run time (moved from the integration rule, 2026-11-26)
+
+Compiling a stiff solve dominates its cost: measured ~1.6 s compile against
+~0.02 s run for an ASM1 batch solve, and ~34 s against ~4 s for the full BSM2
+plant. This is why every integrator caches its compiled solve.

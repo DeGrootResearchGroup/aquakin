@@ -125,7 +125,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
-import equinox as eqx
+import diffrax
 import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as jsla
@@ -260,11 +260,15 @@ class SensitivitySolve(NamedTuple):
         Sensitivity ``dy/dtheta`` at the save times, shape ``(n_t, n, k)``.
     stats : SolveStats
         Step counts of the solve.
+    result : diffrax.RESULTS
+        Whether the solve reached the last save time; the caller checks it with
+        :func:`~aquakin.integrate._solver.check_solve_result`.
     """
 
     ys: jnp.ndarray
     S: jnp.ndarray
     stats: SolveStats
+    result: Any
 
 
 class _Attempt(NamedTuple):
@@ -577,7 +581,8 @@ def _integrate(attempt, z0, t0, t1, t_eval, control: StepControl):
 
     ``attempt(t, z, h) -> _Attempt`` takes one step; ``z`` is an array or a tuple
     of arrays, each recorded at the save times. Returns the saved values (each
-    leaf with a leading ``len(t_eval)`` axis) and the :class:`SolveStats`.
+    leaf with a leading ``len(t_eval)`` axis), the :class:`SolveStats` and the
+    diffrax ``result`` (see :func:`forward_solve`).
     """
     t0 = jnp.asarray(t0, dtype=float)
     t1 = jnp.asarray(t1, dtype=float)
@@ -695,20 +700,17 @@ def _integrate(attempt, z0, t0, t1, t_eval, control: StepControl):
         return jnp.where(mask, buf, jnp.nan)
 
     zs = jax.tree.map(mark, zs)
-    zs = eqx.error_if(
-        zs,
+    # Reported as a diffrax result rather than raised in the program (raising
+    # makes JAX log Equinox's banner first); the caller checks it with
+    # check_solve_result. A loop that stops short without using up its steps
+    # stalled: the step size collapsed.
+    R = diffrax.RESULTS
+    result = R.where(
         incomplete & (stats.attempted >= max_steps),
-        f"forward_solve: the maximum number of solver steps was reached "
-        f"(max_steps={max_steps}) before the last save time.",
+        R.max_steps_reached,
+        R.where(incomplete, R.dt_min_reached, R.successful),
     )
-    zs = eqx.error_if(
-        zs,
-        incomplete,
-        "forward_solve: the solve stalled before the last save time (the step "
-        "size collapsed because the Newton iteration kept failing or the state "
-        "became non-finite).",
-    )
-    return zs, stats
+    return zs, stats, result
 
 
 def forward_solve(
@@ -752,22 +754,21 @@ def forward_solve(
     Returns
     -------
     ys : jnp.ndarray
-        Solution at ``t_eval``, shape ``(len(t_eval), n)``.
-
-    Raises
-    ------
-    equinox.EquinoxRuntimeError
-        If the solve stops before reaching the last save time, either because it
-        used up ``control.max_steps`` (the message contains "maximum number of
-        solver steps", so
-        :func:`~aquakin.integrate._common.friendly_solve_errors` re-raises it
-        with remedies) or because the step size collapsed (the Newton iteration
-        kept failing or the state became non-finite). The check runs inside the
-        compiled solve, so it also works under ``jax.jit``.
+        Solution at ``t_eval``, shape ``(len(t_eval), n)``; the rows after the
+        point where a failed solve stopped are NaN.
+    result : diffrax.RESULTS
+        ``successful``, ``max_steps_reached`` (``control.max_steps`` used up) or
+        ``dt_min_reached`` (the step size collapsed: the Newton iteration kept
+        failing or the state became non-finite). The solve does not raise; the
+        caller checks this with
+        :func:`~aquakin.integrate._solver.check_solve_result`, which raises on
+        the host, or keeps the check in the program under a trace.
     """
     atol = jnp.asarray(atol)
-    ys, _ = _integrate(_state_attempt(rhs, jac, args, rtol, atol), y0, t0, t1, t_eval, control)
-    return ys
+    ys, _, result = _integrate(
+        _state_attempt(rhs, jac, args, rtol, atol), y0, t0, t1, t_eval, control
+    )
+    return ys, result
 
 
 def staggered_sensitivity_solve(
@@ -860,12 +861,8 @@ def staggered_sensitivity_solve(
     Returns
     -------
     SensitivitySolve
-        ``ys`` ``(n_t, n)``, ``S`` ``(n_t, n, k)`` and the step counts.
-
-    Raises
-    ------
-    equinox.EquinoxRuntimeError
-        As :func:`forward_solve`.
+        ``ys`` ``(n_t, n)``, ``S`` ``(n_t, n, k)``, the step counts and the
+        ``result``, which the caller checks as for :func:`forward_solve`.
     """
     from aquakin.integrate.forward_sensitivity import sensitivity_atol
 
@@ -874,10 +871,10 @@ def staggered_sensitivity_solve(
     theta = jnp.asarray(theta)
     atol = jnp.broadcast_to(jnp.asarray(atol, dtype=float), (n,))
     if k == 0:
-        ys, stats = _integrate(
+        ys, stats, result = _integrate(
             _state_attempt(rhs, jac, theta, rtol, atol), y0, t0, t1, t_eval, control
         )
-        return SensitivitySolve(ys, jnp.zeros(ys.shape + (0,), ys.dtype), stats)
+        return SensitivitySolve(ys, jnp.zeros(ys.shape + (0,), ys.dtype), stats, result)
     # Unit parameter tangents: row j selects free parameter free_idx[j].
     tangents = jnp.zeros((k, theta.shape[0]), theta.dtype).at[jnp.arange(k), free_idx].set(1.0)
     atol_S = sensitivity_atol(atol, theta[free_idx], sens_atol=sens_atol, param_scale=param_scale)
@@ -893,5 +890,5 @@ def staggered_sensitivity_solve(
         sens_error_control,
     )
     S0 = jnp.zeros((k, n), y0.dtype)  # row j = sensitivity column j
-    (ys, Ss), stats = _integrate(attempt, (y0, S0), t0, t1, t_eval, control)
-    return SensitivitySolve(ys, jnp.swapaxes(Ss, 1, 2), stats)
+    (ys, Ss), stats, result = _integrate(attempt, (y0, S0), t0, t1, t_eval, control)
+    return SensitivitySolve(ys, jnp.swapaxes(Ss, 1, 2), stats, result)

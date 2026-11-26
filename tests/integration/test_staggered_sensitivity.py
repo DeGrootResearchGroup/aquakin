@@ -100,7 +100,7 @@ _ROB_T = jnp.array([0.0, 1.0, 10.0, 40.0])
 def robertson_reference():
     """S of the stiff Robertson problem by the independent diffrax augmented
     [y; S] solve (Kvaerno5, block-arrow corrector), at a tight tolerance."""
-    _, _, S = augmented_forward_sensitivity(
+    _, _, S, _ = augmented_forward_sensitivity(
         _robertson,
         _ROB_Y0,
         _ROB_K,
@@ -222,7 +222,7 @@ def test_no_sensitivity_parameters_is_the_state_solve():
         rtol=1e-6,
         atol=1e-9,
     )
-    ys = forward_solve(
+    ys, _ = forward_solve(
         _linear_source, jac, jnp.array([1.0]), theta, 0.0, 2.0, t_eval, rtol=1e-6, atol=1e-9
     )
     assert res.S.shape == (5, 1, 0)
@@ -423,7 +423,7 @@ def test_no_step_growth_right_after_a_rejection():
         return fs._Attempt(z1, (h / 0.1) ** 6, jnp.asarray(0.0), jnp.asarray(True), zero, zero)
 
     control = StepControl(h0=0.2, pi_beta=0.0, maxfac=2.0)
-    zs, stats = fs._integrate(attempt, jnp.zeros(64), 0.0, 0.5, jnp.array([0.0, 0.5]), control)
+    zs, stats, _ = fs._integrate(attempt, jnp.zeros(64), 0.0, 0.5, jnp.array([0.0, 0.5]), control)
     assert int(stats.error_rejected) >= 1
     accepted = np.asarray(zs[-1, 1 : 1 + int(zs[-1, 0])])
     assert accepted[0] == pytest.approx(0.2 * 0.9 * 64.0 ** (-1 / 3))  # the shrunk retry
@@ -451,7 +451,7 @@ def _robertson_stage_iterations(monkeypatch, time_scale):
     def rhs(t, y, k):
         return _robertson(t / time_scale, y, k) / time_scale
 
-    ys = forward_solve(
+    ys, _ = forward_solve(
         rhs,
         _dense_jac(rhs),
         _ROB_Y0,

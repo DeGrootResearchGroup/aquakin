@@ -2,10 +2,15 @@
 
 Before running an experiment you can ask whether it will determine the
 parameters you care about, and choose the design that determines them best.
-The tools work on the Fisher information of a design at assumed parameter
-values; no data are needed.
-[Worked example: designing an experiment](worked_example_design.md) explains
-the ideas behind them step by step.
+The tools work on the
+[Fisher information](analysis_concepts.md#the-fisher-information) of a design
+at assumed parameter values; no data are needed.
+[Key ideas](analysis_concepts.md) explains the Fisher information, the bound
+it puts on the parameters' uncertainty and the criteria that score a design,
+and [Worked example: designing an experiment](worked_example_design.md) uses
+them step by step. To choose sensors for a whole plant, see
+[Identifiability of plant parameters](plant_calibration.md#identifiability-of-plant-parameters)
+(`aquakin.plant.plant_rank_sensor_sets`).
 
 The experiment-design examples share the setup of
 [Sensitivity analysis](sensitivity_and_calibration.md#the-examples-on-this-page):
@@ -50,7 +55,7 @@ operating conditions):
 
 ```python
 reactor_ph8 = aquakin.BatchReactor(
-    model, aquakin.SpatialConditions.uniform(1, pH=8.0, T=293.15, OH_scavenging=5e4))
+    model, aquakin.SpatialConditions.uniform(1, pH=8.0, OH_scavenging=5e4))
 design = [
     aquakin.Experiment(C0, t_obs=t_obs, sigma=sigma, observed_species=observed),
     aquakin.Experiment(C0.at[i["Br-"]].set(2e-6), t_obs=t_obs, sigma=sigma,
@@ -68,10 +73,14 @@ fim.std()        # Cramér-Rao lower bound on each standard deviation, physical 
 
 The information of independent experiments adds, so an experiment that
 sharpens a poorly determined parameter shows up as a large drop in its
-`std()`. A singular matrix (`fim.std()` raises) means some combination of the
-quantities cannot be determined from the design at all. At a calibration's
-optimum, with `loss="nll"`, the matrix equals the Gauss-Newton Laplace Hessian
-(`joint_hessian` with `include_ic=True`).
+`std()`. When some combination of the quantities cannot be determined from the
+design at all, the matrix is singular and `fim.std()` raises
+`numpy.linalg.LinAlgError`; `aquakin.identifiability(fim)` reports the same
+design without raising, with an infinite standard deviation for each quantity
+involved and the undetermined combination named
+([Identifiability report](fit_uncertainty.md#identifiability-report)). At a
+calibration's optimum, with `loss="nll"` and no prior, the matrix equals the
+fit's Gauss-Newton Laplace Hessian (`joint_hessian` with `include_ic=True`).
 
 ## Fisher information of any forward model
 
@@ -119,17 +128,10 @@ differentiated in reverse mode.
 
 ## Scoring and optimizing a design
 
-A design is scored by a criterion of its Fisher information `F`:
-
-| Criterion | Value | Better |
-|---|---|---|
-| `"D"` | `log det F` | larger |
-| `"A"` | `trace(F⁻¹)`, the summed variance bound | smaller |
-| `"E"` | smallest eigenvalue of `F` | larger |
-| `"modified_E"` | condition number of `F` | smaller |
-
-D is the usual default: it shrinks the joint confidence region and does not
-depend on the units of the parameters. Pass `subset=[...]` to score only the
+A design is scored by a criterion of its Fisher information:
+`criterion="D"` (the default), `"A"`, `"E"` or `"modified_E"`, the criteria of
+[Scoring a design](analysis_concepts.md#scoring-a-design). D and E are better
+larger, A and modified E smaller. Pass `subset=[...]` to score only the
 information about some quantities, treating the others (for example nuisance
 initial pools) as unknown.
 
@@ -161,11 +163,33 @@ res.experiments[0].t_obs, res.experiments[0].C0
 the bounds by gradient, keeping consecutive samples at least `min_spacing`
 apart.
 
+To plan the next run given the runs already made, pass them as `base=`: their
+information is counted but their samples are not moved, so the new run is
+designed to add what they lack. Here the first run of `design` has been made
+and fitted (`result`), and the next one is planned at the fitted values:
+
+```python
+next_run = aquakin.optimize_experiment(
+    reactor,
+    aquakin.Experiment(C0.at[i["O3"]].set(2e-4), t_obs=jnp.linspace(60.0, 360.0, 6),
+                       sigma=sigma, observed_species=observed),
+    free_params,
+    base=design[:1],                 # the run already made
+    params=result.params,            # its fitted values
+    time_bounds=(30.0, 600.0), min_spacing=20.0,
+)
+next_run.experiments[0].t_obs        # the new run's samples only
+```
+
+% invisible-code-block: python
+%     assert len(next_run.experiments) == 1 and next_run.experiments[0].t_obs.shape == (6,)
+
 The optimal design depends on the parameter values you assume, which are
-uncertain before the experiment. To make the design robust to that, pass
-`param_draws`, an array of parameter vectors drawn from a prior or a previous
-calibration's posterior, and the criterion is averaged over them. A
-calibration fitted with `laplace=` provides posterior draws directly:
+uncertain before the experiment. To make it a
+[robust design](analysis_concepts.md#scoring-a-design), pass `param_draws`,
+an array of parameter vectors drawn from a prior or a previous calibration's
+posterior, and the criterion is averaged over them. A calibration with its
+Laplace posterior (the default) provides the draws directly:
 
 ```python
 draws = result.posterior_draws(model, n_draw=20, seed=0)   # (20, 7)
@@ -173,6 +197,10 @@ robust = aquakin.optimize_experiment(reactor, design[0], free_params,
                                      param_draws=draws, time_bounds=(30.0, 600.0),
                                      min_spacing=20.0)
 ```
+
+Draws from `aquakin.sample_posterior` (its `draws`) serve the same purpose when
+the Laplace posterior is a poor description
+([Sampling the posterior](fit_uncertainty.md#sampling-the-posterior)).
 
 ## Choosing measurements from a candidate pool
 
@@ -239,9 +267,9 @@ The candidates can also be a stack of `(p, p)` matrices or a list of
 For D and A the relaxed problem is concave, so its optimum is a bound that no
 integer design can beat. The result reports it as `bound` and the chosen
 design's `efficiency` against it. For D with no base, no required candidates
-and no binding cap, `equivalence` gives the check from the Kiefer-Wolfowitz
-equivalence theorem: at the relaxed optimum the largest standardized variance
-equals the number of scored parameters. `gains` shows how much one more of
+and no binding cap, `equivalence` is the pair (largest standardized variance,
+number of scored parameters), which are equal at the relaxed optimum
+([the equivalence check](analysis_concepts.md#scoring-a-design)). `gains` shows how much one more of
 each candidate would add, which is useful when the budget grows.
 
 A design with fewer informative candidates than parameters has singular

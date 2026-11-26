@@ -333,7 +333,9 @@ def _bsm1():
         "SND": 6.95, "XND": 10.59, "SALK": 7.0})
     feed = InfluentSeries(t=jnp.asarray([0.0, 100.0]), Q=jnp.full((2,), BSM1_Q_AVG),
                           C=jnp.tile(C0, (2, 1)), model=asm1)
-    plant = build_bsm1(model=asm1)
+    # The ideal clarifier: these tests are about the steady-state solver on a
+    # recycle plant, not the settler, and its smaller state keeps them fast.
+    plant = build_bsm1(model=asm1, use_takacs=False)
     plant.add_influent("feed", feed, to="inlet_mix.fresh")
     return plant, asm1, bsm1_warm_start(plant)
 

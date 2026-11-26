@@ -112,13 +112,13 @@ class IFASUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
         maximum specific utilization rate, ``X_f`` the biofilm biomass density),
         and the error tracks ``L_f / delta``:
 
-        =============  =====  =====  ======  ======
-        ``L_f/delta``  n=4    n=8    n=16    n=32
-        =============  =====  =====  ======  ======
-        1 (penetrated) 1.4%   0.7%   0.4%    0.2%
-        2              6.9%   3.6%   1.8%    0.9%
-        4              25.7%  12.4%  6.0%    2.9%
-        =============  =====  =====  ======  ======
+        ==============  =====  =====  ======  ======
+        ``L_f/delta``   n=4    n=8    n=16    n=32
+        ==============  =====  =====  ======  ======
+        1 (penetrated)  1.4%   0.7%   0.4%    0.2%
+        2               6.9%   3.6%   1.8%    0.9%
+        4               25.7%  12.4%  6.0%    2.9%
+        ==============  =====  =====  ======  ======
 
         So a thin, fully penetrated film is accurate with very few layers, while
         a thick partially penetrated one needs many. The default of 16 keeps a

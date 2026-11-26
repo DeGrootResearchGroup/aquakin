@@ -70,6 +70,7 @@ from aquakin.integrate._common import (
     to_native_time,
     validate_t_eval,
 )
+from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.steady import solve_steady_state
 
 
@@ -641,11 +642,14 @@ class BiofilmReactor(GradientCheckMixin):
                 jitted = self._build_jitted_solve(t0, t1, t_eval_arr is not None)
                 self._jit_cache[cache_key] = jitted
 
-        with friendly_solve_errors(self.max_steps, what="biofilm reactor solve"):
+        with friendly_solve_errors(what="biofilm reactor solve"):
             if t_eval_arr is None:
-                ts, ys = jitted(y0, params, condition_arrays)
+                ts, ys, result = jitted(y0, params, condition_arrays)
             else:
-                ts, ys = jitted(y0, params, condition_arrays, t_eval_arr)
+                ts, ys, result = jitted(y0, params, condition_arrays, t_eval_arr)
+            ts, ys = check_solve_result(
+                result, (ts, ys), max_steps=self.max_steps, what="biofilm reactor solve"
+            )
         # ys: (n_t, n_comp, n_species). Bulk is compartment 0.
         if _time_factor != 1.0:
             ts = ts / _time_factor  # native -> requested unit
@@ -891,7 +895,7 @@ class BiofilmReactor(GradientCheckMixin):
                     factormax=factormax,
                     solver=solver,
                 )
-                return sol.ts, sol.ys
+                return sol.ts, sol.ys, sol.result
 
             return _solve
 
@@ -913,7 +917,7 @@ class BiofilmReactor(GradientCheckMixin):
                 factormax=factormax,
                 solver=solver,
             )
-            return sol.ts, sol.ys
+            return sol.ts, sol.ys, sol.result
 
         return _solve
 

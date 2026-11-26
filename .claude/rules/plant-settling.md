@@ -20,8 +20,8 @@ velocity, `flux_tss · X_k/TSS`, conserving total settleable solids) produce
 a monotone sludge blanket, a strongly clarified effluent, a thickened
 underflow, and tight solids mass balance (verified to machine precision
 against an independent port of the reference BSM1 settler derivative in
-`tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1(use_takacs=
-True)` selects it in the full plant (both clarifiers expose the same ports),
+`tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1` and `build_a2o` select it
+by default (`use_takacs=False` gives the `IdealClarifier`; both expose the same ports),
 and `Plant.solve` takes `max_steps`. By default a bare `TakacsClarifier` does not
 hold the **soluble** species in the settler — they pass straight through (overflow = underflow = feed,
 no holdup), the common simplification. The opt-in **`soluble_holdup=True`** makes
@@ -79,7 +79,14 @@ enforce **one** missing-species policy: a species named in a unit's config but
 not in the model **raises** a clear `ValueError` at construction (it does *not*
 silently drop it — the old, contradictory behaviour that under-settled without
 warning). So a non-ASM1 model must name its own `settling_species` /
-`particulate_species` / `tss_species` rather than rely on the ASM1 defaults. TSS
+`particulate_species` / `tss_species` rather than rely on the ASM1 defaults.
+**A model that tracks its TSS as a state (`XTSS` / `XSS`, the ASM2d and ASM3
+families) takes its settler `tss_factors` from `_constants.lumped_tss_weights`**
+(solved from the stoichiometry: each particulate at its `iTSS` factor, the TSS
+state at 0), as `build_a2o` and `design.sludge_metrics` do; the Takács
+`tss_factors.get(sp, 1.0)` fallback otherwise adds COD, g P and the TSS state
+together into the TSS that sets the settling velocity. A shipped composition
+for such a model sets the TSS state with `with_lumped_tss`, never by hand. TSS
 from a weight vector is `tss_concentration(C, tss_vec)`; the Q-weighted multi-inlet
 feed is `mixed_feed(inputs, names)` and the total inflow `total_flow(...)` (the
 flow siblings of `mixed_scalars`, in `plant/streams.py`); and the ideal secondary
