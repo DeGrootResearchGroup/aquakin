@@ -117,7 +117,7 @@ def test_anaerobic_phosphate_release_per_acetate_and_its_gradient(biop):
 
 def test_a2o_clarifier_settles_every_particulate_of_the_model(biop):
     """``build_a2o`` reads the clarifier's particulates from the model, so the
-    plant-wide model's storage pools and acidogens settle with its biomass.
+    plant-wide model's storage pools and poly-P settle with its biomass.
     Fed a stream at 1 g/m3 of everything, the ideal clarifier returns each
     X species to the underflow at capture * Q_in / Q_under and each soluble
     at its inlet concentration."""
@@ -134,7 +134,7 @@ def test_a2o_clarifier_settles_every_particulate_of_the_model(biop):
     for s, i in biop.species_index.items():
         expected = thickened if s.startswith("X") else 1.0
         assert float(under.C[i]) == pytest.approx(expected, rel=1e-9), s
-    assert {"XGLY_PAO", "XPHA_GAOC_PR", "XFE", "XPP"} <= set(clarifier.particulate_species)
+    assert {"XGLY_PAO", "XPHA_GAOC_PR", "XAC", "XPP"} <= set(clarifier.particulate_species)
 
 
 POPULATIONS = {

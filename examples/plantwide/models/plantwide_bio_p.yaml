@@ -54,9 +54,6 @@ species:
 - name: XAUT
   composition:
     P: 0.02
-- name: XFE
-  composition:
-    P: 0.02
 - name: XPRO
   composition:
     P: 0.02
@@ -399,7 +396,7 @@ reactions:
   - N
   - C
   - P
-- name: fermentation_by_acidogens
+- name: fermentation
   stoichiometry:
     SPO4: auto
   conserved_for:
@@ -421,13 +418,6 @@ reactions:
   - C
   - P
 - name: hydrogenotrophic_methanogenesis
-  stoichiometry:
-    SPO4: auto
-  conserved_for:
-  - N
-  - C
-  - P
-- name: decay_of_acidogens
   stoichiometry:
     SPO4: auto
   conserved_for:

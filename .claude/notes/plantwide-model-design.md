@@ -218,6 +218,22 @@ kept equal by putting the organic-N difference in ammonium.
 15. **The A2O comparison's base influent VFA is 75% acetate, 25% propionate**
     (owner, 2026-11-26), typical of sewage and clear of the PAO / GAO
     boundary; all-acetate (ASM2d's default influent) is a sensitivity case.
+16. **The heterotrophs ferment** (owner, 2026-11-26; replaces decisions 3, 4
+    and 7): fermentation is heterotroph growth on `SF` without oxygen or
+    nitrate, in every unit (Barker and Dold 1997; Hauduc et al. 2013), with
+    the acetate / propionate / hydrogen split kept, uptake 3 1/d at 20 C
+    (theta 1.04), half-saturation 5 g/m3, yield 0.1 (the commercial model of
+    the Varga et al. 2018 lineage); the acidogens `XFE` and their Contois
+    hydrolysis are removed, so hydrolysis is the heterotrophs' alone; and
+    heterotroph decay without oxygen or nitrate is 0.25 of the aerobic rate
+    (the same model's), which lets them persist in a digester on fermentation
+    growth. Decision 4's reason (heterotroph fermentation starving the
+    acidogens out of the digester) does not apply without acidogens. `etafe`
+    is refitted to the BSM2 digester: 0.144 (methane +0.1%, particulate COD
+    destroyed 53.9% against ADM1's 54.2%). The digester's hydrolysis is then
+    saturated in `XS/XH` (2545 against 2038 g/m3, with `KX` 0.1), a capacity
+    proportional to `etafe`, so methane is steep in it: 0.12 gives -15.5%,
+    0.135 -4.7%, 0.155 +3.9%, 0.2 +8.0%.
 
 ## What the bio-P and acidogen sources give (read 2026-11-26)
 
@@ -440,6 +456,7 @@ days 75 to 150) and nothing else moves, so these are stable steady states
 | acidogens, ADM1 kinetics (current) | 14.5 | 571 | 0 (washed out) | 6.86 |
 | heterotrophs ferment (3 1/d substrate, `K` 5, yield 0.1) | 0.47 | 1061 | - | 4.52 |
 | BNRM1-type (off by O2 only, Ruel kinetics, 10 g/m3 acidogens in the influent) | 5.35 | 846 | 139 | 5.65 |
+| as adopted (decision 16: also slower anaerobic decay, `etafe` 0.144) | 0.36 | 1057 | - | 4.41 |
 
 ## Structure: a linear `extends:` chain
 
@@ -508,7 +525,7 @@ anyone who knows the IWA family.
 | Group | Species |
 |---|---|
 | Organics | `SF` fermentable substrate, `SA` acetate, `SPRO` propionate, `SI` soluble inert, `XS` slowly biodegradable, `XI` particulate inert |
-| Biomass | `XH` heterotrophs, `XAUT` nitrifiers, `XFE` acidogens, `XPRO` propionate oxidizers, `XAC` acetoclastic methanogens, `XH2M` hydrogenotrophic methanogens |
+| Biomass | `XH` heterotrophs (also the fermenters), `XAUT` nitrifiers, `XPRO` propionate oxidizers, `XAC` acetoclastic methanogens, `XH2M` hydrogenotrophic methanogens |
 | Dissolved | `SO2`, `SNH4`, `SNO3`, `SN2`, `SH2`, `SCH4`, `SIC` (total inorganic carbon, g C/m³) |
 | Not yet | inorganic suspended solids (for TSS) and the gas phase (see *Engine work*) |
 
@@ -529,8 +546,8 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
 | Processes | Primary source |
 |---|---|
 | Hydrolysis of `XS` by heterotrophs (aerobic, anoxic, anaerobic), heterotroph growth on `SF` and `SA` (O₂, NO₃), nitrification | ASM2d (Henze et al., 1999) |
-| Decay of every group by death-regeneration, at the same rate in every zone (heterotrophs and nitrifiers with ASM2d's `fXI` = 0.1) | ASM2d; Barker & Dold (1997) use the same form with 0.08, the value Ikumi et al. (2014) found consistent with digestion |
-| Fermentation by acidogens only, in every unit; hydrolysis by acidogens without O₂ and NO₃ | BNRM1 structure (Seco et al., 2004; Barat et al., 2013); Contois hydrolysis constants of Sötemann et al. (2005) |
+| Decay of every group by death-regeneration (heterotrophs and nitrifiers with ASM2d's `fXI` = 0.1); heterotrophs at 0.25 of the rate without O₂ and NO₃ | ASM2d; Barker & Dold (1997) use the same form with 0.08, the value Ikumi et al. (2014) found consistent with digestion |
+| Fermentation as heterotroph growth without O₂ and NO₃, in every unit (decision 16) | Barker & Dold (1997); Hauduc et al. (2013); kinetics of the Varga et al. (2018) model |
 | Fermentation products: acetate, propionate, hydrogen | split of Siegrist et al. (2002), Table 2 |
 | Propionate oxidation, acetoclastic and hydrogenotrophic methanogenesis, their H₂ and NH₃ inhibition | ADM1 (Batstone et al., 2002; BSM2 values), temperature dependence of Siegrist et al. (2002) |
 | Carbon contents of the organic components | Siegrist et al. (2002), Table 2 |
@@ -546,9 +563,6 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
 - Without ASM2d's heterotrophic fermentation, anaerobic zones differ from
   `asm2d`; the equivalence with `asm2d` holds under aerobic and anoxic
   conditions (and against `asm2d` with its fermentation switched off).
-- The acidogen kinetics are ADM1's sugar degraders (half-saturation 500 g/m³)
-  for now, provisional until a source tested in activated sludge is found;
-  the digester cannot tell the candidates apart (decision 7).
 - Particulate organics the activated-sludge models treat as unbiodegradable
   stay largely unbiodegradable in a digester (Ikumi et al., 2014), so `XI` is
   inert in every unit and the first version has no anaerobic conversion of
@@ -657,14 +671,9 @@ gas phase has its own balance in the unit).
 
 1. **Bio-P populations.** Settled: metabolic PAOs and separate GAOs
    (decision 8).
-2. **Acidogen kinetics** (deferred to `plantwide_bio_p`, decision 7). BNRM2's parameter sources (Barat et al., 2013,
-   appendix p. x) name none for the anaerobic groups; Ribes et al. (2002, primary
-   settler fermentation) is the likeliest source for acidogens tested in
-   activated sludge. Candidates meanwhile: ADM1's sugar degraders (in use) or
-   Siegrist et al.'s fermenters (half-saturation 50 g/m³). Both sustain the
-   continuous digester; they differ in the VFA an anaerobic zone produces,
-   which matters at the bio-P level.
-3. **Heterotroph anaerobic hydrolysis factor.** Settled: 0.15 (decision 6).
+2. **Who ferments.** Settled: the heterotrophs (decision 16).
+3. **Heterotroph anaerobic hydrolysis factor.** Settled: 0.144 (decision 16,
+   refitting decision 6's 0.15).
 4. **Iron chemistry.** Saturation-index precipitation (already in the
    repository) or surface complexation. Recommendation: start with the
    existing approach; add surface complexation as its own level if aged-iron

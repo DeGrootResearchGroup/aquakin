@@ -111,9 +111,9 @@ def test_gas_transfer_and_outflow_equal_adm1s_bsm2_headspace(adm1_without_headsp
 
 FEED = dict(
     SF=300.0, SA=300.0, SI=100.0, SNH4=40.0, SIC=60.0, XI=14000.0, XS=22000.0,
-    XH=9000.0, XAUT=500.0, XFE=1.0, XPRO=1.0, XAC=1.0, XH2M=1.0,
+    XH=9000.0, XAUT=500.0, XPRO=1.0, XAC=1.0, XH2M=1.0,
 )  # fmt: skip
-SEED = {**FEED, "XFE": 500.0, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
+SEED = {**FEED, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
 
 
 def _vector(model, values):

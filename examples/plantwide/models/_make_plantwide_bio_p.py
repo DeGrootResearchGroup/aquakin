@@ -108,7 +108,7 @@ def species() -> list[dict]:
         # Phosphorus contents of the core's organics and biomass (ASM2d).
         *(dict(name=n, composition=dict(P=p)) for n, p in (
             ("SF", 0.01), ("SI", 0.0), ("XI", 0.01), ("XS", 0.01), ("XH", 0.02), ("XAUT", 0.02),
-            ("XFE", 0.02), ("XPRO", 0.02), ("XAC", 0.02), ("XH2M", 0.02))),
+            ("XPRO", 0.02), ("XAC", 0.02), ("XH2M", 0.02))),
         dict(name="XPP", units="g_P/m3", default_concentration=10.0,
              description="Polyphosphate stored by the PAOs", composition=dict(P=1.0)),
     ]

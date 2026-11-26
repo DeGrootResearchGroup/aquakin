@@ -28,7 +28,7 @@ from aquakin.plant import CSTRUnit, Plant
 from aquakin.plant.influent import InfluentSeries
 
 MODEL = Path(__file__).parents[2] / "examples" / "plantwide" / "models" / "plantwide_core.yaml"
-ANAEROBES = ("XFE", "XPRO", "XAC", "XH2M")
+ANAEROBES = ("XPRO", "XAC", "XH2M")
 
 
 @pytest.fixture(scope="module")
@@ -72,8 +72,11 @@ def test_solved_coefficients_match_the_asm2d_expressions(core):
 
 @pytest.mark.parametrize("SO2", [2.0, 0.0])
 def test_aerobic_and_anoxic_reaction_terms_equal_asm2d(core, SO2):
-    """With no anaerobes present, the shared processes are ASM2d's without its
-    heterotrophic fermentation, which this model leaves to the acidogens.
+    """With no anaerobes present, the shared processes are ASM2d's. The core's
+    own anaerobic heterotroph processes (fermentation as growth, slower decay
+    without oxygen or nitrate) are switched off on both sides: ASM2d's
+    fermentation (`qfe` 0) and the core's (`q_FE` 0, `eta_b_AN` 1), since the
+    anaerobic switch is small but not zero here.
 
     ASM2d also limits growth by phosphate and alkalinity; with both at 1e6 those
     Monod terms are 1 - O(1e-8), which sets the tolerance.
@@ -85,9 +88,16 @@ def test_aerobic_and_anoxic_reaction_terms_equal_asm2d(core, SO2):
     )  # fmt: skip
     c_core = _vector(core, {**state, "SIC": 60.0})
     c_asm2d = _vector(asm2d, {**state, "SPO4": 1e6, "SALK": 1e6})
-    r_core = core.dCdt(c_core, core.default_parameters(), core.default_conditions().fields, 0)
+    p_core = (
+        core.default_parameters()
+        .at[core.param_index["q_FE"]]
+        .set(0.0)
+        .at[core.param_index["eta_b_AN"]]
+        .set(1.0)
+    )
+    r_core = core.dCdt(c_core, p_core, core.default_conditions().fields, 0)
     # The models share these processes' expressions; the heterotrophs'
-    # anaerobic hydrolysis factor differs by value (0.15 here, chosen against
+    # anaerobic hydrolysis factor differs by value (0.144 here, chosen against
     # the BSM2 digester; 0.4 in ASM2d), and with SO2 = 0 the anaerobic switch
     # is small but not zero, so ASM2d is given the core's value.
     etafe = core.default_parameters()[core.param_index["etafe"]]
@@ -107,7 +117,7 @@ def test_aerobic_and_anoxic_reaction_terms_equal_asm2d(core, SO2):
 
 FEED = dict(
     SF=300.0, SA=300.0, SI=100.0, SNH4=40.0, SIC=60.0, XI=14000.0, XS=22000.0,
-    XH=9000.0, XAUT=500.0, XFE=1.0, XPRO=1.0, XAC=1.0, XH2M=1.0,
+    XH=9000.0, XAUT=500.0, XPRO=1.0, XAC=1.0, XH2M=1.0,
 )  # fmt: skip
 
 
@@ -116,7 +126,7 @@ def digester_steady_state(core):
     """A 2000 m3 digester fed 100 m3/d of mixed sludge (20 d), at 35 C, solved for
     800 d from a seeded start."""
     plant = Plant("digester", time_unit="d")
-    seed = {**FEED, "XFE": 500.0, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
+    seed = {**FEED, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
     plant.add_unit(
         CSTRUnit(
             name="digester",
@@ -157,13 +167,17 @@ def test_digester_steady_state_closes_the_cod_n_and_c_balances(core, digester_st
 def test_digester_sustains_every_anaerobic_group_and_makes_methane(core, digester_steady_state):
     """Each anaerobic group stays far above its feed level of 1 g/m3, so it grows
     in the digester rather than passing through, and most of the biodegradable
-    COD fed leaves as methane."""
+    COD fed leaves as methane: 75%, a measured property of this model rather
+    than an independent figure. It follows the hydrolysis structure: 80% while
+    acidogens hydrolyzed beside the heterotrophs, 75% now that the
+    heterotrophs alone do (decision 16), their hydrolysis saturated in
+    ``XS/XH`` at these solids, so part of ``XS`` leaves unhydrolyzed."""
     final = digester_steady_state[-1]
     idx = core.species_index
     for group in ANAEROBES:
         assert final[idx[group]] > 50.0, group
     biodegradable_in = FEED["SF"] + FEED["SA"] + FEED["XS"] + 0.9 * (FEED["XH"] + FEED["XAUT"])
-    assert final[idx["SCH4"]] / biodegradable_in == pytest.approx(0.80, abs=0.02)
+    assert final[idx["SCH4"]] / biodegradable_in == pytest.approx(0.75, abs=0.02)
 
 
 def test_gradient_of_batch_methane_matches_a_central_difference(core):
@@ -171,10 +185,10 @@ def test_gradient_of_batch_methane_matches_a_central_difference(core):
     difference with a relative step of 1e-3.
 
     About 18 s, almost all of it compiling the reverse-mode stiff solve of the
-    19-state model; the one-day batch is already the shortest that exercises
+    18-state model; the one-day batch is already the shortest that exercises
     the methanogens.
     """
-    seed = {**FEED, "XFE": 500.0, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
+    seed = {**FEED, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
     reactor = aquakin.BatchReactor(core, aquakin.SpatialConditions.uniform(T=308.15, pH=7.1))
     C0 = _vector(core, seed)
     k = core.param_index["k_m_ac"]
