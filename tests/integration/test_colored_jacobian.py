@@ -229,12 +229,9 @@ def bsm1():
     from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
     from aquakin.plant.influent import InfluentSeries
 
-    def make():
+    def make(use_takacs=True):
         asm1 = aquakin.load_model("asm1")
-        # The ideal clarifier: these tests check the colored machinery on a
-        # mid-size recycle plant whose warm-start probe pattern covers its
-        # trajectory; the layered settler's couplings are BSM2's tests.
-        p = build_bsm1(model=asm1, use_takacs=False)
+        p = build_bsm1(model=asm1, use_takacs=use_takacs)
         C0 = asm1.concentrations({
             "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
             "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0})
@@ -263,8 +260,10 @@ def _rhs_at(plant, y0, params):
 @pytest.mark.slow
 def test_plant_pattern_superset_over_trajectory(bsm1):
     """The positive-probe pattern covers the J nonzeros at states the solve
-    actually visits (not just the probe states)."""
-    plant, y0 = bsm1()
+    actually visits (not just the probe states). On the ideal clarifier: the
+    probe alone does not cover the layered settler's regime-switching couplings,
+    which is what the structural pattern is for (the next test)."""
+    plant, y0 = bsm1(use_takacs=False)
     params = plant.default_parameters()
     rhs = _rhs_at(plant, y0, params)
     P = jacobian_sparsity_pattern(rhs, y0, n_probe=24)
@@ -277,6 +276,27 @@ def test_plant_pattern_superset_over_trajectory(bsm1):
         J = np.asarray(fj(jnp.maximum(jnp.asarray(row), 0.0)))
         true = np.abs(J) > 1e-9 * (np.abs(J).max() + 1e-300)
         assert np.all(P[true]), "trajectory J has a nonzero outside the pattern"
+
+
+@pytest.mark.slow
+def test_forward_pattern_covers_the_takacs_trajectory(bsm1):
+    """The pattern the coloured forward solve uses (probe unioned with the
+    structural pattern) covers every dense-Jacobian entry, scored against its
+    own row, at the states the Takács BSM1 visits from its warm start. The
+    settler's feed coupling through the non-settleable floor switches on in the
+    clarification layers only along the trajectory, so a pattern derived at one
+    settler profile missed it."""
+    plant, y0 = bsm1()
+    params = plant.default_parameters()
+    sol = plant.solve(t_span=(0.0, 8.0), t_eval=jnp.linspace(0.0, 8.0, 41),
+                      params=params, y0=y0, rtol=1e-5, atol=1e-3,
+                      integrator=aquakin.IntegratorConfig(max_steps=2_000_000))
+    rf = plant._colored.forward_root_finder(0.0, y0, params, 1e-5, 1e-3)
+    assert rf is not None                                   # guard passed
+    rhs = _rhs_at(plant, y0, params)
+    count, worst = cj.pattern_coverage_misses(
+        rhs, list(np.asarray(sol.state)), rf.pattern, row_rtol=1e-9, abs_floor=0.0)
+    assert count == 0, f"{count} trajectory entries missed ({worst:.1e} of its row)"
 
 
 @pytest.mark.slow
@@ -295,7 +315,12 @@ def test_plant_colored_matches_dense_jacobian(bsm1):
 
 @pytest.mark.slow
 def test_plant_colored_solve_matches_default(bsm1):
-    plant, y0 = bsm1()
+    # On the ideal clarifier: on the Takács plant the coloured and dense solves
+    # differ by ~2 solver tolerances on the settler states, as each does from a
+    # tight reference, while a coloured solve with a full pattern is
+    # bit-identical to one with the derived pattern -- linear-algebra-path drift
+    # the 1e-3 bound (set on this plant) does not allow for, not a pattern miss.
+    plant, y0 = bsm1(use_takacs=False)
     params = plant.default_parameters()
     te = jnp.linspace(0.0, 8.0, 41)
     kw = dict(t_span=(0.0, 8.0), t_eval=te, params=params, y0=y0,
@@ -314,7 +339,9 @@ def test_plant_colored_solve_matches_default(bsm1):
 
 @pytest.mark.slow
 def test_plant_colored_gradient_matches_default(bsm1):
-    plant, y0 = bsm1()
+    # On the ideal clarifier, for the reason in the test above: the forward
+    # coloured chord's drift on the Takács plant moves this gradient by ~2e-4.
+    plant, y0 = bsm1(use_takacs=False)
     base = plant.default_parameters()
     # build the colored RF concretely first (the pattern needs concrete arrays)
     plant.solve(t_span=(0.0, 0.1), t_eval=jnp.array([0.1]), params=base, y0=y0,
