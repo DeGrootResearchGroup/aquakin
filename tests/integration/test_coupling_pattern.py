@@ -83,6 +83,43 @@ def test_settler_coupling_pattern_is_superset_of_dense_jacobian():
         assert not (active & ~cp.self_pattern).any()      # superset
 
 
+@pytest.mark.parametrize("mode", ["lumped_tss", "per_species"])
+def test_settler_inlet_pattern_covers_the_feed_coupling_of_every_layer(mode):
+    """The feed reaches every layer's settling flux through the non-settleable
+    floor ``X_min``, so the inlet pattern must cover ``d(rhs)/d(feed C)`` when the
+    layer profile and the feed vary together -- and every particulate row must
+    read the feed solids. Derived at a single (uniform-seed) profile, the
+    interior layers' flux changes cancel and the pattern kept only the bottom,
+    feed and top layers, which the Takács BSM1 trajectory then exceeded."""
+    from aquakin.plant.streams import Stream
+    from aquakin.plant.takacs import TakacsClarifier
+
+    net = aquakin.load_model("asm1")
+    s = TakacsClarifier(name="s", model=net, area=1500.0, height=4.0,
+                        underflow_Q=1.8e4, soluble_holdup=True, composition_mode=mode)
+    ip = s.coupling_pattern().inlet_pattern
+    m = s.state_size
+
+    def rhs_wrt_feed(y, C):
+        inlet = {s.input_port: Stream(Q=jnp.asarray(2.0e4), C=C, model=net)}
+        return s.rhs(jnp.asarray(0.0), y, inlet, None)
+
+    fj = jax.jit(jax.jacfwd(rhs_wrt_feed, argnums=1))
+    rng = np.random.default_rng(3)
+    base_y = np.maximum(np.abs(np.asarray(s.initial_state())), 1e-3)
+    base_C = np.maximum(np.abs(np.asarray(net.default_concentrations())), 1e-3)
+    for _ in range(8):
+        y = jnp.asarray(base_y * 10.0 ** rng.uniform(-2, 2, size=base_y.shape))
+        C = jnp.asarray(base_C * 10.0 ** rng.uniform(-2, 2, size=base_C.shape))
+        J = np.asarray(fj(y, C))
+        active = np.abs(J) > 1e-9 * (np.abs(J).max() + 1e-300)
+        assert not (active & ~ip).any()                    # superset
+
+    n_part = m - s.n_layers * len(s._soluble_indices)     # particulate head rows
+    feed_solids = np.asarray(s._part_indices)
+    assert ip[:n_part][:, feed_solids].any(axis=1).all()  # every layer reads X_min
+
+
 def test_settler_output_pattern_covers_outlets_and_skips_interior_layers():
     """The settler declares which layer states its outlets read: a superset of
     d(outlet C)/d(state) at diverse profiles, yet not the whole state -- the

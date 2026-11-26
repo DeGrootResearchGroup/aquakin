@@ -462,15 +462,18 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         def make_inputs(C):
             return {self.input_port: Stream(Q=Q0, C=C, model=net)}
 
-        inlet0 = make_inputs(jnp.asarray(np.maximum(np.abs(base_C), 1e-3)))
-        self_jac = lambda s: jax.jacfwd(lambda x: self.rhs(t0, x, inlet0, None))(s)
-        self_pat = ad_union(self_jac, state0)
+        # The layer state and the feed are sampled *jointly*: the feed reaches a
+        # layer's settling flux through the non-settleable floor X_min, which a
+        # layer sees only where its velocity is not clipped and where the fluxes
+        # across its two interfaces do not cancel. Holding the layers at one
+        # profile while sampling the feed (a uniform seed, equal neighbours)
+        # hides that coupling for every interior layer.
+        m = state0.size
+        joint_jac = lambda z: jax.jacfwd(lambda x: self.rhs(t0, x[:m], make_inputs(x[m:]), None))(z)
+        joint_pat = ad_union(joint_jac, np.concatenate([state0, base_C]))
+        self_pat, inlet_pat = joint_pat[:, :m], joint_pat[:, m:]
 
-        state_fixed = jnp.asarray(np.maximum(np.abs(state0), 1e-3))
-        inlet_jac = lambda c: jax.jacfwd(lambda C: self.rhs(t0, state_fixed, make_inputs(C), None))(
-            c
-        )
-        inlet_pat = ad_union(inlet_jac, base_C)
+        inlet0 = make_inputs(jnp.asarray(np.maximum(np.abs(base_C), 1e-3)))
 
         def outlet_C(x):
             out = self.compute_outputs(t0, x, inlet0, None)
