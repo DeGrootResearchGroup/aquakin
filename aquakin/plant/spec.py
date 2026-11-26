@@ -3,7 +3,7 @@
 A *spec* is a JSON/YAML document that rebuilds a plant::
 
     format: 2
-    aquakin: 0.2.0
+    aquakin: 0.3.0
     name: BSM1
     options: {recycle_passes: 3, recycle_tol: 1.0e-08, recycle_max_passes: 100}
     models:
@@ -132,7 +132,7 @@ def aquakin_version() -> str:
     Returns
     -------
     str
-        ``"0.2.0"`` for an installed release, ``"0.2.0+g1a2b3c4"`` when aquakin
+        ``"0.3.0"`` for an installed release, ``"0.3.0+g1a2b3c4"`` when aquakin
         runs from a git checkout (``+dirty`` added when it has local changes).
     """
     import subprocess
