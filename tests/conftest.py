@@ -64,6 +64,19 @@ def simple_model():
     return aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
 
 
+@pytest.fixture(scope="session")
+def stiff_sewer_model():
+    """Load the stiff sewer sulfur-cycle test model, once per session.
+
+    A WATS-based carbon and sulfur model with nitrate-driven sulfide oxidation
+    and a positivity limiter: stiff enough that reverse-mode AD through an
+    uncapped solve overflows, which is what the stable adjoints and the
+    forward-sensitivity solve are tested against. It is a frozen test input,
+    not a shipped model. Do not mutate it.
+    """
+    return aquakin.load_model_from_file(FIXTURES / "wats_sewer_khalil_paper_balanced.yaml")
+
+
 @pytest.fixture
 def make_cstr_plant(simple_model):
     """Build a one-tank plant: a CSTR (V = 100) on the A -> B decay model, fed

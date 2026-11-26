@@ -1,9 +1,9 @@
-# Original reference-book WATS model. The extended model and the Khalil paper/thesis models build on this base.
+# Original reference-book WATS model.
 model:
   name: wats_sewer
   version: "1.0"
   description: >-
-    The reference WATS sewer-process model: Hvitved-Jacobsen, Vollertsen & Nielsen (2013), Sewer Processes, 2nd ed., process matrices Tables 9.1-9.4. Aerobic/anoxic/anaerobic heterotrophic carbon turnover (growth bulk+biofilm, endogenous maintenance, fast/slow hydrolysis in all three redox regimes, fermentation) and the sulfur cycle: sulfate reduction (H2S formation, Eq 6.24) and chemical + biological sulfide oxidation to sulfate (bulk, Eqs 5.13-5.15; biofilm, Eq 5.16). pH is state-derived from the acid/base charge balance (the WATS pH chemistry). This is the base model WITHOUT the nitrate-dosing/methane/elemental-sulfur extensions of wats_sewer_extended; the extended model and the wats_sewer_khalil_* models add to this base. Rate constants are the book values: a_h2s = 0.036 d^-1 (Eq 6.24, domestic wastewater, 0.0015 g^0.5 m^-0.5 h^-1 x 24); the chemical/biological bulk-oxidation constants and orders, pKa, omega, pHopt and temperature coefficients are the Nielsen et al. values carried from the WATS reference. The biofilm sulfide-oxidation constant k_sox_f follows Eq 5.16 in FORM, but the book states this constant is site-specific (Nielsen et al. 2005) with no tabulated default; the value here is representative and should be calibrated per site.
+    The reference WATS sewer-process model: Hvitved-Jacobsen, Vollertsen & Nielsen (2013), Sewer Processes, 2nd ed., process matrices Tables 9.1-9.4. Aerobic/anoxic/anaerobic heterotrophic carbon turnover (growth bulk+biofilm, endogenous maintenance, fast/slow hydrolysis in all three redox regimes, fermentation) and the sulfur cycle: sulfate reduction (H2S formation, Eq 6.24) and chemical + biological sulfide oxidation to sulfate (bulk, Eqs 5.13-5.15; biofilm, Eq 5.16). pH is state-derived from the acid/base charge balance (the WATS pH chemistry). It carries no nitrate-dosing, methane or elemental-sulfur extensions. Rate constants are the book values: a_h2s = 0.036 d^-1 (Eq 6.24, domestic wastewater, 0.0015 g^0.5 m^-0.5 h^-1 x 24); the chemical/biological bulk-oxidation constants and orders, pKa, omega, pHopt and temperature coefficients are the Nielsen et al. values carried from the WATS reference. The biofilm sulfide-oxidation constant k_sox_f follows Eq 5.16 in FORM, but the book states this constant is site-specific (Nielsen et al. 2005) with no tabulated default; the value here is representative and should be calibrated per site.
   references:
   - "Hvitved-Jacobsen, Vollertsen & Nielsen (2013). Sewer Processes (WATS), 2nd ed. (process matrices Tables 9.1-9.4; growth, hydrolysis, maintenance, fermentation, sulfide formation Eq 6.24, sulfide oxidation Eqs 5.13-5.16, saturation constants, temperature coefficients)."
   - "Hvitved-Jacobsen, Vollertsen & Nielsen (1988); Nielsen et al. (1998). Sulfide formation rate, Eq 6.24 / Table 6.6 Eq. 4 (half-order, substrate (SF+SA+XS1))."
@@ -385,8 +385,7 @@ reactions:
     sulfide and oxygen, areal, with the bell-shaped pH dependence f_sII_pH (Eq 5.15, same
     pHopt/omega as the bulk water phase, Sec. 5.5.2) and temperature coefficient 1.03 (a_s).
     Written net to sulfate as in the WATS process matrix (Table 9.4); mechanistically
-    elemental sulfur is the main intermediate, captured explicitly by the elemental-sulfur
-    cycle of the extended/Khalil models.'
+    elemental sulfur is the main intermediate, which this model does not track.'
   rate: k_sox_f * ho_sumS_half * ho_SO_half * f_sII_pH * theta_s * {A_V}
   stoichiometry:
     sumS: -1

@@ -30,8 +30,6 @@ _CASES = [
     ("asm2d_tud", ["SF", "SA"]),
     ("asm2d_tud", ["XPP", "XPAO"]),
     ("wats_sewer", ["S_B", "S_VFA"]),
-    ("wats_sewer_extended", ["S_B", "S_VFA"]),
-    ("wats_sewer_khalil_thesis", ["S_B", "S_VFA"]),
 ]
 
 

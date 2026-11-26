@@ -296,13 +296,13 @@ def test_bad_sens_params_raise(simple_model):
 
 
 @pytest.mark.validation
-def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
+def test_stiff_uncapped_finite_and_matches_capped_jacfwd(stiff_sewer_model):
     # The canonical stiff sewer-biofilm model, where AD through an uncapped
     # solve is the failure the dtmax cap exists to avoid: the augmented
     # forward-sensitivity solve -- uncapped -- is finite and matches a
     # tightly-capped jacfwd. This model also carries a positivity limiter, so
     # the limiter is part of f and the sensitivity sees it.
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
+    net = stiff_sewer_model
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -336,12 +336,12 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd():
 
 
 @pytest.mark.validation
-def test_shared_factor_biofilm_matches_dense():
+def test_shared_factor_biofilm_matches_dense(stiff_sewer_model):
     # On the stiff layered biofilm -- the regime the simultaneous corrector is
     # built for (ndof = n_comp * n_species is large, so sharing the diagonal-block
     # factorization across the sensitivity columns is the point) -- it must
     # reproduce the dense augmented solve to machine precision.
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
+    net = stiff_sewer_model
     cond = net.default_conditions(1)
     n = net.n_species
     soluble = jnp.asarray([not s.startswith("X") for s in net.species])

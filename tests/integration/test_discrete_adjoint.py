@@ -267,7 +267,7 @@ def test_esdirk_equals_autodiff_through_same_solve(simple_model):
 
 
 @pytest.mark.validation
-def test_esdirk_stiff_trajectory_matches_capped_kvaerno5_and_low_memory():
+def test_esdirk_stiff_trajectory_matches_capped_kvaerno5_and_low_memory(stiff_sewer_model):
     # The Kvaerno5 discrete adjoint on the stiff model: finite uncapped, and
     # matching the capped-Kvaerno5 jax-adjoint of the same forced-step forward.
     # The low_memory stage recompute must match the saved-stage gradient here
@@ -276,7 +276,7 @@ def test_esdirk_stiff_trajectory_matches_capped_kvaerno5_and_low_memory():
     # path is the forward root-finder tolerance vs the machine-precision
     # recompute of the stages. (One test, so the saved-stage gradient is
     # computed once for both comparisons.)
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
+    net = stiff_sewer_model
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -317,12 +317,12 @@ def test_esdirk_stiff_trajectory_matches_capped_kvaerno5_and_low_memory():
 
 
 @pytest.mark.validation
-def test_calibrate_stable_adjoint_matches_jax_adjoint():
-    # End-to-end: a Khalil-model calibration with gradient="stable_adjoint"
+def test_calibrate_stable_adjoint_matches_jax_adjoint(stiff_sewer_model):
+    # End-to-end: a stiff-sewer-model calibration with gradient="stable_adjoint"
     # (cap-free) must reach the same optimum as the existing capped-Kvaerno5
     # gradient="jax_adjoint" path. Synthetic recovery; compare the fitted params.
 
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
+    net = stiff_sewer_model
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p_def = net.default_parameters()
@@ -367,11 +367,11 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
 
 
 @pytest.mark.validation
-def test_stiff_trajectory_loss_matches_capped():
+def test_stiff_trajectory_loss_matches_capped(stiff_sewer_model):
     # A multi-observation (trajectory) loss -- the calibration shape -- must be
     # finite uncapped and match the capped reference using the same forced-step
     # forward solve.
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
+    net = stiff_sewer_model
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
