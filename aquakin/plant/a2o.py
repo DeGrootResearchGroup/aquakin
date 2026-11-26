@@ -248,6 +248,67 @@ def a2o_warm_start(plant: Plant) -> jnp.ndarray:
     return plant.initial_state(overrides=dict.fromkeys(reactors, ml))
 
 
+def _add_reactor_zones(plant: Plant, model: CompiledModel, conditions: dict) -> None:
+    """Add the anaerobic, anoxic and aerobic tanks and the anoxic mixer, in order.
+
+    Parameters
+    ----------
+    plant : Plant
+        The A²O plant being built (its front mixer already added).
+    model : CompiledModel
+        The plant's model.
+    conditions : dict
+        The tanks' operating conditions.
+    """
+    # ----- Anaerobic selector (no aeration) -----
+    for i, vol in enumerate(A2O_ANAEROBIC_VOLUMES):
+        plant.add_unit(
+            CSTRUnit(
+                name=f"anaer{i + 1}",
+                model=model,
+                volume=vol,
+                input_port_names=["inlet"],
+                conditions=conditions,
+                aeration=None,
+            )
+        )
+
+    # ----- Anoxic mixer: anaerobic outlet + internal (nitrate) recycle -----
+    plant.add_unit(
+        MixerUnit(
+            name="anoxic_mix",
+            input_port_names=["upstream", "internal_recycle"],
+            model=model,
+        )
+    )
+
+    # ----- Anoxic zone (denitrification, no aeration) -----
+    for i, vol in enumerate(A2O_ANOXIC_VOLUMES):
+        plant.add_unit(
+            CSTRUnit(
+                name=f"anox{i + 1}",
+                model=model,
+                volume=vol,
+                input_port_names=["inlet"],
+                conditions=conditions,
+                aeration=None,
+            )
+        )
+
+    # ----- Aerobic zone (nitrification + luxury P uptake) -----
+    for i, vol in enumerate(A2O_AEROBIC_VOLUMES):
+        plant.add_unit(
+            CSTRUnit(
+                name=f"aer{i + 1}",
+                model=model,
+                volume=vol,
+                input_port_names=["inlet"],
+                conditions=conditions,
+                aeration=Aeration(kla=A2O_AEROBIC_KLA[i], do_sat=A2O_DO_SATURATION, species="SO2"),
+            )
+        )
+
+
 def build_a2o(
     model: CompiledModel | None = None,
     *,
@@ -349,53 +410,7 @@ def build_a2o(
         )
     )
 
-    # ----- Anaerobic selector (no aeration) -----
-    for i, vol in enumerate(A2O_ANAEROBIC_VOLUMES):
-        plant.add_unit(
-            CSTRUnit(
-                name=f"anaer{i + 1}",
-                model=model,
-                volume=vol,
-                input_port_names=["inlet"],
-                conditions=conditions,
-                aeration=None,
-            )
-        )
-
-    # ----- Anoxic mixer: anaerobic outlet + internal (nitrate) recycle -----
-    plant.add_unit(
-        MixerUnit(
-            name="anoxic_mix",
-            input_port_names=["upstream", "internal_recycle"],
-            model=model,
-        )
-    )
-
-    # ----- Anoxic zone (denitrification, no aeration) -----
-    for i, vol in enumerate(A2O_ANOXIC_VOLUMES):
-        plant.add_unit(
-            CSTRUnit(
-                name=f"anox{i + 1}",
-                model=model,
-                volume=vol,
-                input_port_names=["inlet"],
-                conditions=conditions,
-                aeration=None,
-            )
-        )
-
-    # ----- Aerobic zone (nitrification + luxury P uptake) -----
-    for i, vol in enumerate(A2O_AEROBIC_VOLUMES):
-        plant.add_unit(
-            CSTRUnit(
-                name=f"aer{i + 1}",
-                model=model,
-                volume=vol,
-                input_port_names=["inlet"],
-                conditions=conditions,
-                aeration=Aeration(kla=A2O_AEROBIC_KLA[i], do_sat=A2O_DO_SATURATION, species="SO2"),
-            )
-        )
+    _add_reactor_zones(plant, model, conditions)
 
     n_aer = len(A2O_AEROBIC_VOLUMES)
 
