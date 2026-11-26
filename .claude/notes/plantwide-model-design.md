@@ -201,6 +201,18 @@ kept equal by putting the organic-N difference in ammonium.
   - per propionate it prints `2/9 - α` (0.04); `2/9 + α` (0.40) joins its
     own pH > 7.5 branch `0.20 pH - 1.1` exactly at 7.5, and the paper's Fig.
     2d model curve releases about 0.42 per propionate. Use `2/9 + α`.
+- **Two more in its aerobic stoichiometry (Appendix 1, checked by electron and
+  P balances with O2 and CO2 implicit):**
+  - the storage rows (glycogen and poly-P formation, every population) print
+    the biomass entry as `-i` with `i = -Y_SX / Y_S,store`, a net `+`; only
+    the negative sign conserves electrons (residual < 1e-15 for PHB and for
+    propionate-derived PHA, against about 7 e-/C-mmol for glycogen as
+    printed). Storage diverts PHA from growth, so biomass falls: use
+    `-Y_SX / Y_S,store`;
+  - the aerobic maintenance rows' O2 entry `Y_SX / Y_OX - 1` balances only
+    for a substrate of 4 e-/C-mol (glycogen); for PHA (4.5 to 5) it is short
+    by `redox_PHA / 4 - 1` O2 per C-mmol, 0.5 to 0.9 e-/C-mmol of
+    maintenance. Use the balanced `Y_SX / Y_OX - redox_PHA / 4`.
 - Smolders, G.J.F., van der Meij, J., van Loosdrecht, M.C.M. & Heijnen, J.J.
   (1994a). Model of the anaerobic metabolism of the biological phosphorus
   removal process: stoichiometry and pH influence. *Biotechnol. Bioeng.*
