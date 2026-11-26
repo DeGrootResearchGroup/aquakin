@@ -140,8 +140,15 @@ sens = aquakin.sensitivity(
 )
 sens.doutput_dparams              # (7,) gradient with respect to each parameter
 sens.doutput_dconditions["pH"]    # (1,) sensitivity to a condition field
-sens.ranked_params()              # [(name, |gradient|), ...] most influential first
+sens.ranked_params()              # [(name, |elasticity|), ...] most influential first
 ```
+
+`ranked_params()` ranks by the **elasticity** `(dy/dp)·p/y`, the percentage
+change in the output per percentage change in a parameter
+(`sens.elasticities()` returns them). The raw gradients in `doutput_dparams`
+depend on each parameter's units: this model's rate constants span from about
+10 to 10⁹, so a large gradient can belong to a parameter that barely matters.
+`ranked_params(elasticity=False)` ranks by the raw gradient instead.
 
 ### Forward sensitivity (cap-free stiff gradients)
 
