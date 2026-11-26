@@ -461,9 +461,10 @@ def test_a2o_srt_weighs_the_solids_by_their_itss_factors():
     """On the ASM2d A²O plant every solids term of the SRT is TSS through the
     model's iTSS factors -- the reactors, the per-species Takács blanket, the
     overflow and the wastage -- so the reactor MLSS is the mixed liquor's TSS,
-    not 0.75·(XI + XS), the only ASM1-named particulates asm2d has. (The F:M
-    load is not checked: the BOD and COD measures are ASM1's; the COD one is
-    asked for only because the BOD one needs ASM1 species.)"""
+    not 0.75·(XI + XS), the only ASM1-named particulates asm2d has. The F:M
+    load is ASM2d's own: its COD counts every COD species (not only the
+    ASM1-named SI, XI and XS), and its default BOD weighs them by their
+    biodegradable share (it raised ``KeyError: 'SS'``)."""
     from aquakin.plant import a2o_influent, a2o_warm_start, build_a2o
     from aquakin.plant.results import PlantSolution
 
@@ -505,6 +506,20 @@ def test_a2o_srt_weighs_the_solids_by_their_itss_factors():
     assert m.mlss == pytest.approx(mean(reactor) / V, rel=1e-9)
     assert m.solids_inventory == pytest.approx((mean(reactor) + mean(blanket)) * 1e-3, rel=1e-9)
     assert pytest.approx((mean(reactor) + mean(blanket)) / loss, rel=1e-9) == m.SRT
+
+    # F:M = substrate load over the reactor solids, by hand from the influent.
+    feed = [plant.influents["feed"].at(ti) for ti in t]
+    Q = np.array([float(f.Q) for f in feed])
+    C = {s: np.array([float(f.C[asm2d.species_index[s]]) for f in feed]) for s in asm2d.species}
+    cod = sum(C[s] for s in ("SF", "SA", "SI", "XI", "XS", "XH", "XPAO", "XPHA", "XAUT"))
+    bod = 0.25 * (
+        C["SF"] + C["SA"] + C["XPHA"] + (1.0 - p["fSI"]) * C["XS"]
+        + (1.0 - p["fXI"]) * (C["XH"] + C["XPAO"] + C["XAUT"])
+    )
+    assert m.FM == pytest.approx(mean(Q * cod) / mean(reactor), rel=1e-9)
+    by_bod = sludge_metrics(plant, sol)
+    assert by_bod.FM == pytest.approx(mean(Q * bod) / mean(reactor), rel=1e-9)
+    assert by_bod.SRT == m.SRT
 
 
 @pytest.mark.slow

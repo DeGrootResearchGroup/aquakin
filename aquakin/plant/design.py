@@ -478,7 +478,10 @@ def sludge_metrics(
         the clarifier-underflow wastage ``underflow_split.waste`` (ahead of a
         BSM2 dewatering cake, which also holds primary and digested solids).
     substrate : str, optional
-        Substrate measure for the F:M load -- ``"BOD"`` (default) or ``"COD"``.
+        Substrate measure for the F:M load -- ``"BOD"`` (default) or ``"COD"``,
+        each read from the reactors' model (:func:`derived_BOD`,
+        :func:`derived_COD`). A model whose stoichiometry does not determine
+        its biodegradable COD raises with ``"BOD"``; use ``"COD"`` for it.
 
     Returns
     -------
@@ -541,8 +544,11 @@ def sludge_metrics(
     Q_mean = float(time_average(inf_Q, t))
     HRT = reactor_volume / (Q_mean + EPS_Q)  # days
 
-    load_fn = derived_BOD if substrate_key == "BOD" else derived_COD
-    bod_load_rate = inf_Q * load_fn(inf_C, model)  # (n_t,) g/d
+    if substrate_key == "BOD":
+        load = derived_BOD(inf_C, model, params=plant._params_for_unit(reactors[0], params_full))
+    else:
+        load = derived_COD(inf_C, model)
+    bod_load_rate = inf_Q * load  # (n_t,) g/d
     bod_load_mean = float(time_average(bod_load_rate, t))  # g/d
     # F:M is the substrate load over the reactor (aeration-basin) solids mass.
     FM = bod_load_mean / (reactor_solids_mean + EPS_Q)  # 1/d
