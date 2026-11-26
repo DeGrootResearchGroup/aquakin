@@ -401,8 +401,6 @@ reactions:
       XMeOH: "fMeOH_PO4_MW"
       XMeP: "fMeP_PO4_MW"
       XTSS: "fMeOH_PO4_MW + fMeP_PO4_MW"
-      XMeOH: "fMeOH_PO4_MW"
-      XMeP: "fMeP_PO4_MW"
 
   # Units: each unit of rate releases 1 g P (SPO4 +1), so the rate is in
   # g P/m3/d and kRED, which multiplies XMeP in g TSS/m3, carries g P/(g TSS d).
@@ -416,6 +414,4 @@ reactions:
       XMeOH: "(-1) * fMeOH_PO4_MW"
       XMeP: "(-1) * fMeP_PO4_MW"
       XTSS: "(-1) * (fMeOH_PO4_MW + fMeP_PO4_MW)"
-      XMeOH: "(-1) * fMeOH_PO4_MW"
-      XMeP: "(-1) * fMeP_PO4_MW"
 
