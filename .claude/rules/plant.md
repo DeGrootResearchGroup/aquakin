@@ -217,17 +217,18 @@ compartment inside the biofilm RHS (which also calls `model.dCdt`).
 **Sizes are checked at construction**: `_constants.check_positive(name, "volume", value)` first in
 `__post_init__` (a zero, negative or infinite volume makes a steady state never end).
 
-**Co-stripped gases (`Aeration(stripped=...)`).** A gas stripped with oxygen
-is folded into the same per-species aeration vectors as oxygen by
-`build_aeration_vectors` (open loop: kLa times ratio; closed loop: the same
-signal at gain times ratio); `stripped="model"` too, its T- and pH-dependent
-saturation filled in per call. `C_s(T)` corrects oxygen only; `required_signals`
-must de-duplicate. **`rhs` and `mass_balance` both call `aeration_term`**.
+**Co-stripped gases (`Aeration(stripped=...)`).** `build_aeration_vectors` folds
+a gas into oxygen's per-species vectors (kLa or gain times ratio); `C_s(T)`
+corrects oxygen only; `required_signals` must de-duplicate. **`rhs` and
+`mass_balance` both call `aeration_term`**.
 
 - **Read a tank's aeration through the `AerationUnit` readers** (`oxygen_kla`,
-  `kla_vector`, `saturation_vector`, `stripped_gases`), never by a species name:
-  models name oxygen differently (`SO` in ASM1, `SO2` in ASM3-based models).
-  Closed-loop entries go through the one `_apply_controlled_kla` the RHS uses.
+  `kla_vector`, `saturation_vector`, `stripped_gases`), never by a species name
+  (oxygen is `SO` in ASM1, `SO2` in ASM3-based models).
+- **The stored and reported kLa is the clean-water kLa** (fixed `kla`, or signal
+  times gain, via `cstr.clean_water_kla`); only `cstr.delivered_kla` applies
+  `alpha` and `kla_theta`, in every mode. Never fold `alpha` into `kla_vec` or
+  a gain. Energy and blower formulas read the clean-water kLa (blowers make it).
 - In a closed-loop plant whose only effluent is a sensed tank, the DO sensor
   tap consumes `tank.out`, so it is not a dangling output: pass it to
   `plant.mass_balance` as `effluent_ports`.

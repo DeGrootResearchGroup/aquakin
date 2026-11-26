@@ -346,7 +346,11 @@ def aeration_energy(
     Parameters
     ----------
     t : (n_t,) save times in days
-    kla_history : (n_t, n_aerated_tanks) kLa value at each save time
+    kla_history : (n_t, n_aerated_tanks) kLa value at each save time: the
+        clean-water kLa the blowers deliver (a tank's fixed ``kla``, or its
+        controller output times its gain), before ``alpha`` and the temperature
+        factor, since the energy is spent producing it
+        (:meth:`~aquakin.plant.cstr.AerationUnit.oxygen_kla`)
     volumes : (n_aerated_tanks,) liquid volume of each aerated tank
     saturation : float
         Dissolved-oxygen saturation concentration (mg/L).

@@ -27,9 +27,10 @@ the aeration **energy** ``∫ Σ_i P_i dt`` has the same form as the Copp
 correlation but with a mechanistic coefficient (SOTE / depth / blower efficiency)
 in place of the fixed one -- so it is a principled refinement, and it stays
 ``jit`` / ``jax.grad`` clean. The α / β / temperature field corrections live on
-:class:`~aquakin.plant.cstr.Aeration` (they shape the ``kLa`` and the driving
-force in the solve); ``AerationSystem`` adds the diffuser-fouling factor ``F`` on
-the standard efficiency and the blower curve.
+:class:`~aquakin.plant.cstr.Aeration` (they take the clean-water ``kLa`` to the
+process ``kLa`` and shape the driving force in the solve); ``AerationSystem``
+reads the clean-water ``kLa`` and adds the diffuser-fouling factor ``F`` on the
+standard efficiency and the blower curve.
 
 All quantities are in days / metres / kPa / kW so they compose with the plant's
 time unit and the existing energy kernels (kWh/d).
@@ -147,7 +148,10 @@ def required_airflow(kla, volume, system: AerationSystem):
     Parameters
     ----------
     kla : float or jnp.ndarray
-        Mass-transfer coefficient (1/d).
+        Clean-water mass-transfer coefficient (1/d): a tank's fixed ``kla`` or
+        its controller output times its gain, before the ``alpha`` and
+        temperature corrections of :class:`~aquakin.plant.cstr.Aeration`, as
+        the standard transfer ``SOTR`` is defined in clean water.
     volume : float or jnp.ndarray
         Tank liquid volume (m³).
     system : AerationSystem
