@@ -392,8 +392,8 @@ def test_calibrate_stable_adjoint_runs_the_reactor_solver(
 @pytest.mark.validation
 def test_calibrate_stable_adjoint_matches_jax_adjoint():
     # End-to-end: a Khalil-model calibration with gradient="stable_adjoint"
-    # (cap-free) must reach the same optimum as the existing capped-Kvaerno5
-    # gradient="jax_adjoint" path. Synthetic recovery; compare the fitted params.
+    # (cap-free) must reach the same optimum as the existing capped
+    # gradient="jax_adjoint" path; both run the reactor's default order (Kvaerno3). Synthetic recovery; compare the fitted params.
 
     net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
     cond = net.default_conditions(1)
@@ -413,7 +413,7 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
     ]
 
     # Generous buffer: the backward skips padded slots (lax.cond), so the cost
-    # tracks the actual Kvaerno5 step count, while the buffer stays large enough
+    # tracks the actual step count, while the buffer stays large enough
     # for the forward across all params the optimiser explores.
     max_steps = 4000
     common = dict(observed_species=obs_species, loss="mse", laplace=False,
