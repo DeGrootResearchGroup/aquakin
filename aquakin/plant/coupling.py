@@ -95,6 +95,12 @@ def ad_union(
     numerically invisible at every probed state, so kinetics need the *syntactic*
     dependency from the rate AST instead (:func:`structural_sparsity_pattern`).
 
+    Only the components of ``x`` are varied. When the right-hand side also reads
+    an input held fixed outside ``x`` (the unit's own state while ``x`` is its
+    inlet concentrations, say), a branch that depends on that input stays at one
+    side for every sample, so put every input the block reads into ``x`` and
+    split the columns afterwards, as the Takács settler does.
+
     Parameters
     ----------
     jac_fn : Callable
