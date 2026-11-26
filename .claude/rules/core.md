@@ -290,8 +290,11 @@ one location, built directly from scalar field values — it **is** a
 the README quickstart lead with it.
 
 **`conditions.with_(**overrides)` — edit from defaults.** Returns a copy with the
-named fields overridden (or added), scalars broadcast to the object's location
-count, the rest carried over, the original untouched. The recommended
+named fields overridden, scalars broadcast to the object's location
+count, the rest carried over, the original untouched. It must refuse a name
+the object does not carry (`ValueError` listing the declared fields), because a
+misspelt name would add a field no rate reads; a new field is built with
+`uniform`. The recommended
 edit-from-defaults pattern is `model.default_conditions().with_(T=283.15)`
 (start from the YAML-declared defaults, change only what differs). It always
 returns the base `SpatialConditions` type.

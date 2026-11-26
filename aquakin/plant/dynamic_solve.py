@@ -31,6 +31,7 @@ from aquakin.integrate._common import (
     to_native_time,
 )
 from aquakin.integrate._config import FORWARD_THROUGH_SOLVE_DIFF, STABLE_REVERSE_DIFF
+from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.integrate.events import (
     Event,
@@ -42,6 +43,7 @@ from aquakin.integrate.events import (
     segment_signature,
 )
 from aquakin.integrate.seam import _coerce_atol, _run_diffeqsolve
+from aquakin.plant.influent import warn_if_outside_records
 from aquakin.plant.results import (
     PlantSolution,
 )
@@ -262,6 +264,7 @@ def solve(
     if events is not None:
         events = events_to_native_time(events, _time_factor)
     _check_inlet_flows(self, t0, t1)
+    warn_if_outside_records(self.influents, t0, t1, self.time_unit)
     unit_events: list[Event] = []
     for unit in self.units.values():
         if isinstance(unit, CycleEventSource):
@@ -865,9 +868,10 @@ def _solve_jax_adjoint(
 
     with friendly_solve_errors(max_steps, what="plant solve"):
         if t_eval is None:
-            ts, ys = jitted(y0, params)
+            ts, ys, result = jitted(y0, params)
         else:
-            ts, ys = jitted(y0, params, t_eval)
+            ts, ys, result = jitted(y0, params, t_eval)
+        ts, ys = check_solve_result(result, (ts, ys), max_steps=max_steps, what="plant solve")
     return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
 
 
@@ -1061,7 +1065,7 @@ def _build_jitted_solve(
                 saveat=diffrax.SaveAt(ts=t_eval),
                 **kw,
             )
-            return sol.ts, sol.ys
+            return sol.ts, sol.ys, sol.result
 
         return _solve
 
@@ -1074,7 +1078,7 @@ def _build_jitted_solve(
             saveat=diffrax.SaveAt(t1=True),
             **kw,
         )
-        return sol.ts, sol.ys
+        return sol.ts, sol.ys, sol.result
 
     return _solve
 

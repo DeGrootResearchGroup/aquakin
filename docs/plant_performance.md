@@ -1290,8 +1290,12 @@ as `aquakin.characterize_influent` / `fractionate` / `InfluentFractions` /
 Setting a plant's temperature used to mean writing the static `T` condition of
 every reactor by hand (in Kelvin, at the correction `ref_T`). `set_temperature`
 takes **°C**, converts to Kelvin, and writes the static `T` of every
-temperature-bearing reactor — so a re-solve runs the Arrhenius
-`temperature_corrections` at that temperature (`build_bsm2(...)` then
+temperature-bearing reactor. A re-solve runs the Arrhenius
+`temperature_corrections` at that temperature only in a reactor whose inflow
+carries no temperature: an inflow temperature (the flow-weighted inlet `T`, or
+the tank's temperature state under `HeatBalanceTemperature`, which the static
+`T` only seeds) takes precedence, and the SBR always runs at its static `T`
+(`build_bsm2(...)` then
 `plant.set_temperature(15)` is the BSM2 15 °C operating point; `set_temperature(10)`
 drives nitrification down — verified in
 `tests/integration/test_plant_temperature.py`). It targets the activated-sludge
@@ -1906,3 +1910,9 @@ Dynamic-solve performance numbers formerly in `.claude/rules/plant-solve.md`
   coloured-backward entries above for the re-measured numbers).
 - **Cached recycle flow map `A`:** 1.076× (7.6%) on the 60-day dynamic BSM2
   forward solve.
+
+## Compile versus run time (moved from the integration rule, 2026-11-26)
+
+Compiling a stiff solve dominates its cost: measured ~1.6 s compile against
+~0.02 s run for an ASM1 batch solve, and ~34 s against ~4 s for the full BSM2
+plant. This is why every integrator caches its compiled solve.

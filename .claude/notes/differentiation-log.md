@@ -101,3 +101,11 @@ as current. Plant forward-sensitivity measurements are in
   saved-stage gradient to machine precision on linear decay and to `rel < 1e-5` on the
   stiff Khalil model, the residual being the forward root-finder tolerance against the
   machine-precision recompute; costs about a second per-step stage solve.
+
+## Forward vs reverse mode for a multi-output screen
+
+Forward mode (`dgsm(..., diff=DifferentiationConfig(mode="forward"))`) was
+benchmarked at about 2× faster, with less memory, than reverse mode for the
+4-output / 17-input Khalil batch screen; for a single scalar output reverse
+still wins. Forward and reverse agree to machine precision, so the choice is
+purely performance, set by the output / input counts and the adjoint stiffness.

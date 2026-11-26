@@ -31,6 +31,7 @@ from aquakin.integrate._common import (
     validate_C0_params,
     validate_t_eval,
 )
+from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.events import (
     Event,
     SegmentSettings,
@@ -281,9 +282,12 @@ class BatchReactor(GradientCheckMixin):
 
         with friendly_solve_errors(self.max_steps, what="batch reactor solve"):
             if t_eval_arr is None:
-                ts, ys = jitted(C0, params, condition_arrays)
+                ts, ys, result = jitted(C0, params, condition_arrays)
             else:
-                ts, ys = jitted(C0, params, condition_arrays, t_eval_arr)
+                ts, ys, result = jitted(C0, params, condition_arrays, t_eval_arr)
+            ts, ys = check_solve_result(
+                result, (ts, ys), max_steps=self.max_steps, what="batch reactor solve"
+            )
         if _time_factor != 1.0:
             ts = ts / _time_factor  # native -> requested unit
         sol = BatchSolution(t=ts, C=ys, model=self.model)
@@ -485,7 +489,7 @@ class BatchReactor(GradientCheckMixin):
                     saveat=diffrax.SaveAt(ts=t_eval),
                     **kw,
                 )
-                return sol.ts, sol.ys
+                return sol.ts, sol.ys, sol.result
 
             return _solve
 
@@ -499,6 +503,6 @@ class BatchReactor(GradientCheckMixin):
                 saveat=diffrax.SaveAt(t1=True),
                 **kw,
             )
-            return sol.ts, sol.ys
+            return sol.ts, sol.ys, sol.result
 
         return _solve

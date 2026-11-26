@@ -1,7 +1,7 @@
 """BSM1 with a dynamic (time-varying) influent.
 
 Builds the canonical BSM1 plant, settles it to a steady state under the
-dry-weather influent, then plays a 14-day *dynamic* influent through it and
+average dry-weather load, then plays a 14-day *dynamic* influent through it and
 tracks how the tank-5 (effluent) state responds. Two profiles are compared --
 dry weather and a wet-weather rain event -- warm-started from the same steady
 state so the difference is purely the influent forcing.
@@ -20,12 +20,19 @@ import jax.numpy as jnp
 
 import aquakin
 from aquakin.plant.bsm import build_bsm1, load_bsm1_influent
+from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
+
+# The BSM1 average dry-weather load (Copp 2002), held constant for the settle.
+BSM1_AVERAGE_FEED = {"SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
+                     "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0}
 
 
 def _settle(model):
-    """Run the dry influent to a steady state and return the final plant state."""
+    """Run the plant to a steady state under the constant average load (the
+    14-day dynamic record ends long before a 100-day settle would) and return
+    the final plant state."""
     plant = build_bsm1(model=model)
-    plant.add_influent("feed", load_bsm1_influent("dry", model),
+    plant.add_influent("feed", model.influent(BSM1_AVERAGE_FEED, Q=BSM1_Q_AVG),
                        to="inlet_mix.fresh")
     sol = plant.solve(t_span=(0.0, 100.0), t_eval=jnp.array([0.0, 100.0]),
                       rtol=1e-5, atol=1e-3,

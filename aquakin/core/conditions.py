@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 import jax.numpy as jnp
 
+from aquakin.core.hints import did_you_mean
+
 
 @dataclass
 class SpatialConditions:
@@ -82,7 +84,7 @@ class SpatialConditions:
         return cls(fields=fields)
 
     def with_(self, **kwargs: float) -> SpatialConditions:
-        """Return a copy with some fields overridden (or added).
+        """Return a copy with some of its fields overridden.
 
         The common edit-from-defaults pattern: start from
         ``model.default_conditions()`` and change only what differs, e.g.::
@@ -92,7 +94,9 @@ class SpatialConditions:
         Scalar overrides are broadcast to this object's location count (so the
         result keeps the same ``n_locations``); a length-``n_locations`` array
         override is used as-is. Fields not named are carried over unchanged. The
-        original is not modified.
+        original is not modified. Only fields this object already carries can be
+        overridden: a misspelt name would otherwise add a field no rate reads and
+        leave the intended one at its default.
 
         Parameters
         ----------
@@ -105,7 +109,21 @@ class SpatialConditions:
         SpatialConditions
             A new ``SpatialConditions`` (always the base type, so it stays valid
             for every reactor) with the merged fields.
+
+        Raises
+        ------
+        ValueError
+            If a name is not one of this object's fields (build a set with new
+            fields with :meth:`uniform`).
         """
+        undeclared = sorted(name for name in kwargs if name not in self.fields)
+        if undeclared:
+            hint = did_you_mean(undeclared[0], self.fields) if len(undeclared) == 1 else ""
+            raise ValueError(
+                f"with_() got undeclared condition field(s) {undeclared}; the declared "
+                f"fields are {sorted(self.fields)}.{hint} To add a field, build the "
+                "conditions with SpatialConditions.uniform(...)."
+            )
         n = self.n_locations or 1
         merged = dict(self.fields)
         for name, value in kwargs.items():

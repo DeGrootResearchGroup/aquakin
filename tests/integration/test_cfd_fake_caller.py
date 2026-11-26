@@ -170,13 +170,14 @@ def test_step_is_ad_clean(cfd_setup):
     model = reactor.model
 
     # Convert to JAX for the grad path; CFDReactor.step does NumPy conversion
-    # internally, so we drive the underlying jit directly here.
+    # internally, so we drive the underlying jit directly here. It returns the
+    # per-cell solve results beside the state, which step() checks on the host.
     inner = reactor._build_step()
     cond_jax = {k: jnp.asarray(v) for k, v in conditions.items()}
     C0_jax = jnp.asarray(C0)
 
     def output(params):
-        C_new = inner(C0_jax, cond_jax, jnp.asarray(60.0), params)
+        C_new, _result = inner(C0_jax, cond_jax, jnp.asarray(60.0), params)
         return jnp.mean(C_new[:, model.species_index["BrO3-"]])
 
     g = jax.grad(output)(model.default_parameters())

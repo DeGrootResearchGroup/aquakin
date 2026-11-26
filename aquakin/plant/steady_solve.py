@@ -23,6 +23,7 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.integrate._common import IntegratorConfig, atol_cache_key, friendly_solve_errors
+from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.seam import _run_diffeqsolve
 from aquakin.plant.results import (
     SteadyStateResult,
@@ -661,6 +662,9 @@ def _steady_forward_design(
             atol=atol,
             max_steps=max_steps,
             event=event,
+        )
+        sol = check_solve_result(
+            sol.result, sol, max_steps=max_steps, what="plant steady-state fallback"
         )
     t_final = float(sol.ts[-1])
     state = sol.ys[-1]

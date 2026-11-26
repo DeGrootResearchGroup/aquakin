@@ -32,10 +32,10 @@ def main() -> None:
           f"{float(inf.t[-1]):.1f} days, avg Q = {float(inf.Q.mean()):.0f} m³/d")
     print()
 
-    print("Solving for 15 days (open-loop kLa, Takács clarifier) ...")
+    print("Solving the 14-day record (open-loop kLa, Takács clarifier) ...")
     sol = plant.solve(
-        t_span=(0.0, 15.0),
-        t_eval=jnp.linspace(0.0, 15.0, 16),
+        t_span=(0.0, 14.0),
+        t_eval=jnp.linspace(0.0, 14.0, 15),
         rtol=1e-4, atol=1e-3,
     )
 

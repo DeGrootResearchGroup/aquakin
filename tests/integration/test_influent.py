@@ -382,3 +382,137 @@ def test_load_bsm2_influent_missing_file(asm1, monkeypatch):
     monkeypatch.setattr(influent_mod, "files", lambda pkg: _FakeResource())
     with pytest.raises(FileNotFoundError, match="BSM2 influent file"):
         load_bsm2_influent("dry", asm1)
+
+
+# ----- a record run past its ends warns ------------------------------------
+
+
+def _ramp_plant(simple_model, t_end=100.0, t_start=0.0):
+    """One CSTR on the decay model fed by a record whose flow ramps from 5 to 15
+    over ``[t_start, t_end]`` (plant clock: seconds)."""
+    from aquakin.plant import CSTRUnit, InfluentSeries, Plant
+
+    plant = Plant("ramp", time_unit="s")
+    plant.add_unit(
+        CSTRUnit(name="tank", model=simple_model, volume=100.0, input_port_names=["inlet"],
+                 conditions={"T": 293.15})
+    )
+    record = InfluentSeries(
+        t=jnp.asarray([t_start, t_end]),
+        Q=jnp.asarray([5.0, 15.0]),
+        C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]),
+        model=simple_model,
+    )
+    plant.add_influent("ramp_feed", record, to="tank.inlet")
+    return plant
+
+
+def _range_warnings(record):
+    from aquakin.plant import InfluentRangeWarning
+
+    return [w for w in record if issubclass(w.category, InfluentRangeWarning)]
+
+
+def test_solve_past_the_last_sample_warns_once_naming_the_influent(simple_model):
+    """A solve that ends after a time-varying record's last sample warns once,
+    naming the influent, the record's range and the requested span; following
+    its advice (a record covering the span) silences it."""
+    import warnings
+
+    from aquakin.plant import InfluentRangeWarning
+
+    plant = _ramp_plant(simple_model)
+    with pytest.warns(InfluentRangeWarning) as record:
+        plant.solve(t_span=(0.0, 150.0))
+    (w,) = _range_warnings(record)
+    message = str(w.message)
+    assert "'ramp_feed'" in message
+    assert "t = 0 to 100" in message
+    assert "t = 0 to 150" in message
+    assert "last sample" in message
+
+    covered = _ramp_plant(simple_model, t_end=150.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", InfluentRangeWarning)
+        sol = covered.solve(t_span=(0.0, 150.0))
+    assert float(sol.t[-1]) == pytest.approx(150.0, rel=1e-12)
+
+
+def test_solve_before_the_first_sample_warns(simple_model):
+    """A solve starting before a record's first sample warns about the start."""
+    from aquakin.plant import InfluentRangeWarning
+
+    plant = _ramp_plant(simple_model, t_start=10.0, t_end=100.0)
+    with pytest.warns(InfluentRangeWarning, match="before its first sample") as record:
+        plant.solve(t_span=(0.0, 50.0))
+    (w,) = _range_warnings(record)
+    assert "t = 10 to 100" in str(w.message)
+
+
+def test_solve_within_the_record_does_not_warn(simple_model):
+    """The absence of the warning is the property under test: a span inside the
+    record, and a constant feed (two equal samples, or ``InfluentSeries.constant``)
+    run far past its samples, do not warn."""
+    import warnings
+
+    from aquakin.plant import CSTRUnit, InfluentRangeWarning, InfluentSeries, Plant
+
+    plant = _ramp_plant(simple_model)
+    flat = Plant("flat", time_unit="s")
+    flat.add_unit(CSTRUnit(name="tank", model=simple_model, volume=100.0,
+                           input_port_names=["inlet"], conditions={"T": 293.15}))
+    flat.add_influent(
+        "flat_feed",
+        InfluentSeries(t=jnp.asarray([0.0, 10.0]), Q=jnp.asarray([10.0, 10.0]),
+                       C=jnp.asarray([[1.0, 0.0], [1.0, 0.0]]), model=simple_model),
+        to="tank.inlet",
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", InfluentRangeWarning)
+        plant.solve(t_span=(0.0, 100.0))
+        flat.solve(t_span=(0.0, 500.0))
+
+
+def test_solve_sensitivity_past_the_last_sample_warns(simple_model):
+    """The forward-sensitivity solve checks the span too."""
+    from aquakin.plant import InfluentRangeWarning
+
+    plant = _ramp_plant(simple_model)
+    with pytest.warns(InfluentRangeWarning, match="'ramp_feed'"):
+        plant.solve_sensitivity(
+            plant.default_parameters(), ["simple_decay.A_to_B.k"], t_span=(0.0, 150.0)
+        )
+
+
+def test_traced_records_warn_only_when_their_range_is_known(simple_model):
+    """Under a trace (a record built inside ``jax.jit``) a record whose values are
+    traced cannot be shown constant, so a span past its concrete range warns;
+    a record whose sample times are traced has no range to compare, so it does
+    not warn."""
+    import warnings
+
+    import jax
+
+    from aquakin.plant import InfluentRangeWarning
+    from aquakin.plant.influent import InfluentSeries, warn_if_outside_records
+
+    C = jnp.asarray([[1.0, 0.0], [1.0, 0.0]])
+    t = jnp.asarray([0.0, 100.0])  # built outside the trace, so concrete inside it
+
+    @jax.jit
+    def traced_values(Q):
+        record = InfluentSeries(t=t, Q=Q, C=C, model=simple_model)
+        warn_if_outside_records({"feed": record}, 0.0, 150.0, "s")
+        return Q
+
+    @jax.jit
+    def traced_times(times):
+        record = InfluentSeries(t=times, Q=jnp.asarray([5.0, 15.0]), C=C, model=simple_model)
+        warn_if_outside_records({"feed": record}, 0.0, 150.0, "s")
+        return times
+
+    with pytest.warns(InfluentRangeWarning, match="t = 0 to 100 s"):
+        traced_values(jnp.asarray([10.0, 10.0]))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", InfluentRangeWarning)
+        traced_times(jnp.asarray([0.0, 100.0]))

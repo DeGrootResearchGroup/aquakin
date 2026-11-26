@@ -102,6 +102,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Split lab measurements into model states | `characterize_influent`, `fractionate`, `InfluentFractions` |
 | Read a time series from CSV | `read_influent_csv` |
 | Read or write an influent as a headed table | `aquakin.plant.read_influent_table`, `aquakin.plant.write_influent_table` |
+| Catch a solve that runs outside an influent record | `aquakin.plant.InfluentRangeWarning` |
 | Describe an influent by expressions of time (`Q="18446 + 4000*sin(2*pi*t)"`) | `aquakin.plant.InfluentExpression`, `aquakin.plant.compile_time_expression` (`aquakin.plant.TimeExpressionError`) |
 
 ## Sensitivity analysis
