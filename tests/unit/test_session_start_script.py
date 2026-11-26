@@ -372,3 +372,22 @@ def test_settings_run_this_script_with_a_timeout_above_the_install_limit(ss):
     assert hook["type"] == "command"
     assert hook["command"] == 'python3 "$CLAUDE_PROJECT_DIR/scripts/session_start.py"'
     assert hook["timeout"] > ss.INSTALL_TIMEOUT_S
+
+
+def test_own_hooks_path_makes_an_absolute_path_to_this_checkout_relative(ss, tmp_path):
+    """An absolute core.hooksPath to the checkout's own .githooks is read the same
+    from every worktree, so each would run the main checkout's (possibly stale)
+    hook; it is treated as unset, so plan sets the relative .githooks."""
+    root = tmp_path / "repo"
+    (root / ".githooks").mkdir(parents=True)
+    absolute = str(root / ".githooks")
+    assert ss.own_hooks_path(absolute, root) is None
+    assert ss.plan("python3", "/py/bin", "abc", "abc", ss.own_hooks_path(absolute, root),
+                   None).set_hooks_path == ["git", "config", "core.hooksPath", ".githooks"]
+
+
+@pytest.mark.parametrize("hooks_path", [None, ".githooks", "/home/dev/hooks"])
+def test_own_hooks_path_leaves_other_settings_alone(ss, tmp_path, hooks_path):
+    root = tmp_path / "repo"
+    (root / ".githooks").mkdir(parents=True)
+    assert ss.own_hooks_path(hooks_path, root) == hooks_path

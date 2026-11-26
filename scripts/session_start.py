@@ -10,8 +10,11 @@ every session begins with a manual install and the committed pre-push hook
   so ruff and pyright match CI, unless the same install already succeeded in
   this Python environment (with ``PIP_NO_CACHE_DIR``, inherited by the build
   subprocess too, so pip keeps no download cache outside the environment); and
-* points ``core.hooksPath`` at ``.githooks`` unless it already points somewhere;
-  and
+* points ``core.hooksPath`` at ``.githooks`` unless it already points somewhere
+  else. An absolute path to this checkout's own ``.githooks`` is made relative:
+  git reads the absolute path from every worktree, so each would run the main
+  checkout's copy of the hook, which is as old as whatever that checkout has
+  checked out, while ``.githooks`` resolves to each worktree's own; and
 * puts the interpreter's scripts directory first on ``PATH`` for the session's
   commands (through ``CLAUDE_ENV_FILE``), because the cloud image ships its own
   ``ruff`` and ``pyright`` ahead of it on ``PATH``, and a bare ``ruff`` would
@@ -382,6 +385,36 @@ def _write(path: Path, text: str) -> str | None:
     return None
 
 
+def own_hooks_path(hooks_path: str | None, root: Path) -> str | None:
+    """
+    ``hooks_path``, or None when it is an absolute path to ``root``'s own hooks.
+
+    An absolute ``core.hooksPath`` to this checkout's ``.githooks`` is read the
+    same from every worktree, so every worktree runs the hook as the main
+    checkout has it, however old its branch. Treating it as unset makes
+    :func:`plan` set the relative ``.githooks``, which each worktree resolves
+    to its own copy.
+
+    Parameters
+    ----------
+    hooks_path : str or None
+        The current ``core.hooksPath``.
+    root : Path
+        The repository root.
+
+    Returns
+    -------
+    str or None
+        None for an absolute path that resolves to ``root / ".githooks"``;
+        otherwise ``hooks_path`` unchanged.
+    """
+    if hooks_path is None or not Path(hooks_path).is_absolute():
+        return hooks_path
+    if Path(hooks_path).resolve() == (root / HOOKS_PATH).resolve():
+        return None
+    return hooks_path
+
+
 def _git_hooks_path(run: Runner) -> str | None:
     """The repository's ``core.hooksPath``, or None when unset (or git is missing)."""
     try:
@@ -423,7 +456,7 @@ def main(env: dict[str, str] | None = None, root: Path | None = None) -> int:
         sysconfig.get_path("scripts"),
         digest,
         recorded,
-        _git_hooks_path(run_command),
+        own_hooks_path(_git_hooks_path(run_command), root),
         env.get("CLAUDE_ENV_FILE"),
     )
     out = execute(todo, digest, marker)

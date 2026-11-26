@@ -20,7 +20,10 @@ nor concentrating it in a few files makes the whole suite fast.
   `ruff>=0.15,<0.16` so a new ruff release cannot redden the gate without a
   deliberate bump). The same gate runs locally from the committed pre-push hook
   (`.githooks/pre-push`); a Claude Code cloud session enables it, and installs the
-  pinned extras, through the SessionStart hook (`scripts/session_start.py`). The rule set and the per-file ignores live in `[tool.ruff]` in
+  pinned extras, through the SessionStart hook (`scripts/session_start.py`). On
+  a pull request the job first refuses any commit whose message links to a
+  Claude session (`scripts/check_session_links.sh`, the check the pre-push hook
+  also runs), so the rule holds even where the local hook is not enabled. The rule set and the per-file ignores live in `[tool.ruff]` in
   `pyproject.toml`: the `E,F,W,I,B,RUF,NPY,PIE,ICN,FA,UP` families plus `C420`
   and `SIM300` at `line-length = 100` (the width the package is written to), with
   several rules `ignore`d against dedicated audit issues so each can be tackled — and
