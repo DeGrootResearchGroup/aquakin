@@ -215,17 +215,17 @@ a2o.add_influent("feed", a2o_influent(asm2d))
 a2o_root = a2o.steady_state(y0=a2o_warm_start(a2o))
 aer3 = a2o.named_state(a2o_root.state)["aer3"]     # the last aerated tank
 print({k: round(aer3[k], 1) for k in ("SNH4", "SNO3", "SPO4")})
-# {'SNH4': 0.1, 'SNO3': 10.4, 'SPO4': 5.1}
+# {'SNH4': 0.2, 'SNO3': 10.3, 'SPO4': 4.1}
 ```
 
 % invisible-code-block: python
 %     assert bool(a2o_root.converged)
-%     assert {k: round(aer3[k], 1) for k in ("SNH4", "SNO3", "SPO4")} == {"SNH4": 0.1, "SNO3": 10.4, "SPO4": 5.1}
+%     assert {k: round(aer3[k], 1) for k in ("SNH4", "SNO3", "SPO4")} == {"SNH4": 0.2, "SNO3": 10.3, "SPO4": 4.1}
 
 Its options set the design flow, the wastage flow and the two recycle ratios;
 `ferric=FerricDose(flow=...)` doses a metal salt into the aerated zone to
-precipitate more phosphate, and `use_takacs=True` replaces its stateless
-`IdealClarifier` with the layered `TakacsClarifier`. Its streams are named
+precipitate more phosphate, and `use_takacs=False` replaces its ten-layer
+`TakacsClarifier` with the stateless `IdealClarifier`. Its streams are named
 `effluent`, `internal_recycle`, `ras` and `wastage`, as on the BSM plants.
 
 ## Steady state, faster
@@ -311,7 +311,9 @@ Warm-start whenever the default start is far from where the plant operates.
 BSM1 settles from its default in about the same time; a plant with an anaerobic
 digester does not, because the digester's retention time is weeks, so always
 warm-start BSM2. The organisms of a phosphorus-removing plant also take long
-to establish from a cold start, so start the A²O plant from `a2o_warm_start`.
+to establish from a cold start, so start the A²O plant from `a2o_warm_start`;
+the A²O plant also has a steady state where the nitrifiers have washed out,
+which `steady_state` can reach from a seed far from the operating point.
 A solve that runs out of steps from a cold start often succeeds from a warm one
 (see [When a solve fails](reactors.md#when-a-solve-fails)).
 
