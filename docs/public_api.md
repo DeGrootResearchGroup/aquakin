@@ -15,10 +15,14 @@ docstring with `help()`. A name written as `Plant.<method>` is a method of
 The guide pages — [Getting started](getting_started.md),
 [Reactors](reactors.md), [Plant-wide simulation](plants.md),
 [Sensitivity analysis](sensitivity_and_calibration.md),
-[Calibration](calibration.md) and [Experiment design](experiment_design.md) —
-walk through these
-APIs with worked examples. Start there; use this page and the API reference to
-look things up.
+[Calibration](calibration.md),
+[Uncertainty and model comparison](fit_uncertainty.md),
+[Experiment design](experiment_design.md),
+[Calibrating a plant](plant_calibration.md) and
+[Worked example: designing an experiment](worked_example_design.md) — walk
+through these APIs with worked examples, and
+[Key ideas](analysis_concepts.md) explains the statistics behind the analysis
+tools. Start there; use this page and the API reference to look things up.
 ```
 
 Everything not listed here (the concrete AST node classes, the compile context, the schema
@@ -112,36 +116,47 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Sensitivities of a plant solve | `Plant.solve_sensitivity`, `Plant.dynamic_sensitivity`, `Plant.steady_state_sensitivity`, `Plant.dynamic_dgsm`, `Plant.steady_state_dgsm` |
 | Gradients through a stiff solve by a chosen adjoint | `esdirk_adjoint_solve`, `implicit_euler_adjoint_solve` |
 
-## Calibration and identifiability
-
-| To… | Use |
-|---|---|
-| Point-estimate fit | `fit` → `FitResult` |
-| MAP fit of plant parameters | `Plant.calibrate` (also `aquakin.plant.calibrate_plant`) → `CalibrationResult` |
-| MAP fit + Laplace posterior | `calibrate` → `CalibrationResult` (→ `predictive_band` → `PredictiveBand`; `posterior_draws` for parameter samples) |
-| Sample the posterior of a fit (MCMC) | `sample_posterior` → `PosteriorSamples` (`draws` for `predictive_band(draws=)` and `param_draws`); `Plant.sample_posterior` for a plant fit |
-| Profile-likelihood identifiability | `profile_likelihood` → `ProfileResult` |
-| Fisher information of a design (before running it) | `fisher_information` with `Experiment` → `FisherInformation` |
-| Fisher information of any JAX observation function, optionally split by candidate measurement | `fisher_information_from_fn` → `FisherInformation` |
-| Fisher information and profile likelihood of plant parameters | `aquakin.plant.plant_fisher_information` → `FisherInformation`, `aquakin.plant.plant_profile_likelihood` → `ProfileResult` |
-| Choose plant sensors by the information they add | `aquakin.plant.plant_rank_sensor_sets` with `aquakin.plant.SensorSet` → `CandidateScore` |
-| Identifiability report from a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |
-| Compare model structures fitted to the same data (AIC, AICc, BIC, Akaike weights) | `aic`, `aicc`, `bic` of a `CalibrationResult`; `compare_models` → `ModelComparison` |
-| Score a design (D / A / E / modified-E) | `design_criterion` |
-| Choose between candidate experiments | `rank_experiments` → `CandidateScore` |
-| Choose the best set of measurements from a candidate pool under a budget | `design_from_candidates` → `CandidateDesign` |
-| Optimize sampling times and initial concentrations | `optimize_experiment` → `ExperimentDesignResult` |
-| Configure the fit | `LaplaceConfig`, `OptimizerConfig`, `FreeICConfig`; `SamplerConfig` for `sample_posterior` |
-| Name what a plant sensor measures | `aquakin.plant.PlantObservable` with species, a measurement keyword, a weighted sum of your own (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, read by `aquakin.plant.parse_measure`, which raises `aquakin.plant.MeasureSyntaxError`) or `aquakin.plant.Measure` |
-
-## Uncertainty propagation and design
+## Uncertainty propagation and process design
 
 | To… | Use |
 |---|---|
 | Propagate input uncertainty | `monte_carlo` → `MonteCarloResult` |
 | Compare named scenarios | `compare_scenarios` → `ScenarioComparison` |
-| Optimize a constrained design | `optimize_design`, `Constraint` → `OptimizeResult` |
+| Optimize a constrained process design (a dose, a size) | `optimize_design`, `Constraint` → `OptimizeResult` |
 | Run an ensemble of solves | `integrate_ensemble` |
+
+## Calibration
+
+| To… | Use |
+|---|---|
+| Point-estimate fit | `fit` → `FitResult` |
+| MAP fit + Laplace posterior | `calibrate` → `CalibrationResult` (→ `predictive_band` → `PredictiveBand`; `posterior_draws` for parameter samples) |
+| Configure the fit | `LaplaceConfig`, `OptimizerConfig`, `FreeICConfig` |
+| Sample the posterior of a fit (MCMC) | `sample_posterior` → `PosteriorSamples` (`draws` for `predictive_band(draws=)` and `param_draws`), configured by `SamplerConfig` |
+| Profile-likelihood interval of one parameter or pool | `profile_likelihood` → `ProfileResult` |
+| Identifiability report from a fit or a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |
+| Compare model structures fitted to the same data (AIC, AICc, BIC, Akaike weights) | `aic`, `aicc`, `bic` of a `CalibrationResult`; `compare_models` → `ModelComparison` |
+
+## Experiment design
+
+| To… | Use |
+|---|---|
+| Fisher information of a design (before running it) | `fisher_information` with `Experiment` → `FisherInformation` |
+| Fisher information of any JAX observation function, optionally split by candidate measurement | `fisher_information_from_fn` → `FisherInformation` |
+| Score a design (D / A / E / modified-E) | `design_criterion` |
+| Choose between candidate experiments | `rank_experiments` → `CandidateScore` |
+| Choose the best set of measurements from a candidate pool under a budget | `design_from_candidates` → `CandidateDesign` |
+| Optimize sampling times and initial concentrations | `optimize_experiment` → `ExperimentDesignResult` |
+
+## Calibrating a plant
+
+| To… | Use |
+|---|---|
+| MAP fit of plant parameters | `Plant.calibrate` (also `aquakin.plant.calibrate_plant`) → `CalibrationResult` |
+| Sample the posterior of a plant fit | `Plant.sample_posterior` → `PosteriorSamples` |
+| Name what a plant sensor measures | `aquakin.plant.PlantObservable` with species, a measurement keyword, a weighted sum of your own (`"BOD5 = 0.65*[SS] + 0.65*[XS]"`, read by `aquakin.plant.parse_measure`, which raises `aquakin.plant.MeasureSyntaxError`) or `aquakin.plant.Measure` |
+| Fisher information and profile likelihood of plant parameters | `aquakin.plant.plant_fisher_information` → `FisherInformation`, `aquakin.plant.plant_profile_likelihood` → `ProfileResult` |
+| Choose plant sensors by the information they add | `aquakin.plant.plant_rank_sensor_sets` with `aquakin.plant.SensorSet` → `CandidateScore` |
 
 ## Studies
 
