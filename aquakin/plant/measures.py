@@ -46,6 +46,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+import jax.numpy as jnp
 import numpy as np
 
 from aquakin.core.hints import did_you_mean
@@ -59,6 +60,7 @@ __all__ = [
     "channel_name",
     "measure_map",
     "parse_measure",
+    "weights_at",
 ]
 
 #: The channel names that are measurements rather than species.
@@ -154,6 +156,36 @@ class MeasureMap:
     def uses_temperature(self) -> bool:
         """Whether a channel reads the stream's temperature."""
         return bool(np.any(self.t))
+
+
+def weights_at(W, idx, theta0, dW, p):
+    """A channel map's species weights at the parameter vector ``p``.
+
+    ``W(p) = W + Σ_i (p[idx_i] - theta0_i) dW[i]``, the weights of a
+    :class:`MeasureMap` moved to the composition parameters a run uses (exact
+    for the affine dependence of every content fraction). Traceable, so a
+    measured channel inside a solve follows a parameter being differentiated.
+
+    Parameters
+    ----------
+    W : array, shape (n_species, k)
+        The weights at the defaults ``theta0``.
+    idx : numpy.ndarray of int, shape (P,)
+        Where each parameter the weights depend on sits in ``p``.
+    theta0 : array, shape (P,)
+        Their default values.
+    dW : array, shape (P, n_species, k)
+        ``dW/dθ`` for each.
+    p : array
+        The parameter vector ``idx`` indexes.
+
+    Returns
+    -------
+    jnp.ndarray, shape (n_species, k)
+    """
+    if idx.size == 0:
+        return W
+    return W + jnp.tensordot(jnp.asarray(p)[idx] - theta0, dW, axes=1)
 
 
 # ---------------------------------------------------------------------------
