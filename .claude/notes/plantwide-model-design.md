@@ -191,9 +191,13 @@ kept equal by putting the organic-N difference in ammonium.
     is that paper's rejected TCA-cycle model) and fits `0.19 pH - 0.85`
     P-mol/C-mol (Eq. 8; 0.48 at pH 7, 0.50 measured). The paper's own Fig. 2b
     model curve releases about 0.4 per acetate, not the 0.82 the misprint
-    gives. Use `1/4 + α`. Open: α(pH) as the paper takes it from Filipe et
-    al. (2001d), `0.16 pH - 0.7985` (0.57 at pH 7), or Smolders'
-    `0.19 pH - 1.10` (0.48); to be checked against Filipe et al.;
+    gives. Use `1/4 + α`, with α(pH) = `0.16 pH - 0.7985` as the paper
+    takes it from Filipe et al. (2001d, Eq. 8; their Eq. 1 confirms the
+    `1/4 + α` form), so the release is `0.16 pH - 0.55` (0.57 at pH 7). The
+    literature spread is wide and unexplained: Smolders et al. (1994a)
+    `0.19 pH - 0.85` (0.48), Smolders et al. (1995a) 0.36, and Filipe's own
+    SBR 0.55 against 0.64 predicted at pH 7.4. Keep the intercept a
+    parameter (prior over 0.36-0.57 at pH 7) so a calibration can move it;
   - per propionate it prints `2/9 - α` (0.04); `2/9 + α` (0.40) joins its
     own pH > 7.5 branch `0.20 pH - 1.1` exactly at 7.5, and the paper's Fig.
     2d model curve releases about 0.42 per propionate. Use `2/9 + α`.
@@ -202,6 +206,12 @@ kept equal by putting the organic-N difference in ammonium.
   removal process: stoichiometry and pH influence. *Biotechnol. Bioeng.*
   43(6), 461–470: glycogen model per C-mol acetate, 1/2 C-mol glycogen used,
   4/3 C-mol PHB made, 1/6 C-mol CO2, `1/4 + α` P released.
+- Filipe, C.D.M., Daigger, G.T. & Grady, C.P.L. Jr. (2001d). Stoichiometry
+  and kinetics of acetate uptake under anaerobic conditions by an enriched
+  culture of phosphorus-accumulating organisms at different pHs.
+  *Biotechnol. Bioeng.* 76(1), 32–43: α_PAO = 0.16 pH - 0.7985 (pH 6.5-8.0),
+  maximum acetate uptake 0.185 C-mmol/(C-mmol h) independent of pH,
+  anaerobic maintenance 2.0e-3 mmol ATP/(C-mmol h), PHV 11% of PHA.
 - **Meijer et al. (2001)** prints no matrix; it uses the TUDP model of van
   Veldhuizen et al. (1999), as `asm2d_tud` does, with no propionate uptake.
 - **Varga et al. (2018)**: separate PAOs (storing PHA only) and GAOs
