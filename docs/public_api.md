@@ -2,11 +2,14 @@
 
 This page is a task-oriented map of the `aquakin` API: it points you to the
 right entry points for each job. A bare name is importable as `aquakin.<name>`
-and has its full signature and docstring in the [API reference](api.md). A name
-written with its module, such as `aquakin.plant.IFASUnit` or
-`aquakin.study.run_study`, lives only in that subpackage; the API reference does
-not list it, so read its docstring with `help()`. A name written as
-`Plant.<method>` is a method of `aquakin.Plant`.
+and has its full signature and docstring in the [API reference](api.md#aquakin).
+A name written with its module, such as `aquakin.plant.IFASUnit` or
+`aquakin.study.run_study`, lives only in that subpackage; the API reference
+lists it under [`aquakin.plant`](api.md#aquakinplant) or
+[`aquakin.study`](api.md#aquakinstudy). A name from a module below those, such
+as `aquakin.plant.bsm.build_bsm1`, is not in the API reference; read its
+docstring with `help()`. A name written as `Plant.<method>` is a method of
+`aquakin.Plant`.
 
 ```{tip}
 The guide pages — [Getting started](getting_started.md),
@@ -185,5 +188,5 @@ results have gone stale.
 | Pumping / mixing / heating energy | `pumping_energy`, `pumping_energy_bsm2`, `mixing_energy`, `heating_energy` |
 | Disinfection sizing | `uv_dose`, `uv_log_inactivation`, `ct_value`, `ct_log_removal`, `t10_from_rtd`, `t10_from_baffling` |
 
-For the exact signatures, return types, and every remaining top-level symbol,
-see the [API reference](api.md).
+For the exact signatures, return types, and every remaining public symbol of
+`aquakin`, `aquakin.plant` and `aquakin.study`, see the [API reference](api.md).
