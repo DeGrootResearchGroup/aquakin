@@ -39,8 +39,9 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   if grep -qxE 'constraints\.txt|pyproject\.toml' <<<"$changed_paths"; then
     pins_changed=1
   fi
-  # The same check CI runs on a pull request's commits.
-  scripts/check_session_links.sh "${range[@]}"
+  # The same check CI runs on a pull request's commits. Found beside this hook
+  # (not by the working directory), so it is the copy this hook came with.
+  "$(dirname "${BASH_SOURCE[0]}")/../scripts/check_session_links.sh" "${range[@]}"
 done
 
 # A change to the pins or the dependencies must still install on every Python
