@@ -141,6 +141,43 @@ kept equal by putting the organic-N difference in ammonium.
   as ammonium.
 - Pinned by `tests/validation/test_plantwide_core_digester.py`.
 
+## What the bio-P and acidogen sources give (read 2026-11-26)
+
+- **López-Vázquez et al. (2009)** models three populations, not two:
+  *Accumulibacter* (PAO), *Competibacter* (GAO, acetate only: propionate
+  uptake 0.01 C-mmol/(C-mmol h)) and *Alphaproteobacteria*-GAO (propionate at
+  0.20, acetate at 0.10). Each stores its own PHA, split into PHB, PHV and
+  PH2MV by carbon source (Table 1), and glycogen; the PAO also polyphosphate.
+  Its aerobic yields follow from δ = 1.85 ATP/NADH (the same for all) and the
+  stored PHA composition, as in Murnleitner et al. (1997). Units C-mmol; 19
+  processes, 21 components. The main text gives the anaerobic uptake rates
+  and PHA splits (Table 1), temperature coefficients (Table 2), the calibrated
+  aerobic rates per carbon source (Table 4) and the shared half-saturations;
+  the stoichiometric matrix, rate expressions and parameter table are in its
+  online supplement (Appendices 1-7), which is needed before writing the
+  processes. Its Fig. 4 (population shares after 50 d for 36 combinations of
+  10/20/30 C, pH 6.0/7.0/7.5 and four acetate:propionate ratios) is a
+  benchmark a reimplementation should reproduce.
+- **Meijer et al. (2001)** prints no matrix; it uses the TUDP model of van
+  Veldhuizen et al. (1999), as `asm2d_tud` does, with no propionate uptake.
+- **Varga et al. (2018)**: separate PAOs (storing PHA only) and GAOs
+  (glycogen only), extending Barker-Dold; ORP estimated from DO, NOx and
+  methane switches GAO storage off and PAO fermentation on at low ORP; no
+  acetate / propionate distinction; equations only in a commercial
+  simulator's file. A different family from López-Vázquez, not used.
+- **Ribes et al. (2002)**, primary-settler fermentation at 20 C, fits a
+  separate acidogen group (`X_ACID`) in activated sludge: growth 2.14 1/d,
+  half-saturation 15 g COD/m3 on fermentable substrate, yield 0.15, decay
+  0.33 1/d, acetate inhibition (6500 g COD/m3), ammonium and phosphate
+  limitation and a pH switch; products 0.58 acetate, 0.25 propionate, 0.17
+  hydrogen (as the core). It is the candidate for decision 7 to compare
+  against ADM1's sugar degraders; its decay is 16 times ADM1's, so adopting it
+  means re-running the BSM2 digester comparison.
+- **Solon et al. (2017)**: sludge-line P on a BSM2-type plant (single PAO
+  group, ADM1 extended for P, S and Fe, minerals by saturation index): 129 kg
+  P/d into the digester, 22% returning as soluble phosphate, effluent TP 6.4
+  g/m3 open loop; model outputs, usable as a later plausibility check.
+
 ## Structure: a linear `extends:` chain
 
 ```
@@ -464,9 +501,14 @@ paper itself before citing it in a model file.
   https://doi.org/10.1128/aem.65.7.3248-3250.1999
 - Varga, E., Hauduc, H. et al. (2018). Recent advances in bio-P modelling – a
   new approach verified by full-scale observations. *Water Sci. Technol.*
-  78(10), 2119–2130. Its abstract and index records describe separate PAO and
-  GAO populations with ordinary heterotrophs and nitrifiers, not one
-  switching population (this note said so earlier); the PAO-to-GAO metabolic
-  shift is from a related full-scale metabolic study by overlapping authors.
-  Not read in full: the postprint host is not reachable from these sessions.
+  78(10), 2119–2130. Separate PAO and GAO populations (see *What the bio-P
+  and acidogen sources give*), not one switching population as this note
+  said earlier.
+- Ribes, J., Ferrer, J., Bouzas, A. & Seco, A. (2002). Modelling of an
+  activated primary settling tank including the fermentation process and VFA
+  elutriation. *Environ. Technol.* 23(10), 1147–1156. No DOI confirmed.
+- van Veldhuizen, H.M., van Loosdrecht, M.C.M. & Heijnen, J.J. (1999).
+  Modelling biological phosphorus and nitrogen removal in a full scale
+  activated sludge process. *Water Res.* 33(16), 3459–3468.
+  https://doi.org/10.1016/S0043-1354(99)00064-0
   https://doi.org/10.2166/wst.2018.490 (also presented at WRRmod 2018).
