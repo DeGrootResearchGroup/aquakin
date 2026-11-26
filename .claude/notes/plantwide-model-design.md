@@ -180,6 +180,16 @@ kept equal by putting the organic-N difference in ammonium.
     GAOs decay by the core's death-regeneration, releasing their storage
     pools.
 
+12. **PAO and GAO endogenous loss: the source's maintenance, plus decay only
+    without oxygen and nitrate.** López-Vázquez et al. (2009) and the TU Delft
+    model use maintenance alone, and the source's yields were calibrated with
+    it; the core decays every group everywhere. Decay at ASM2d's b_PAO
+    (0.2 1/d at 20 C) switched off under O2 and NO3 lets bio-P sludge die and
+    digest in the digester as the heterotrophs do, without counting aerobic
+    endogenous loss twice. On death the pools are released: polyphosphate to
+    phosphate and PHA to acetate (ASM2d's lysis), glycogen to `XS`. (This
+    replaces decision 11's "decay by the core's death-regeneration".)
+
 ## What the bio-P and acidogen sources give (read 2026-11-26)
 
 - **López-Vázquez et al. (2009)** models three populations, not two:
