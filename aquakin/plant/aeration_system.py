@@ -30,7 +30,9 @@ in place of the fixed one -- so it is a principled refinement, and it stays
 :class:`~aquakin.plant.cstr.Aeration` (they take the clean-water ``kLa`` to the
 process ``kLa`` and shape the driving force in the solve); ``AerationSystem``
 reads the clean-water ``kLa`` and adds the diffuser-fouling factor ``F`` on the
-standard efficiency and the blower curve.
+standard efficiency and the blower curve. (The benchmark correlation
+:func:`aquakin.plant.metrics.aeration_energy`, an empirical field efficiency,
+reads the delivered process ``kLa`` instead.)
 
 All quantities are in days / metres / kPa / kW so they compose with the plant's
 time unit and the existing energy kernels (kWh/d).
@@ -185,7 +187,9 @@ def blower_airflow_total(t, kla_history, volumes, system: AerationSystem) -> flo
     """Time-averaged total air flow over the window (m³/d), summed across tanks.
 
     ``kla_history`` is ``(n_t, n_tanks)`` and ``volumes`` is ``(n_tanks,)`` --
-    the same arguments as :func:`aquakin.plant.metrics.aeration_energy`."""
+    the same shapes as :func:`aquakin.plant.metrics.aeration_energy` -- but the
+    kLa is the clean-water one (before ``alpha`` and the temperature factor),
+    as the air flow is defined on the standard clean-water transfer."""
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)
     q = required_airflow(kla_history, volumes[None, :], system)  # (n_t, n_tanks)
@@ -199,7 +203,10 @@ def blower_energy(t, kla_history, volumes, system: AerationSystem) -> float:
     Sums the blower power across tanks at each save time and time-averages over
     the window, ×24 h to give energy per day. Same call signature as the Copp
     correlation (``t``, ``kla_history`` ``(n_t, n_tanks)``, ``volumes``
-    ``(n_tanks,)``) so it is a drop-in.
+    ``(n_tanks,)``), but ``kla_history`` is the clean-water kLa (a tank's
+    fixed ``kla`` or controller output times its gain, before ``alpha`` and the
+    temperature factor), since the blower air flow is defined on the standard
+    clean-water transfer; the correlation takes the delivered process kLa.
     """
     kla_history = jnp.asarray(kla_history)
     volumes = jnp.asarray(volumes)

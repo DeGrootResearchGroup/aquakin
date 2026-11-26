@@ -61,6 +61,8 @@ def test_anoxic_tank_has_no_aeration(asm1):
     assert float(tank._kla_vec.max()) == 0.0
     assert float(tank._sat_vec.max()) == 0.0
     assert tank.required_signals == ()
+    assert not tank.kla_temperature_corrected
+    assert float(tank.delivered_oxygen_kla({}, None)) == 0.0
 
 
 # --- closed loop: per-tank auto-wiring --------------------------------------

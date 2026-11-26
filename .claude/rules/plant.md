@@ -228,7 +228,7 @@ corrects oxygen only; `required_signals` must de-duplicate. **`rhs` and
 - **The stored and reported kLa is the clean-water kLa** (fixed `kla`, or signal
   times gain, via `cstr.clean_water_kla`); only `cstr.delivered_kla` applies
   `alpha` and `kla_theta`, in every mode. Never fold `alpha` into `kla_vec` or
-  a gain. Energy and blower formulas read the clean-water kLa (blowers make it).
+  a gain. Blower / air-flow / mixing read clean-water kLa; BSM `AE`, delivered.
 - In a closed-loop plant whose only effluent is a sensed tank, the DO sensor
   tap consumes `tank.out`, so it is not a dangling output: pass it to
   `plant.mass_balance` as `effluent_ports`.

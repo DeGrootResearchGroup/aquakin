@@ -803,6 +803,37 @@ class AerationUnit:
         kla = self.kla_vector(signals, process_water=process_water)
         return kla[self.model.species_index[self.aeration.species]]
 
+    @property
+    def kla_temperature_corrected(self) -> bool:
+        """Whether the delivered kLa carries the ``kla_theta`` temperature
+        factor (``Aeration(temperature_correction=True)``), so that it depends on
+        the operating temperature and not only on the control signals."""
+        return self._av.temp_correct
+
+    def delivered_oxygen_kla(self, inputs: dict, signals: dict | None):
+        """The tank's oxygen kLa as its aeration term applies it: the
+        clean-water kLa times ``alpha`` and, with the temperature correction on,
+        ``kla_theta**(T - ref_T)`` at the operating temperature the inputs and
+        signals give (:func:`delivered_kla`); 0 for an unaerated tank.
+
+        Parameters
+        ----------
+        inputs : dict[str, Stream]
+            The unit's input streams, which set its operating temperature.
+        signals : dict or None
+            The control-signal bus, needed only when the kLa is signal-driven.
+
+        Returns
+        -------
+        jnp.ndarray
+            Scalar process oxygen kLa (1/time).
+        """
+        if self.aeration is None:
+            return jnp.asarray(0.0)
+        _conditions, T_op = self._operating_conditions(inputs, signals)
+        kla = delivered_kla(self._av, T_op, signals, self.model)
+        return kla[self.model.species_index[self.aeration.species]]
+
     def oxygen_transfer(
         self,
         t,

@@ -17,9 +17,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from aquakin.plant import Aeration, ExpressionController
+from aquakin.plant import Aeration, AerationSystem, ExpressionController
+from aquakin.plant.aeration_system import blower_power_kw, required_airflow
 from aquakin.plant.balance import oxygen_transfer_history
-from aquakin.plant.bsm.evaluation import _kla_history
+from aquakin.plant.bsm.evaluation import _aeration_energy, _delivered_kla_history, _kla_history
 
 SIGNAL, GAIN, ALPHA, DO_SAT = 0.04, 0.5, 0.5, 2.0
 T_END = 200.0  # 40 time constants of the slowest tank below
@@ -138,3 +139,64 @@ def test_grad_through_a_fouled_signal_driven_solve_matches_a_central_difference(
     # Central difference of an rtol=1e-10 solve with h = 1e-4: truncation ~h^2.
     assert grad == pytest.approx(fd, rel=1e-5)
     assert grad < 0.0
+
+
+# --- which kLa each energy figure reads -------------------------------------------
+
+V_TANK, S_SAT = 100.0, 8.0
+
+
+def _energy_solve(plant):
+    return plant.solve(
+        (0.0, T_END), t_eval=jnp.asarray([T_END / 2, T_END]), rtol=1e-10, atol=1e-12
+    )
+
+
+@pytest.mark.parametrize("mode", ["kla", "kla_signal"])
+def test_benchmark_aeration_energy_reads_the_delivered_kla(make_cstr_plant, mode):
+    """``AE = S_sat·V·kLa/1800`` on ``alpha × kLa`` for a fixed and a
+    signal-driven tank alike (the clean-water kLa would give twice as much)."""
+    if mode == "kla":
+        plant = make_cstr_plant(
+            aeration=Aeration(kla=SIGNAL * GAIN, species="A", do_sat=DO_SAT, alpha=ALPHA)
+        )
+    else:
+        plant = _signal_plant(make_cstr_plant, ALPHA)
+    sol = _energy_solve(plant)
+    ae, air_flow, clean = _aeration_energy(
+        plant, sol, plant.default_parameters(), sol.t, ["tank"], None, S_SAT
+    )
+    assert air_flow is None
+    assert ae == pytest.approx(S_SAT / 1800.0 * ALPHA * SIGNAL * GAIN * V_TANK, rel=1e-12)
+    np.testing.assert_allclose(clean, SIGNAL * GAIN, rtol=1e-15)
+
+
+def test_benchmark_aeration_energy_includes_the_temperature_factor(make_cstr_plant):
+    """With the temperature correction on, the delivered kLa of a signal-driven
+    tank at 293.15 K specified at ``ref_T = 283.15`` carries ``1.024**10``."""
+    aer = Aeration(
+        kla_signal="kla", species="A", do_sat=DO_SAT, gain=GAIN, alpha=ALPHA,
+        temperature_correction=True, ref_T=283.15,
+    )
+    plant = make_cstr_plant(aeration=aer)
+    plant.add_unit(ExpressionController("ctl", signal_name="kla", law="c", constants={"c": SIGNAL}))
+    sol = _energy_solve(plant)
+    delivered = _delivered_kla_history(plant, sol, None, ["tank"])
+    expected = ALPHA * SIGNAL * GAIN * 1.024**10.0
+    np.testing.assert_allclose(delivered, expected, rtol=1e-12)
+    ae, _air, _clean = _aeration_energy(plant, sol, None, sol.t, ["tank"], None, S_SAT)
+    assert ae == pytest.approx(S_SAT / 1800.0 * expected * V_TANK, rel=1e-12)
+
+
+def test_blower_energy_and_air_flow_read_the_clean_water_kla(fouled):
+    """With an ``AerationSystem`` the air flow is that of the clean-water kLa
+    ``signal × gain``, not of ``alpha`` times it."""
+    plant, _sol = fouled
+    sol = _energy_solve(plant)
+    system = AerationSystem(depth=4.0)
+    ae, air_flow, _clean = _aeration_energy(
+        plant, sol, plant.default_parameters(), sol.t, ["tank"], system, S_SAT
+    )
+    clean_q = float(required_airflow(SIGNAL * GAIN, V_TANK, system))
+    assert air_flow == pytest.approx(clean_q, rel=1e-12)
+    assert ae == pytest.approx(float(blower_power_kw(clean_q, system)) * 24.0, rel=1e-12)

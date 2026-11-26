@@ -314,7 +314,7 @@ as a fixed `kla` is. The tank's `Aeration(alpha=...)` and, with
 `temperature_correction=True`, its `kla_theta` correction scale it into the kLa
 the tank's mass balance applies, and the gases it strips follow that kLa. So a
 fouled tank (`alpha` below 1) under DO control asks its controller for more,
-and reaches `kla_max` sooner. `signals_at` and the aeration energy report the
+and reaches `kla_max` sooner. `signals_at` reports the controller's output, the
 clean-water kLa.
 
 ### Plant temperature
