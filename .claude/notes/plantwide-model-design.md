@@ -346,7 +346,7 @@ state) is negative for ADM1's sugar degraders (-0.052 1/d), ADM1 with
 decay (-0.045). Only Ribes with no decay (+0.136) or with decay scaled to the
 anaerobic share (+0.060) invades. Without fermentation the anaerobic zone
 ends at 14.9 g/m3 `SF` (ASM2d 0.93); effluent phosphate is 7.1 g P/m3 against
-ASM2d's 5.1, PAOs 522 against 774 g COD/m3.
+ASM2d's 5.1, PAOs 522 against 784 g COD/m3.
 
 **What the literature does.**
 - Fermentation is OHO (heterotroph) activity in ASM2d (a transformation,
@@ -381,7 +381,7 @@ and is indicative only):
 
 | Variant | `SF` end of anaerobic zone | PAO | Competibacter | Effluent PO4 |
 |---|---|---|---|---|
-| ASM2d | 0.93 | 774 | - | 5.13 |
+| ASM2d | 0.93 | 784 | - | 5.13 |
 | acidogens, ADM1 kinetics (current) | 14.9 | 522 | 0 | 7.08 |
 | heterotrophs ferment, 3 1/d substrate, `K` 5 (not conv.) | 0.48 | 1022 | 0 | 4.67 |
 | BNRM1-type: fermentation off by O2 only, Ruel kinetics, 10 g/m3 acidogens in the influent | 5.4 | 806 | 0 | 5.82 |
@@ -452,7 +452,7 @@ days 75 to 150) and nothing else moves, so these are stable steady states
 
 | Variant | `SF` end of anaerobic zone | PAO | Acidogens | Effluent PO4 |
 |---|---|---|---|---|
-| ASM2d | 0.93 | 774 | - | 5.13 |
+| ASM2d | 0.93 | 784 | - | 5.13 |
 | acidogens, ADM1 kinetics (current) | 14.5 | 571 | 0 (washed out) | 6.86 |
 | heterotrophs ferment (3 1/d substrate, `K` 5, yield 0.1) | 0.47 | 1061 | - | 4.52 |
 | BNRM1-type (off by O2 only, Ruel kinetics, 10 g/m3 acidogens in the influent) | 5.35 | 846 | 139 | 5.65 |

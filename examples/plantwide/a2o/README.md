@@ -27,14 +27,19 @@ pseudo-transient solver's convergence test can see. So each plant-wide steady
 state is followed by a stability run: both GAO groups seeded at 1 g COD/m3 and
 150 days forward; a negative growth rate means the state stands.
 
-At 20 C, pH 7 and all-acetate VFA, the PAO / GAO competition is close to
-neutral and tips to Competibacter through its anoxic processes; a propionate
-share, a lower temperature or a higher pH tips it to the PAOs, as López-Vázquez
-et al. (2009) predict. The 75/25 base is clear of that boundary.
+On an all-acetate VFA at 20 C and pH 7 the PAO / GAO competition is close to
+neutral, and the GAOs' anoxic processes favour Competibacter; a propionate
+share, a lower temperature or a higher pH favour the PAOs, as López-Vázquez et
+al. (2009) predict. The heterotrophs' fermentation also makes propionate, so
+both influents below give a stable PAO state.
 
 ## Results (20 C, pH 7)
 
 | | SF end of anaerobic zone (g COD/m3) | PAO (g COD/m3) | Effluent PO4 (g P/m3) |
 |---|---|---|---|
-| ASM2d | 0.93 | 774 | 5.13 |
+| ASM2d | 0.93 | 784 | 5.13 |
 | plant-wide, VFA 75/25 | 0.36 | 1057 | 4.41 |
+| plant-wide, all acetate | 0.36 | 1027 | 4.56 |
+
+Seeded GAOs die out in both plant-wide cases (Competibacter -0.028 and -0.013
+1/d, Alphaproteobacteria -0.027 and -0.034 1/d).
