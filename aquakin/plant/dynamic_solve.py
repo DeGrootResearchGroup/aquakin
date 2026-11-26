@@ -756,7 +756,10 @@ def _solve_forward_fast(
             )
             self._solve_cache.put("jit", fkey, jitted)
         with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
-            ts, ys = jitted(y0, params, te)
+            ts, ys, result = jitted(y0, params, te)
+            ts, ys = check_solve_result(
+                result, (ts, ys), max_steps=max_steps, what="plant forward_fast solve"
+            )
         return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
     warnings.warn(
         "forward_fast: the colored-Jacobian start-state guard failed; "
@@ -1107,7 +1110,7 @@ def _build_jitted_forward_fast(self, root_finder, t0, t1, *, rtol, atol, max_ste
     def _solve(y0, params, t_eval):
         rhs, _ = self._recycle.cached_rhs(t0a, self._split_state(y0), params)
 
-        ys = forward_solve(
+        ys, result = forward_solve(
             rhs,
             state_jacobian(rhs, root_finder),
             y0,
@@ -1119,7 +1122,7 @@ def _build_jitted_forward_fast(self, root_finder, t0, t1, *, rtol, atol, max_ste
             atol=atol,
             control=StepControl(max_steps=max_steps),
         )
-        return t_eval, ys
+        return t_eval, ys, result
 
     return _solve
 

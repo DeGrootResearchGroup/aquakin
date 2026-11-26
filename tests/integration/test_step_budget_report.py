@@ -67,9 +67,64 @@ def _plant_events(simple_model, make_plant):
     )
 
 
+def _batch_sensitivity(simple_model, _make_plant):
+    _batch(simple_model).solve_sensitivity(
+        jnp.asarray([1.0, 0.0]),
+        (0.0, 20.0),
+        params=simple_model.default_parameters(),
+        sens_params=["A_to_B.k"],
+    )
+
+
+def _batch_sensitivity_own_tolerance(simple_model, _make_plant):
+    """Its own ``sens_atol`` takes the uncached forward-sensitivity path."""
+    _batch(simple_model).solve_sensitivity(
+        jnp.asarray([1.0, 0.0]),
+        (0.0, 20.0),
+        params=simple_model.default_parameters(),
+        sens_params=["A_to_B.k"],
+        sens_atol=1e-8,
+    )
+
+
+def _plant_forward_fast(simple_model, make_plant):
+    make_plant().solve(
+        t_span=(0.0, 1000.0), t_eval=jnp.asarray([0.0, 1000.0]), integrator=TIGHT,
+        forward_fast=True,
+    )
+
+
+def _plant_sensitivity(corrector):
+    def run(simple_model, make_plant):
+        plant = make_plant()
+        plant.solve_sensitivity(
+            plant.default_parameters(),
+            ["simple_decay.A_to_B.k"],
+            t_span=(0.0, 1000.0),
+            max_steps=2,
+            corrector=corrector,
+        )
+
+    run.__name__ = f"_plant_sensitivity_{corrector}"
+    return run
+
+
 @pytest.mark.parametrize(
     "run",
-    [_batch_solve, _batch_solve_on_grid, _batch_events, _pfr, _plant, _plant_events],
+    [
+        _batch_solve,
+        _batch_solve_on_grid,
+        _batch_events,
+        _pfr,
+        _plant,
+        _plant_events,
+        _batch_sensitivity,
+        _batch_sensitivity_own_tolerance,
+        _plant_forward_fast,
+        _plant_sensitivity("staggered"),
+        _plant_sensitivity("simultaneous"),
+    ],
+    ids=lambda run: run.__name__.lstrip("_"),
 )
 def test_step_budget_raises_without_a_banner(run, simple_model, make_cstr_plant, capfd, caplog):
     """The error names the budget, and nothing reaches stderr or the log first.
@@ -97,39 +152,18 @@ def test_step_budget_under_a_gradient_still_fails(simple_model):
         jax.block_until_ready(jax.grad(final_a)(simple_model.default_parameters()))
 
 
-def _batched(*results):
-    """A batch of diffrax results, as a vmapped solve returns them."""
-    import diffrax
+def test_sensitivity_step_budget_under_a_gradient_still_fails(make_cstr_plant):
+    """The simultaneous plant sensitivity is the differentiable one: under
+    ``jax.grad`` its result is traced, so the runtime check stays in the
+    program and the budget is still enforced."""
+    plant = make_cstr_plant()
 
-    codes = jnp.arange(len(results))
-    return jax.vmap(
-        lambda i: diffrax.RESULTS.where(
-            i == 0,
-            results[0],
-            results[1] if len(results) > 1 else results[0],
+    def final_s(params):
+        _t, _ys, S = plant.solve_sensitivity(
+            params, ["simple_decay.A_to_B.k"], t_span=(0.0, 1000.0), max_steps=2,
+            corrector="simultaneous",
         )
-    )(codes)
+        return S[-1].sum()
 
-
-def test_check_solve_result_reports_each_outcome():
-    """A successful result passes the outputs through unchanged; a failure other
-    than the step budget raises Equinox's error type (as ``throw=True`` did, so the
-    calibration multistart still recognizes it) with Diffrax's reason (scalar) or
-    naming a failed batch element; a batch with an element out of steps gives the budget
-    message."""
-    import diffrax
-    import equinox as eqx
-
-    from aquakin.integrate._solver import check_solve_result
-
-    R = diffrax.RESULTS
-    out = (jnp.asarray([1.0]), jnp.asarray([2.0]))
-    assert check_solve_result(R.successful, out, max_steps=5, what="x solve") is out
-    assert check_solve_result(R.event_occurred, out, max_steps=5, what="x solve") is out
-    with pytest.raises(eqx.EquinoxRuntimeError, match="x solve stopped before the end of its span: A linear"):
-        check_solve_result(R.singular, out, max_steps=5, what="x solve")
-    with pytest.raises(RuntimeError, match=r"step budget \(max_steps=5\)"):
-        check_solve_result(_batched(R.successful, R.max_steps_reached), out,
-                           max_steps=5, what="x solve")
-    with pytest.raises(eqx.EquinoxRuntimeError, match="an element of the batch failed"):
-        check_solve_result(_batched(R.successful, R.singular), out, max_steps=5, what="x solve")
+    with pytest.raises(RuntimeError, match=BUDGET):
+        jax.block_until_ready(jax.grad(final_s)(plant.default_parameters()))

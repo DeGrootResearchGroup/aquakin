@@ -77,11 +77,11 @@ the `custom_vjp` wall, and even with `DirectAdjoint` the second derivatives
 through the stiff solve disagree with finite differences. Use a first-order Gauss–Newton
 `H = JᵀJ` instead (see `calibrate(laplace=LaplaceConfig(method="gauss_newton"))`).
 
-**A failed solve is checked on the host.** `_run_diffeqsolve` runs with
-`throw=False`, so every caller must pass `sol.result` (a compiled solve returns
-it beside its outputs) to `check_solve_result` in `integrate/_solver.py`:
-raising inside the program makes JAX log Equinox's banner first. Under a trace
-the helper restores diffrax's runtime check, so a gradient still fails.
+**A failed solve is checked on the host.** `_run_diffeqsolve`, the forward
+sensitivity and the lean `forward_solve` loop return a failed solve with its
+diffrax `result`, so every caller must pass it to `check_solve_result` in
+`integrate/_solver.py`: raising inside the program makes JAX log Equinox's
+banner first. Under a trace it restores the runtime check (gradients still fail).
 
 ### Operator Splitting
 

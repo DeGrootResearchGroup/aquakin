@@ -38,7 +38,7 @@ def test_decay_matches_analytic_and_saveat():
         return jnp.diag(-k)
 
     t_eval = jnp.linspace(0.0, 1.5, 7)
-    ys = forward_solve(rhs, jac, y0, None, 0.0, 1.5, t_eval,
+    ys, _ = forward_solve(rhs, jac, y0, None, 0.0, 1.5, t_eval,
                        rtol=1e-7, atol=1e-10)
     exact = y0[None, :] * jnp.exp(-k[None, :] * t_eval[:, None])
     assert np.allclose(np.asarray(ys[0]), np.asarray(y0))      # t0 exact
@@ -65,8 +65,8 @@ def test_dense_output_save_grid_independent():
 
     dense = jnp.linspace(0.0, 4.0, 201)         # 0.02 spacing
     sparse = jnp.linspace(0.0, 4.0, 5)          # 0,1,2,3,4 -- a subset of dense
-    yd = forward_solve(rhs, jac, y0, None, 0.0, 4.0, dense, rtol=1e-4, atol=1e-8)
-    ys = forward_solve(rhs, jac, y0, None, 0.0, 4.0, sparse, rtol=1e-4, atol=1e-8)
+    yd, _ = forward_solve(rhs, jac, y0, None, 0.0, 4.0, dense, rtol=1e-4, atol=1e-8)
+    ys, _ = forward_solve(rhs, jac, y0, None, 0.0, 4.0, sparse, rtol=1e-4, atol=1e-8)
     shared = np.asarray(yd)[::50]               # dense rows at t = 0,1,2,3,4
     # Same step sequence interpolated at the same times -> bit-for-bit agreement.
     assert np.max(np.abs(shared - np.asarray(ys))) < 1e-11
@@ -102,7 +102,7 @@ def test_order_is_three():
     exact = 10.0 / 101.0 * (10.0 * np.sin(t1) - np.cos(t1) + np.exp(-10.0 * t1))
 
     def error(h):
-        ys = forward_solve(rhs, jac, jnp.array([0.0]), None, 0.0, t1,
+        ys, _ = forward_solve(rhs, jac, jnp.array([0.0]), None, 0.0, t1,
                            jnp.array([0.0, t1]), rtol=1e3, atol=1e3,
                            control=StepControl(h0=h, dtmax=h))
         return abs(float(ys[-1, 0]) - exact)
@@ -112,7 +112,13 @@ def test_order_is_three():
 
 
 def test_step_budget_exhaustion_raises():
-    """Running out of steps must raise, not return zero-filled rows."""
+    """Running out of steps must report it, not return zero-filled rows: the
+    result is ``max_steps_reached``, the unreached rows are NaN, and
+    ``check_solve_result`` raises the step-budget error."""
+    import diffrax
+
+    from aquakin.integrate._solver import check_solve_result
+
     def rhs(t, y, args):
         return -args[0] * y
 
@@ -120,20 +126,21 @@ def test_step_budget_exhaustion_raises():
         return -args[0] * jnp.eye(1)
 
     te = jnp.linspace(0.0, 10.0, 5)
-    with pytest.raises(eqx.EquinoxRuntimeError, match="maximum number of solver steps"):
-        forward_solve(rhs, jac, jnp.array([1.0]), jnp.array([0.3]), 0.0, 10.0, te,
-                      rtol=1e-6, atol=1e-9, control=StepControl(max_steps=3))
-    # The step-budget message is recognized by friendly_solve_errors.
-    from aquakin.integrate._common import friendly_solve_errors
-    with pytest.raises(RuntimeError, match="step budget"):
-        with friendly_solve_errors(3, what="test solve"):
-            forward_solve(rhs, jac, jnp.array([1.0]), jnp.array([0.3]), 0.0, 10.0,
-                          te, rtol=1e-6, atol=1e-9, control=StepControl(max_steps=3))
+    ys, result = forward_solve(rhs, jac, jnp.array([1.0]), jnp.array([0.3]), 0.0, 10.0, te,
+                               rtol=1e-6, atol=1e-9, control=StepControl(max_steps=3))
+    assert bool(result == diffrax.RESULTS.max_steps_reached)
+    assert np.isnan(np.asarray(ys[-1])).all()
+    with pytest.raises(RuntimeError, match=r"step budget \(max_steps=3\)"):
+        check_solve_result(result, ys, max_steps=3, what="test solve")
 
 
 def test_stalled_solve_raises():
     """A solution that blows up (y' = y^2 from y0 = 1, singular at t = 1) stalls
-    the step size; the solve must raise rather than return zeros."""
+    the step size; the solve must report it rather than return zeros."""
+    import diffrax
+
+    from aquakin.integrate._solver import check_solve_result
+
     def rhs(t, y, args):
         return y**2
 
@@ -141,10 +148,12 @@ def test_stalled_solve_raises():
         return 2.0 * y * jnp.eye(1)
 
     te = jnp.linspace(0.0, 2.0, 5)
-    with pytest.raises(eqx.EquinoxRuntimeError, match="the solve stalled"):
-        forward_solve(rhs, jac, jnp.array([1.0]), None, 0.0, 2.0, te,
-                      rtol=1e-6, atol=1e-9,
-                      control=StepControl(max_steps=100_000))
+    ys, result = forward_solve(rhs, jac, jnp.array([1.0]), None, 0.0, 2.0, te,
+                               rtol=1e-6, atol=1e-9,
+                               control=StepControl(max_steps=100_000))
+    assert bool(result == diffrax.RESULTS.dt_min_reached)
+    with pytest.raises(eqx.EquinoxRuntimeError, match="minimum step size"):
+        check_solve_result(result, ys, max_steps=100_000, what="test solve")
 
 
 # --------------------------------------------------------------------------

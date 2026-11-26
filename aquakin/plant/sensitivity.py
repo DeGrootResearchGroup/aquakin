@@ -34,6 +34,7 @@ import jax
 import jax.numpy as jnp
 
 from aquakin.integrate._common import DifferentiationConfig, IntegratorConfig
+from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate._transforms import (
     dphysical_dunconstrained,
     from_unconstrained,
@@ -1061,7 +1062,7 @@ def solve_sensitivity(
         )
         plant._solve_cache.put("jit", key, jitted)
     with friendly_solve_errors(max_steps, what="plant sensitivity solve"):
-        ys, S, stats = jitted(
+        ys, S, stats, result = jitted(
             y0,
             theta_aug,
             t0a,
@@ -1070,6 +1071,9 @@ def solve_sensitivity(
             jnp.asarray(rtol, dtype=float),
             atol_arr,
             jnp.asarray(rtol if sens_rtol is None else sens_rtol, dtype=float),
+        )
+        ys, S, stats = check_solve_result(
+            result, (ys, S, stats), max_steps=max_steps, what="plant sensitivity solve"
         )
     if return_stats:
         return te, ys, S, stats
@@ -1092,7 +1096,8 @@ def _build_sensitivity_solve(
     """Build the jit-compiled sensitivity solve for one static structure.
 
     The returned function takes ``(y0, theta, t0, t1, t_eval, rtol, atol,
-    sens_rtol)`` -- all runtime arguments -- and returns ``(ys, S, stats)``, with
+    sens_rtol)`` -- all runtime arguments -- and returns ``(ys, S, stats,
+    result)``, the diffrax ``result`` for ``check_solve_result``, with
     ``S`` shape ``(n_t, ndof, k)`` and ``stats`` ``None`` for the simultaneous
     corrector. ``theta`` is the plant parameter vector followed by the
     ``op_meta`` operating scales; ``free_aug`` indexes the sensitivity
@@ -1142,13 +1147,13 @@ def _build_sensitivity_solve(
                 sens_error_control=sens_error_control,
                 control=control,
             )
-            return res.ys, res.S, res.stats
+            return res.ys, res.S, res.stats, res.result
 
         return _solve
 
     @jax.jit
     def _solve(y0, theta, t0, t1, t_eval, rtol, atol, sens_rtol):
-        _, ys, S = augmented_forward_sensitivity(
+        _, ys, S, result = augmented_forward_sensitivity(
             make_rhs(y0, theta, t0),
             y0,
             theta,
@@ -1165,7 +1170,7 @@ def _build_sensitivity_solve(
             order=3,
             factormax=factormax,
         )
-        return ys, S, None
+        return ys, S, None, result
 
     return _solve
 
