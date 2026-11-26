@@ -332,20 +332,24 @@ def _closed_form_decay_fit(t, obs, k0):
 
 
 @pytest.mark.parametrize(
-    ("integrator", "solver_cls"),
+    ("integrator", "solver_cls", "factormax"),
     [
-        (None, diffrax.Kvaerno3),                                          # the default
-        (aquakin.IntegratorConfig(order=5), diffrax.Kvaerno5),
-        (aquakin.IntegratorConfig(solver=diffrax.Kvaerno5()), diffrax.Kvaerno5),  # solver= beats order=3
+        (None, diffrax.Kvaerno3, 3.0),                                     # the defaults
+        (aquakin.IntegratorConfig(order=5, factormax=None), diffrax.Kvaerno5,
+         diffrax.PIDController(rtol=1e-3, atol=1e-6).factormax),          # diffrax's own
+        (aquakin.IntegratorConfig(solver=diffrax.Kvaerno5(), factormax=7.0),
+         diffrax.Kvaerno5, 7.0),                                           # solver= beats order=3
     ],
-    ids=["default", "order5", "explicit_kvaerno5"],
+    ids=["default", "order5_no_factormax", "explicit_kvaerno5_factormax7"],
 )
 def test_calibrate_stable_adjoint_runs_the_reactor_solver(
-        integrator, solver_cls, simple_model, monkeypatch):
+        integrator, solver_cls, factormax, simple_model, monkeypatch):
     """``calibrate``'s stable adjoint integrates with the ESDIRK the reactor's
     ``IntegratorConfig`` selects: the solver the discrete adjoint builds (whose
-    tableau its backward reads) is recorded as it is built, and is Kvaerno3 by
-    default and Kvaerno5 for ``order=5`` or an explicit ``solver=``. The fitted
+    tableau its backward reads) and the PID step controller it wraps are
+    recorded as they are built. The solver is Kvaerno3 by default and Kvaerno5
+    for ``order=5`` or an explicit ``solver=``; the controller carries the
+    reactor's ``factormax`` (3 by default, diffrax's own when ``None``). The fitted
     rate constant matches the closed-form least-squares optimum of the decay
     model, so the gradient the fit followed is the right one for each solver.
 
@@ -354,14 +358,19 @@ def test_calibrate_stable_adjoint_runs_the_reactor_solver(
     order or solver is dropped."""
     from aquakin.integrate import discrete_adjoint as da
 
-    built = []
-    real = da.build_implicit_solver
+    built, controllers = [], []
+    real, real_controller = da.build_implicit_solver, da.build_step_controller
 
     def recording(*a, **k):
         built.append(real(*a, **k))
         return built[-1]
 
+    def recording_controller(*a, **k):
+        controllers.append(real_controller(*a, **k))
+        return controllers[-1]
+
     monkeypatch.setattr(da, "build_implicit_solver", recording)
+    monkeypatch.setattr(da, "build_step_controller", recording_controller)
 
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0 = jnp.array([1.0, 0.0])
@@ -383,6 +392,7 @@ def test_calibrate_stable_adjoint_runs_the_reactor_solver(
     )
 
     assert built and all(type(s) is solver_cls for s in built)
+    assert controllers and all(c.factormax == factormax for c in controllers)
     # rtol=1e-8 solve: the fitted k agrees with the exact optimum to a decade
     # or two above the solve tolerance.
     k_exact = _closed_form_decay_fit(t_obs, obs, 0.13)
