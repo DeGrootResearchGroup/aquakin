@@ -130,7 +130,8 @@ atol   = model.atol({"SO": 1e-8}, default=1e-6)   # tighter tolerance on oxygen
 
 There is **no global time unit**. `t_span` and `t_eval` are in whatever unit the
 model's rate constants use, and it differs by model — the ozone and UV models
-are in **seconds**, the biological models (ASM, ADM, WATS) and the mineral
+are in **seconds**, the biological models (the activated sludge models ASM1–ASM3, the anaerobic
+digestion model ADM1, and the WATS sewer models) and the mineral
 precipitation models in **days**. Check
 before choosing an integration window:
 

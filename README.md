@@ -178,7 +178,7 @@ To draw and edit flowsheets in your browser:
 
 ```bash
 pip install "aquakin[ui]"
-aquakin-ui examples/projects/bsm2/flowsheet.yaml
+aquakin-ui            # or: aquakin-ui flowsheet.yaml to open a saved plant
 ```
 
 The editor lets you drag units from a palette, wire their ports, edit each unit
