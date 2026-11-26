@@ -62,6 +62,23 @@ ASM1_TSS_FACTOR: float = 0.75
 LUMPED_TSS_SPECIES: tuple[str, ...] = ("XTSS", "XSS")
 
 
+def lumped_tss_state(model: CompiledModel) -> str | None:
+    """The state that carries a model's suspended solids, or ``None``.
+
+    Parameters
+    ----------
+    model : CompiledModel
+        The model.
+
+    Returns
+    -------
+    str or None
+        The first of :data:`LUMPED_TSS_SPECIES` the model has (``XTSS`` in
+        ASM2d, ``XSS`` in ASM3), or ``None`` for a model without one (ASM1).
+    """
+    return next((s for s in LUMPED_TSS_SPECIES if s in model.species_index), None)
+
+
 def lumped_tss_weights(model: CompiledModel, params=None) -> dict[str, float]:
     """TSS per unit of each particulate of a model that tracks its TSS as a state.
 
@@ -104,7 +121,7 @@ def lumped_tss_weights(model: CompiledModel, params=None) -> dict[str, float]:
 
     from aquakin.utils.units import units_match
 
-    tss = next((s for s in LUMPED_TSS_SPECIES if s in model.species_index), None)
+    tss = lumped_tss_state(model)
     if tss is None:
         raise ValueError(
             f"model '{model.name}' has no TSS state ({', '.join(LUMPED_TSS_SPECIES)}); "

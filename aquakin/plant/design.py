@@ -32,7 +32,7 @@ import jax.numpy as jnp
 
 from aquakin.plant._constants import (
     EPS_Q,
-    LUMPED_TSS_SPECIES,
+    lumped_tss_state,
     lumped_tss_weights,
     tss_concentration,
 )
@@ -432,7 +432,7 @@ def _tss_of(model):
     weighting its Takács settler's blanket uses; any other is read with the
     ASM1 benchmark convention of :func:`derived_TSS`.
     """
-    if not any(s in model.species_index for s in LUMPED_TSS_SPECIES):
+    if lumped_tss_state(model) is None:
         return lambda C: derived_TSS(C, model)
     weights = lumped_tss_weights(model)
     vec = jnp.asarray([weights.get(s, 0.0) for s in model.species])
