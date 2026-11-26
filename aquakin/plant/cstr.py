@@ -874,20 +874,6 @@ class AerationUnit:
         o2_mask = jnp.zeros((n,)).at[self.model.species_index[self.aeration.species]].set(1.0)
         return transfer * o2_mask, transfer * (1.0 - o2_mask)
 
-    # Readers onto the canonical ``self._av`` store, for tests that introspect
-    # the per-species aeration vectors.
-    @property
-    def _kla_vec(self) -> jnp.ndarray:
-        return self._av.kla_vec
-
-    @property
-    def _sat_vec(self) -> jnp.ndarray:
-        return self._av.sat_vec
-
-    @property
-    def _controlled_kla(self) -> dict:
-        return self._av.controlled
-
 
 @dataclass
 class CSTRUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
