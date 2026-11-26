@@ -352,7 +352,10 @@ def test_mass_balance_closes_on_bsm1_from_warm_start():
     from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
 
     net = aquakin.load_model("asm1")
-    plant = build_bsm1(model=net)
+    # The ideal clarifier: the lumped Takács settler values its blanket's
+    # nitrogen at the default solids composition, so it closes N to 1e-4 only
+    # at steady state (the next test).
+    plant = build_bsm1(model=net, use_takacs=False)
     feed = net.influent({"SS": 69.5, "XS": 202.32, "XB_H": 28.17, "SNH": 31.56,
                          "SND": 6.95, "XND": 10.59, "SI": 30.0, "XI": 51.2,
                          "SALK": 7.0}, Q=18446.0)

@@ -231,7 +231,10 @@ def bsm1():
 
     def make():
         asm1 = aquakin.load_model("asm1")
-        p = build_bsm1(model=asm1)
+        # The ideal clarifier: these tests check the colored machinery on a
+        # mid-size recycle plant whose warm-start probe pattern covers its
+        # trajectory; the layered settler's couplings are BSM2's tests.
+        p = build_bsm1(model=asm1, use_takacs=False)
         C0 = asm1.concentrations({
             "SI": 30.0, "SS": 69.5, "XI": 51.2, "XS": 202.32, "XB_H": 28.17,
             "SNH": 31.56, "SND": 6.95, "XND": 10.59, "SALK": 7.0})
