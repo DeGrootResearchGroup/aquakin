@@ -150,7 +150,9 @@ def test_feedback_dose_solves_and_publishes_signal(feedback_plant):
 def test_feedback_dosing_plant_extended_after_a_solve(asm1):
     """A unit added after a solve re-runs the controller set-up, which keeps the
     dosing controller it already derived (not a second one, which would collide
-    by name) and solves exactly as a plant built with the unit from the start."""
+    by name). The extended plant then solves bit-identically to a plant with the
+    same state layout that never solved, and agrees by unit with a plant built
+    with the unit from the start to ten times the solver's rtol."""
     def extend(p):
         p.add_unit(_tank(asm1, "tank2"))
         p.connect("tank.out", "tank2.in")
@@ -160,16 +162,32 @@ def test_feedback_dosing_plant_extended_after_a_solve(asm1):
     edited.solve(t_span=(0.0, 1.0), t_eval=t_eval)
     extend(edited)
     sol = edited.solve(t_span=(0.0, 1.0), t_eval=t_eval)
+    assert edited.list_units().count("carbon_dosing") == 1
 
+    # Same add order with no solve in between: initial_state() derives the
+    # controller before tank2 is added, as the first solve did. Nothing the
+    # earlier solve left behind may change the result, so the two are
+    # bit-identical.
+    same = _feedback_plant(asm1, flow_max=10.0)
+    same.initial_state()
+    extend(same)
+    assert same.list_units() == edited.list_units()
+    assert jnp.array_equal(sol.state, same.solve(t_span=(0.0, 1.0), t_eval=t_eval).state)
+
+    # Built with tank2 from the start, the controller is derived after tank2,
+    # so the state layout is permuted. That changes the floating-point
+    # operation order, and the adaptive implicit solve amplifies round-off
+    # (a 1-ulp nudge of one initial value moves this output by up to ~2e-10
+    # relative) through its Newton and step-size decisions. The two solve the
+    # same ODE, so they agree to the solver's accuracy: rtol 1e-5, a decade
+    # above the solve's rtol of 1e-6.
     fresh = _feedback_plant(asm1, flow_max=10.0)
     extend(fresh)
     ref = fresh.solve(t_span=(0.0, 1.0), t_eval=t_eval)
-    # The edited plant derived its controller before tank2 was added, so the
-    # add order (and with it the state layout) differs: compare by unit.
     assert sorted(edited.list_units()) == sorted(fresh.list_units())
-    assert edited.list_units().count("carbon_dosing") == 1
+    assert edited.list_units() != fresh.list_units()
     for name in fresh.list_units():
-        assert jnp.allclose(sol.unit_state(name), ref.unit_state(name), rtol=1e-12, atol=0.0)
+        assert jnp.allclose(sol.unit_state(name), ref.unit_state(name), rtol=1e-5, atol=0.0)
 
 
 def test_grad_flows_through_feedback_dosing(feedback_plant):
