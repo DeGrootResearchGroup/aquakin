@@ -188,9 +188,14 @@ def parameters() -> dict:
     add("K_fPHA", 0.01, "C-mol/C-mol")
     add("K_store", 0.01, "C-mol/C-mol")
     add("K_VFA_BIOP", 0.001 * 32.0, "g_COD/m3")
-    add("K_PHA_BIOP", 0.01 * 36.0, "g_COD/m3")
-    add("K_GLY_BIOP", 0.01 * 32.0, "g_COD/m3")
-    add("K_PP_BIOP", 0.01 * P_G, "g_P/m3")
+    # Depletion switches on the stored polymers, written on their fractions of
+    # the biomass so that a population's growth does not depend on its own
+    # size (an absolute switch throttles a rare population and makes the PAO /
+    # GAO outcome in a plant depend on its history). The source's 0.01 C-mmol/L
+    # (P-mmol/L) at its 30 C-mmol/L starting biomass.
+    add("K_fGLY", 0.01 / 30.0, "C-mol/C-mol")
+    add("K_fPP", 0.01 / 30.0, "P-mol/C-mol")
+    add("K_fPHA_store", 0.01 / 30.0, "C-mol/C-mol")
     add("K_PO4_BIOP", 0.01 * P_G, "g_P/m3")
     # Phosphate limitation of the core's growth (ASM2d K_P).
     add("KP_H", 0.01, "g_P/m3")
@@ -231,6 +236,8 @@ def expressions() -> dict:
         c_ac = num(pool_cod(pool_composition(pop, "AC")))
         c_pr = num(pool_cod(pool_composition(pop, "PR")))
         X = s["X"]
+        if pop == "PAO":
+            e["f_PP"] = "safe_div([XPP] / 31.0, x_C_PAO)"
         e[f"pha_C_{pop}"] = f"[{s['AC']}] / {c_ac} + [{s['PR']}] / {c_pr}"
         e[f"x_C_{pop}"] = f"[{X}] / {num(COD_X)}"
         e[f"f_PHA_{pop}"] = f"safe_div(pha_C_{pop}, x_C_{pop})"
@@ -248,17 +255,16 @@ def expressions() -> dict:
         e[f"gly_drive_{pop}"] = (
             f"f_PHA_{pop} ** (2 / 3) / max(f_GLY_{pop}, 0.001) * x_C_{pop}"
             f" * room_GLY_{pop} / (room_GLY_{pop} + K_store)"
-            f" * monod([{s['AC']}] + [{s['PR']}], K_PHA_BIOP)"
+            f" * monod(f_PHA_{pop}, K_fPHA_store)"
         )
-        store = f"monod([{s['GLY']}], K_GLY_BIOP)"
+        store = f"monod(f_GLY_{pop}, K_fGLY)"
         if pop == "PAO":
-            store += " * monod([XPP], K_PP_BIOP)"
+            store += " * monod(f_PP, K_fPP)"
         e[f"ana_store_{pop}"] = store
-    e["f_PP"] = "safe_div([XPP] / 31.0, x_C_PAO)"
     e["room_PP"] = "max(fPP_max - f_PP, 0)"
     e["pp_drive"] = (
         "1 / max(f_PP, 0.001) * room_PP / (room_PP + K_store) * x_C_PAO"
-        " * monod([XPHA_PAO_AC] + [XPHA_PAO_PR], K_PHA_BIOP) * monod([SPO4], K_PO4_BIOP)"
+        " * monod(f_PHA_PAO, K_fPHA_store) * monod([SPO4], K_PO4_BIOP)"
     )
     return e
 
@@ -333,12 +339,12 @@ def anaerobic_reactions(pop: str) -> list[dict]:
                 stoichiometry={GLY: -2.0, AC: 2.0, "SIC": "auto"},
                 conserved_for=["COD", "C"]))
     if pop == "PAO":
-        rx.append(dict(name="PAO_anaerobic_maintenance", rate="m_ANA_PAO * 1.096 ** dT * [XPAO] * monod([XPP], K_PP_BIOP) * anaerobic",
+        rx.append(dict(name="PAO_anaerobic_maintenance", rate="m_ANA_PAO * 1.096 ** dT * [XPAO] * monod(f_PP, K_fPP) * anaerobic",
                        stoichiometry={"XPP": -1.0, "SPO4": "auto"}, conserved_for=["P"]))
     else:
         rx.append(dict(name=f"{pop}_anaerobic_maintenance",
                        description="Glycogen to propionyl-rich PHA (Zeng et al. 2003a, Eq. 21).",
-                       rate=f"m_ANA_GAO * 1.028 ** dT * [{X}] * monod([{GLY}], K_GLY_BIOP) * anaerobic",
+                       rate=f"m_ANA_GAO * 1.028 ** dT * [{X}] * monod(f_GLY_{pop}, K_fGLY) * anaerobic",
                        stoichiometry={GLY: -1.0, PR: 1.0, "SIC": "auto"}, conserved_for=["COD", "C"]))
     return rx
 

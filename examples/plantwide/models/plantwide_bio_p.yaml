@@ -290,15 +290,15 @@ parameters:
   K_VFA_BIOP:
     value: 0.032
     units: g_COD/m3
-  K_PHA_BIOP:
-    value: 0.36
-    units: g_COD/m3
-  K_GLY_BIOP:
-    value: 0.32
-    units: g_COD/m3
-  K_PP_BIOP:
-    value: 0.31
-    units: g_P/m3
+  K_fGLY:
+    value: 0.0003333333333
+    units: C-mol/C-mol
+  K_fPP:
+    value: 0.0003333333333
+    units: P-mol/C-mol
+  K_fPHA_store:
+    value: 0.0003333333333
+    units: C-mol/C-mol
   K_PO4_BIOP:
     value: 0.31
     units: g_P/m3
@@ -329,6 +329,7 @@ expressions:
   alpha_PAO_HPr_pH: alpha_PAO_HPr + 0.2 * max({pH} - 7.5, 0)
   alpha_GAO_HAc: max(alpha_GAO_HAc_slope * {pH} + alpha_GAO_HAc_int, 0)
   decay_switch: anaerobic
+  f_PP: safe_div([XPP] / 31.0, x_C_PAO)
   pha_C_PAO: '[XPHA_PAO_AC] / 36.0 + [XPHA_PAO_PR] / 39.27154472'
   x_C_PAO: '[XPAO] / 34.76'
   f_PHA_PAO: safe_div(pha_C_PAO, x_C_PAO)
@@ -338,8 +339,8 @@ expressions:
   room_GLY_PAO: max(fGLY_max_PAO - f_GLY_PAO, 0)
   pha_drive_PAO: f_PHA_PAO ** (2 / 3) * x_C_PAO * monod(f_PHA_PAO, K_fPHA) * monod([SPO4], K_PO4_BIOP)
   gly_drive_PAO: f_PHA_PAO ** (2 / 3) / max(f_GLY_PAO, 0.001) * x_C_PAO * room_GLY_PAO / (room_GLY_PAO
-    + K_store) * monod([XPHA_PAO_AC] + [XPHA_PAO_PR], K_PHA_BIOP)
-  ana_store_PAO: monod([XGLY_PAO], K_GLY_BIOP) * monod([XPP], K_PP_BIOP)
+    + K_store) * monod(f_PHA_PAO, K_fPHA_store)
+  ana_store_PAO: monod(f_GLY_PAO, K_fGLY) * monod(f_PP, K_fPP)
   pha_C_GAOC: '[XPHA_GAOC_AC] / 36.66871055 + [XPHA_GAOC_PR] / 39.11466667'
   x_C_GAOC: '[XGAOC] / 34.76'
   f_PHA_GAOC: safe_div(pha_C_GAOC, x_C_GAOC)
@@ -349,8 +350,8 @@ expressions:
   room_GLY_GAOC: max(fGLY_max_GAO - f_GLY_GAOC, 0)
   pha_drive_GAOC: f_PHA_GAOC ** (2 / 3) * x_C_GAOC * monod(f_PHA_GAOC, K_fPHA) * monod([SPO4], K_PO4_BIOP)
   gly_drive_GAOC: f_PHA_GAOC ** (2 / 3) / max(f_GLY_GAOC, 0.001) * x_C_GAOC * room_GLY_GAOC / (room_GLY_GAOC
-    + K_store) * monod([XPHA_GAOC_AC] + [XPHA_GAOC_PR], K_PHA_BIOP)
-  ana_store_GAOC: monod([XGLY_GAOC], K_GLY_BIOP)
+    + K_store) * monod(f_PHA_GAOC, K_fPHA_store)
+  ana_store_GAOC: monod(f_GLY_GAOC, K_fGLY)
   pha_C_GAOA: '[XPHA_GAOA_AC] / 36.66871055 + [XPHA_GAOA_PR] / 39.11466667'
   x_C_GAOA: '[XGAOA] / 34.76'
   f_PHA_GAOA: safe_div(pha_C_GAOA, x_C_GAOA)
@@ -360,12 +361,11 @@ expressions:
   room_GLY_GAOA: max(fGLY_max_GAO - f_GLY_GAOA, 0)
   pha_drive_GAOA: f_PHA_GAOA ** (2 / 3) * x_C_GAOA * monod(f_PHA_GAOA, K_fPHA) * monod([SPO4], K_PO4_BIOP)
   gly_drive_GAOA: f_PHA_GAOA ** (2 / 3) / max(f_GLY_GAOA, 0.001) * x_C_GAOA * room_GLY_GAOA / (room_GLY_GAOA
-    + K_store) * monod([XPHA_GAOA_AC] + [XPHA_GAOA_PR], K_PHA_BIOP)
-  ana_store_GAOA: monod([XGLY_GAOA], K_GLY_BIOP)
-  f_PP: safe_div([XPP] / 31.0, x_C_PAO)
+    + K_store) * monod(f_PHA_GAOA, K_fPHA_store)
+  ana_store_GAOA: monod(f_GLY_GAOA, K_fGLY)
   room_PP: max(fPP_max - f_PP, 0)
-  pp_drive: 1 / max(f_PP, 0.001) * room_PP / (room_PP + K_store) * x_C_PAO * monod([XPHA_PAO_AC] + [XPHA_PAO_PR],
-    K_PHA_BIOP) * monod([SPO4], K_PO4_BIOP)
+  pp_drive: 1 / max(f_PP, 0.001) * room_PP / (room_PP + K_store) * x_C_PAO * monod(f_PHA_PAO, K_fPHA_store)
+    * monod([SPO4], K_PO4_BIOP)
 reactions:
 - name: hydrolysis
   stoichiometry:
@@ -512,7 +512,7 @@ reactions:
   - COD
   - C
 - name: PAO_anaerobic_maintenance
-  rate: m_ANA_PAO * 1.096 ** dT * [XPAO] * monod([XPP], K_PP_BIOP) * anaerobic
+  rate: m_ANA_PAO * 1.096 ** dT * [XPAO] * monod(f_PP, K_fPP) * anaerobic
   stoichiometry:
     XPP: -1.0
     SPO4: auto
@@ -756,7 +756,7 @@ reactions:
   - P
 - name: GAOC_anaerobic_maintenance
   description: Glycogen to propionyl-rich PHA (Zeng et al. 2003a, Eq. 21).
-  rate: m_ANA_GAO * 1.028 ** dT * [XGAOC] * monod([XGLY_GAOC], K_GLY_BIOP) * anaerobic
+  rate: m_ANA_GAO * 1.028 ** dT * [XGAOC] * monod(f_GLY_GAOC, K_fGLY) * anaerobic
   stoichiometry:
     XGLY_GAOC: -1.0
     XPHA_GAOC_PR: 1.0
@@ -956,7 +956,7 @@ reactions:
   - P
 - name: GAOA_anaerobic_maintenance
   description: Glycogen to propionyl-rich PHA (Zeng et al. 2003a, Eq. 21).
-  rate: m_ANA_GAO * 1.028 ** dT * [XGAOA] * monod([XGLY_GAOA], K_GLY_BIOP) * anaerobic
+  rate: m_ANA_GAO * 1.028 ** dT * [XGAOA] * monod(f_GLY_GAOA, K_fGLY) * anaerobic
   stoichiometry:
     XGLY_GAOA: -1.0
     XPHA_GAOA_PR: 1.0
