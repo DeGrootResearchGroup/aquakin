@@ -46,6 +46,7 @@ from aquakin.integrate._transforms import (
 # Re-exported here so ``from aquakin.plant.sensitivity import _dgsm_aggregate``
 # keeps working.
 from aquakin.integrate.seam import _dgsm_aggregate
+from aquakin.plant.influent import warn_if_outside_records
 from aquakin.plant.results import PlantSolution
 
 logger = logging.getLogger(__name__)
@@ -992,6 +993,7 @@ def solve_sensitivity(
         )
     free_idx = tuple(plant.parameter_index(w) if isinstance(w, str) else int(w) for w in wrt)
     t0, t1 = float(t_span[0]), float(t_span[1])
+    warn_if_outside_records(plant.influents, t0, t1, plant.time_unit)
     t0a = jnp.asarray(t0)
 
     # Cached recycle / flow maps (state-invariant for fixed-pump plants): run

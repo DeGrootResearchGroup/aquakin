@@ -45,8 +45,11 @@ Between samples the feed is **interpolated linearly**, so a solve sees a
 smoothly varying flow (19 000 m³/d at 3 h, halfway between the first two
 samples). **Outside the samples it holds the nearest one**: before the first
 time the feed is the first sample, and after the last it stays at the last
-sample for as long as the solve runs, without a warning. Make the record cover
-the whole solve, or, for a load that repeats, write it as a pattern
+sample for as long as the solve runs. A solve whose span reaches outside a
+record that varies warns once with an `InfluentRangeWarning` (from
+`aquakin.plant`) naming the influent, its range and the span; a constant feed,
+the same at every sample, never warns. Make the record cover the whole solve,
+or, for a load that repeats, write it as a pattern
 ([below](#a-feed-that-follows-a-pattern)). `base="zero"` leaves the species
 you do not name out of the feed.
 

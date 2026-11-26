@@ -42,6 +42,7 @@ from aquakin.integrate.events import (
     segment_signature,
 )
 from aquakin.integrate.seam import _coerce_atol, _run_diffeqsolve
+from aquakin.plant.influent import warn_if_outside_records
 from aquakin.plant.results import (
     PlantSolution,
 )
@@ -262,6 +263,7 @@ def solve(
     if events is not None:
         events = events_to_native_time(events, _time_factor)
     _check_inlet_flows(self, t0, t1)
+    warn_if_outside_records(self.influents, t0, t1, self.time_unit)
     unit_events: list[Event] = []
     for unit in self.units.values():
         if isinstance(unit, CycleEventSource):

@@ -82,6 +82,7 @@ from aquakin.plant.characterize import (
 )
 from aquakin.plant.influent import (
     InfluentExpression,
+    InfluentRangeWarning,
     InfluentSeries,
     read_influent_csv,
     read_influent_table,
@@ -208,6 +209,7 @@ __all__ = [
     "IdentityTranslator",
     "InfluentExpression",
     "InfluentFractions",
+    "InfluentRangeWarning",
     "InfluentSeries",
     "InterfaceSettling",
     "LayeredSettling",

@@ -9,11 +9,17 @@ time.
 :func:`load_bsm1_influent` reads the **synthesised** BSM1 dry / rain / storm
 influent files shipped under ``aquakin/plant/bsm/data/`` (they match the BSM1
 statistical profile but are not the canonical IWA series).
+
+:func:`warn_if_outside_records` is the check every plant solve runs on its span:
+a record that varies in time is defined only between its first and last samples,
+so a solve reaching outside them gets an :class:`InfluentRangeWarning`.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -28,6 +34,14 @@ from aquakin.utils.units import CELSIUS_SPELLINGS, conversion_factor, parse_unit
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
+
+
+class InfluentRangeWarning(UserWarning):
+    """A solve runs outside the sampled range of a time-varying influent record.
+
+    :meth:`InfluentSeries.at` holds the nearest sample outside the record, so the
+    feed there is an extrapolation the data do not support.
+    """
 
 
 # Roles a ``column_map`` may target besides ``"t"`` / ``"Q"`` / ``"T"`` and
@@ -955,4 +969,65 @@ class InfluentExpression:
             C=C,
             model=self.model,
             scalars=make_scalars(T=T),
+        )
+
+
+def _varies_in_time(series: InfluentSeries) -> bool:
+    """Whether the record's flow, concentrations or temperature differ between
+    samples. A traced record cannot be inspected, so it counts as varying."""
+    arrays = [a for a in (series.Q, series.C, series.T) if a is not None]
+    if any(isinstance(a, jax.core.Tracer) for a in arrays):
+        return True
+    return any(bool(np.any(np.asarray(a) != np.asarray(a)[:1])) for a in arrays)
+
+
+def warn_if_outside_records(
+    influents: Mapping[str, object], t0: float, t1: float, time_unit: str | None
+) -> None:
+    """Warn once for each time-varying record the span ``(t0, t1)`` leaves.
+
+    Every plant solve calls this with its span on the plant's clock before
+    integrating: the interpolant is evaluated inside a traced solve, so it cannot
+    warn itself. A record whose samples are all equal (a constant feed) has the
+    same value everywhere and never warns; neither does an
+    :class:`InfluentExpression`, which is defined at every time.
+
+    Parameters
+    ----------
+    influents : Mapping[str, object]
+        The plant's influents by name, already on the plant's clock.
+    t0, t1 : float
+        The solve span (plant clock).
+    time_unit : str or None
+        The plant's time unit, named in the message.
+
+    Warns
+    -----
+    InfluentRangeWarning
+        Naming the influent, its sampled range and the span.
+    """
+    unit = f" {time_unit}" if time_unit else ""
+    for name, series in influents.items():
+        if not isinstance(series, InfluentSeries) or isinstance(series.t, jax.core.Tracer):
+            continue
+        if not _varies_in_time(series):
+            continue
+        # Read the times on the host: indexing a jnp array under a trace would
+        # give a tracer even for a concrete record.
+        times = np.asarray(series.t)
+        first, last = float(times[0]), float(times[-1])
+        leaves = []
+        if t0 < first:
+            leaves.append("starts before its first sample")
+        if t1 > last:
+            leaves.append("runs past its last sample")
+        if not leaves:
+            continue
+        warnings.warn(
+            f"Influent '{name}' is a record over t = {first:g} to {last:g}{unit}, but "
+            f"the solve spans t = {t0:g} to {t1:g}{unit}: it {' and '.join(leaves)}, "
+            "where the feed is held at the nearest sample. Extend the record to "
+            "cover the solve, or write a load that repeats as an InfluentExpression.",
+            InfluentRangeWarning,
+            stacklevel=3,
         )
