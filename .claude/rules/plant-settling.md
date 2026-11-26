@@ -20,8 +20,8 @@ velocity, `flux_tss · X_k/TSS`, conserving total settleable solids) produce
 a monotone sludge blanket, a strongly clarified effluent, a thickened
 underflow, and tight solids mass balance (verified to machine precision
 against an independent port of the reference BSM1 settler derivative in
-`tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1(use_takacs=
-True)` selects it in the full plant (both clarifiers expose the same ports),
+`tests/validation/test_takacs_vs_bsm1_reference.py`). `build_bsm1` selects it by
+default (`use_takacs=False` gives the `IdealClarifier`; both expose the same ports),
 and `Plant.solve` takes `max_steps`. By default a bare `TakacsClarifier` does not
 hold the **soluble** species in the settler — they pass straight through (overflow = underflow = feed,
 no holdup), the common simplification. The opt-in **`soluble_holdup=True`** makes
