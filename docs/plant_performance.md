@@ -334,8 +334,10 @@ step-path drift; gradient finite and matching the dense path to ~1e-8). It
   decision is a per-host *performance* choice, never a tested outcome — the tests
   assert its self-consistency and gradient correctness, not which branch it picks.
   That measured-ratio decision has since been replaced by a deterministic size
-  gate (`Plant._COLORED_BACKWARD_MIN_STATES`, 100 states: BSM1 dense, BSM2
-  colored), and `plant.colored_jacobian_decision()` returns
+  gate (`Plant._COLORED_BACKWARD_MIN_STATES`, first 100 states, lowered to 50
+  on the 2026-11-26 remeasurement in `.claude/notes/plant-solve-log.md`, which
+  found the colored backward ~1.5× faster on the 65-state ideal-clarifier BSM1),
+  and `plant.colored_jacobian_decision()` returns
   `("colored"|"dense", n_states)`. **`"auto"` governs only the
   `stable_adjoint` backward** — it leaves the **forward** `jax_adjoint` solve dense
   (forward coloring swaps the implicit linear solver and so is not guaranteed

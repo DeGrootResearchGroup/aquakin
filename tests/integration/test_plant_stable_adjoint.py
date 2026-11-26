@@ -691,10 +691,10 @@ def test_stable_adjoint_colored_jacobian_matches_dense(bsm1_colored_backward):
 
 def test_stable_adjoint_colored_jacobian_auto_decision_size_gated():
     """``colored_jacobian="auto"`` (the default) decides by plant SIZE: the colored
-    backward is enabled iff ``n_states >= _COLORED_BACKWARD_MIN_STATES``. BSM1 with
-    its ideal clarifier is below the threshold, so "auto" deterministically chooses
-    dense; the default BSM1, whose layered settler adds its layer states, is above
-    it and chooses colored. The decision is a
+    backward is enabled iff ``n_states >= _COLORED_BACKWARD_MIN_STATES``. BSM1 is
+    above the threshold with either clarifier (65 states with the ideal one, where
+    the colored backward measured ~1.5x faster than dense), so "auto"
+    deterministically chooses colored for both. The decision is a
     pure structural property -- no wall-clock measurement and no concrete probe solve
     -- so it is available immediately, before any solve. (That the colored gradient
     equals the dense one is test_stable_adjoint_colored_jacobian_matches_dense; that
@@ -703,8 +703,8 @@ def test_stable_adjoint_colored_jacobian_auto_decision_size_gated():
     plant = build_bsm1(asm1, use_takacs=False)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     choice, n = plant.colored_jacobian_decision()
-    assert n < plant._COLORED_BACKWARD_MIN_STATES        # ideal-clarifier BSM1: below
-    assert choice == "dense"
+    assert n == 65 and n >= plant._COLORED_BACKWARD_MIN_STATES   # ideal clarifier
+    assert choice == "colored"
     default = build_bsm1(asm1)
     default.add_influent("influent", load_bsm1_influent("dry", asm1))
     choice, n = default.colored_jacobian_decision()

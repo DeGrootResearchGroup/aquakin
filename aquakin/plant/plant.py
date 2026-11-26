@@ -2565,14 +2565,13 @@ class Plant:
         return self._compute_signals(jnp.asarray(t), states, params_full)
 
     # Backward colored Jacobian is auto-enabled when the plant has at least this
-    # many states. The win is set by absolute plant size, not sparsity: a small
-    # plant pays more in per-build overhead than it saves (BSM1, 65 states:
-    # colored is ~2x slower per build despite 4.7x fewer colors), while a large
-    # one benefits (BSM2, 167 states). The threshold sits between them. The colored
-    # backward is exact (== dense), so a mis-set gate only ever costs a little
-    # speed, never correctness -- which is what lets a deterministic size gate
-    # replace the old (concrete-solve-dependent) build-time benchmark.
-    _COLORED_BACKWARD_MIN_STATES = 100
+    # many states. Per gradient the colored backward is never slower than dense
+    # and gains from ~50 states (BSM1 with its ideal clarifier, 65 states, ~1.5x);
+    # below that the gain is small and the one-time pattern build, guard and
+    # larger compile dominate. The colored backward is exact (== dense), so a
+    # mis-set gate only costs speed, never correctness. Measurements:
+    # .claude/notes/plant-solve-log.md.
+    _COLORED_BACKWARD_MIN_STATES = 50
 
     def colored_jacobian_decision(self):
         """Report the auto colored-backward-Jacobian decision:
