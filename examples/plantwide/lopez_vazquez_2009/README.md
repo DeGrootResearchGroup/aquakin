@@ -57,7 +57,7 @@ age and the source's feed (5 C-mmol/L VFA, 0.40 P-mmol/L).
   GAO acetate PHA yield at pH 7 instead of carrying it in the rate costs up
   to 22 points at pH 6 and 7.5.
 - The generated model, `plantwide_bio_p`, against the faithful model: worst
-  deviation 13.9 points, every condition within 5 points except propionate
+  deviation 13.8 points, every condition within 5 points except propionate
   at pH 7.5 (14 at 30 °C, 6 at 20 °C), where the model's PAO propionate
   stoichiometry above pH 7 is COD-balanced and the source's is not; the same
   outcome in 34 of 36 conditions, and as the source's Fig. 6 in 32.
