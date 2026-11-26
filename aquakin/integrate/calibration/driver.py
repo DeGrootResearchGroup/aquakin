@@ -206,6 +206,7 @@ def _fit_result(problem: _CalibrationProblem, fm, cfg: _FitConfig, bundle, resul
             ic_opt,
             sigma_hat_at_map=sigma_hat,
             at_bound_mask=sides != "",
+            bundle=bundle,
         )
         if cfg.laplace
         else _LaplaceOut(*[None] * len(_LaplaceOut._fields))

@@ -31,7 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import minimize
 
-from aquakin.integrate._common import Reactor, native_time_factor
+from aquakin.integrate._common import Reactor, cached_jitted_solver, native_time_factor
 from aquakin.integrate._linalg import _NULL_RTOL
 from aquakin.integrate.fisher import Experiment, FisherInformation, _FisherSetup
 
@@ -342,6 +342,210 @@ def _initial_bounds_map(initial_bounds, n_exp, model):
     return out
 
 
+@dataclass(frozen=True)
+class _DesignLayout:
+    """Where the entries of :func:`optimize_experiment`'s design vector go.
+
+    The design vector ``x`` lies in ``[0, 1]``: each optimised experiment's
+    sampling times, then each optimised initial concentration, scaled by its
+    bounds. The layout is static (it fixes the compiled program's shape and is
+    part of its cache key); the bounds themselves are arguments of
+    :meth:`apply`.
+
+    Attributes
+    ----------
+    n_base : int
+        Number of fixed base experiments before the optimised ones.
+    time_slices : tuple of (int, int)
+        ``(start, stop)`` of each optimised experiment's times in ``x``; empty
+        when the times are not optimised.
+    conc : tuple of (int, int)
+        ``(experiment, species index)`` of each optimised initial
+        concentration, in the order of the last entries of ``x``.
+    """
+
+    n_base: int
+    time_slices: tuple
+    conc: tuple
+
+    def apply(self, x, tobs, C0s, lo, span, conc_lo, conc_hi):
+        """The design's sampling times and initial states at ``x``.
+
+        Parameters
+        ----------
+        x : jnp.ndarray, shape (n_x,)
+            The scaled design vector.
+        tobs, C0s : list of jnp.ndarray
+            Every experiment's sampling times and initial state (base first);
+            the optimised entries are replaced.
+        lo, span : float
+            Lower end and width of the sampling-time window.
+        conc_lo, conc_hi : jnp.ndarray, shape (n_conc,)
+            Bounds of each optimised initial concentration.
+
+        Returns
+        -------
+        tobs, C0s : list of jnp.ndarray
+            New lists with the optimised entries set from ``x``.
+        """
+        tobs, C0s = list(tobs), list(C0s)
+        for e, (start, stop) in enumerate(self.time_slices):
+            tobs[self.n_base + e] = lo + x[start:stop] * span
+        for k, (e, j) in enumerate(self.conc):
+            i = self.n_base + e
+            xk = x[len(x) - len(self.conc) + k]
+            C0s[i] = C0s[i].at[j].set(conc_lo[k] + xk * (conc_hi[k] - conc_lo[k]))
+        return tobs, C0s
+
+
+def _start_design(exps, ib, model, n_base, optimize_times, time_bounds, gap):
+    """The starting design vector of :func:`optimize_experiment` and its layout.
+
+    Parameters
+    ----------
+    exps : list of Experiment
+        The experiments to optimise.
+    ib : dict
+        ``{(experiment, species): (lo, hi)}`` from :func:`_initial_bounds_map`.
+    model : CompiledModel
+        The reactor's model (for species indices).
+    n_base : int
+        Number of fixed base experiments.
+    optimize_times : bool
+        Whether the sampling times are optimised.
+    time_bounds : tuple of float
+        ``(lo, hi)`` sampling-time window, as the caller gave it.
+    gap : float
+        Minimum spacing between consecutive samples.
+
+    Returns
+    -------
+    x0 : np.ndarray
+        The starting design vector, in ``[0, 1]``.
+    layout : _DesignLayout
+    conc_lo, conc_hi : jnp.ndarray
+        Bounds of each optimised initial concentration.
+
+    Raises
+    ------
+    ValueError
+        If a starting time or concentration lies outside its bounds, or the
+        starting times violate the minimum spacing.
+    """
+    lo, hi = float(time_bounds[0]), float(time_bounds[1])
+    span = hi - lo
+    x0, time_slices, conc_vars = [], [], list(ib.items())
+    if optimize_times:
+        for e, ex in enumerate(exps):
+            t = np.asarray(ex.t_obs, dtype=float)
+            if t.min() < lo or t.max() > hi:
+                raise ValueError(f"experiment {e}: t_obs lies outside time_bounds {time_bounds}.")
+            if t.size > 1 and np.min(np.diff(t)) < gap * (1 - 1e-9):
+                raise ValueError(f"experiment {e}: t_obs violates the minimum spacing {gap}.")
+            time_slices.append((len(x0), len(x0) + t.size))
+            x0.extend(((t - lo) / span).tolist())
+    for (e, s), (clo, chi) in conc_vars:
+        v = float(np.asarray(exps[e].C0)[model.species_index[s]])
+        if not clo <= v <= chi:
+            raise ValueError(f"experiment {e}: C0[{s!r}] = {v} lies outside {(clo, chi)}.")
+        x0.append((v - clo) / (chi - clo))
+    layout = _DesignLayout(
+        n_base=n_base,
+        time_slices=tuple(time_slices),
+        conc=tuple((e, model.species_index[s]) for (e, s), _ in conc_vars),
+    )
+    conc_lo = jnp.asarray([b[0] for _, b in conc_vars], dtype=float)
+    conc_hi = jnp.asarray([b[1] for _, b in conc_vars], dtype=float)
+    return np.asarray(x0), layout, conc_lo, conc_hi
+
+
+def _design_program(setup, layout, criterion, sub, nui):
+    """The compiled criterion and its design gradient, shared across calls.
+
+    The program takes ``(x, draws, tobs, C0s, lo, span, conc_lo, conc_hi)``:
+    the design vector, the parameter draws, every experiment's sampling times
+    and initial state, and the design bounds. It bakes in only what
+    ``setup.structure_key()``, the layout, the criterion and the subset fix, so
+    it is cached on those in the shared compiled-solver cache, and a repeat
+    :func:`optimize_experiment` call of the same structure compiles nothing.
+
+    Parameters
+    ----------
+    setup : _FisherSetup
+        The resolved Fisher-information evaluation.
+    layout : _DesignLayout
+        Where the design vector's entries go.
+    criterion : str
+        The design criterion.
+    sub, nui : jnp.ndarray or None
+        Scored and nuisance indices, from :func:`_subset_indices`.
+
+    Returns
+    -------
+    callable
+        ``program(x, draws, tobs, C0s, lo, span, conc_lo, conc_hi) -> (value,
+        gradient)``, the criterion averaged over the draws and its gradient
+        with respect to ``x``.
+    """
+
+    def value(x, draws, tobs, C0s, lo, span, conc_lo, conc_hi):
+        tobs, C0s = layout.apply(x, tobs, C0s, lo, span, conc_lo, conc_hi)
+        return _mean_criterion(setup, draws, tobs, C0s, criterion, sub, nui)
+
+    def build():
+        return jax.jit(lambda x, *args: (value(x, *args), jax.jacfwd(value)(x, *args)))
+
+    key = (
+        "optimize_experiment",
+        setup.structure_key(),
+        layout,
+        criterion,
+        _index_key(sub),
+        _index_key(nui),
+    )
+    return cached_jitted_solver(key, build, *setup.models())
+
+
+def _index_key(idx) -> tuple | None:
+    """A hashable form of an index array from :func:`_subset_indices`."""
+    return None if idx is None else tuple(int(i) for i in np.asarray(idx))
+
+
+def _spacing_constraints(layout, n_x, span, gap):
+    """SLSQP linear constraints keeping each experiment's consecutive samples
+    at least ``gap`` apart.
+
+    Parameters
+    ----------
+    layout : _DesignLayout
+        Where each experiment's times sit in the design vector.
+    n_x : int
+        Length of the design vector.
+    span : float
+        Width of the sampling-time window (the scale from ``x`` to time).
+    gap : float
+        Minimum spacing, in time.
+
+    Returns
+    -------
+    list of dict
+        One ``{"type": "ineq", "fun", "jac"}`` constraint per experiment with
+        more than one sample.
+    """
+    constraints = []
+    for start, stop in layout.time_slices:
+        n = stop - start
+        if n > 1:
+            A = np.zeros((n - 1, n_x))
+            idx = np.arange(start, stop - 1)
+            A[np.arange(n - 1), idx] = -span
+            A[np.arange(n - 1), idx + 1] = span
+            constraints.append(
+                {"type": "ineq", "fun": lambda x, A=A: A @ x - gap, "jac": lambda x, A=A: A}
+            )
+    return constraints
+
+
 def optimize_experiment(
     reactor: Reactor,
     experiments: Experiment | list[Experiment],
@@ -461,44 +665,18 @@ def optimize_experiment(
         t_end=[None] * n_base + [hi * factor] * n_exp,
     )
     sub, nui = _subset_indices(setup.names, subset)
-    draws = _draws(setup, param_draws)
+    x0, layout, conc_lo, conc_hi = _start_design(
+        exps, ib, model, n_base, optimize_times, time_bounds, gap
+    )
+    # Everything the design changes is an argument of the compiled program, so
+    # a repeat call with the same structure reuses it (see _design_program).
+    program = _design_program(setup, layout, criterion, sub, nui)
+    args = (_draws(setup, param_draws), setup.tobs, setup.C0, lo, span, conc_lo, conc_hi)
 
-    # Design vector x in [0, 1]: each optimised experiment's times, then each
-    # optimised initial concentration, scaled by its bounds.
-    x0, time_slices, conc_vars = [], [], list(ib.items())
-    if optimize_times:
-        for e, ex in enumerate(exps):
-            t = np.asarray(ex.t_obs, dtype=float)
-            if t.min() < lo or t.max() > hi:
-                raise ValueError(f"experiment {e}: t_obs lies outside time_bounds {time_bounds}.")
-            if t.size > 1 and np.min(np.diff(t)) < gap * (1 - 1e-9):
-                raise ValueError(f"experiment {e}: t_obs violates the minimum spacing {gap}.")
-            time_slices.append(slice(len(x0), len(x0) + t.size))
-            x0.extend(((t - lo) / span).tolist())
-    for (e, s), (clo, chi) in conc_vars:
-        v = float(np.asarray(exps[e].C0)[model.species_index[s]])
-        if not clo <= v <= chi:
-            raise ValueError(f"experiment {e}: C0[{s!r}] = {v} lies outside {(clo, chi)}.")
-        x0.append((v - clo) / (chi - clo))
-    x0 = np.asarray(x0)
+    def value_and_grad(x):
+        return program(jnp.asarray(x), *args)
 
-    def _design(x):
-        tobs, C0s = list(setup.tobs), list(setup.C0)
-        if optimize_times:
-            for e, sl in enumerate(time_slices):
-                tobs[n_base + e] = lo + x[sl] * span
-        for k, ((e, s), (clo, chi)) in enumerate(conc_vars):
-            i = n_base + e
-            j = len(x) - len(conc_vars) + k
-            C0s[i] = C0s[i].at[model.species_index[s]].set(clo + x[j] * (chi - clo))
-        return tobs, C0s
-
-    def _value(x):
-        tobs, C0s = _design(x)
-        return _mean_criterion(setup, draws, tobs, C0s, criterion, sub, nui)
-
-    value_and_grad = jax.jit(lambda x: (_value(x), jax.jacfwd(_value)(x)))
-    v0 = float(value_and_grad(jnp.asarray(x0))[0])
+    v0 = float(value_and_grad(x0)[0])
     if not np.isfinite(v0) or (criterion == "E" and v0 <= 0.0):
         raise ValueError(
             f"The starting design's information is singular for criterion {criterion!r}; "
@@ -509,38 +687,27 @@ def optimize_experiment(
     scale = abs(v0) if v0 != 0.0 else 1.0
 
     def _objective(x):
-        v, g = value_and_grad(jnp.asarray(x))
+        v, g = value_and_grad(x)
         return sign * float(v) / scale, sign * np.asarray(g) / scale
 
-    constraints = []
-    for sl in time_slices:
-        n = sl.stop - sl.start
-        if n > 1:
-            A = np.zeros((n - 1, len(x0)))
-            idx = np.arange(sl.start, sl.stop - 1)
-            A[np.arange(n - 1), idx] = -span
-            A[np.arange(n - 1), idx + 1] = span
-            constraints.append(
-                {"type": "ineq", "fun": lambda x, A=A: A @ x - gap, "jac": lambda x, A=A: A}
-            )
     res = minimize(
         _objective,
         x0,
         jac=True,
         method="SLSQP",
         bounds=[(0.0, 1.0)] * len(x0),
-        constraints=constraints,
+        constraints=_spacing_constraints(layout, len(x0), span, gap),
         options={"maxiter": max_iter, "ftol": tol},
     )
     x = np.clip(res.x, 0.0, 1.0)
-    tobs, C0s = _design(jnp.asarray(x))
+    tobs, C0s = layout.apply(jnp.asarray(x), setup.tobs, setup.C0, lo, span, conc_lo, conc_hi)
     out = [
         replace(ex, t_obs=np.asarray(tobs[n_base + e]), C0=np.asarray(C0s[n_base + e]))
         for e, ex in enumerate(exps)
     ]
     return ExperimentDesignResult(
         experiments=out,
-        value=float(_value(jnp.asarray(x))),
+        value=float(value_and_grad(x)[0]),
         initial_value=v0,
         success=bool(res.success),
         message=str(res.message),

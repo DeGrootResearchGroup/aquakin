@@ -18,12 +18,14 @@ from aquakin.integrate.calibration.coords import (
     _joint_names,
     _simplex_fraction_cov,
 )
-from aquakin.integrate.calibration.loss import _data_term
-from aquakin.integrate.calibration.objective import _forward_jac, _residual_parts
-from aquakin.integrate.calibration.problem import _predict
+from aquakin.integrate.calibration.objective import (
+    _forward_jac,
+    _objective_fn,
+    _residual_parts,
+)
 
 if TYPE_CHECKING:
-    from aquakin.integrate.calibration.objective import _FitConfig
+    from aquakin.integrate.calibration.objective import _FitConfig, _ObjectiveBundle
     from aquakin.integrate.calibration.problem import _CalibrationProblem, _ReactorForwardModel
 
 
@@ -167,6 +169,39 @@ def _at_bound_named(problem: _CalibrationProblem, sides) -> dict[str, str]:
     return {n: str(sd) for n, sd in zip(_joint_names(problem), sides) if sd}
 
 
+def _objective_gradient(problem: _CalibrationProblem, fm, fm_lap, bundle):
+    """The compiled gradient of the calibration objective for the FD Laplace
+    Hessian, as a function of the full unconstrained vector (rates, then pools).
+
+    It is the gradient of :func:`_objective_fn`, the objective the fit
+    minimized, at the problem's own data. When the Hessian uses the fit's
+    forward model (``fm_lap is fm``) it is the fit's compiled program from
+    ``bundle``; otherwise (a tighter ``laplace_dtmax``, or no bundle) it is
+    compiled here for ``fm_lap``.
+
+    Parameters
+    ----------
+    problem : _CalibrationProblem
+        The resolved problem.
+    fm, fm_lap : forward model
+        The fit's forward model, and the one the Hessian is formed on.
+    bundle : _ObjectiveBundle or None
+        The fit's compiled objective.
+
+    Returns
+    -------
+    callable
+        ``grad(theta) -> jnp.ndarray``, the gradient of the unscaled objective
+        over every coordinate of ``theta``.
+    """
+    data = problem.data
+    if bundle is not None and fm_lap is fm:
+        program = bundle.objective_value_and_grad
+        return lambda theta: program(theta, *data)[1]
+    program = jax.jit(jax.grad(_objective_fn(problem, fm_lap)))
+    return lambda theta: program(theta, *data)
+
+
 def _laplace_posterior(
     problem: _CalibrationProblem,
     fm: _ReactorForwardModel,
@@ -175,6 +210,7 @@ def _laplace_posterior(
     ic_opt,
     sigma_hat_at_map=None,
     at_bound_mask=None,
+    bundle: _ObjectiveBundle | None = None,
 ) -> _LaplaceOut:
     """Laplace covariance at the MAP.
 
@@ -197,7 +233,11 @@ def _laplace_posterior(
     coordinates that ended on an active optimiser bound. They are held fixed:
     the covariance is the inverse of the Hessian over the remaining
     coordinates, embedded with zero rows / columns for the fixed ones, whose
-    std is reported as ``nan``."""
+    std is reported as ``nan``.
+
+    ``bundle`` is the fit's compiled objective: the finite-difference Hessian
+    reuses its gradient program when the Hessian's forward model is the fit's
+    (no tighter ``laplace_dtmax``), so the posterior compiles nothing more."""
     d = problem.n_rate
     joint = bool(cfg.laplace_include_ic and problem.m_ic)
     fm_lap = fm.with_dtmax(cfg.laplace_dtmax)
@@ -236,29 +276,14 @@ def _laplace_posterior(
         H = J.T @ J
     elif cfg.laplace_method == "fd":
         # FD Hessian of the loss (pools fixed at the MAP unless joint).
-        def _objective(theta):
-            rate_thetas, ic_thetas = _split(theta)
-            physical = problem.physical_from_theta(rate_thetas)
-            p = problem.p0_full.at[problem.free_indices].set(physical)
-            total = _data_term(problem, _predict(problem, fm_lap, p, ic_thetas, problem.C0_base))
-            if problem.has_priors:
-                total = total + 0.5 * jnp.sum(
-                    problem.prior_mask * ((physical - problem.prior_mean) / problem.prior_std) ** 2
-                )
-            if joint and problem.ic_prior_log_std:
-                total = total + 0.5 * jnp.sum(
-                    ((ic_thetas - problem.ic_center_full) / problem.ic_prior_log_std) ** 2
-                )
-            return total
-
-        grad_fn = jax.jit(jax.grad(_objective))
+        grad_fn = _objective_gradient(problem, fm, fm_lap, bundle)
         n_theta = theta_at.shape[0]
         H_rows = []
         for i in range(n_theta):
             step = max(abs(float(theta_at[i])), 1.0) * cfg.laplace_fd_step
             e_i = jnp.zeros(n_theta).at[i].set(step)
-            g_plus = grad_fn(theta_at + e_i)
-            g_minus = grad_fn(theta_at - e_i)
+            g_plus = grad_fn(jnp.concatenate(_split(theta_at + e_i)))[:n_theta]
+            g_minus = grad_fn(jnp.concatenate(_split(theta_at - e_i)))[:n_theta]
             H_rows.append((g_plus - g_minus) / (2.0 * step))
         H = jnp.stack(H_rows)
     else:

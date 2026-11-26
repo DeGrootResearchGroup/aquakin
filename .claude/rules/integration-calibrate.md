@@ -141,15 +141,15 @@ loss, observations, `sigma`, observation times (fingerprinted into
 `_CalibrationProblem.data_key`), the free set, transforms and priors -- is in
 `struct_key`, so a cache shared across different data rebuilds instead of
 mis-hitting; the reactor is not keyed, so never share a cache across reactors),
-`_run_multistart`, and
-`_laplace_posterior`. `_laplace_posterior` returns a `_LaplaceOut` namedtuple
-whose fields map one-to-one onto the `CalibrationResult` posterior fields (both
-call sites splat it with `**laplace_out._asdict()`). By default its Hessian is
-over the rates with the fitted pools held at the MAP; with
+`_run_multistart`, and `_laplace_posterior`, whose `_LaplaceOut` fields map
+one-to-one onto the `CalibrationResult` posterior fields (both call sites splat
+`**laplace_out._asdict()`). Its Hessian is over the rates (pools at the MAP); with
 `LaplaceConfig(include_ic=True)` it is over rates + log-space pools jointly
 (`joint_cov` / `joint_hessian` / `joint_names`), and `posterior_cov` becomes the
 rate block of the joint covariance (marginal over the pools), while
-`hessian_unconstrained` stays the rate-rate block in both modes. The standalone
+`hessian_unconstrained` stays the rate-rate block in both modes. The FD Hessian
+reuses the fit's `_ObjectiveBundle.objective_value_and_grad` unless `laplace_dtmax`
+changes the forward model; never write it a second objective. The standalone
 `fisher_information` ([`integrate/fisher.py`](aquakin/integrate/fisher.py)) is
 deliberately *not* built on `_CalibrationProblem`: a design has no observations
 and each `Experiment` may carry its own reactor and observed species, which the
@@ -182,10 +182,12 @@ priors (`_active_priors`) and `_resolve_transforms` are free helpers that
 and plant matrices cannot drift. Likewise `profile.py`'s sweep is factored into
 `_check_profile_args` / `_cold_starts` / `_point_optimizer` / `_guarded` /
 `_profile_sweep` / `_profile_result`, which `plant_profile_likelihood` reuses
-with `Plant.calibrate` as the inner fit; change them, not a copy. `experiment_design.py` builds on it: `optimize_experiment` passes a fixed
-`t_end` per optimized experiment so sampling times can be traced, jits
-`(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector, and runs
-SLSQP with linear spacing constraints; `param_draws` are `vmap`ped.
+with `Plant.calibrate` as the inner fit; change them, not a copy. `optimize_experiment`
+fixes `t_end` per optimized experiment so sampling times can be traced, and runs
+SLSQP on `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector
+(`param_draws` `vmap`ped). That program is held in `cached_jitted_solver` under
+`_FisherSetup.structure_key()`: anything new `_FisherSetup.information` bakes
+in must join that key, or a repeat call reuses a stale program.
 `fisher_information_from_fn` (in `fisher.py`) is the matrix-only path for a
 forward model that is not a reactor: AD Jacobian of `fn(theta)`, the same
 transforms and `FisherInformation` result, and `groups=` returning
