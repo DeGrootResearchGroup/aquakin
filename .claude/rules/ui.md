@@ -228,13 +228,12 @@ editor needs at run time goes in its `REQUIRED`.
   skipped without Playwright; not in the fast gate). Run `pytest tests/browser`
   when a change touches the canvas or the form, after rebuilding the bundle, and
   add a page's files beyond BSM1 to the job's path filter.
-- In `tests/browser`, the `page` fixture hands over the page only once the
-  start-up checks have finished (`checks_finished`, `tests/browser/conftest.py`),
-  because every worker request (Open, the study dialog) queues behind a round
-  of checks, which is slow on a loaded machine. A test that starts a round and
-  then needs it over waits for it (`checks_finished`, or `checks_done` to show
-  the Checks tab), never with a longer timeout; read Python's document from the header chip ("N units · M
-  connections · K recycles") and messages through a recorder (the snackbar
+- In `tests/browser`, the `page` fixture waits for the start-up checks
+  (`checks_finished`, `tests/browser/conftest.py`), since every worker request
+  queues behind a round of checks. A test that starts a round and needs it over
+  waits for it (`checks_finished`, or `checks_done` for the Checks tab), never
+  with a longer timeout; read Python's document from the header chip ("N units
+  · M connections · K recycles") and messages through a recorder (the snackbar
   closes after four seconds); never a negative check with no sync point after it.
 
 ## The installers (`installers/`)

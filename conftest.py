@@ -33,18 +33,35 @@ from sybil.parsers import markdown, myst
 GUIDE_PAGES = [
     "docs/index.md",
     "docs/getting_started.md",
+    "docs/models.md",
+    "docs/simulation.md",
+    "docs/analysis.md",
+    "docs/reference.md",
     "docs/installing_the_editor.md",
     "docs/reactors.md",
     "docs/plants.md",
+    "docs/custom_flowsheets.md",
+    "docs/influents.md",
+    "docs/plant_files.md",
     "docs/sensitivity_and_calibration.md",
+    "docs/calibration.md",
+    "docs/experiment_design.md",
+    "docs/plant_calibration.md",
+    "docs/worked_example_design.md",
     "docs/model_format.md",
     "docs/adding_models.md",
     "docs/model_catalog.md",
     "docs/public_api.md",
 ]
 
-# Pages whose examples run whole-plant solves for minutes.
-SLOW_PAGES = {"plants.md", "sensitivity_and_calibration.md"}
+# Pages whose examples take minutes (whole-plant solves, multistart fits).
+SLOW_PAGES = {
+    "plants.md",
+    "custom_flowsheets.md",
+    "sensitivity_and_calibration.md",
+    "calibration.md",
+    "experiment_design.md",
+}
 
 _NAMED_FILE = re.compile(r"\A#\s*(?P<name>[\w.-]+\.ya?ml)\s*\n")
 

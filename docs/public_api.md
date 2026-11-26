@@ -10,8 +10,10 @@ not list it, so read its docstring with `help()`. A name written as
 
 ```{tip}
 The guide pages — [Getting started](getting_started.md),
-[Reactors](reactors.md), [Plant-wide simulation](plants.md), and
-[Sensitivity & calibration](sensitivity_and_calibration.md) — walk through these
+[Reactors](reactors.md), [Plant-wide simulation](plants.md),
+[Sensitivity analysis](sensitivity_and_calibration.md),
+[Calibration](calibration.md) and [Experiment design](experiment_design.md) —
+walk through these
 APIs with worked examples. Start there; use this page and the API reference to
 look things up.
 ```

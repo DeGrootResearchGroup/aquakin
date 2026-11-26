@@ -89,8 +89,8 @@ nor concentrating it in a few files makes the whole suite fast.
     run by Sybil (the root `conftest.py`): each page's python blocks run in
     order in one namespace, so a page fails as a reader would find it broken.
     One job, `-n 2 --dist loadfile`, since a page's blocks must stay on one
-    worker. The two pages of whole-plant solves (`plants.md`,
-    `sensitivity_and_calibration.md`) are marked `slow` and run instead in
+    worker. The pages of whole-plant solves (`SLOW_PAGES` in the root
+    `conftest.py`: the whole-plant and calibration pages) are marked `slow` and run instead in
     **`docs-examples-slow`**, with the slow suite's triggers (merge to `main`,
     `full-ci` PRs). Neither is in the pytest-split shards, which could split a
     page from its namespace, and the docs are not in `testpaths`.
