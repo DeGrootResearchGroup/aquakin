@@ -32,7 +32,11 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   else
     range=("$remote_sha..$local_sha")
   fi
-  if git log --format= --name-only "${range[@]}" | grep -qxE 'constraints\.txt|pyproject\.toml'; then
+  # Read the whole list before matching: piped into `grep -q`, git would be
+  # killed by SIGPIPE once grep stops at a match, and `pipefail` turns that into
+  # "no pin change" for a push that changes many files.
+  changed_paths=$(git log --format= --name-only "${range[@]}")
+  if grep -qxE 'constraints\.txt|pyproject\.toml' <<<"$changed_paths"; then
     pins_changed=1
   fi
   linked=""

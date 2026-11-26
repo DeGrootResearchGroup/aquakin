@@ -151,3 +151,22 @@ def test_a_push_without_pin_changes_skips_the_resolve(repo, stub_path):
                        path=stub_path, fail_on="3.11")
     assert result.returncode == 0, result.stderr
     assert "resolves on every supported Python" not in result.stderr
+
+
+def test_a_pin_change_among_many_changed_files_is_still_noticed(repo, stub_path):
+    # The pushed range lists more changed paths than a pipe buffer holds, with
+    # constraints.txt first (newest commit). The check must still run: a reader
+    # that stops at the first match must not turn the writer's SIGPIPE into
+    # "no pin change" under `set -o pipefail`.
+    _commit_file(repo, "pyproject.toml", PYPROJECT, "Add pyproject")
+    many = repo / "many"
+    many.mkdir()
+    for i in range(3000):
+        (many / f"a_file_with_a_long_enough_name_{i:05d}.txt").write_text("")
+    _git(repo, "add", "many")
+    _commit(repo, "Many files")
+    sha = _commit_file(repo, "constraints.txt", "jax==0.12.1\n", "Bump jax")
+    result = _run_hook(repo, f"refs/heads/b {sha} refs/heads/b {ZERO}\n",
+                       path=stub_path, fail_on="3.11")
+    assert result.returncode == 1, result.stderr
+    assert "Python 3.11: does not resolve" in result.stderr
