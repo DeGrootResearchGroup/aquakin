@@ -185,6 +185,23 @@ kept equal by putting the organic-N difference in ammonium.
   processes and no decay (maintenance only), and works in C-mmol / P-mmol. Its Fig. 4 (population shares after 50 d for 36 combinations of
   10/20/30 C, pH 6.0/7.0/7.5 and four acetate:propionate ratios) is a
   benchmark a reimplementation should reproduce.
+- **Two misprints in López-Vázquez et al. (2009), Appendix 2 (PAO P release):**
+  - per acetate it prints `1/2 + α`; Smolders et al. (1994a), the source it
+    cites, derives `1/4 + α` for the glycogen model it uses (Eq. 5; `1/2 + α`
+    is that paper's rejected TCA-cycle model) and fits `0.19 pH - 0.85`
+    P-mol/C-mol (Eq. 8; 0.48 at pH 7, 0.50 measured). The paper's own Fig. 2b
+    model curve releases about 0.4 per acetate, not the 0.82 the misprint
+    gives. Use `1/4 + α`. Open: α(pH) as the paper takes it from Filipe et
+    al. (2001d), `0.16 pH - 0.7985` (0.57 at pH 7), or Smolders'
+    `0.19 pH - 1.10` (0.48); to be checked against Filipe et al.;
+  - per propionate it prints `2/9 - α` (0.04); `2/9 + α` (0.40) joins its
+    own pH > 7.5 branch `0.20 pH - 1.1` exactly at 7.5, and the paper's Fig.
+    2d model curve releases about 0.42 per propionate. Use `2/9 + α`.
+- Smolders, G.J.F., van der Meij, J., van Loosdrecht, M.C.M. & Heijnen, J.J.
+  (1994a). Model of the anaerobic metabolism of the biological phosphorus
+  removal process: stoichiometry and pH influence. *Biotechnol. Bioeng.*
+  43(6), 461–470: glycogen model per C-mol acetate, 1/2 C-mol glycogen used,
+  4/3 C-mol PHB made, 1/6 C-mol CO2, `1/4 + α` P released.
 - **Meijer et al. (2001)** prints no matrix; it uses the TUDP model of van
   Veldhuizen et al. (1999), as `asm2d_tud` does, with no propionate uptake.
 - **Varga et al. (2018)**: separate PAOs (storing PHA only) and GAOs
