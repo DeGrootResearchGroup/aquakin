@@ -174,6 +174,15 @@ kept equal by putting the organic-N difference in ammonium.
     - fixing the GAO acetate PHA yield at pH 7 instead costs up to 22 points
       at pH 6 and 7.5, so pH-dependent amounts go in the rates, not in fixed
       stoichiometry.
+    *The generated model (`plantwide_bio_p`, 2026-11-26)* on the same grid,
+    through its own `dCdt`: worst deviation from the reference 13.9 points,
+    every condition within 5 points except propionate at pH 7.5 (14 at 30 C,
+    6 at 20 C), outcome matching the reference in 34/36 and the paper in
+    32/36. The pH 7.5 propionate gap is the COD-balanced PAO propionate
+    stoichiometry above pH 7 (the source's PHA and glycogen lines there do not
+    balance electrons, 0.56 e-/C-mol per pH unit; the model keeps the glycogen
+    line and balances COD). Its PAO equals `asm2d_tud` to 1% in growth
+    yields, except the anaerobic P release per acetate (see decision 13).
 11. **Anoxic processes and decay come from elsewhere**: the source has neither.
     PAO anoxic processes from the TU Delft model (`asm2d_tud`); the GAOs get
     the same anoxic reduction factor, an assumption stated as such; PAOs and
