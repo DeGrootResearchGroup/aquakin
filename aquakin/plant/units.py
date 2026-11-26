@@ -87,7 +87,10 @@ class Unit(Protocol):
     ``runtime_checkable`` Protocol below so the contract is explicit:
 
     - :class:`SignalProducer` (``signal_outputs``) -- produces control signals for
-      the shared signal bus (e.g. a PI controller).
+      the shared signal bus (e.g. a PI controller), given the bus built so far.
+    - :class:`SignalCheckedUnit` (``check_signals``) -- checks the names it reads
+      against the signals the plant publishes, when the plant is built (an
+      expression controller, whose bare names may be signals).
     - :class:`PHOperating` (``operating_pH``) -- exposes its state-derived pH to a
       pH-coupled interface translator.
     - :class:`LiquidVolumeUnit` (``liquid_volume``) -- a single well-mixed liquid
@@ -189,7 +192,13 @@ class SignalProducer(Protocol):
     controller). ``signal_outputs`` returns a ``{signal name: scalar}`` map the
     plant gathers into the bus each RHS call and threads into every unit's
     :meth:`Unit.rhs`. (A producer also lists the names it publishes via a
-    ``signal_names`` property so consumers can be wired before the solve.)"""
+    ``signal_names`` property so consumers can be wired before the solve.)
+
+    ``signals`` is the bus built so far. A producer that reads other producers'
+    signals lists them in ``required_signals``, and the plant runs producers in
+    an order that computes those first
+    (:func:`aquakin.plant.signal_bus.order_signal_producers`); one that reads
+    none ignores it."""
 
     def signal_outputs(
         self,
@@ -197,7 +206,21 @@ class SignalProducer(Protocol):
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: dict | None = None,
     ) -> dict[str, jnp.ndarray]: ...
+
+
+@runtime_checkable
+class SignalCheckedUnit(Protocol):
+    """A unit that checks the names it reads against the published signals.
+
+    ``check_signals(published)`` is given every signal of the plant mapped to the
+    unit that publishes it, when the plant is built and before the generic check
+    that every required signal is published, and raises ``ValueError`` with a
+    message in its own terms (an expression controller suggests its constants
+    and channels as well as the signals)."""
+
+    def check_signals(self, published: dict[str, str]) -> None: ...
 
 
 @runtime_checkable

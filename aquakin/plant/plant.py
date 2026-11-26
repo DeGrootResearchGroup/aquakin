@@ -59,7 +59,7 @@ from aquakin.plant.results import (
 
 # Re-exported, as ``aquakin.plant.plant.<name>`` is an import path for them.
 from aquakin.plant.results import SteadyStateResult as SteadyStateResult
-from aquakin.plant.signal_bus import validate_control_signals
+from aquakin.plant.signal_bus import order_signal_producers, validate_control_signals
 from aquakin.plant.solve_cache import SolveCache, structure_changed
 from aquakin.plant.steady_solve import NORM_RESIDUAL_WARN_FACTOR as NORM_RESIDUAL_WARN_FACTOR
 from aquakin.plant.streams import Stream, StreamSeries, make_scalars
@@ -76,7 +76,6 @@ from aquakin.plant.units import (
     LiquidVolumeUnit,
     PHOperating,
     PlantTimeUnitAware,
-    SignalProducer,
     TemperatureSettable,
     Unit,
 )
@@ -1173,6 +1172,7 @@ class Plant:
         self._total_state_size = cursor
         self._build_connection_index()
         validate_control_signals(self.units)
+        self._signal_order = order_signal_producers(self.units, self._unit_order)
 
     def _resolve_time_unit(self) -> None:
         """Put every part of the plant on its clock (:attr:`time_unit`).
@@ -2506,14 +2506,13 @@ class Plant:
         sweep, so the signal must already exist. Each controller's sensed
         ``inputs`` stream is reconstructed from the sensor unit's state
         (``C = state``); the sensor must therefore be a reactor whose output
-        concentration is its state (a :class:`CSTRUnit`). Whether a unit produces
-        signals is a class-level property, so the branch is static (jit-safe).
+        concentration is its state (a :class:`CSTRUnit`). Producers run in
+        ``_signal_order`` (each after those it reads) and each is given the bus
+        built so far.
         """
         signals: dict = {}
-        for name in self._unit_order:
+        for name in self._signal_order:
             unit = self.units[name]
-            if not isinstance(unit, SignalProducer):
-                continue
             # Reconstruct each sensed source's stream from its state (a reactor's
             # output concentration is its state), so no swept stream is needed.
             sensed_outputs: dict[tuple[str, str], Stream] = {}
@@ -2526,11 +2525,8 @@ class Plant:
                     model=self.units[conn.from_unit].model,
                 )
             inputs = self._collect_inputs(name, sensed_outputs, {})
-            signals.update(
-                unit.signal_outputs(
-                    t, states[name], inputs, self._params_for_unit(name, params_full)
-                )
-            )
+            params = self._params_for_unit(name, params_full)
+            signals.update(unit.signal_outputs(t, states[name], inputs, params, dict(signals)))
         return signals
 
     def signals_at(

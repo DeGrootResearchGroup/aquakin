@@ -180,8 +180,8 @@ class ClosureParser(PrecedenceParser):
         return f"expected a number, 't' or '(', got {self.describe(token)} at position {token.pos}"
 
     def variable(self, token: Token) -> Callable:
-        """A bare name that is not a call or a constant."""
-        raise NotImplementedError
+        """A bare name that is not a call or a constant; each language says what it is."""
+        raise NotImplementedError(f"{type(self).__name__} does not say what a name reads")
 
     def bracket(self, token: Token) -> Callable:
         """A ``[name]``; a language without one refuses it as it refuses any token."""

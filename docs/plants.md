@@ -374,9 +374,10 @@ Every one documents its settings in the [API reference](api.md).
 | `IdealThickener` | an ideal solids separator: thickener or dewatering |
 | `MixerUnit`, `RatioSplitter`, `SetpointSplitter`, `ThresholdSplitter` | joining and splitting streams |
 | `StorageTank`, `HydraulicDelayUnit` | variable-volume storage with an overflow bypass, and a first-order hydraulic lag |
-| `DosingUnit` | inline chemical dosing of a `Reagent` (fixed or feedback-controlled) |
+| `DosingUnit` | inline chemical dosing of a `Reagent` (fixed, feedback-controlled, or read from a signal) |
 | `UVUnit`, `ChlorineContactUnit` | disinfection |
 | `PIController` | a proportional-integral controller with anti-windup |
+| `ExpressionController` | a stateless controller whose output is a law written as an expression |
 | `ASM1toADM1`, `ADM1toASM1` | translators between the activated-sludge and digester models |
 
 `build_a2o` builds an anaerobic–anoxic–oxic (A²O) biological nutrient removal
@@ -516,6 +517,57 @@ T10 and CT are in the **plant's** time unit, so convert a CT table given in
 mg·min/L (divide by 1440 for a plant in days). `uv_dose`, `uv_log_inactivation`,
 `ct_value`, `ct_log_removal`, `t10_from_baffling` and `t10_from_rtd` compute
 the same credits standalone, for sizing a contactor.
+
+### Control laws written as expressions
+
+A `PIController` is the dissolved-oxygen loop the benchmarks use, and
+`Aeration(do_setpoint=...)` wires one up for a tank. Any other stateless law (a
+proportional loop on ammonia, a gain that changes with load, one signal
+following another) is an `ExpressionController`: it publishes the value of its
+`law` as a named signal, and a tank reads that signal as its kLa with
+`Aeration(kla_signal=...)` (a dosing unit as its dose flow with
+`flow_signal=`):
+
+```python
+from aquakin.plant import ExpressionController
+
+ctl = aquakin.Plant("nh4_control", time_unit="d")
+ctl.add_unit(aquakin.CSTRUnit("anoxic", model, volume=1000.0,
+                              input_port_names=["in"], conditions={"T": 293.15}))
+ctl.add_unit(aquakin.CSTRUnit("aerobic", model, volume=1333.0,
+                              input_port_names=["in"], conditions={"T": 293.15},
+                              aeration=aquakin.Aeration(kla_signal="kla_aerobic")))
+ctl.add_unit(ExpressionController(
+    "nh4_loop", model=model, signal_name="kla_aerobic",
+    law="clip(offset + Kp*([SNH] - sp), 0, 240)",
+    constants={"Kp": 5.0, "sp": 25.0, "offset": 120.0},
+))
+ctl.add_influent("feed", model.influent(bsm1_feed, Q=18446.0, T=288.15), to="anoxic.in")
+ctl.connect("anoxic.out", "aerobic.in")
+ctl.connect("aerobic.out", "nh4_loop.measured")   # the stream the law reads
+
+ctl_sol = ctl.solve(t_span=(0.0, 10.0), t_eval=t_eval)
+snh = ctl.stream(ctl_sol, "aerobic.out").C_named("SNH")[-1]
+kla = ctl.signals_at(10.0, ctl_sol.state[-1])["kla_aerobic"]
+print(f"SNH {float(snh):.1f} g N/m³, kLa {float(kla):.0f} 1/d")
+# SNH 32.4 g N/m³, kLa 157 1/d
+```
+
+% invisible-code-block: python
+%     assert f"SNH {float(snh):.1f} g N/m³, kLa {float(kla):.0f} 1/d" == "SNH 32.4 g N/m³, kLa 157 1/d"
+
+A law reads the sensed stream's species in brackets (`[SNH]`), its measured
+channels by name (`TSS`, `COD`, `TN`, `TKN`, `NOx`, `TP`, whose weights follow
+the run's composition parameters), its `constants`, the plant clock `t`, and
+the functions of an expression of time (`clip`, `step`, `min`, `max`, `exp`,
+...). Limits are written into the law with `clip`; there is no `if`. Any other
+name is a signal another unit publishes, so one law can build on another:
+`ExpressionController("tank4_follow", signal_name="kla_tank4",
+law="0.5*kla_aerobic")` senses nothing and follows the loop above. The plant
+computes each controller after the ones it reads, and refuses a cycle. The
+sensed stream's flow is not available to a law, since the signals are computed
+from the units' states before the streams are. The constants are fixed numbers,
+not plant parameters, so they are not calibrated.
 
 ### Aeration design
 

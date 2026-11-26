@@ -108,6 +108,10 @@ _SATURATION_MODELS = {
 }
 
 
+#: The modes of an :class:`Aeration`, exactly one of which is given.
+_AERATION_MODES = ("kla", "do_setpoint", "kla_signal")
+
+
 @dataclass(frozen=True)
 class Aeration:
     """Aeration / dissolved-oxygen spec for a :class:`CSTRUnit`.
@@ -132,13 +136,24 @@ class Aeration:
         Aeration(do_setpoint=2.0, controller="do", sensor="tank4", gain=1.0)
         Aeration(do_setpoint=2.0, controller="do", sensor="tank4", gain=0.5)
 
+    **From a signal** -- the kLa is a control signal some other unit publishes
+    (an :class:`~aquakin.plant.control.ExpressionController`, or any signal
+    producer); nothing is auto-wired::
+
+        Aeration(kla_signal="kla_tank3")  # kLa = signal * gain
+
     Parameters
     ----------
     kla : float, optional
-        Open-loop mass-transfer coefficient (1/time). Mutually exclusive with
-        ``do_setpoint``.
+        Open-loop mass-transfer coefficient (1/time). Give exactly one of
+        ``kla``, ``do_setpoint`` and ``kla_signal``.
     do_setpoint : float, optional
         Closed-loop dissolved-oxygen target (same units as ``species``).
+    kla_signal : str, optional
+        Name of the control signal that sets this tank's kLa (1/time, times
+        ``gain``). A unit of the plant must publish it. It is treated as a
+        closed-loop kLa: neither ``alpha`` nor the theta correction scales it,
+        while the saturation correction and co-stripped gases apply as usual.
     do_sat : float
         Saturation concentration in the aeration term ``kLa*(do_sat - C)``.
         Default 8.0 (gO2/m3, the usual ASM oxygen saturation).
@@ -152,9 +167,9 @@ class Aeration:
         Closed-loop only. Name of the unit whose oxygen the controller measures.
         Defaults to the controlled tank itself (per-tank control).
     gain : float
-        Closed-loop only. This tank's share of the controller's kLa output
-        (default 1.0), so one shared controller can drive tanks at different
-        rates.
+        Closed loop or ``kla_signal``. This tank's share of the controller's kLa
+        output (default 1.0), so one shared controller can drive tanks at
+        different rates.
     Kp, Ti, Tt, kla_offset, kla_min, kla_max : float
         Closed-loop PI tuning and output bounds. Defaults are the BSM2 DO loop:
         Kp=25, Ti=0.002 d, Tt=0.001 d, offset 120, bounds [0, 360] d^-1.
@@ -228,6 +243,7 @@ class Aeration:
 
     kla: float | None = None
     do_setpoint: float | None = None
+    kla_signal: str | None = field(default=None, metadata={"written_when_set": True})
     do_sat: float = 8.0
     species: str = "SO"
     controller: str | None = None
@@ -254,10 +270,16 @@ class Aeration:
         # triples (the dataclass is frozen and hashable).
         object.__setattr__(self, "stripped", _normalize_stripped(self.stripped, self.species))
         object.__setattr__(self, "air", _normalize_air(self.air, self.stripped))
-        n_modes = (self.kla is not None) + (self.do_setpoint is not None)
-        if n_modes != 1:
+        given = [m for m in _AERATION_MODES if getattr(self, m) is not None]
+        if not given:
             raise ValueError(
-                "Aeration requires exactly one of kla= (open loop) or do_setpoint= (closed loop)."
+                "Aeration requires exactly one of kla= (open loop), do_setpoint= "
+                "(closed loop) or kla_signal= (kLa from a control signal); none was given."
+            )
+        if len(given) > 1:
+            raise ValueError(
+                f"Aeration requires exactly one of kla=, do_setpoint= or kla_signal=; "
+                f"got {' and '.join(given)}."
             )
         if self.saturation_model not in _SATURATION_MODELS:
             raise ValueError(
@@ -281,10 +303,18 @@ class Aeration:
         if given, else the tank's own name (a dedicated per-tank controller)."""
         return self.controller if self.controller is not None else unit_name
 
+    @property
+    def reads_signal(self) -> bool:
+        """Whether the kLa is read from the signal bus (closed loop, or ``kla_signal``)."""
+        return self.kla is None
+
     def signal_name(self, unit_name: str) -> str:
-        """The control-signal name the controlled tank reads and its controller
-        publishes. Derived from the controller id so a shared controller's tanks
-        all resolve to the same signal."""
+        """The control-signal name the tank reads: ``kla_signal`` when given,
+        otherwise the one its auto-wired controller publishes, derived from the
+        controller id so a shared controller's tanks all resolve to the same
+        signal."""
+        if self.kla_signal is not None:
+            return self.kla_signal
         return _aeration_signal_name(self.controller_id(unit_name))
 
 
@@ -426,7 +456,7 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
             float(aeration.do_sat) * float(aeration.beta) * float(aeration.pressure_factor)
         )
         o2_mask = jnp.zeros((model.n_species,)).at[idx].set(1.0)
-        if aeration.is_closed_loop:
+        if aeration.reads_signal:
             controlled[aeration.species] = (aeration.signal_name(unit_name), aeration.gain)
         else:
             kla_vec = kla_vec.at[idx].set(float(aeration.kla) * float(aeration.alpha))
@@ -442,7 +472,7 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
             g = model.species_index[sp]
             stripped[sp] = ratio
             sat_vec = sat_vec.at[g].set(sat)
-            if aeration.is_closed_loop:
+            if aeration.reads_signal:
                 controlled[sp] = (aeration.signal_name(unit_name), aeration.gain * ratio)
             else:
                 kla_vec = kla_vec.at[g].set(float(aeration.kla) * float(aeration.alpha) * ratio)

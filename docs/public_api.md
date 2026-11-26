@@ -64,6 +64,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 |---|---|
 | Assemble a flowsheet | `Plant` (with `Plant(name, time_unit="d")` setting the plant's clock), and units `CSTRUnit`, `MixerUnit`, `RatioSplitter` / `SetpointSplitter` / `ThresholdSplitter`, `ChlorineContactUnit`, `UVUnit` |
 | More unit operations | `aquakin.plant.ADM1DigesterUnit`, `aquakin.plant.HeadspaceDigesterUnit`, `aquakin.plant.IFASUnit`, `aquakin.plant.MBBRUnit`, `aquakin.plant.MBRUnit`, `aquakin.plant.SBRUnit` (its holding volume reported by `aquakin.plant.storage_report`), `aquakin.plant.TakacsClarifier`, `aquakin.plant.IdealClarifier`, `aquakin.plant.PrimaryClarifier`, `aquakin.plant.IdealThickener`, `aquakin.plant.StorageTank`, `aquakin.plant.DosingUnit`, `aquakin.plant.HydraulicDelayUnit`, `aquakin.plant.PIController` (`aquakin.plant.__all__` lists every unit) |
+| Control a unit with a law written as an expression | `aquakin.plant.ExpressionController`, read by `Aeration(kla_signal=...)` or `aquakin.plant.DosingUnit(flow_signal=...)` |
 | Write a unit of your own | `Unit` (the protocol every unit satisfies) |
 | Build the IWA benchmark plants | `aquakin.plant.bsm.build_bsm1`, `aquakin.plant.bsm.build_bsm2`, `aquakin.plant.bsm.load_bsm1_influent`, `aquakin.plant.bsm.load_bsm2_influent` |
 | Catch wiring mistakes | `WiringError`, `UnknownUnitError`, `UnknownPortError` |
