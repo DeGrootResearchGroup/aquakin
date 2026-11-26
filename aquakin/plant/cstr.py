@@ -142,6 +142,13 @@ class Aeration:
 
         Aeration(kla_signal="kla_tank3")  # kLa = signal * gain
 
+    In every mode the kLa given -- the fixed ``kla``, or the controller output
+    times ``gain`` -- is the **clean-water** kLa, the quantity the blowers
+    deliver. The kLa the tank's mass balance applies is that times ``alpha`` and,
+    with ``temperature_correction`` on, ``kla_theta**(T - ref_T)``. So a fouled
+    tank (``alpha < 1``) under DO control drives its controller higher, and
+    reaches ``kla_max`` sooner, than a clean one.
+
     Parameters
     ----------
     kla : float, optional
@@ -150,10 +157,10 @@ class Aeration:
     do_setpoint : float, optional
         Closed-loop dissolved-oxygen target (same units as ``species``).
     kla_signal : str, optional
-        Name of the control signal that sets this tank's kLa (1/time, times
-        ``gain``). A unit of the plant must publish it. It is treated as a
-        closed-loop kLa: neither ``alpha`` nor the theta correction scales it,
-        while the saturation correction and co-stripped gases apply as usual.
+        Name of the control signal that sets this tank's clean-water kLa
+        (1/time, times ``gain``). A unit of the plant must publish it. ``alpha``,
+        the temperature correction and co-stripped gases apply to it as to a
+        fixed ``kla``.
     do_sat : float
         Saturation concentration in the aeration term ``kLa*(do_sat - C)``.
         Default 8.0 (gO2/m3, the usual ASM oxygen saturation).
@@ -182,20 +189,20 @@ class Aeration:
         tank's operating temperature (the flow-weighted inlet ``T`` the kinetics
         already use, falling back to the static ``T`` condition). The saturation
         is scaled by the clean-water ratio ``C_s(T)/C_s(ref_T)``
-        (:func:`oxygen_saturation`) and -- for an open-loop fixed ``kla`` -- the
-        transfer coefficient by ``kla_theta**(T - ref_T)``. ``False`` (default)
-        leaves both constant. Removes the internal inconsistency whereby a warm
-        run already speeds the (Arrhenius) biology while the oxygen saturation
-        stays pinned. A closed-loop controlled ``kla`` is **not** theta-scaled
-        (the controller already manipulates it to hold the setpoint), but its
-        driving-force saturation still gets the ``C_s(T)`` correction.
+        (:func:`oxygen_saturation`) and the transfer coefficient by
+        ``kla_theta**(T - ref_T)``, whether the kLa is fixed or comes from a
+        controller (whose output is the clean-water kLa at ``ref_T``).
+        ``False`` (default) leaves both constant. Removes the internal
+        inconsistency whereby a warm run already speeds the (Arrhenius) biology
+        while the oxygen saturation stays pinned.
     ref_T : float
         Reference temperature (Kelvin) at which ``do_sat`` and ``kla`` are
         specified, so the correction is unity there. Default 293.15 (20 degC).
     alpha : float
-        Process kLa-transfer factor (alpha_F): a constant multiplier on ``kla``
-        (clean-water -> process water; typically 0.4-0.7 in activated sludge).
-        Default 1.0. Applied to the open-loop ``kla`` only.
+        Process kLa-transfer factor (alpha_F): a constant multiplier taking the
+        clean-water kLa to process water (typically 0.4-0.7 in activated
+        sludge). Default 1.0. Applied to every kLa: the fixed ``kla`` and the
+        signal-driven one of ``do_setpoint`` and ``kla_signal`` alike.
     beta : float
         Salinity saturation factor: a constant multiplier on ``do_sat``
         (typically 0.95-0.99). Default 1.0.
@@ -203,9 +210,9 @@ class Aeration:
         Elevation / barometric saturation factor: a constant multiplier on
         ``do_sat`` (``< 1`` at altitude). Default 1.0.
     kla_theta : float
-        Arrhenius base for the open-loop ``kla(T) = kla*kla_theta**(T-ref_T)``
-        correction (only used when ``temperature_correction`` is on). Default
-        1.024, the standard value.
+        Arrhenius base for the ``kLa(T) = kLa*kla_theta**(T-ref_T)`` correction,
+        fixed or signal-driven (only used when ``temperature_correction`` is
+        on). Default 1.024, the standard value.
     saturation_model : str
         Which clean-water saturation correlation supplies the temperature-
         correction ratio ``C_s(T)/C_s(ref_T)``: ``"benson_krause"`` (default, the
@@ -219,9 +226,9 @@ class Aeration:
         saturation 0) or to a ``(ratio, saturation)`` pair. Each gas gets the
         term ``ratio * kLa_O2 * (sat - C)`` in the tank's mass balance, so it
         leaves the liquid inside the solve rather than through the effluent.
-        ``kLa_O2`` is the tank's actual oxygen transfer coefficient: the
-        open-loop ``kla`` (with ``alpha`` and, when enabled, the temperature
-        factor), or under closed loop the controller signal times ``gain``. By
+        ``kLa_O2`` is the tank's actual (process) oxygen transfer coefficient:
+        the fixed ``kla`` or the controller signal times ``gain``, with
+        ``alpha`` and, when enabled, the temperature factor. By
         penetration theory the ratio is the square root of the diffusivity
         ratio, close to 1 for N2O and NO (``{"SN2O": 1.0, "SNO": 1.0}``). The
         gas saturation is not temperature-corrected. ``"model"`` instead strips
@@ -407,11 +414,16 @@ class AerationVectors:
     and applied each RHS call by :func:`aeration_transfer`. Shared by
     :class:`CSTRUnit` (the suspended tank) and the bulk of
     :class:`~aquakin.plant.ifas.IFASUnit`, so the closed-loop control, the
-    constant alpha/beta/pressure folds and the temperature correction live in one
-    place.
+    constant beta/pressure folds, alpha and the temperature correction live in
+    one place.
+
+    ``kla_vec`` and ``controlled`` hold the **clean-water** kLa (the fixed
+    ``kla``, or the control signal times its gain), each times the gas's
+    transfer ratio; :func:`delivered_kla` turns it into the process kLa by
+    ``alpha`` and the temperature factor, the same way for every mode.
     """
 
-    kla_vec: jnp.ndarray  # (n_species,) fixed open-loop kLa
+    kla_vec: jnp.ndarray  # (n_species,) fixed open-loop clean-water kLa
     sat_vec: jnp.ndarray  # (n_species,) saturation (beta/P folded)
     controlled: dict  # species -> (signal_name, gain)
     ref_T: float
@@ -427,23 +439,45 @@ class AerationVectors:
     # stripped="model": ((DissolvedGas, partial pressure in Pa), ...), whose
     # saturation and volatile fraction are evaluated at the tank's conditions.
     gases: tuple = ()
+    # Process-water transfer factor, applied to every kLa (fixed or controlled).
+    alpha: float = 1.0
 
 
 def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
     """Translate an :class:`Aeration` spec into the per-species RHS vectors.
 
-    The constant (temperature-independent) corrections fold straight in: beta
-    (salinity) and pressure_factor (elevation) onto the saturation, alpha
-    (transfer fouling) onto the open-loop kLa. A closed-loop species records its
-    ``(signal_name, gain)`` instead of a fixed kLa. All factors default to 1.0
-    / off, so a plain ``Aeration(kla=...)`` or ``aeration=None`` is unchanged.
+    The constant saturation corrections fold straight in: beta (salinity) and
+    pressure_factor (elevation) onto the saturation. The kLa is kept as the
+    clean-water kLa: the fixed ``kla``, or, for a species whose kLa is read from
+    the signal bus, its ``(signal_name, gain)``. ``alpha`` is recorded on its own
+    and applied with the temperature factor by :func:`delivered_kla`, so both
+    modes are corrected at one point. All factors default to 1.0 / off, so a
+    plain ``Aeration(kla=...)`` or ``aeration=None`` is unchanged.
+
+    Parameters
+    ----------
+    aeration : Aeration or None
+        The tank's aeration spec; ``None`` for an unaerated tank.
+    model : CompiledModel
+        The tank's kinetic model.
+    unit_name : str
+        The tank's name, for messages and the auto-wired signal name.
+
+    Returns
+    -------
+    AerationVectors
+
+    Raises
+    ------
+    ValueError
+        If the aerated or a stripped species is not in the model.
     """
     controlled: dict[str, tuple[str, float]] = {}
     stripped: dict[str, float] = {}
     kla_vec = jnp.zeros((model.n_species,))
     sat_vec = jnp.zeros((model.n_species,))
     o2_mask = None
-    ref_T, kla_theta, temp_correct = T_REF_20C, 1.024, False
+    ref_T, kla_theta, temp_correct, alpha = T_REF_20C, 1.024, False, 1.0
     saturation_model = "benson_krause"
     gases: tuple = ()
     if aeration is not None:
@@ -459,9 +493,9 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
         if aeration.reads_signal:
             controlled[aeration.species] = (aeration.signal_name(unit_name), aeration.gain)
         else:
-            kla_vec = kla_vec.at[idx].set(float(aeration.kla) * float(aeration.alpha))
+            kla_vec = kla_vec.at[idx].set(float(aeration.kla))
         # Co-stripped gases ride on the oxygen kLa: ratio * (open-loop kla, or
-        # the controller signal * gain).
+        # the controller signal * gain), corrected with it by delivered_kla.
         listed = aeration.stripped
         if listed == STRIP_MODEL_GASES:
             gases = _declared_gases(aeration, model, unit_name)
@@ -475,8 +509,9 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
             if aeration.reads_signal:
                 controlled[sp] = (aeration.signal_name(unit_name), aeration.gain * ratio)
             else:
-                kla_vec = kla_vec.at[g].set(float(aeration.kla) * float(aeration.alpha) * ratio)
+                kla_vec = kla_vec.at[g].set(float(aeration.kla) * ratio)
         ref_T = float(aeration.ref_T)
+        alpha = float(aeration.alpha)
         kla_theta = float(aeration.kla_theta)
         temp_correct = bool(aeration.temperature_correction)
         saturation_model = aeration.saturation_model
@@ -491,6 +526,7 @@ def build_aeration_vectors(aeration, model, unit_name: str) -> AerationVectors:
         stripped=stripped,
         o2_mask=o2_mask,
         gases=gases,
+        alpha=alpha,
     )
 
 
@@ -516,17 +552,19 @@ def _declared_gases(aeration, model, unit_name: str) -> tuple:
 def aeration_transfer(av: AerationVectors, C, T_eff, signals, model, conditions=None, params=None):
     """The per-species mass-transfer term ``kLa * (C_sat - C)`` for state ``C``.
 
-    Applies the temperature correction (saturation by ``C_s(T)/C_s(ref)``, the
-    open-loop kLa by ``theta**(T-ref)``) when enabled and a temperature is
-    available, then overrides any closed-loop species' kLa with its control
-    signal (``signal * gain``). ``T_eff`` is the operating temperature (the
+    The kLa is the process kLa of :func:`delivered_kla` (the clean-water kLa,
+    fixed or from its control signal, times ``alpha`` and, when enabled, the
+    temperature factor). With the temperature correction enabled and a
+    temperature available, the oxygen saturation is scaled by
+    ``C_s(T)/C_s(ref)``. ``T_eff`` is the operating temperature (the
     flow-weighted inlet, else the static condition); pass ``None`` to skip the
     correction. A gas stripped as one the model declares (``stripped="model"``)
     is driven by ``kLa * (H(T) p - C_volatile)`` at the temperature and pH of
     ``conditions`` (the kinetics' conditions) and ``params``, which it then
     requires.
     """
-    kla_vec, sat_vec = av.kla_vec, av.sat_vec
+    kla_vec = delivered_kla(av, T_eff, signals, model)
+    sat_vec = av.sat_vec
     if av.temp_correct and T_eff is not None:
         c_s = _SATURATION_MODELS[av.saturation_model]
         sat_ratio = c_s(T_eff) / c_s(av.ref_T)
@@ -535,18 +573,6 @@ def aeration_transfer(av: AerationVectors, C, T_eff, signals, model, conditions=
             sat_vec = sat_vec * (1.0 + av.o2_mask * (sat_ratio - 1.0))
         else:
             sat_vec = sat_vec * sat_ratio
-        kla_vec = kla_vec * av.kla_theta ** (T_eff - av.ref_T)
-    if av.controlled:
-        if signals is None:
-            raise ValueError(
-                "Closed-loop aeration needs the control-signal bus, but rhs() "
-                "was called without one (signals=None). A controlled reactor must "
-                "be solved inside its plant, which supplies the signals "
-                f"{sorted({sig for sig, _gain in av.controlled.values()})}; there is "
-                "no open-loop kLa to fall back on, so running it this way would "
-                "silently leave it unaerated."
-            )
-        kla_vec = _apply_controlled_kla(av, kla_vec, signals, model)
     if av.gases:
         sat_vec, C = _declared_gas_driving(av, sat_vec, C, model, conditions, params)
     return kla_vec * (sat_vec - C)
@@ -570,13 +596,78 @@ def _declared_gas_driving(av: AerationVectors, sat_vec, C, model, conditions, pa
     return sat_vec, volatile
 
 
-def _apply_controlled_kla(av: AerationVectors, kla_vec, signals, model):
-    """``kla_vec`` with each closed-loop species' entry set to its control
-    signal times its gain (oxygen at ``gain``, a co-stripped gas at
-    ``gain * ratio``). The one place the controller output becomes a kLa, shared
-    by the RHS transfer term and the post-solve readers."""
+def clean_water_kla(av: AerationVectors, signals, model):
+    """The per-species clean-water kLa: the fixed ``kla`` vector with each
+    signal-driven species' entry set to its control signal times its gain
+    (oxygen at ``gain``, a co-stripped gas at ``gain * ratio``).
+
+    The one place a controller output becomes a kLa, shared by the RHS transfer
+    term (through :func:`delivered_kla`) and the post-solve readers.
+
+    Parameters
+    ----------
+    av : AerationVectors
+        The tank's aeration vectors.
+    signals : dict or None
+        The control-signal bus; needed only when a kLa is signal-driven.
+    model : CompiledModel
+        The tank's kinetic model.
+
+    Returns
+    -------
+    jnp.ndarray
+        Clean-water kLa per species, shape ``(n_species,)`` (1/time).
+
+    Raises
+    ------
+    ValueError
+        If a kLa is signal-driven and ``signals`` is ``None``.
+    """
+    kla_vec = av.kla_vec
+    if not av.controlled:
+        return kla_vec
+    if signals is None:
+        raise ValueError(
+            "Closed-loop aeration needs the control-signal bus, but rhs() "
+            "was called without one (signals=None). A controlled reactor must "
+            "be solved inside its plant, which supplies the signals "
+            f"{sorted({sig for sig, _gain in av.controlled.values()})}; there is "
+            "no open-loop kLa to fall back on, so running it this way would "
+            "silently leave it unaerated."
+        )
     for sp, (signal_name, gain) in av.controlled.items():
         kla_vec = kla_vec.at[model.species_index[sp]].set(signals[signal_name] * gain)
+    return kla_vec
+
+
+def delivered_kla(av: AerationVectors, T_eff, signals, model):
+    """The per-species process kLa the aeration term applies.
+
+    The clean-water kLa of :func:`clean_water_kla` (fixed, or the control
+    signal times its gain) times ``alpha`` and, when the temperature correction
+    is on and ``T_eff`` is given, ``kla_theta**(T_eff - ref_T)``. Every mode
+    goes through this one product, so a controller's output is corrected
+    exactly as a fixed ``kla`` is.
+
+    Parameters
+    ----------
+    av : AerationVectors
+        The tank's aeration vectors.
+    T_eff : float or jnp.ndarray or None
+        The operating temperature (K); ``None`` skips the temperature factor.
+    signals : dict or None
+        The control-signal bus; needed only when a kLa is signal-driven.
+    model : CompiledModel
+        The tank's kinetic model.
+
+    Returns
+    -------
+    jnp.ndarray
+        Process kLa per species, shape ``(n_species,)`` (1/time).
+    """
+    kla_vec = clean_water_kla(av, signals, model) * av.alpha
+    if av.temp_correct and T_eff is not None:
+        kla_vec = kla_vec * av.kla_theta ** (T_eff - av.ref_T)
     return kla_vec
 
 
@@ -644,19 +735,31 @@ class AerationUnit:
         corrected."""
         return self._av.sat_vec
 
-    def kla_vector(self, signals: dict | None = None) -> jnp.ndarray:
+    def kla_vector(
+        self, signals: dict | None = None, *, process_water: bool = False
+    ) -> jnp.ndarray:
         """Per-species mass-transfer coefficient, shape ``(n_species,)``.
 
-        The open-loop kLa (with ``alpha`` folded in) on the aerated species and
-        each stripped gas, with every closed-loop entry replaced by its control
-        signal times its gain. The temperature correction is not applied.
+        By default the **clean-water** kLa: the fixed ``kla`` on the aerated
+        species, or the control signal times its gain when the kLa is
+        signal-driven, and that times the transfer ratio on each stripped gas.
+        It is the kLa the blowers produce and a controller manipulates, so the
+        aeration-energy and blower-airflow formulas read it (a fouled tank,
+        ``alpha < 1``, needs more of it to hold the same oxygen). With
+        ``process_water=True`` it is that times ``alpha``: the kLa in process
+        water at the reference temperature. Neither applies the
+        ``kla_theta`` temperature factor, which needs the operating temperature;
+        :meth:`oxygen_transfer` gives the transfer the solve applied, every
+        correction included.
 
         Parameters
         ----------
         signals : dict, optional
             The control-signal bus at the time of interest
-            (:meth:`Plant.signals_at`). Needed only when the tank is under
-            closed-loop control; ``None`` otherwise.
+            (:meth:`Plant.signals_at`). Needed only when the kLa is
+            signal-driven; ``None`` otherwise.
+        process_water : bool
+            Multiply by ``alpha`` (default ``False``).
 
         Returns
         -------
@@ -666,18 +769,17 @@ class AerationUnit:
         Raises
         ------
         ValueError
-            If the tank is under closed-loop control and ``signals`` is ``None``.
+            If the kLa is signal-driven and ``signals`` is ``None``.
         """
-        if not self._av.controlled:
-            return self._av.kla_vec
-        if signals is None:
+        if self._av.controlled and signals is None:
             raise ValueError(
                 f"'{self.name}' is under closed-loop aeration control, so its kLa "
                 "is the controller signal; pass the signal bus (plant.signals_at)."
             )
-        return _apply_controlled_kla(self._av, self._av.kla_vec, signals, self.model)
+        kla = clean_water_kla(self._av, signals, self.model)
+        return kla * self._av.alpha if process_water else kla
 
-    def oxygen_kla(self, signals: dict | None = None):
+    def oxygen_kla(self, signals: dict | None = None, *, process_water: bool = False):
         """The tank's oxygen kLa: the entry of :meth:`kla_vector` for the
         aerated species named by ``aeration.species`` (``"SO"`` in ASM1,
         ``"SO2"`` in ASM3-based models), or 0 for an unaerated tank.
@@ -685,8 +787,11 @@ class AerationUnit:
         Parameters
         ----------
         signals : dict, optional
-            The control-signal bus, needed only under closed-loop control (see
-            :meth:`kla_vector`).
+            The control-signal bus, needed only when the kLa is signal-driven
+            (see :meth:`kla_vector`).
+        process_water : bool
+            The process-water kLa (times ``alpha``) instead of the clean-water
+            one (default ``False``; see :meth:`kla_vector`).
 
         Returns
         -------
@@ -695,7 +800,39 @@ class AerationUnit:
         """
         if self.aeration is None:
             return jnp.asarray(0.0)
-        return self.kla_vector(signals)[self.model.species_index[self.aeration.species]]
+        kla = self.kla_vector(signals, process_water=process_water)
+        return kla[self.model.species_index[self.aeration.species]]
+
+    @property
+    def kla_temperature_corrected(self) -> bool:
+        """Whether the delivered kLa carries the ``kla_theta`` temperature
+        factor (``Aeration(temperature_correction=True)``), so that it depends on
+        the operating temperature and not only on the control signals."""
+        return self._av.temp_correct
+
+    def delivered_oxygen_kla(self, inputs: dict, signals: dict | None):
+        """The tank's oxygen kLa as its aeration term applies it: the
+        clean-water kLa times ``alpha`` and, with the temperature correction on,
+        ``kla_theta**(T - ref_T)`` at the operating temperature the inputs and
+        signals give (:func:`delivered_kla`); 0 for an unaerated tank.
+
+        Parameters
+        ----------
+        inputs : dict[str, Stream]
+            The unit's input streams, which set its operating temperature.
+        signals : dict or None
+            The control-signal bus, needed only when the kLa is signal-driven.
+
+        Returns
+        -------
+        jnp.ndarray
+            Scalar process oxygen kLa (1/time).
+        """
+        if self.aeration is None:
+            return jnp.asarray(0.0)
+        _conditions, T_op = self._operating_conditions(inputs, signals)
+        kla = delivered_kla(self._av, T_op, signals, self.model)
+        return kla[self.model.species_index[self.aeration.species]]
 
     def oxygen_transfer(
         self,
@@ -891,9 +1028,9 @@ class CSTRUnit(AdjustableTemperatureUnit, AerationUnit, CouplingAware):
         # unlimited (the reaction term is the only one the limiter guards).
         conditions = self._reaction_conditions(inputs, signals)
         chemistry = self._reaction(state, params, conditions)
-        # Aeration (mass transfer), with the optional driving-force correction at
-        # the same temperature; aeration_transfer then overrides any closed-loop
-        # kLa with its control signal.
+        # Aeration (mass transfer) at the process kLa (fixed or from its control
+        # signal, times alpha and the optional temperature factor), with the
+        # optional driving-force correction at the same temperature.
         aeration = self.aeration_term(state, inputs, params, signals)
 
         return convection + chemistry + aeration

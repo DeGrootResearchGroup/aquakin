@@ -461,6 +461,14 @@ sensed stream's flow is not available to a law, since the signals are computed
 from the units' states before the streams are. The constants are fixed numbers,
 not plant parameters, so they are not calibrated.
 
+A controller's output is the clean-water kLa, the quantity the blowers deliver,
+as a fixed `kla` is. The tank's `Aeration(alpha=...)` and, with
+`temperature_correction=True`, its `kla_theta` correction scale it into the kLa
+the tank's mass balance applies, and the gases it strips follow that kLa. So a
+fouled tank (`alpha` below 1) under DO control asks its controller for more,
+and reaches `kla_max` sooner. `signals_at` reports the controller's output, the
+clean-water kLa.
+
 ### Plant temperature
 
 A reactor runs its kinetics at its temperature, which becomes the model's `T`

@@ -95,6 +95,21 @@ against.
    tell the candidates apart, so ADM1's sugar degraders stay until an
    anaerobic-zone VFA comparison against `asm2d` on an A2O flowsheet.
 
+## Decisions made (owner, 2026-11-26)
+
+8. **Bio-P populations: metabolic PAOs and separate GAOs.** The PAO is the
+   TU Delft metabolic form (Meijer et al., 2001; as in the shipped
+   `asm2d_tud`), with polyphosphate, PHA and glycogen; the GAO is that of
+   López-Vázquez et al. (2009), which extends the same metabolic model, so
+   the two share one framework. Each population keeps its own PHA and
+   glycogen. Their competition for acetate and propionate uses the core's
+   separate `SA` and `SPRO`, so the A2O comparison that settles the acidogen
+   kinetics (decision 7) also tests the PAO / GAO balance. Considered and
+   left for later: fermentative PAOs (sugar and amino-acid uptake; recent
+   metabolic models, parameters not yet settled), a metabolic shift of PAOs
+   to glycogen-based metabolism when polyphosphate runs out, and a separate
+   denitrifying-PAO group.
+
 ### The BSM2 digester comparison (2026-11-25)
 
 The BSM2 open-loop steady state's digester feed (aquakin's BSM2, the ASM1
@@ -125,6 +140,173 @@ kept equal by putting the organic-N difference in ammonium.
   0.02 g N/g COD (ASM2d) against BSM2's 0.06, so the difference enters the feed
   as ammonium.
 - Pinned by `tests/validation/test_plantwide_core_digester.py`.
+
+9. **Two GAO groups**, as López-Vázquez et al. (2009): *Competibacter*
+   (acetate; propionate uptake negligible) and *Alphaproteobacteria*-GAO
+   (propionate preferred, acetate at half the rate). The core's separate `SA`
+   and `SPRO` are what tell them apart, and the paper's Fig. 4 benchmark needs
+   both.
+10. **PHA pools by origin, constant stoichiometry.** The source's yields depend
+    on each population's stored-PHA composition (aerobic: through the
+    acetyl- and propionyl-CoA fractions λ, β) and on pH (anaerobic), but the
+    engine evaluates stoichiometry once per solve. Each population therefore
+    keeps two PHA pools, PHA made from acetate and PHA made from propionate,
+    each with its Table 1 composition, so its aerobic yields are constants.
+    pH effects linear in the transport-energy term α(pH) (P release, glycogen
+    use) are exact, carried in the rates; the nonlinear GAO acetate-PHA yield
+    is fixed at a reference pH. The error of both against a faithful
+    implementation of the source is measured before the level is committed.
+    *Measured (2026-11-26)* with a reference implementation of the source
+    (scratch, numpy/scipy; the corrections below applied; PHA by type, yields
+    from the current composition) on the source's own 36-condition grid
+    (10/20/30 C, pH 6.0/7.0/7.5, four acetate:propionate ratios; reconstructed
+    SBR: 6 h cycle, 2 h anaerobic, 3.5 h aerobic, 50% exchange, SRT 8 d, 5
+    C-mmol/L VFA, 0.40 P-mmol/L, 50 d):
+    - the reference reproduces the source's Fig. 6 outcome in 33 of 36
+      conditions; the three others are at 30 C, a 7-12 point PAO excess at the
+      60% dominance threshold, plausibly the unreported SBR operation; at 20 C
+      the shares agree with Fig. 4 within a few points;
+    - pools by origin with every pH-dependent amount in the rates (P release,
+      glycogen use and PHA made per acid, as a rate times the coefficient,
+      stoichiometry +1) and only the pool compositions fixed at pH 7: worst
+      population-share deviation from the reference 3.1 points, outcome
+      matching the reference in 35/36 and the paper in 34/36;
+    - fixing the GAO acetate PHA yield at pH 7 instead costs up to 22 points
+      at pH 6 and 7.5, so pH-dependent amounts go in the rates, not in fixed
+      stoichiometry.
+    *The generated model (`plantwide_bio_p`, 2026-11-26)* on the same grid,
+    through its own `dCdt`: worst deviation from the reference 13.9 points,
+    every condition within 5 points except propionate at pH 7.5 (14 at 30 C,
+    6 at 20 C), outcome matching the reference in 34/36 and the paper in
+    32/36. The pH 7.5 propionate gap is the COD-balanced PAO propionate
+    stoichiometry above pH 7 (the source's PHA and glycogen lines there do not
+    balance electrons, 0.56 e-/C-mol per pH unit; the model keeps the glycogen
+    line and balances COD). Its PAO equals `asm2d_tud` to 1% in growth
+    yields, except the anaerobic P release per acetate (see decision 13).
+11. **Anoxic processes and decay come from elsewhere**: the source has neither.
+    PAO anoxic processes from the TU Delft model (`asm2d_tud`); the GAOs get
+    the same anoxic reduction factor, an assumption stated as such; PAOs and
+    GAOs decay by the core's death-regeneration, releasing their storage
+    pools.
+
+12. **PAO and GAO endogenous loss: the source's maintenance, plus decay only
+    without oxygen and nitrate.** López-Vázquez et al. (2009) and the TU Delft
+    model use maintenance alone, and the source's yields were calibrated with
+    it; the core decays every group everywhere. Decay switched off under O2
+    and NO3 lets bio-P sludge die and digest in the digester, without counting
+    aerobic endogenous loss twice. Rate revised (owner, 2026-11-26) from
+    ASM2d's b_PAO 0.2 1/d to 0.02 1/d, the core's anaerobic-group rate: at 0.2
+    it also ran in the SBR's anaerobic phase, where the source has no decay,
+    and moved the PAO-GAO outcome by up to 48 points at 30 C (to within about
+    1 point with no decay, about 3 at 0.02). On death the pools are released: polyphosphate to
+    phosphate and PHA to acetate (ASM2d's lysis), glycogen to `XS`. (This
+    replaces decision 11's "decay by the core's death-regeneration".)
+
+13. **PAO P release per acetate: the source's value** (owner, 2026-11-26),
+    `1/4 + 0.16 pH - 0.7985` P-mol/C-mol (0.57 at pH 7, 0.55 g P/g COD), so
+    the PAO-GAO competition stays as the source calibrated it; the intercept
+    is a parameter with bounds and a prior that reach the full-scale TU Delft
+    value (0.36, as in `asm2d_tud`), to be calibrated per plant.
+
+## What the bio-P and acidogen sources give (read 2026-11-26)
+
+- **López-Vázquez et al. (2009)** models three populations, not two:
+  *Accumulibacter* (PAO), *Competibacter* (GAO, acetate only: propionate
+  uptake 0.01 C-mmol/(C-mmol h)) and *Alphaproteobacteria*-GAO (propionate at
+  0.20, acetate at 0.10). Each stores its own PHA, split into PHB, PHV and
+  PH2MV by carbon source (Table 1), and glycogen; the PAO also polyphosphate.
+  Its aerobic yields follow from δ = 1.85 ATP/NADH (the same for all) and the
+  stored PHA composition, as in Murnleitner et al. (1997). Units C-mmol; 19
+  processes, 21 components. The main text gives the anaerobic uptake rates
+  and PHA splits (Table 1), temperature coefficients (Table 2), the calibrated
+  aerobic rates per carbon source (Table 4) and the shared half-saturations;
+  the online supplement (Appendices 1-7, read) gives the 14-component,
+  19-process matrix, the anaerobic stoichiometry as functions of pH and of
+  the PHA type made (App. 2), the aerobic yields from δ, K1, K2 and the PHA
+  composition (App. 3, 4; biomass CH1.84O0.5N0.19P0.015), the temperature-
+  and pH-dependent rate constants (App. 5: piecewise in T, constant above
+  20 C for uptake; GAO uptake times 10^-pH/(1.2e-8 + 10^-pH)), the rate
+  expressions with Murnleitner storage-fraction switches (App. 6) and the
+  half-saturations and maximum storage fractions (App. 7). It has no anoxic
+  processes and no decay (maintenance only), and works in C-mmol / P-mmol. Its Fig. 4 (population shares after 50 d for 36 combinations of
+  10/20/30 C, pH 6.0/7.0/7.5 and four acetate:propionate ratios) is a
+  benchmark a reimplementation should reproduce.
+- **Two misprints in López-Vázquez et al. (2009), Appendix 2 (PAO P release):**
+  - per acetate it prints `1/2 + α`; Smolders et al. (1994a), the source it
+    cites, derives `1/4 + α` for the glycogen model it uses (Eq. 5; `1/2 + α`
+    is that paper's rejected TCA-cycle model) and fits `0.19 pH - 0.85`
+    P-mol/C-mol (Eq. 8; 0.48 at pH 7, 0.50 measured). The paper's own Fig. 2b
+    model curve releases about 0.4 per acetate, not the 0.82 the misprint
+    gives. Use `1/4 + α`, with α(pH) = `0.16 pH - 0.7985` as the paper
+    takes it from Filipe et al. (2001d, Eq. 8; their Eq. 1 confirms the
+    `1/4 + α` form), so the release is `0.16 pH - 0.55` (0.57 at pH 7). The
+    literature spread is wide and unexplained: Smolders et al. (1994a)
+    `0.19 pH - 0.85` (0.48), Smolders et al. (1995a) 0.36, and Filipe's own
+    SBR 0.55 against 0.64 predicted at pH 7.4. Keep the intercept a
+    parameter (prior over 0.36-0.57 at pH 7) so a calibration can move it;
+  - per propionate it prints `2/9 - α` (0.04); `2/9 + α` (0.40) joins its
+    own pH > 7.5 branch `0.20 pH - 1.1` exactly at 7.5, and the paper's Fig.
+    2d model curve releases about 0.42 per propionate. Use `2/9 + α`.
+- **Two more in its aerobic stoichiometry (Appendix 1, checked by electron and
+  P balances with O2 and CO2 implicit):**
+  - the storage rows (glycogen and poly-P formation, every population) print
+    the biomass entry as `-i` with `i = -Y_SX / Y_S,store`, a net `+`; only
+    the negative sign conserves electrons (residual < 1e-15 for PHB and for
+    propionate-derived PHA, against about 7 e-/C-mmol for glycogen as
+    printed). Storage diverts PHA from growth, so biomass falls: use
+    `-Y_SX / Y_S,store`;
+  - the aerobic maintenance rows' O2 entry `Y_SX / Y_OX - 1` balances only
+    for a substrate of 4 e-/C-mol (glycogen); for PHA (4.5 to 5) it is short
+    by `redox_PHA / 4 - 1` O2 per C-mmol, 0.5 to 0.9 e-/C-mmol of
+    maintenance. Use the balanced `Y_SX / Y_OX - redox_PHA / 4`.
+- **Two parameter details**: the PAO anaerobic maintenance's temperature
+  factor 1.096^(T-20) is not capped above 20 C (the uptake and aerobic rates
+  are; capping it gave a PAO excess at 30 C); the PAO glycogen rate on
+  propionate is 0.008 (Table 4), where Appendix 5 prints 0.077 under a
+  mislabelled symbol.
+- **GAO anaerobic maintenance**, undefined in López-Vázquez's appendices
+  (its matrix names `Y_PHA,mANA`, `Y_GLY,mANA` without values), comes from
+  Zeng et al. (2003a), Eq. 21: 1 C-mol glycogen -> 1/6 PHB + 5/12 PHV +
+  1/4 PH2MV + 1/6 CO2 (carbon and electrons close), at a glycogen
+  consumption of 4.7e-3 C-mol/(C-mol h) measured = 2 m_ATP with 0.5 ATP per
+  C-mol glycogen and m_ATP = 2.35e-3. López-Vázquez writes the rate as
+  `0.5 m_ATP`, a quarter of that; use the measured value.
+- Zeng, R.J., van Loosdrecht, M.C.M., Yuan, Z. & Keller, J. (2003a).
+  Metabolic model for glycogen-accumulating organisms in anaerobic/aerobic
+  activated sludge systems. *Biotechnol. Bioeng.* 81(1), 92–105.
+  https://doi.org/10.1002/bit.10455 : confirms the aerobic yield expressions
+  (its Eqs. 8-10, as López-Vázquez's Appendix 3), maintenance consuming PHA
+  directly (Eq. 7), and the GAO acetate stoichiometry at pH 7 (Eq. I).
+- Smolders, G.J.F., van der Meij, J., van Loosdrecht, M.C.M. & Heijnen, J.J.
+  (1994a). Model of the anaerobic metabolism of the biological phosphorus
+  removal process: stoichiometry and pH influence. *Biotechnol. Bioeng.*
+  43(6), 461–470: glycogen model per C-mol acetate, 1/2 C-mol glycogen used,
+  4/3 C-mol PHB made, 1/6 C-mol CO2, `1/4 + α` P released.
+- Filipe, C.D.M., Daigger, G.T. & Grady, C.P.L. Jr. (2001d). Stoichiometry
+  and kinetics of acetate uptake under anaerobic conditions by an enriched
+  culture of phosphorus-accumulating organisms at different pHs.
+  *Biotechnol. Bioeng.* 76(1), 32–43: α_PAO = 0.16 pH - 0.7985 (pH 6.5-8.0),
+  maximum acetate uptake 0.185 C-mmol/(C-mmol h) independent of pH,
+  anaerobic maintenance 2.0e-3 mmol ATP/(C-mmol h), PHV 11% of PHA.
+- **Meijer et al. (2001)** prints no matrix; it uses the TUDP model of van
+  Veldhuizen et al. (1999), as `asm2d_tud` does, with no propionate uptake.
+- **Varga et al. (2018)**: separate PAOs (storing PHA only) and GAOs
+  (glycogen only), extending Barker-Dold; ORP estimated from DO, NOx and
+  methane switches GAO storage off and PAO fermentation on at low ORP; no
+  acetate / propionate distinction; equations only in a commercial
+  simulator's file. A different family from López-Vázquez, not used.
+- **Ribes et al. (2002)**, primary-settler fermentation at 20 C, fits a
+  separate acidogen group (`X_ACID`) in activated sludge: growth 2.14 1/d,
+  half-saturation 15 g COD/m3 on fermentable substrate, yield 0.15, decay
+  0.33 1/d, acetate inhibition (6500 g COD/m3), ammonium and phosphate
+  limitation and a pH switch; products 0.58 acetate, 0.25 propionate, 0.17
+  hydrogen (as the core). It is the candidate for decision 7 to compare
+  against ADM1's sugar degraders; its decay is 16 times ADM1's, so adopting it
+  means re-running the BSM2 digester comparison.
+- **Solon et al. (2017)**: sludge-line P on a BSM2-type plant (single PAO
+  group, ADM1 extended for P, S and Fe, minerals by saturation index): 129 kg
+  P/d into the digester, 22% returning as soluble phosphate, effluent TP 6.4
+  g/m3 open loop; model outputs, usable as a later plausibility check.
 
 ## Structure: a linear `extends:` chain
 
@@ -175,6 +357,14 @@ is a model-format change, so it is **not** proposed yet: write
 `plantwide_bio_p` by hand first, count how many of its edits are this
 bookkeeping alone, and decide from that.
 
+*Counted (2026-11-26):* `plantwide_bio_p` overrides all 16 core reactions
+only to add `SPO4: auto` (10 of them also extend `conserved_for`) and 10 core
+species only to add a P content; its 67 new reactions carry 201 `auto`
+entries. A generator writes all of it from the core file, so the bookkeeping
+costs nothing at this level. Recommendation: keep deferring the closure
+declaration until a hand-written level (`plantwide_nitrite`, which adds
+`SNO2` to every N-carrying reaction) shows the cost, and decide then.
+
 ## Proposed state set
 
 Names follow ASM2d where ASM2d has the concept, so the models read naturally to
@@ -189,8 +379,8 @@ anyone who knows the IWA family.
 | Dissolved | `SO2`, `SNH4`, `SNO3`, `SN2`, `SH2`, `SCH4`, `SIC` (total inorganic carbon, g C/m³) |
 | Not yet | inorganic suspended solids (for TSS) and the gas phase (see *Engine work*) |
 
-**`plantwide_bio_p` adds** `SPO4`, `XPAO`, `XPP`, `XPHA` (and `XGAO`, `XGLY` if
-GAOs are included, see *Open decisions*).
+**`plantwide_bio_p` adds** `SPO4`, `XPAO`, `XPP`, `XPHA`, `XGLY` (the PAO's
+storage pools) and `XGAO`, `XPHA_GAO`, `XGLY_GAO` (decision 8).
 
 **`plantwide_nitrite` replaces** `XAUT` with `XAOB`, `XNOB` and adds `SNO2`,
 `XAMX`.
@@ -235,8 +425,8 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
 
 | Processes | Primary source |
 |---|---|
-| PHA storage with P release, polyphosphate storage, PAO growth on PHA (aerobic, anoxic), lysis of PAO, PP and PHA | ASM2d (Henze et al., 1999); metabolic form as in Meijer et al. (2001) |
-| GAO glycogen storage and competition for VFA (if included) | López-Vázquez et al. (2009) |
+| PAO: anaerobic VFA uptake into PHA with P release and glycogen use, polyphosphate and glycogen storage, growth on PHA (aerobic, anoxic), maintenance, decay of the cell and its pools | TU Delft metabolic model (Meijer et al., 2001), as in the shipped `asm2d_tud` |
+| GAO: anaerobic VFA uptake into PHA from glycogen, glycogen storage and growth on PHA (aerobic, anoxic), maintenance, decay; acetate / propionate, temperature and pH effects on the competition | López-Vázquez et al. (2009) |
 | P release in the sludge line | checked against Solon et al. (2017) |
 
 ### `plantwide_nitrite`
@@ -332,11 +522,8 @@ gas phase has its own balance in the unit).
 
 ## Open decisions (the owner's)
 
-1. **Bio-P populations.** PAOs only (ASM2d), PAOs and GAOs as separate
-   populations (López-Vázquez et al., 2009), or a single carbon-storing
-   population whose metabolism switches with conditions (Varga et al., 2018).
-   Recommendation: separate PAOs and GAOs, the more established and more easily
-   benchmarked form; read Varga et al. before deciding.
+1. **Bio-P populations.** Settled: metabolic PAOs and separate GAOs
+   (decision 8).
 2. **Acidogen kinetics** (deferred to `plantwide_bio_p`, decision 7). BNRM2's parameter sources (Barat et al., 2013,
    appendix p. x) name none for the anaerobic groups; Ribes et al. (2002, primary
    settler fermentation) is the likeliest source for acidogens tested in
@@ -452,4 +639,14 @@ paper itself before citing it in a model file.
   https://doi.org/10.1128/aem.65.7.3248-3250.1999
 - Varga, E., Hauduc, H. et al. (2018). Recent advances in bio-P modelling – a
   new approach verified by full-scale observations. *Water Sci. Technol.*
+  78(10), 2119–2130. Separate PAO and GAO populations (see *What the bio-P
+  and acidogen sources give*), not one switching population as this note
+  said earlier.
+- Ribes, J., Ferrer, J., Bouzas, A. & Seco, A. (2002). Modelling of an
+  activated primary settling tank including the fermentation process and VFA
+  elutriation. *Environ. Technol.* 23(10), 1147–1156. No DOI confirmed.
+- van Veldhuizen, H.M., van Loosdrecht, M.C.M. & Heijnen, J.J. (1999).
+  Modelling biological phosphorus and nitrogen removal in a full scale
+  activated sludge process. *Water Res.* 33(16), 3459–3468.
+  https://doi.org/10.1016/S0043-1354(99)00064-0
   https://doi.org/10.2166/wst.2018.490 (also presented at WRRmod 2018).

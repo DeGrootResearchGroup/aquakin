@@ -327,7 +327,7 @@ class BiofilmReactor(GradientCheckMixin):
     that holds **only the inert solids** fixed and lets every reactive pool
     evolve:
 
-    >>> net = aquakin.load_model("wats_sewer_khalil_paper_balanced_biofilm_multispecies")
+    >>> net = aquakin.load_model_from_file("sulfur_biofilm.yaml")
     >>> inert = {"X_I"}   # the only genuinely inert, non-depleting solid
     >>> fixed_mask = jnp.array([s in inert for s in net.species])
     >>> reactor = aquakin.BiofilmReactor(
@@ -336,10 +336,11 @@ class BiofilmReactor(GradientCheckMixin):
 
     Everything not named in ``inert`` --- the heterotrophs and functional-group
     biomass, the stored-substrate reservoirs ``X_S1``/``X_S2``, and the reactive
-    sulfur pools ``X_S0``/``X_FeS`` --- then evolves and conserves mass. (The
-    areal ``*_biofilm`` variant, by contrast, deliberately freezes its biomass as
-    a sustained "mature biofilm" reservoir, so its mask holds the biomass fixed
-    too; the rule is always "freeze only what is genuinely non-depleting".)
+    sulfur pools ``X_S0``/``X_FeS`` --- then evolves and conserves mass. (A
+    model whose biofilm reactions carry an areal ``{A_V}`` factor instead of a
+    per-layer biomass state may deliberately freeze its biomass as a sustained
+    "mature biofilm" reservoir, so its mask holds the biomass fixed too; the
+    rule is always "freeze only what is genuinely non-depleting".)
     """
 
     def __init__(

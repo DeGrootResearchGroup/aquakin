@@ -56,7 +56,6 @@ exclude_patterns = [
     "ci.md",
     "package_structure.md",
     "plant_performance.md",
-    "khalil_reproduction_log.md",
     "spec_forward_sensitivity_solver.md",
     "project_reference.md",
 ]

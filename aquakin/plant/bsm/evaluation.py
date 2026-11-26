@@ -13,6 +13,12 @@ that is each aerated tank's fixed ``kla``; under closed-loop DO control
 (``build_bsm2(do_control=True)``) it is the controller's manipulated signal,
 recovered per saved state via :meth:`Plant.signals_at`. So evaluating an
 open- and a closed-loop run side by side quantifies what the control buys.
+With an ``aeration_system`` the blower energy and air flow are computed on the
+clean-water kLa the blowers deliver (the standard transfer, before the tank's
+``alpha`` and temperature factor), and the mixing threshold too, as the air
+flow mixes the tank. The benchmark correlation ``AE = S_sat·V·kLa/1800`` is
+computed on the delivered process kLa (``alpha`` and, when on, the temperature
+factor included), because its 1.8 kg O₂/kWh is an empirical field efficiency.
 
 **Conventions.** Both evaluators use the EQI weights of the updated BSM1
 evaluation (Alex et al. 2008), which BSM2 also uses: ``B_TSS = 2``,
@@ -40,7 +46,7 @@ from aquakin.core.gases import R_GAS
 from aquakin.integrate._common import native_time_factor
 from aquakin.plant._constants import CH4_G_PER_MOL, PA_PER_BAR
 from aquakin.plant.aeration_system import blower_airflow_total, blower_energy
-from aquakin.plant.balance import oxygen_transfer_history
+from aquakin.plant.balance import oxygen_transfer_history, unit_terms
 from aquakin.plant.errors import NoDigesterError
 from aquakin.plant.metrics import (
     _EQI_WEIGHTS,
@@ -279,20 +285,23 @@ def _as_reactors(plant) -> list:
     return plant.activated_sludge_reactors(require_volume=False)
 
 
-def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
+def _kla_history(plant, solution, params, tanks, *, process_water=False) -> jnp.ndarray:
     """Reconstruct each reactor's oxygen kLa at every saved time, ``(n_t, n_tanks)``.
 
     Each tank's kLa is its :meth:`~aquakin.plant.cstr.AerationUnit.oxygen_kla`,
     read on the oxygen species its own ``Aeration`` names (so a model calling
     oxygen ``SO2`` works as well as ASM1's ``SO``): 0 for an anoxic tank, the
-    control signal under DO control (via :meth:`Plant.signals_at`), otherwise
-    the fixed ``kLa``.
+    control signal times the tank's gain under DO control (via
+    :meth:`Plant.signals_at`), otherwise the fixed ``kLa``. That is the
+    clean-water kLa, the one the blowers deliver, on which the blower / air-flow
+    formulas and the mixing threshold are defined; ``process_water=True``
+    multiplies it by the tank's ``alpha`` (no temperature factor).
     """
     n_t = solution.t.shape[0]
     units = [plant.units[n] for n in tanks]
     if not any(unit.required_signals for unit in units):
         # Every tank's kLa is fixed: one constant row, tiled over time.
-        row = jnp.asarray([float(unit.oxygen_kla()) for unit in units])
+        row = jnp.asarray([float(unit.oxygen_kla(process_water=process_water)) for unit in units])
         return jnp.broadcast_to(row, (n_t, len(tanks)))
 
     # Closed-loop DO control: the manipulated kLa comes from the control signal,
@@ -300,9 +309,63 @@ def _kla_history(plant, solution, params, tanks) -> jnp.ndarray:
     # of a per-step Python call to signals_at.
     def _row(t_i, state_row):
         sig = plant.signals_at(t_i, state_row, params)
-        return jnp.stack([jnp.asarray(unit.oxygen_kla(sig), dtype=float) for unit in units])
+        return jnp.stack(
+            [
+                jnp.asarray(unit.oxygen_kla(sig, process_water=process_water), dtype=float)
+                for unit in units
+            ]
+        )
 
     return jax.vmap(_row)(jnp.asarray(solution.t_native), jnp.asarray(solution.state))
+
+
+def _delivered_oxygen_kla_term(unit, t, state, inputs, signals, params):
+    """A tank's delivered oxygen kLa, for :func:`~aquakin.plant.balance.unit_terms`."""
+    return unit.delivered_oxygen_kla(inputs, signals)
+
+
+def _delivered_kla_history(plant, solution, params, tanks) -> jnp.ndarray:
+    """Each reactor's delivered (process) oxygen kLa at every saved time,
+    ``(n_t, n_tanks)``: the clean-water kLa of :func:`_kla_history` times
+    ``alpha`` and, for a tank with the aeration temperature correction on,
+    ``kla_theta**(T - ref_T)`` at its operating temperature in the solve.
+
+    Without a temperature-corrected tank the factor is ``alpha`` alone, so the
+    history is ``_kla_history(..., process_water=True)``, which needs no stream
+    reconstruction; otherwise each tank's operating temperature is rebuilt from
+    the inputs the solve handed it (:func:`~aquakin.plant.balance.unit_terms`).
+    """
+    units = [plant.units[n] for n in tanks]
+    if not any(unit.kla_temperature_corrected for unit in units):
+        return _kla_history(plant, solution, params, tanks, process_water=True)
+    params = plant.default_parameters() if params is None else params
+    per_unit = unit_terms(plant, solution, params, list(tanks), _delivered_oxygen_kla_term)
+    return jnp.stack([jnp.asarray(per_unit[n], dtype=float) for n in tanks], axis=1)
+
+
+def _aeration_energy(plant, solution, params, t, reactors, aeration_system, do_saturation):
+    """The aeration energy of ``reactors`` (kWh/d), the total air flow (m³/d,
+    ``None`` without an ``aeration_system``), and their clean-water kLa history.
+
+    With an :class:`~aquakin.plant.aeration_system.AerationSystem` the energy
+    is the mechanistic blower energy, defined on the clean-water kLa (the
+    standard transfer the air must deliver). Otherwise it is the benchmark
+    correlation ``AE = S_sat·V·kLa/1800``, whose 1.8 kg O₂/kWh is an empirical
+    field efficiency and so is applied to the delivered process kLa (``alpha``
+    and the temperature factor included), never counting a tank's ``alpha``
+    twice. The two coincide at the default ``alpha = 1`` without temperature
+    correction.
+    """
+    kla_hist = _kla_history(plant, solution, params, reactors)
+    volumes = jnp.asarray([float(plant.units[n].volume) for n in reactors])
+    if aeration_system is not None:
+        AE = blower_energy(t, kla_hist, volumes, aeration_system)
+        air_flow = blower_airflow_total(t, kla_hist, volumes, aeration_system)
+    else:
+        delivered = _delivered_kla_history(plant, solution, params, reactors)
+        AE = aeration_energy(t, delivered, volumes, saturation=do_saturation)
+        air_flow = None
+    return AE, air_flow, kla_hist
 
 
 def _reconstruct(plant, solution, params_full, endpoints):
@@ -631,19 +694,13 @@ def evaluate_bsm2(
         averages = {**averages, "BOD": bod_average}
 
     # ----- Aeration + mixing energy (actual kLa over the run). Both span all AS
-    # reactors: anoxic tanks add no aeration (kLa=0) but do need mixing. -----
+    # reactors: anoxic tanks add no aeration (kLa=0) but do need mixing. The
+    # mixing threshold reads the clean-water kLa: the air flow mixes the tank.
     reactors = _as_reactors(plant)
-    kla_hist = _kla_history(plant, solution, params, reactors)
     volumes = jnp.asarray([float(plant.units[n].volume) for n in reactors])
-    # When a diffuser/blower design is given, AE is the mechanistic blower energy
-    # (SOTE / depth / blower curve) and the total air flow is reported; otherwise
-    # the benchmark aeration-energy formula (the validated default).
-    if aeration_system is not None:
-        AE = blower_energy(t, kla_hist, volumes, aeration_system)
-        air_flow = blower_airflow_total(t, kla_hist, volumes, aeration_system)
-    else:
-        AE = aeration_energy(t, kla_hist, volumes, saturation=do_saturation)
-        air_flow = None
+    AE, air_flow, kla_hist = _aeration_energy(
+        plant, solution, params, t, reactors, aeration_system, do_saturation
+    )
     V_digester = float(plant.units["digester"].volume)
     ME = mixing_energy(t, kla_hist, volumes, V_digester)
     aerated = [reactors[i] for i in range(len(reactors)) if float(jnp.max(kla_hist[:, i])) > 0.0]
@@ -882,18 +939,12 @@ def evaluate_bsm1(
     eqi = effluent_quality_index(t, eff_C, eff_Q, model, params=params_asm)
     averages = effluent_averages(t, eff_C, eff_Q, model, params=params_asm)
 
-    # ----- Aeration energy (actual kLa over the run). -----
+    # ----- Aeration energy (actual kLa over the run; see _aeration_energy). -----
     reactors = _as_reactors(plant)
-    kla_hist = _kla_history(plant, solution, params, reactors)
     volumes = jnp.asarray([float(plant.units[n].volume) for n in reactors])
-    # Mechanistic blower energy when a diffuser/blower design is given, else the
-    # Copp-2002 correlation (see evaluate_bsm2).
-    if aeration_system is not None:
-        AE = blower_energy(t, kla_hist, volumes, aeration_system)
-        air_flow = blower_airflow_total(t, kla_hist, volumes, aeration_system)
-    else:
-        AE = aeration_energy(t, kla_hist, volumes, saturation=do_saturation)
-        air_flow = None
+    AE, air_flow, kla_hist = _aeration_energy(
+        plant, solution, params, t, reactors, aeration_system, do_saturation
+    )
     aerated = [reactors[i] for i in range(len(reactors)) if float(jnp.max(kla_hist[:, i])) > 0.0]
 
     # ----- Pumping energy (internal recycle + RAS + wastage). -----
@@ -958,7 +1009,8 @@ def direct_n2o_emission(
     aeration temperature correction included, so the result is the emission the
     solve actually removed. Otherwise the gas stayed in the liquid during the
     solve, and this is a post-solve estimate of what aeration would strip, from
-    the oxygen kLa without the temperature correction.
+    the oxygen kLa in process water (times ``alpha``) without the temperature
+    correction.
 
     If the model has no ``n2o_species`` state (the standard ASM1 BSM2 plant,
     which does not resolve N₂O), the direct N₂O emission is **0** -- the model has
@@ -1031,13 +1083,14 @@ def _solved_n2o_emission(plant, solution, params, tanks, n2o_species) -> float:
 
 def _estimated_n2o_emission(plant, solution, params, tanks, n2o_species, kla_ratio) -> float:
     """Time-averaged N₂O-N (kg per plant time unit) aeration would strip from ``tanks`` at
-    ``kla_ratio`` (default 1.0) times the oxygen kLa, toward each tank's
-    in-solve saturation of the gas if it has one, else zero."""
+    ``kla_ratio`` (default 1.0) times the oxygen kLa in process water (times
+    ``alpha``), toward each tank's in-solve saturation of the gas if it has one,
+    else zero."""
     from aquakin.plant.ghg import stripped_n2o
 
     if not tanks:
         return 0.0
-    kla_hist = _kla_history(plant, solution, params, tanks)
+    kla_hist = _kla_history(plant, solution, params, tanks, process_water=True)
     volumes = jnp.asarray([float(plant.units[n].volume) for n in tanks])
     s_n2o = jnp.stack([solution.C_named(n, n2o_species) for n in tanks], axis=1)
     sats = []

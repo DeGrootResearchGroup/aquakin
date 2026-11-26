@@ -1210,13 +1210,14 @@ oxygen driving force stayed pinned. `Aeration` now carries **opt-in** transfer
 corrections, all identity by default so the benchmark stays bit-faithful:
 `temperature_correction=True` scales the saturation by the clean-water ratio
 `C_s(T)/C_s(ref_T)` (the Benson–Krause `aquakin.plant.oxygen_saturation`,
-~9.09 mg/L at 20 °C → ~7.56 at 30 °C) and the **open-loop** `kLa` by
+~9.09 mg/L at 20 °C → ~7.56 at 30 °C) and the `kLa` by
 `kla_theta**(T−ref_T)` (default θ=1.024), using the same flow-weighted inlet `T`
-the kinetics use (falling back to the static `T` condition); a closed-loop
-controlled `kLa` is **not** θ-scaled (the controller already manipulates it) but
-its driving-force saturation still gets the `C_s(T)` correction. Constant factors
-`alpha` (kLa transfer fouling), `beta` (salinity) and `pressure_factor`
-(elevation) fold into the precomputed vectors at construction (defaults 1.0). All
+the kinetics use (falling back to the static `T` condition). Since #900 a
+controlled `kLa` (the controller output is the clean-water kLa) is θ-scaled and
+`alpha`-scaled exactly as a fixed one, in `delivered_kla`. Constant factors
+`beta` (salinity) and `pressure_factor` (elevation) fold into the precomputed
+saturation at construction (defaults 1.0); `alpha` (kLa transfer fouling) is
+applied with θ to every kLa. All
 AD-clean (the correction is a smooth function of `T` inside the monolithic plant
 solve). `build_bsm2(do_temperature_correction=True)` turns it on plant-wide with
 `ref_T` = the reactors' static temperature (so it is unity at the benchmark

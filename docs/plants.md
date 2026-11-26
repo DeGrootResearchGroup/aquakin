@@ -446,7 +446,16 @@ reports `sol.t` in hours, whatever the plant's clock.
 
 ### Aeration design
 
-`Aeration(kla=...)` sets the oxygen transfer coefficient a tank receives.
+`Aeration(kla=...)` sets the clean-water oxygen transfer coefficient a tank
+receives. `alpha` (fouling of transfer in process water, typically 0.4 to 0.7
+in activated sludge), and with `temperature_correction=True` the `kla_theta`
+factor, scale it into the kLa the mass balance applies; they apply the same way
+to a kLa set by a DO controller or by `kla_signal`. The benchmark aeration
+energy (`AE = S_sat·V·kLa/1800`) is computed on the kLa the tank's mass balance
+applies, because its 1.8 kg O₂/kWh is a field efficiency. An `AerationSystem`'s
+air flow and blower energy, and the mixing energy, are computed on the
+clean-water kLa, because that is what the blowers produce: a fouled tank needs
+more of it for the same oxygen.
 `AerationSystem` adds the diffusers and blower behind it (submergence depth,
 standard oxygen-transfer efficiency SOTE, fouling, blower efficiency) and turns
 a kLa into an air flow and a blower power:

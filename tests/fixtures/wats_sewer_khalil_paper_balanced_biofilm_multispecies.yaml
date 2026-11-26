@@ -1,15 +1,15 @@
-# Auto-generated from wats_sewer_khalil_paper_balanced.yaml by _make_khalil_balanced_biofilm_biomass.py -- do not edit by hand.
+# Frozen test input: a stiff sewer sulfur-cycle model (WATS carbon and sulfur processes
+# with nitrate-driven sulfide oxidation), kept to exercise the stiff solvers and adjoints.
 model:
-  name: wats_sewer_khalil_paper_balanced_biofilm_biomass
+  name: wats_sewer_khalil_paper_balanced_biofilm_multispecies
   version: '1.0'
-  description: Depth-resolved biofilm variant of wats_sewer_khalil_paper_balanced in which biomass is
-    an explicit per-layer growing/decaying state rather than a uniform lumped activity factor. The heterotroph
-    X_BH drives every biofilm process, including the sulfur and methane processes, via the local volumetric
-    biomass [X_BH] (no {A_V} / {X_BF}); wats_sewer_khalil_paper_balanced_biofilm_multispecies gives those
-    processes their own biomass instead. The rate constants are carried over from the lumped model and
-    are not recalibrated for a biofilm-density biomass, so absolute rates are uncalibrated. Run with aquakin.BiofilmReactor
-    (biofilm_reactions=None, single phase), a stratified initial state, and fixed_mask holding only the
-    inert solids X_I; the biomass gradient then evolves.
+  description: 'Multispecies depth-resolved biofilm variant of wats_sewer_khalil_paper_balanced: as wats_sewer_khalil_paper_balanced_biofilm_biomass,
+    but the sulfur and methane processes are driven by their own per-layer growing/decaying biomass (X_SRB
+    sulfate/elemental-S reducers, X_MA methanogens, X_SOB sulfide oxidizers) rather than the heterotroph
+    X_BH. Each process keeps its Monod form but grows its group at a literature yield with COD/S/N-conserving
+    stoichiometry; each group decays first-order to inert. The yields are literature values; the maximum
+    growth rates (mu_*) are literature-range defaults to be calibrated. Run with aquakin.BiofilmReactor
+    (biofilm_reactions=None), a stratified initial state, and fixed_mask holding only X_I.'
   references:
   - Khalil, Haroun, Santoro, Batstone & DeGroot (2025). Optimizing nitrate dosing strategies for sulfide
     control using kinetic modelling. Water Environ. Res. (Table 2 kinetics, Table 3 parameters, Figures
@@ -101,6 +101,33 @@ species:
   description: Autotrophic (nitrifier) biomass
   units: gCOD/m3
   default_concentration: 5.0
+  composition:
+    COD: 1.0
+    N: 0.07
+    P: 0.02
+    S: 0.01
+- name: X_SRB
+  description: Sulfate/elemental-sulfur-reducing biomass
+  units: gCOD/m3
+  default_concentration: 1.0
+  composition:
+    COD: 1.0
+    N: 0.07
+    P: 0.02
+    S: 0.01
+- name: X_MA
+  description: Methanogenic biomass
+  units: gCOD/m3
+  default_concentration: 1.0
+  composition:
+    COD: 1.0
+    N: 0.07
+    P: 0.02
+    S: 0.01
+- name: X_SOB
+  description: Sulfide-oxidising biomass
+  units: gCOD/m3
+  default_concentration: 1.0
   composition:
     COD: 1.0
     N: 0.07
@@ -249,48 +276,21 @@ parameters:
   k_fe:
     value: 10.0
     units: gCOD/m3
-  k_h2s_acid:
-    value: 2.5
-    units: gS/gCOD/d
   k_srb:
     value: 5.0
     units: gCOD/m3
-  k_so4:
-    value: 2.0
-    units: gS/m3
-  k_s0_acid:
-    value: 15.5
-    units: gS/gCOD/d
   K_S0:
     value: 1.0
     units: gS/m3
     bounds:
     - 0.1
     - 5.0
-  k_ch4_acid:
-    value: 4.44
-    units: gCOD/gCOD/d
-    prior:
-      mean: 4.44
-      std: 5.0
   k_vfa_mb:
     value: 1.0
     units: gCOD/m3
-  k_ch4_hyd:
-    value: 1.92
-    units: gCOD/gCOD/d
   k_h2_mb:
     value: 0.002
     units: gCOD/m3
-  k_sII_anox_f:
-    value: 18.45
-    units: gS/gCOD/d
-    prior:
-      mean: 17.1
-      std: 2.3
-    bounds:
-    - 1.0
-    - 40.0
   K_S2:
     value: 0.15
     units: gS/m3
@@ -309,15 +309,6 @@ parameters:
     bounds:
     - 0.05
     - 8.0
-  k_s0_anox_f:
-    value: 2.64
-    units: gS/gCOD/d
-    prior:
-      mean: 2.2
-      std: 0.4
-    bounds:
-    - 0.1
-    - 30.0
   k_h2sc:
     value: 0.96
     units: (gS/m3)(gO2/m3) /d
@@ -339,12 +330,6 @@ parameters:
   pH_optimum:
     value: 8.0
     units: '-'
-  k_sII_ox_f:
-    value: 12.0
-    units: gS/gCOD/d
-  k_s0_ox_f:
-    value: 0.0
-    units: gS/gCOD/d
   i_n_bio:
     value: 0.07
     units: gN/gCOD
@@ -357,6 +342,102 @@ parameters:
   k_fes_p:
     value: 1.0
     units: m3/g/d
+  Y_srb:
+    value: 0.596
+    units: gCOD/gCOD
+    bounds:
+    - 0.3
+    - 0.7
+  mu_srb:
+    value: 0.8
+    units: 1/d
+    bounds:
+    - 0.05
+    - 50.0
+  mu_srb_s0:
+    value: 2.0
+    units: 1/d
+    bounds:
+    - 0.05
+    - 50.0
+  b_srb:
+    value: 0.192
+    units: 1/d
+    bounds:
+    - 0.02
+    - 1.0
+  Y_ma:
+    value: 0.05
+    units: gCOD/gCOD
+    bounds:
+    - 0.02
+    - 0.1
+  Y_ma_h2:
+    value: 0.06
+    units: gCOD/gCOD
+    bounds:
+    - 0.02
+    - 0.1
+  mu_ma:
+    value: 0.3
+    units: 1/d
+    bounds:
+    - 0.02
+    - 20.0
+  mu_ma_h2:
+    value: 2.0
+    units: 1/d
+    bounds:
+    - 0.05
+    - 50.0
+  b_ma:
+    value: 0.03
+    units: 1/d
+    bounds:
+    - 0.005
+    - 0.5
+  Y_sob:
+    value: 0.1
+    units: gCOD/gCOD
+    bounds:
+    - 0.02
+    - 0.4
+  mu_sob:
+    value: 1.0
+    units: 1/d
+    bounds:
+    - 0.05
+    - 50.0
+  mu_sob_s0:
+    value: 0.5
+    units: 1/d
+    bounds:
+    - 0.05
+    - 50.0
+  mu_sob_aer:
+    value: 2.0
+    units: 1/d
+    bounds:
+    - 0.05
+    - 50.0
+  mu_sob_s0_aer:
+    value: 0.0
+    units: 1/d
+    bounds:
+    - 0.0
+    - 50.0
+  b_sob:
+    value: 0.05
+    units: 1/d
+    bounds:
+    - 0.005
+    - 0.5
+  K_SO4:
+    value: 6.4
+    units: gS/m3
+    bounds:
+    - 0.5
+    - 20.0
 reactions:
 - name: anox_growth_SB
   description: Anoxic (denitrifying) heterotrophic growth on S_B, bulk water.
@@ -455,46 +536,64 @@ reactions:
     S_B: -1
     S_VFA: 0.667
     S_H2: 0.333
-- name: sulfate_reduction_SB
+- name: sulfate_reduction
   description: Sulfide formation on fermentable substrate S_B (VFA accumulates as a fermentation product).
-  rate: k_h2s_acid * monod([S_B], k_srb) * monod([S_SO4], k_so4) * no_gate * [X_BH]
+  rate: mu_srb * monod([S_B], k_srb) * monod([S_SO4], K_SO4) * no_gate * [X_SRB]
   stoichiometry:
-    sumS: 1
-    S_SO4: -1
-    S_B: -2
-- name: elemental_S_reduction_SB
+    X_SRB: 1
+    S_B: 0.0 - 1.0 / Y_srb
+    sumS: (1.0 - Y_srb) / (2.0 * Y_srb)
+    S_SO4: 0.0 - (1.0 - Y_srb) / (2.0 * Y_srb)
+    S_NH: 0.0 - i_n_bio
+    S_PO4: 0.0 - i_p_bio
+- name: elemental_S_reduction
   description: Sulfide formation on fermentable substrate S_B (VFA accumulates as a fermentation product).
-  rate: k_s0_acid * monod([S_B], k_srb) * monod([X_S0], K_S0) * no_gate * [X_BH]
+  rate: mu_srb_s0 * monod([S_B], k_srb) * monod([X_S0], K_S0) * no_gate * [X_SRB]
   stoichiometry:
-    sumS: 1
-    X_S0: -1
-    S_B: -0.5
+    X_SRB: 1
+    S_B: 0.0 - 1.0 / Y_srb
+    sumS: 2.0 * (1.0 - Y_srb) / Y_srb
+    X_S0: 0.0 - 2.0 * (1.0 - Y_srb) / Y_srb
+    S_NH: 0.0 - i_n_bio
+    S_PO4: 0.0 - i_p_bio
 - name: methanogenesis_VFA
   description: Acetoclastic methane formation from VFA, biofilm.
-  rate: k_ch4_acid * monod([S_VFA], k_vfa_mb) * monod_inh([S_NO], K_NO_f) * [X_BH]
+  rate: mu_ma * monod([S_VFA], k_vfa_mb) * monod_inh([S_NO], K_NO_f) * [X_MA]
   stoichiometry:
-    S_VFA: -1
-    S_CH4: 1
+    X_MA: 1
+    S_VFA: 0.0 - 1.0 / Y_ma
+    S_CH4: (1.0 - Y_ma) / Y_ma
+    S_NH: 0.0 - i_n_bio
+    S_PO4: 0.0 - i_p_bio
 - name: methanogenesis_H2
   description: Hydrogenotrophic methane formation from H2, biofilm.
-  rate: k_ch4_hyd * monod([S_H2], k_h2_mb) * monod_inh([S_NO], K_NO_f) * [X_BH]
+  rate: mu_ma_h2 * monod([S_H2], k_h2_mb) * monod_inh([S_NO], K_NO_f) * [X_MA]
   stoichiometry:
-    S_H2: -1
-    S_CH4: 1
+    X_MA: 1
+    S_H2: 0.0 - 1.0 / Y_ma_h2
+    S_CH4: (1.0 - Y_ma_h2) / Y_ma_h2
+    S_NH: 0.0 - i_n_bio
+    S_PO4: 0.0 - i_p_bio
 - name: sulfide_oxidation_anoxic
   description: Nitrate-driven biological sulfide oxidation to elemental sulfur, biofilm (soNRB).
-  rate: k_sII_anox_f * monod([sumS], K_S2) * monod([S_NO], K_NO_S_f) * [X_BH]
+  rate: mu_sob * monod([sumS], K_S2) * monod([S_NO], K_NO_S_f) * [X_SOB]
   stoichiometry:
-    sumS: -1
-    X_S0: 1
-    S_NO: -0.175
+    X_SOB: 1
+    sumS: 0.0 - 2.0 / Y_sob
+    X_S0: 2.0 / Y_sob
+    S_NO: 0.0 - (1.0 / Y_sob - 1.0) / 2.86
+    S_NH: 0.0 - i_n_bio
+    S_PO4: 0.0 - i_p_bio
 - name: elemental_S_oxidation_anoxic
   description: Nitrate-driven oxidation of elemental sulfur to sulfate, biofilm.
-  rate: k_s0_anox_f * monod([X_S0], K_S0) * monod([S_NO], K_NO_S_f) * [X_BH]
+  rate: mu_sob_s0 * monod([X_S0], K_S0) * monod([S_NO], K_NO_S_f) * [X_SOB]
   stoichiometry:
-    X_S0: -1
-    S_SO4: 1
-    S_NO: -0.525
+    X_SOB: 1
+    X_S0: 0.0 - 2.0 / (3.0 * Y_sob)
+    S_SO4: 2.0 / (3.0 * Y_sob)
+    S_NO: 0.0 - (1.0 / Y_sob - 1.0) / 2.86
+    S_NH: 0.0 - i_n_bio
+    S_PO4: 0.0 - i_p_bio
 - name: sulfide_chemoxidation
   description: Aerobic chemical sulfide oxidation, bulk (rate const is a pH-weighted H2S/HS- average).
   rate: (k_h2sc * pH_switch(pKa) + k_hsc * (1.0 - pH_switch(pKa))) * ho_sumS_n1 * ho_SO_n2
@@ -516,18 +615,24 @@ reactions:
     S_O: -2.0
 - name: sulfide_biooxidation_aerobic
   description: Aerobic biological sulfide oxidation to elemental sulfur, biofilm.
-  rate: k_sII_ox_f * monod([sumS], K_S2) * monod([S_O], k_o) * [X_BH]
+  rate: mu_sob_aer * monod([sumS], K_S2) * monod([S_O], k_o) * [X_SOB]
   stoichiometry:
-    sumS: -1
-    X_S0: 1
-    S_O: -0.5
+    X_SOB: 1
+    sumS: 0.0 - 2.0 / Y_sob
+    X_S0: 2.0 / Y_sob
+    S_O: 0.0 - (1.0 / Y_sob - 1.0)
+    S_NH: 0.0 - i_n_bio
+    S_PO4: 0.0 - i_p_bio
 - name: elemental_S_oxidation_aerobic
   description: Aerobic oxidation of elemental sulfur to sulfate, biofilm (0 at default k_s0_ox_f).
-  rate: k_s0_ox_f * monod([X_S0], K_S0) * monod([S_O], k_o) * [X_BH]
+  rate: mu_sob_s0_aer * monod([X_S0], K_S0) * monod([S_O], k_o) * [X_SOB]
   stoichiometry:
-    X_S0: -1
-    S_SO4: 1
-    S_O: -1.5
+    X_SOB: 1
+    X_S0: 0.0 - 2.0 / (3.0 * Y_sob)
+    S_SO4: 2.0 / (3.0 * Y_sob)
+    S_O: 0.0 - (1.0 / Y_sob - 1.0)
+    S_NH: 0.0 - i_n_bio
+    S_PO4: 0.0 - i_p_bio
 - name: FeS_precipitation
   description: 'Precipitation of dissolved sulfide with ferrous iron to solid FeS (Nielsen et al. 2005).
     Iron-limited second-order rate; mass fractions per g FeS: Fe 56/88, S 32/88.'
@@ -536,3 +641,27 @@ reactions:
     S_Fe2: -0.6364
     sumS: -0.3636
     X_FeS: 1
+- name: decay_srb
+  description: First-order decay (inactivation) of X_SRB to inert.
+  rate: b_srb * [X_SRB]
+  stoichiometry:
+    X_SRB: -1
+    X_I: 1
+    S_NH: i_n_bio
+    S_PO4: i_p_bio
+- name: decay_ma
+  description: First-order decay (inactivation) of X_MA to inert.
+  rate: b_ma * [X_MA]
+  stoichiometry:
+    X_MA: -1
+    X_I: 1
+    S_NH: i_n_bio
+    S_PO4: i_p_bio
+- name: decay_sob
+  description: First-order decay (inactivation) of X_SOB to inert.
+  rate: b_sob * [X_SOB]
+  stoichiometry:
+    X_SOB: -1
+    X_I: 1
+    S_NH: i_n_bio
+    S_PO4: i_p_bio
