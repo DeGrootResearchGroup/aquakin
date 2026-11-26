@@ -1283,8 +1283,12 @@ as `aquakin.characterize_influent` / `fractionate` / `InfluentFractions` /
 Setting a plant's temperature used to mean writing the static `T` condition of
 every reactor by hand (in Kelvin, at the correction `ref_T`). `set_temperature`
 takes **°C**, converts to Kelvin, and writes the static `T` of every
-temperature-bearing reactor — so a re-solve runs the Arrhenius
-`temperature_corrections` at that temperature (`build_bsm2(...)` then
+temperature-bearing reactor. A re-solve runs the Arrhenius
+`temperature_corrections` at that temperature only in a reactor whose inflow
+carries no temperature: an inflow temperature (the flow-weighted inlet `T`, or
+the tank's temperature state under `HeatBalanceTemperature`, which the static
+`T` only seeds) takes precedence, and the SBR always runs at its static `T`
+(`build_bsm2(...)` then
 `plant.set_temperature(15)` is the BSM2 15 °C operating point; `set_temperature(10)`
 drives nitrification down — verified in
 `tests/integration/test_plant_temperature.py`). It targets the activated-sludge

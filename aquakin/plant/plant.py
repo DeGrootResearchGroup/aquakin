@@ -496,13 +496,27 @@ class Plant:
     def set_temperature(self, celsius: float, *, units: Iterable[str] | None = None) -> Plant:
         """Set the operating temperature of the reactors, in **degrees Celsius**.
 
-        One knob for "run the plant at this temperature": converts to Kelvin and
-        writes the static ``T`` condition of every temperature-bearing reactor,
-        so a re-solve runs the kinetics -- including the Arrhenius
-        ``temperature_corrections`` -- at that temperature. (For a model whose
-        corrections are referenced to this temperature, the correction is unity
-        and the run reproduces the calibrated operating point; a colder/warmer
-        setting drives the kinetics away from it.)
+        Converts to Kelvin and writes the static ``T`` condition of every
+        temperature-bearing reactor. A reactor runs its kinetics -- including the
+        Arrhenius ``temperature_corrections`` -- at the first of:
+
+        1. its own temperature state, under
+           :class:`~aquakin.plant.temperature.HeatBalanceTemperature` (the static
+           ``T`` written here only seeds that state's initial value, and the
+           state stays there while no inflow carries a temperature);
+        2. the flow-weighted temperature of its inlets, when any inflow carries
+           one (an influent built with ``T=``), under the default
+           :class:`~aquakin.plant.temperature.AlgebraicTemperature`;
+        3. the static ``T`` condition written here.
+
+        So the new temperature reaches the kinetics of a re-solve only for a
+        reactor whose inflow carries no temperature; where it does, the inlet
+        temperature wins and this call changes nothing. An
+        :class:`~aquakin.plant.sbr.SBRUnit` is the exception: it always runs at
+        its static ``T``, so this call reaches it whatever its inflow carries.
+        (For a model whose
+        corrections are referenced to the temperature set, the correction is
+        unity and the run reproduces the calibrated operating point.)
 
         By default it targets the activated-sludge reactors (the units exposing
         :meth:`CSTRUnit.set_temperature` with a ``T`` condition) and **leaves a

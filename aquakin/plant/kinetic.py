@@ -173,10 +173,12 @@ class AdjustableTemperatureUnit(KineticUnit):
     def set_temperature(self, temperature_K: float) -> None:
         """Set this reactor's static operating temperature (Kelvin).
 
-        Updates the ``T`` condition (and its rate-evaluation array) in place, so
-        a re-solve runs the kinetics -- including any Arrhenius
-        ``temperature_corrections`` -- at the new temperature. A no-op for a
-        model that declares no ``T`` condition. The plant clears its compiled-
+        Updates the static ``T`` condition (and its rate-evaluation array) in
+        place. The kinetics run at it only when no operating temperature reaches
+        the unit: a temperature carried by its inflow, or its heat-balance
+        temperature state, takes precedence (:meth:`_operating_conditions`;
+        :meth:`Plant.set_temperature <aquakin.plant.plant.Plant.set_temperature>`
+        gives the order). A no-op for a model that declares no ``T`` condition. The plant clears its compiled-
         solve cache after calling this; on a bare unit, rebuild any cached solve.
         """
         if "T" not in self.model.conditions_required:
