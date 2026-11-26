@@ -1,6 +1,7 @@
-"""Validation of the layered-biofilm variant of the balanced sewer model.
+"""Validation of the layered-biofilm variant of the stiff sewer test model.
 
-``wats_sewer_khalil_paper_balanced_biofilm`` is the balanced model with its
+The ``wats_sewer_khalil_paper_balanced_biofilm`` test fixture is the stiff
+sewer test model (``stiff_sewer_model``) with its
 three composite bulk+biofilm reactions (fermentation, fast/slow hydrolysis) split
 into explicit ``_bulk``/``_biofilm`` halves, for use with
 :class:`aquakin.BiofilmReactor`. These tests check that the split is
@@ -10,35 +11,35 @@ methanogenesis concentrated toward the wall with acetate drawn down with depth -
 the structure a lumped area-to-volume reactor cannot represent.
 """
 
-import os
-
 import jax.numpy as jnp
 import numpy as np
 import pytest
 import yaml
 
 import aquakin
+from tests.conftest import FIXTURES
 
-NDIR = os.path.join(os.path.dirname(aquakin.__file__), "models")
 A_V_LUMPED = 56.7
 L_F = 8e-4   # biofilm thickness (m); A_V (areal->volumetric) per layer = 1/L_F
 
 
 @pytest.fixture(scope="module")
-def lumped():
-    return aquakin.load_model("wats_sewer_khalil_paper_balanced")
+def lumped(stiff_sewer_model):
+    return stiff_sewer_model
 
 
 @pytest.fixture(scope="module")
 def variant():
-    return aquakin.load_model("wats_sewer_khalil_paper_balanced_biofilm")
+    return aquakin.load_model_from_file(
+        FIXTURES / "wats_sewer_khalil_paper_balanced_biofilm.yaml"
+    )
 
 
 @pytest.fixture(scope="module")
 def biofilm_rxns():
     # Biofilm reactions are exactly those carrying the {A_V} area factor.
     y = yaml.safe_load(
-        open(os.path.join(NDIR, "wats_sewer_khalil_paper_balanced_biofilm.yaml"))
+        (FIXTURES / "wats_sewer_khalil_paper_balanced_biofilm.yaml").read_text()
     )
     return [r["name"] for r in y["reactions"] if "{A_V}" in r["rate"]]
 
@@ -106,7 +107,9 @@ def test_multispecies_groups_grow_and_stratify():
     # depth-resolved solve is finite and every functional group grows in the
     # biofilm relative to the (dilute) bulk -- the per-layer-biomass dynamics the
     # interim [X_BH]-coupled model could not represent.
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced_biofilm_multispecies")
+    net = aquakin.load_model_from_file(
+        FIXTURES / "wats_sewer_khalil_paper_balanced_biofilm_multispecies.yaml"
+    )
     si = net.species_index
     n_layers = 8
     fixed = jnp.array([s == "X_I" for s in net.species])     # only inert solids fixed

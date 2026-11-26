@@ -151,8 +151,8 @@ comammox. Each closes COD, nitrogen, and charge balances to machine precision.
 
 The WATS (Wastewater Aerobic/anaerobic Transformations in Sewers) framework
 models the carbon and sulfur transformations that drive sulfide generation and
-odour/corrosion in sewers. `aquakin` ships the reference model and nitrate-dosing
-extensions. These integrate in **days**.
+odour/corrosion in sewers. `aquakin` ships the reference model. It integrates in
+**days**.
 
 `wats_sewer`
 : The reference WATS model (Hvitved-Jacobsen, Vollertsen & Nielsen 2013):
@@ -160,63 +160,6 @@ extensions. These integrate in **days**.
   maintenance, hydrolysis, fermentation) coupled to the sulfur cycle —
   sulfate reduction to sulfide and chemical plus biological sulfide oxidation.
   pH is state-derived by charge balance. *(15 species, 34 reactions.)*
-
-`wats_sewer_extended`
-: The reference model extended with a two-step sulfide → elemental-sulfur →
-  sulfate cycle and nitrate-driven sulfide control, for studying nitrate dosing
-  as a sulfide-mitigation strategy. Adds methanogenesis and nitrification.
-  *(20 species, 47 reactions.)*
-
-`wats_sewer_khalil_paper`
-: A re-implementation of the published sewer nitrate-dosing model of
-  Khalil et al. (2025): the full WATS carbon-and-sulfur backbone plus the
-  paper's nitrate-driven two-step sulfur oxidation, with pH supplied as a fixed
-  operating condition. *(18 species, 27 reactions.)*
-
-`wats_sewer_khalil_paper_balanced`
-: A mass- and electron-balanced counterpart of `wats_sewer_khalil_paper` that
-  also tracks iron/FeS precipitation and nitrogen. *(20 species, 28 reactions.)*
-
-`wats_sewer_khalil_thesis`
-: The nitrate-dosing model as specified with half-order biofilm kinetics.
-  *(18 species, 44 reactions.)*
-
-### Structural variants
-
-These variants each change one structural assumption of a base model, for
-comparing model structures and studying identifiability. Everything not listed
-is the same as in the base, except that the `wats_sewer_extended_*` variants
-have no iron sulfide precipitation (hence two fewer species and one fewer
-reaction) and use a sulfur-process temperature coefficient `a_s` of 1.05 rather
-than 1.03.
-
-| Model | Base | Change | Size |
-|---|---|---|---|
-| `wats_sewer_extended_v0` | `wats_sewer_extended` | Earlier parameter values and a single anoxic yield; same reactions | 18, 46 |
-| `wats_sewer_extended_halforder` | `wats_sewer_extended` | Half-order instead of Monod kinetics for the nitrate-driven biofilm sulfur oxidations | 18, 46 |
-| `wats_sewer_extended_directsulfate` | `wats_sewer_extended` | Nitrate oxidizes sulfide directly to sulfate, with no elemental-sulfur intermediate | 18, 46 |
-| `wats_sewer_extended_srbsubstrate` | `wats_sewer_extended` | Sulfate and elemental-sulfur reducers consume fermentable substrate instead of VFA | 18, 46 |
-| `wats_sewer_extended_combined` | `wats_sewer_extended` | The three changes above together | 18, 46 |
-| `wats_sewer_khalil_paper_halforder` | `wats_sewer_khalil_paper` | Half-order biofilm sulfur oxidation | 18, 27 |
-| `wats_sewer_khalil_paper_directsulfate` | `wats_sewer_khalil_paper` | Direct sulfide-to-sulfate oxidation | 18, 27 |
-| `wats_sewer_khalil_paper_srbsubstrate` | `wats_sewer_khalil_paper` | Reducers consume fermentable substrate | 18, 27 |
-| `wats_sewer_khalil_paper_stopatS0` | `wats_sewer_khalil_paper` | Nitrate-driven oxidation stops at elemental sulfur | 18, 26 |
-| `wats_sewer_khalil_paper_combined` | `wats_sewer_khalil_paper` | The half-order, direct-sulfate and reducer-substrate changes together | 18, 27 |
-| `wats_sewer_khalil_paper_balanced_halforder` | `wats_sewer_khalil_paper_balanced` | Half-order biofilm sulfur oxidation | 20, 28 |
-| `wats_sewer_khalil_paper_balanced_directsulfate` | `wats_sewer_khalil_paper_balanced` | Direct sulfide-to-sulfate oxidation | 20, 28 |
-| `wats_sewer_khalil_paper_balanced_stopatS0` | `wats_sewer_khalil_paper_balanced` | Nitrate-driven oxidation stops at elemental sulfur | 20, 27 |
-| `wats_sewer_khalil_paper_balanced_combined` | `wats_sewer_khalil_paper_balanced` | The half-order and direct-sulfate changes together (the balanced base already uses fermentable substrate for the reducers) | 20, 28 |
-
-### Depth-resolved biofilm models
-
-These run with `aquakin.BiofilmReactor`, which resolves the sewer biofilm over
-its depth.
-
-| Model | What it resolves | Size |
-|---|---|---|
-| `wats_sewer_khalil_paper_balanced_biofilm` | The balanced model's chemistry, with the combined bulk-and-biofilm reactions split into bulk and biofilm halves; the lumped model is its well-mixed limit | 20, 31 |
-| `wats_sewer_khalil_paper_balanced_biofilm_biomass` | Heterotroph biomass as a growing and decaying state in each layer | 20, 24 |
-| `wats_sewer_khalil_paper_balanced_biofilm_multispecies` | Separate biomass for sulfate reducers, methanogens and sulfide oxidizers in each layer | 23, 27 |
 
 ## Mineral precipitation
 

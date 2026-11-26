@@ -52,7 +52,7 @@ Claude-facing files** at the end.
 | `.claude/rules/plant-ifas.md` | `plant/ifas.py`, `integrate/biofilm*.py` | the IFAS / MBBR biofilm unit |
 | `.claude/rules/plant-settling.md` | `plant/takacs.py`, `settling.py`, clarifier / separator modules | the Takács clarifier, shared separator helpers |
 | `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
-| `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog, the schema rules, and the `_make_*` generators |
+| `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog and the schema rules |
 | `.claude/rules/study.md` | `aquakin/study/**` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
 | `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `tests/browser/**`, `ui-widget/**`, `installers/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules, the uv installers |
 
@@ -60,7 +60,6 @@ Claude-facing files** at the end.
 
 | Doc | Contents |
 |---|---|
-| `docs/khalil_reproduction_log.md` | the JRN-055 Khalil model-improvement sequence |
 | `docs/package_structure.md` | the annotated package file tree |
 | `docs/plant_performance.md` | the dynamic-solve performance log (the stiffness-bound regime and its levers) |
 | `docs/ci.md` | the CI architecture (sharding, gates, heavy runner, labels, the OOM memory watchdog) |
@@ -103,8 +102,8 @@ Both **chemistry** (ozonation, advanced oxidation, chlorine decay, ...) and
 **biology** (activated sludge models, anaerobic digestion, ...) are in scope.
 > The user-facing per-model catalog (what each shipped model is, its provenance,
 > size, and how to load it) is the published **`docs/model_catalog.md`**; the
-> dev-internal model-improvement history (documented corrections) lives in
-> **`docs/khalil_reproduction_log.md`** and the git log, not the published catalog.
+> dev-internal model-improvement history (documented corrections) lives in the
+> git log, not the published catalog.
 
 ---
 
