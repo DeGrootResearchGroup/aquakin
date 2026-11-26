@@ -217,3 +217,31 @@ def test_top_level_exports_are_mirrored_by_their_subpackage(subpackage):
         f"{subpackage}.__all__ is missing names the top level re-exports from "
         f"it: {sorted(missing)}"
     )
+
+
+def test_every_catalogue_unit_class_is_exported_from_plant():
+    """Each unit kind in the catalogue builds a class ``aquakin.plant`` exports.
+
+    A user who builds a flowsheet from Python rather than a spec reaches the
+    unit classes through ``aquakin.plant``; a catalogue kind whose class is
+    missing there can be used from a spec but not imported by its public name.
+    """
+    import aquakin.plant
+    from aquakin.plant.catalog import unit_kinds
+
+    exported = set(aquakin.plant.__all__)
+    missing = {}
+    for kind_name, kind in unit_kinds().items():
+        parts = kind.python_class.split(".")
+        # The path is ``module.Class`` or ``module.Class.factory``: the class
+        # name is the first segment after the longest importable module.
+        for split in range(len(parts) - 1, 0, -1):
+            try:
+                importlib.import_module(".".join(parts[:split]))
+            except ModuleNotFoundError:
+                continue
+            class_name = parts[split]
+            break
+        if class_name not in exported:
+            missing[kind_name] = class_name
+    assert not missing, f"catalogue unit classes not exported from aquakin.plant: {missing}"

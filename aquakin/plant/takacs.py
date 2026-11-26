@@ -68,7 +68,7 @@ from aquakin.plant._flow_split import (
     validate_controlled_split,
 )
 from aquakin.plant.coupling import CouplingAware
-from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
+from aquakin.plant.flow_setpoint import FlowParameterized, Setpoint, build_setpoints
 from aquakin.plant.streams import Stream
 from aquakin.utils.units import conversion_factor
 
@@ -125,11 +125,13 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         Index of the layer where the inlet enters (0-based from the
         bottom; BSM1 uses index 5 for a 10-layer clarifier, counting
         from the bottom).
-    overflow_Q : float, optional
+    overflow_Q : float or str, optional
         Fixed overflow (clarified effluent) flow rate, m³/d; underflow takes
         ``Q_in - overflow_Q``. Supply exactly one of ``overflow_Q`` /
-        ``underflow_Q``.
-    underflow_Q : float, optional
+        ``underflow_Q``. Either may be an expression of time
+        (``"385 + 75*sin(2*pi*t)"``), clipped to ``>= 0``, or from Python a
+        :class:`~aquakin.plant.schedule.PiecewiseConstantSchedule`.
+    underflow_Q : float or str, optional
         Fixed underflow flow rate, m³/d (the controlled RAS+wastage pump flow
         ``Q_r + Q_w``); the effluent overflow is then the remainder and tracks
         the feed (``Q_e = Q_f - Q_u``). Preferred under dynamic influent -- a
@@ -229,8 +231,8 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     model: CompiledModel
     area: float
     height: float
-    overflow_Q: float | None = None
-    underflow_Q: float | None = None
+    overflow_Q: float | str | None = None
+    underflow_Q: float | str | None = None
     n_layers: int = 10
     feed_layer: int = 5
     # Initial-condition operating point for a settled-blanket start (state-point
@@ -328,14 +330,13 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
     def _unpack_settling_params(self) -> None:
         """Wire the controlled-outflow setpoint and unpack the settling params to
         scalar attributes read by ``rhs`` without per-call Python branching."""
-        # The controlled outflow is a differentiable flow setpoint -- but only
-        # when it is a constant; a *scheduled* setpoint (a PiecewiseConstant with
-        # ``.at(t)``) is left as the schedule (not a single parameter).
-        self._setpoints = {}
+        # The controlled outflow is a flow setpoint (a differentiable parameter,
+        # or an expression of time) -- but a *scheduled* setpoint (a
+        # PiecewiseConstantSchedule with ``.at(t)``) is left as the schedule.
         ctrl_name = "underflow_Q" if self.underflow_Q is not None else "overflow_Q"
         ctrl_val = getattr(self, ctrl_name)
-        if ctrl_val is not None and not hasattr(ctrl_val, "at"):
-            self._setpoints[ctrl_name] = FlowSetpoint(float(ctrl_val), 0)
+        controlled = {} if hasattr(ctrl_val, "at") else {ctrl_name: ctrl_val}
+        self._setpoints = build_setpoints(controlled, owner=f"TakacsClarifier '{self.name}'")
         self._v0 = float(self.settling_params["v0"])
         self._vmax = float(self.settling_params["vmax"])
         self._rh = float(self.settling_params["rh"])
@@ -560,7 +561,11 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         # the blanket underflow as a stand-in (ratio ~2, right for BSM loading) --
         # this only seeds the initial profile, which then relaxes.
         Q_u = float(self.init_underflow_Q)
-        design_over = self.overflow_Q if self.overflow_Q is not None else self.init_underflow_Q
+        design_over = (
+            self._setpoints["overflow_Q"].initial()
+            if "overflow_Q" in self._setpoints
+            else self.init_underflow_Q
+        )
         ratio = (float(design_over) + Q_u) / Q_u
         X_u = X_f * ratio
         # Clarification (above-feed) layers sit at the non-settleable floor.
@@ -790,20 +795,21 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         v_takacs = self._v0 * (jnp.exp(-self._rh * excess) - jnp.exp(-self._rp * excess))
         return jnp.clip(v_takacs, 0.0, self._vmax)
 
-    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
+    def _flow_setpoints(self) -> dict[str, Setpoint]:
         return self._setpoints
 
     def _resolve_setpoint(self, q, t, params, name):
-        """Evaluate a setpoint: a time schedule, a differentiable parameter, or a
-        constant. A scheduled setpoint (``.at(t)``) takes precedence; otherwise a
-        constant controlled flow is read through its :class:`FlowSetpoint` (so it
-        is differentiable), falling back to the raw value."""
+        """Evaluate a setpoint: a time schedule, a differentiable parameter, an
+        expression of time, or a constant. A scheduled setpoint (``.at(t)``)
+        takes precedence; otherwise the controlled flow is read through its
+        setpoint (so a constant is differentiable), falling back to the raw
+        value."""
         if q is None:
             return None
         if hasattr(q, "at"):
             return q.at(t)
         if name in self._setpoints:
-            return self._setpoints[name].resolve(self._flow_params(params))
+            return self._setpoints[name].resolve(self._flow_params(params), t)
         return q
 
     def _split_flows(self, Q_in: jnp.ndarray, clamp: bool, t, params):

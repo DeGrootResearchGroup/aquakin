@@ -27,7 +27,7 @@ from aquakin.plant._flow_split import (
     split_controlled_flows,
     validate_controlled_split,
 )
-from aquakin.plant.flow_setpoint import FlowParameterized, FlowSetpoint
+from aquakin.plant.flow_setpoint import FlowParameterized, Setpoint, build_setpoints
 from aquakin.plant.streams import Stream, split_by_capture
 from aquakin.plant.units import StatelessUnit
 
@@ -54,10 +54,11 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
     ----------
     name : str
     model : CompiledModel
-    overflow_Q : float, optional
+    overflow_Q : float or str, optional
         Fixed overflow (effluent) flow rate (m³/d); underflow takes the remainder.
-        Supply exactly one of ``overflow_Q`` or ``underflow_Q``.
-    underflow_Q : float, optional
+        Supply exactly one of ``overflow_Q`` or ``underflow_Q``. Either may be
+        an expression of time (``"385 + 75*sin(2*pi*t)"``), clipped to ``>= 0``.
+    underflow_Q : float or str, optional
         Fixed underflow flow rate (m³/d): the controlled RAS+wastage pump flow,
         ``Q_r + Q_w``; the overflow (effluent) is then the remainder and
         tracks the feed (``Q_e = Q_f - Q_u``, the BSM convention). Preferred
@@ -77,8 +78,8 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
 
     name: str
     model: CompiledModel
-    overflow_Q: float | None = None
-    underflow_Q: float | None = None
+    overflow_Q: float | str | None = None
+    underflow_Q: float | str | None = None
     capture_efficiency: float = 0.998
     particulate_species: list[str] = field(default_factory=lambda: list(ASM1_SETTLING_SPECIES))
     input_port: str = "inlet"
@@ -93,15 +94,15 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
         validate_controlled_split(
             f"IdealClarifier '{self.name}'", self.overflow_Q, self.underflow_Q
         )
-        # The controlled outflow (underflow or overflow) is a differentiable
-        # flow setpoint; the other outflow is the remainder. Both the flow rule
-        # and the material split read it through one FlowSetpoint.
-        if self.underflow_Q is not None:
-            self._ctrl = "underflow"
-            self._setpoints = {"underflow_Q": FlowSetpoint(float(self.underflow_Q), 0)}
-        else:
-            self._ctrl = "overflow"
-            self._setpoints = {"overflow_Q": FlowSetpoint(float(self.overflow_Q), 0)}
+        # The controlled outflow (underflow or overflow) is a flow setpoint (a
+        # differentiable parameter, or an expression of time); the other
+        # outflow is the remainder. Both the flow rule and the material split
+        # read it through one setpoint.
+        self._ctrl = "underflow" if self.underflow_Q is not None else "overflow"
+        name = f"{self._ctrl}_Q"
+        self._setpoints = build_setpoints(
+            {name: getattr(self, name)}, owner=f"IdealClarifier '{self.name}'"
+        )
         # Pre-build a (n_species,) mask: 1.0 for particulates, 0.0 for solubles.
         self._particulate_mask = species_mask(
             self.model, self.particulate_species, what="particulate species"
@@ -115,11 +116,11 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
     def output_ports(self) -> list[str]:
         return [self.overflow_port, self.underflow_port]
 
-    def _flow_setpoints(self) -> dict[str, FlowSetpoint]:
+    def _flow_setpoints(self) -> dict[str, Setpoint]:
         return self._setpoints
 
-    def _split_flows(self, Q_in: jnp.ndarray, params: jnp.ndarray, clamp: bool):
-        val = self._setpoints[f"{self._ctrl}_Q"].resolve(self._flow_params(params))
+    def _split_flows(self, Q_in: jnp.ndarray, params: jnp.ndarray, clamp: bool, t):
+        val = self._setpoints[f"{self._ctrl}_Q"].resolve(self._flow_params(params), t)
         if self._ctrl == "underflow":
             return split_controlled_flows(None, val, Q_in, clamp)
         return split_controlled_flows(val, None, Q_in, clamp)
@@ -139,7 +140,7 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
         # hazard during the recycle-flow startup transient; closes issue #17).
         # Mass-conserving (the two outflows sum to Q_in) and inactive at steady
         # state.
-        Q_over, Q_under = self._split_flows(Q_in, params, clamp=True)
+        Q_over, Q_under = self._split_flows(Q_in, params, clamp=True, t=t)
 
         # Particulate mass partitioned by capture: ``capture_efficiency`` of each
         # particulate's inflowing mass goes to the underflow, the rest to the
@@ -162,10 +163,11 @@ class IdealClarifier(StatelessUnit, FlowParameterized):
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
         """Linear flow rule for the recycle-flow solve: the controlled flow
-        (``underflow_Q`` or ``overflow_Q``) is constant and the other outflow is
-        the remainder, so the map stays affine and ``Plant._resolve_flows`` is
-        exact. The clamp in ``compute_outputs`` is the concentration-stage
+        (``underflow_Q`` or ``overflow_Q``) is the setpoint at the context's
+        time and the other outflow is the remainder, so the map stays affine and
+        ``Plant._resolve_flows`` is exact. The clamp in ``compute_outputs`` is the concentration-stage
         safeguard, inactive at steady state."""
         Q_in = input_flows[self.input_port]
-        Q_over, Q_under = self._split_flows(Q_in, params, clamp=False)
+        t = None if ctx is None else ctx.t
+        Q_over, Q_under = self._split_flows(Q_in, params, clamp=False, t=t)
         return {self.overflow_port: Q_over, self.underflow_port: Q_under}

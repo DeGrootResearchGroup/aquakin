@@ -193,9 +193,11 @@ that imports both. Keep it that way rather than copying knowledge across:
   `flowsheet` is another file is pointed back, and a frozen one is refused (it
   would run its snapshot, not the drawing).
 - **A scheduled value is text, read by aquakin** (an influent's `Q`, `T` and
-  `composition` entries): `forms._scheduled` keeps a number a number (a
-  constant feed is written exactly as before) and anything else as typed.
-  Never parse an expression here; the background check or Save reports it.
+  `composition` entries, a flow setpoint, a `scheduled_port_map`'s pumps):
+  `forms._scheduled` keeps a number a number (a constant is written exactly as
+  before) and anything else as typed. Never parse an expression here; the
+  background check or Save reports it. A mapping field is split into entries by
+  `forms._entries` at commas outside brackets only (`clip(t, 0, 1)` is one value).
 - **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
   `inf` / `-inf` remain for "no limit" number settings.
 - **A stored aeration species the model lacks** is replaced by the model's
@@ -227,8 +229,12 @@ editor needs at run time goes in its `REQUIRED`.
   skipped without Playwright; not in the fast gate). Run `pytest tests/browser`
   when a change touches the canvas or the form, after rebuilding the bundle, and
   add a page's files beyond BSM1 to the job's path filter.
-- In `tests/browser`, wait for the start-up checks (`_checks_done`) when a test
-  depends on them; read Python's document from the header chip ("N units · M
+- In `tests/browser`, the `page` fixture hands over the page only once the
+  start-up checks have finished (`checks_finished`, `tests/browser/conftest.py`),
+  because every worker request (Open, the study dialog) queues behind a round
+  of checks, which is slow on a loaded machine. A test that starts a round and
+  then needs it over waits for it (`checks_finished`, or `checks_done` to show
+  the Checks tab), never with a longer timeout; read Python's document from the header chip ("N units · M
   connections · K recycles") and messages through a recorder (the snackbar
   closes after four seconds); never a negative check with no sync point after it.
 

@@ -150,6 +150,17 @@ docstrings of `aquakin/plant/colored.py`, `aquakin/plant/solve_cache.py` and
   but not in algebraic mode, where temperature passes through reactors on the
   concentration-dependent flows. Do not cache a map without this check: there is
   no mid-solve re-guard.
+- **A plant with a flow setpoint written as an expression of time caches none of
+  the maps** (`RecycleResolver.has_scheduled_setpoints`, read from the units'
+  `ScheduledSetpointUnit.scheduled_setpoints`, checked before any probe). The
+  guards probe states at one `t`, so they cannot see a map that moves in time,
+  and such a setpoint moves both: a fraction (`f_PS`) or a threshold changes
+  `A`, and any flow, absolute ones included, changes the mixing and thickening
+  weights of `M` in a loop of stateless units. Decide it from what the units
+  declare, never by probing more times (a `step` lands between any samples). A
+  `PiecewiseConstantSchedule` on the Takács clarifier is not declared and keeps
+  the cache: it is an absolute flow into a stateful unit, whose outlets reach
+  neither map.
 - **The maps are built from the runtime `params`**, so the gradient flows
   through them and a parameter sweep stays correct. `_compute_flow_map` coerces
   `params` first so the flow-setpoint block is present, matching the hot path.
