@@ -287,8 +287,8 @@ def test_a_law_reading_its_own_signal_is_a_cycle():
 
 
 def test_an_aeration_kla_signal_sets_the_kla_times_gain(asm1):
-    """kLa = signal * gain on oxygen and ratio * that on a co-stripped gas; like a
-    closed-loop kLa, ``alpha`` does not scale it."""
+    """The clean-water kLa is signal * gain on oxygen and ratio * that on a
+    co-stripped gas; the process-water kLa is that times ``alpha``."""
     from aquakin.plant import Aeration, CSTRUnit
 
     aer = Aeration(kla_signal="kla3", gain=0.5, alpha=0.4, stripped={"SNO": 0.8})
@@ -298,6 +298,8 @@ def test_an_aeration_kla_signal_sets_the_kla_times_gain(asm1):
     assert kla[asm1.species_index["SO"]] == 50.0
     assert kla[asm1.species_index["SNO"]] == pytest.approx(40.0, rel=1e-14)
     assert np.count_nonzero(kla) == 2
+    process = np.asarray(tank.kla_vector({"kla3": 100.0}, process_water=True))
+    np.testing.assert_allclose(process, 0.4 * kla, rtol=1e-15)
 
 
 def test_an_ifas_unit_reads_its_kla_signal(asm1):
@@ -315,6 +317,31 @@ def test_an_ifas_unit_reads_its_kla_signal(asm1):
     ifas = build_unit("ifas", "ifas", settings)
     assert ifas.required_signals == ("kla_ifas",)
     assert float(ifas.kla_vector({"kla_ifas": 90.0})[asm1.species_index["SO"]]) == 90.0
+
+
+def test_an_ifas_unit_applies_alpha_to_its_kla_signal(asm1):
+    """The IFAS bulk shares the CSTR aeration term: its oxygen transfer is
+    ``alpha * signal * (do_sat - SO)``."""
+    from aquakin.plant.catalog import build_unit
+
+    settings = {
+        "model": "asm1",
+        "volume": 1000.0,
+        "conditions": {"T": 293.15},
+        "specific_surface_area": 500.0,
+        "fill_fraction": 0.5,
+        "biofilm_thickness": 1e-4,
+        "aeration": {"kla_signal": "kla_ifas", "alpha": 0.5},
+    }
+    ifas = build_unit("ifas", "ifas", settings)
+    C = asm1.default_concentrations()
+    inputs = {"in": Stream(Q=jnp.asarray(100.0), C=C, model=asm1)}
+    state = ifas.initial_state()
+    oxygen, _stripped = ifas.oxygen_transfer(
+        0.0, state, inputs, asm1.default_parameters(), {"kla_ifas": 90.0}
+    )
+    so = asm1.species_index["SO"]
+    assert float(oxygen[so]) == pytest.approx(0.5 * 90.0 * (8.0 - float(state[so])), rel=1e-12)
 
 
 @pytest.mark.parametrize(

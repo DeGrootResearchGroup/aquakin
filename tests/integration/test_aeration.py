@@ -61,6 +61,8 @@ def test_anoxic_tank_has_no_aeration(asm1):
     assert float(tank._kla_vec.max()) == 0.0
     assert float(tank._sat_vec.max()) == 0.0
     assert tank.required_signals == ()
+    assert not tank.kla_temperature_corrected
+    assert float(tank.delivered_oxygen_kla({}, None)) == 0.0
 
 
 # --- closed loop: per-tank auto-wiring --------------------------------------
@@ -209,14 +211,19 @@ def test_default_aeration_is_bit_faithful(asm1):
     assert warm == pytest.approx(ref)
 
 
-def test_constant_factors_fold_into_vectors(asm1):
-    """alpha scales the open-loop kLa; beta and pressure_factor scale the
-    saturation -- all temperature-independent, folded at construction."""
-    tank = _tank(asm1, "t", Aeration(kla=240.0, do_sat=8.0,
-                                     alpha=0.6, beta=0.95, pressure_factor=0.9))
+def test_constant_factors_scale_kla_and_saturation(asm1):
+    """beta and pressure_factor fold into the saturation at construction; the
+    stored kLa stays the clean-water ``kla`` and alpha scales it in the
+    aeration term, ``0.6 * 240 * (8 * 0.95 * 0.9 - SO)``."""
+    aer = Aeration(kla=240.0, do_sat=8.0, alpha=0.6, beta=0.95, pressure_factor=0.9)
+    tank = _tank(asm1, "t", aer)
     so = asm1.species_index["SO"]
-    assert float(tank._kla_vec[so]) == pytest.approx(240.0 * 0.6)
+    assert float(tank._kla_vec[so]) == 240.0
+    assert float(tank.oxygen_kla()) == 240.0
+    assert float(tank.oxygen_kla(process_water=True)) == pytest.approx(240.0 * 0.6, rel=1e-15)
     assert float(tank._sat_vec[so]) == pytest.approx(8.0 * 0.95 * 0.9)
+    term, so_val = _aeration_term(asm1, aer, 293.15)
+    assert term == pytest.approx(0.6 * 240.0 * (8.0 * 0.95 * 0.9 - so_val), rel=1e-12)
 
 
 def test_temperature_correction_identity_at_ref_T(asm1):
@@ -261,17 +268,22 @@ def test_temperature_correction_falls_back_to_static_T(asm1):
     assert term == pytest.approx(kla_eff * (8.0 * ratio - float(C[so])), rel=1e-6)
 
 
-def test_closed_loop_kla_not_theta_scaled_but_saturation_is(asm1):
-    """A controlled kLa comes from the control signal and is NOT theta-scaled
-    (the controller already manipulates it), but its driving-force saturation
-    still gets the C_s(T) correction."""
-    aer = Aeration(do_setpoint=2.0, temperature_correction=True, ref_T=293.15)
-    signals = {"_aer_t_kla": 100.0}
-    term, so_val = _aeration_term(asm1, aer, 303.15, signals=signals)
+@pytest.mark.parametrize(
+    ("mode", "signal"),
+    [({"do_setpoint": 2.0}, "_aer_t_kla"), ({"kla_signal": "kla_t"}, "kla_t")],
+)
+def test_signal_driven_kla_is_corrected_like_a_fixed_kla(asm1, mode, signal):
+    """A controller's output is the clean-water kLa: alpha and, with the
+    temperature correction on, ``kla_theta**(T - ref_T)`` scale it as they scale
+    a fixed ``kla``, and the saturation gets the C_s(T) correction."""
+    aer = Aeration(**mode, gain=0.8, alpha=0.6, temperature_correction=True,
+                   ref_T=293.15, kla_theta=1.024)
+    term, so_val = _aeration_term(asm1, aer, 303.15, signals={signal: 100.0})
     ratio = float(oxygen_saturation(303.15) / oxygen_saturation(293.15))
-    # kLa is the raw signal (gain 1.0), NOT 100*theta**10.
-    expected = 100.0 * (8.0 * ratio - so_val)
-    assert term == pytest.approx(expected, rel=1e-6)
+    kla = 100.0 * 0.8 * 0.6 * 1.024 ** 10.0
+    assert term == pytest.approx(kla * (8.0 * ratio - so_val), rel=1e-12)
+    fixed = Aeration(kla=80.0, alpha=0.6, temperature_correction=True, ref_T=293.15)
+    assert term == pytest.approx(_aeration_term(asm1, fixed, 303.15)[0], rel=1e-12)
 
 
 def test_correction_factor_validation():
