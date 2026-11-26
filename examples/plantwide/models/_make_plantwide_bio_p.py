@@ -137,10 +137,12 @@ def per_day(q_cmol_per_h: float, cod_numerator: float) -> float:
 def parameters() -> dict:
     p = {}
 
-    def add(name, value, units, note=None, bounds=None, transform="positive_log"):
+    def add(name, value, units, bounds=None, transform="positive_log", prior=None):
         entry = dict(value=num(value), units=units)
         if bounds:
             entry.update(bounds=[num(b) for b in bounds], transform=transform)
+        if prior:
+            entry["prior"] = dict(mean=num(prior[0]), std=num(prior[1]))
         p[name] = entry
 
     # Anaerobic uptake (Appendix 5), per g COD biomass per day at 20 C.
@@ -158,7 +160,12 @@ def parameters() -> dict:
     # PAO on acetate 0.16 pH - 0.7985 (Filipe et al. 2001); PAO on propionate
     # 0.18 (+0.20 per pH unit above 7.5); GAO on acetate 0.057 pH - 0.34.
     add("alpha_PAO_HAc_slope", 0.16, "1/pH")
-    add("alpha_PAO_HAc_int", -0.7985, "-", bounds=(-0.95, -0.6), transform="none")
+    # The source's value (Filipe et al.; decision 13) gives 0.57 P-mol/C-mol
+    # released at pH 7. Fits are spread and lower at full scale (Smolders et al.
+    # 0.48 in the lab, TU Delft full-scale about 0.36, intercept -1.01), so the
+    # bounds take them in and the prior's two standard deviations reach -1.0.
+    add("alpha_PAO_HAc_int", -0.7985, "-", bounds=(-1.1, -0.6), transform="none",
+        prior=(-0.7985, 0.1))
     add("alpha_PAO_HPr", 0.18, "-")
     add("alpha_GAO_HAc_slope", 0.057, "1/pH")
     add("alpha_GAO_HAc_int", -0.34, "-")

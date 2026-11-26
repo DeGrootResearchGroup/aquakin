@@ -202,6 +202,12 @@ kept equal by putting the organic-N difference in ammonium.
     phosphate and PHA to acetate (ASM2d's lysis), glycogen to `XS`. (This
     replaces decision 11's "decay by the core's death-regeneration".)
 
+13. **PAO P release per acetate: the source's value** (owner, 2026-11-26),
+    `1/4 + 0.16 pH - 0.7985` P-mol/C-mol (0.57 at pH 7, 0.55 g P/g COD), so
+    the PAO-GAO competition stays as the source calibrated it; the intercept
+    is a parameter with bounds and a prior that reach the full-scale TU Delft
+    value (0.36, as in `asm2d_tud`), to be calibrated per plant.
+
 ## What the bio-P and acidogen sources give (read 2026-11-26)
 
 - **López-Vázquez et al. (2009)** models three populations, not two:

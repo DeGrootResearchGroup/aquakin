@@ -221,9 +221,12 @@ parameters:
     value: -0.7985
     units: '-'
     bounds:
-    - -0.95
+    - -1.1
     - -0.6
     transform: none
+    prior:
+      mean: -0.7985
+      std: 0.1
   alpha_PAO_HPr:
     value: 0.18
     units: '-'
