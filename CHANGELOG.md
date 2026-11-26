@@ -21,6 +21,1109 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 <!-- towncrier release notes start -->
 
+## [0.3.0] - 2026-11-26
+
+### Added
+
+- Python 3.13 is now a supported, tested version: the package metadata lists it,
+  and CI runs the unit and editor tests on Python 3.11 and 3.13 (the integration
+  tests on 3.12), so every supported version from 3.11 to 3.13 is tested. ([#645](https://github.com/DeGrootResearchGroup/aquakin/issues/645))
+- `aquakin.sample_posterior` and `Plant.sample_posterior` draw from the posterior
+  of a `loss="nll"` calibration by Markov chain Monte Carlo (a random-walk
+  Metropolis started from the Laplace posterior), for posteriors the Laplace
+  Gaussian misdescribes: curved, skewed or cut by a bound. The density is the one
+  the fit maximized, with fitted initial pools sampled alongside the rates, and the
+  result `PosteriorSamples` reports R-hat, effective sample size and acceptance
+  rate. `CalibrationResult.predictive_band` takes the draws through its new
+  `draws=` argument, and they serve as `param_draws` for robust experiment design.
+  No new dependency. ([#686](https://github.com/DeGrootResearchGroup/aquakin/issues/686))
+- Information criteria for choosing between model structures: `aquakin.aic`,
+  `aquakin.aicc` and `aquakin.bic` of a `loss="nll"` fit by `calibrate` or
+  `Plant.calibrate`, and `aquakin.compare_models`, which ranks fits of the same
+  observations with their differences and Akaike weights and refuses fits of
+  different data. `CalibrationResult` gains `log_likelihood` (the complete
+  Gaussian log-likelihood, without any prior penalty), `n_observations` and
+  `n_estimated` (free rates, fitted initial pools and estimated noise levels).
+  The `CalibrationResult.loss` description now says that it leaves out the
+  `(N/2) log(2π)` constant. ([#688](https://github.com/DeGrootResearchGroup/aquakin/issues/688))
+- `aquakin.sobol_indices` estimates variance-based Sobol sensitivity indices:
+  the first-order index (the share of the output variance each input explains
+  on its own), the total-order index (including interactions), and bootstrap
+  confidence intervals on both, whose resample count and level are set with
+  `aquakin.BootstrapConfig`. It takes the same function and input
+  distributions as `aquakin.dgsm` and `aquakin.monte_carlo`. It costs
+  `N (d + 2)` forward solves for `d` inputs, far more than DGSM, so DGSM remains
+  the screen for many inputs; `aquakin.sobol_indices_cost` gives the solve count
+  before a run. ([#689](https://github.com/DeGrootResearchGroup/aquakin/issues/689))
+- A flow setpoint can follow a schedule written as an expression of time, the
+  same language influent patterns use: a clarifier's `underflow_Q` or
+  `overflow_Q`, a `SetpointSplitter`'s pump flows, a `ThresholdSplitter`'s
+  `threshold` and a primary clarifier's `f_PS`, for example
+  `underflow_Q="18831 + 385*sin(2*pi*t)"` or a wastage step
+  `"385 + 75*step(t - 30)"`. A step test or a diurnal pumping pattern no longer
+  needs Python code or a table file. The expression is written to a flowsheet
+  file as text, round trips and fingerprints, and can be edited in the
+  flowsheet editor. It is on the plant's clock. Its value is clipped as it is
+  evaluated, a flow to zero or more and a fraction to between 0 and 1. A
+  constant setpoint is still checked when the unit is built and is still a
+  differentiable parameter. The numbers inside an expression are not
+  parameters. A plant with such a setpoint recomputes its recycle streams at
+  every step rather than reusing maps built once per run, so it solves somewhat
+  more slowly. Plants without one run exactly as before. ([#692](https://github.com/DeGrootResearchGroup/aquakin/issues/692))
+- A control law can be written as an expression instead of a Python class:
+  `aquakin.plant.ExpressionController` publishes the value of its `law`, such as
+  `"clip(offset + Kp*([SNH] - sp), 0, 240)"`, as a named signal. A law reads the
+  sensed stream's species in brackets and its measured channels (`TSS`, `COD`,
+  `TN`, `TKN`, `NOx`, `TP`, following the run's composition parameters), named
+  `constants`, the plant clock `t`, the functions of an expression of time, and
+  any signal another unit publishes, so one law can cascade from another; the
+  plant computes each controller after the ones it reads and refuses a cycle by
+  name. The law compiles to plain JAX, so a solve under it still differentiates.
+  Two new modes let a unit read a signal by name with nothing wired for it:
+  `Aeration(kla_signal=...)` takes a tank's kLa (signal × `gain`) from the bus,
+  for `CSTRUnit` and `IFASUnit` alike, and `DosingUnit(flow_signal=...)` its dose
+  flow. All three are available in a flowsheet spec (`kind:
+  expression_controller`) and in the flowsheet editor, whose aeration choice
+  gains a `kla_signal` mode. In the editor, every mapping of names to numbers (a
+  controller's constants, the Takács clarifier's `settling_params` and
+  `tss_factors`) is now edited as rows of a name and a number rather than as one
+  line of text. ([#695](https://github.com/DeGrootResearchGroup/aquakin/issues/695))
+- `aquakin-ui` now edits every unit in its form, and a flowsheet file can hold a
+  sequencing batch reactor. A chemical dosing unit's reagent is chosen as its
+  model, a label and the species it contains with their concentrations (each
+  species from that model, with its unit shown). An SBR's phases are a table to
+  add to, reorder and remove from, and its settling model a choice of `interface`
+  or `layered` with that model's arguments. In the file, `phases:` is a list of
+  mappings in `SBRPhase`'s field names and `settling:` a mapping naming its
+  `kind`; a field left out takes its default, `Plant.to_spec` writes every field,
+  and an unknown field is an error naming its phase. No unit is marked "Python"
+  in the palette any more. ([#696](https://github.com/DeGrootResearchGroup/aquakin/issues/696))
+- `aquakin.ASTNode`, the type `parse_rate_expression` returns and a registered
+  rate function's arguments are annotated with, is exported, so code built on
+  them no longer imports it from `aquakin.core.nodes`. ([#820](https://github.com/DeGrootResearchGroup/aquakin/issues/820))
+- Three SBR feed modes, each conserving what flows in. `feed="continuous"` takes
+  the inflow in every phase (a continuous-inflow SBR, ICEAS type).
+  `feed="storage"` puts a holding volume ahead of the tank, inside the unit
+  (`storage_volume`, `storage_initial_fraction`,
+  `storage_initial_concentrations`): the fill pump draws `feed_flow` from it, what
+  it cannot hold leaves through a new `overflow` port, and running empty cuts the
+  draw back to the inflow; `aquakin.plant.storage_report(plant, solution, "sbr")`
+  reports the level, overflow and shortfall. `feed="batch"` requires the influent
+  to deliver `feed_flow` during fill phases and nothing otherwise, and each solve
+  checks this. The flowsheet file, the unit catalogue (a new `choice` setting
+  type, and settings and ports that apply in one mode only) and the flowsheet
+  editor's form take the new settings. ([#857](https://github.com/DeGrootResearchGroup/aquakin/issues/857))
+- A model can declare which of its species are dissolved gases in a new
+  `gases:` block, with Henry's-law solubilities and transfer coefficients from a
+  built-in gas library (O2, N2, CO2, CH4, H2) that each entry can override. The
+  declaration is available as `model.gases`; it does not change how any existing
+  model runs.
+- Results can be read back in the units you want: `C_named`, `C_named_many`,
+  `final_named`, `to_dataframe` and `to_csv` take `units=`, on reactor
+  solutions, plant solutions and plant streams. Pass one unit for every species
+  read (`sol.C_named("SNH", units="mg/L")`) or a `{species: unit}` dict for some
+  of them, the rest staying in the model's units; tables label their columns and
+  `df.attrs["units"]` with the units used. Only the scale is converted, so a unit
+  of another quantity (moles where the model has grams) raises. The conversion is
+  a multiplication, so a value read this way stays differentiable.
+- The flowsheet editor can now be installed by someone who has never used Python:
+  each release carries an installer for Windows (download and double-click) and
+  for macOS and Linux (paste one line into Terminal). It fetches Python and the
+  release's tested dependency versions into a folder of their own, and puts an
+  aquakin launcher on the Desktop. See "Installing the editor without Python" in
+  the user guide.
+- `Aeration(stripped="model")` strips every dissolved gas a model declares in its
+  `gases:` block (N₂, CH₄, H₂, CO₂, ...) along with the oxygen, each at its
+  library transfer ratio and toward its share of the air at the tank's
+  temperature and pH; `air=` changes the gas composition.
+- `HeadspaceDigesterUnit` is an anaerobic digester whose gas headspace belongs to
+  the unit rather than the model, so a model that declares its dissolved gases in
+  a `gases:` block can run in a digester unchanged. It follows BSM2's gas-liquid
+  transfer and biogas outflow, and `plant.mass_balance()` counts the biogas it
+  vents.
+- `IdealClarifier` and `TakacsClarifier` are now importable from `aquakin.plant`
+  like the other unit operations, so `from aquakin.plant import TakacsClarifier`
+  works without naming the module that defines it.
+- `aquakin.register_rate_function` and `aquakin.RateFunction`: add a rate
+  function aquakin does not ship, without editing the package — the rate-law counterpart of the `Unit` protocol
+  that already lets you add a plant unit operation. A rate law needing a
+  function outside the built-in set previously meant forking aquakin or folding
+  the term into a precomputed condition field, which put its coefficients
+  outside the parameter vector and so outside calibration, sensitivity and
+  identifiability. A registered function is not second class: it parses,
+  evaluates, reaches the same batched rate kernel — bit-identically to its own
+  scalar path — and differentiates exactly as a built-in does, with its
+  constants as ordinary model parameters. Register before the model that uses
+  it is loaded; a model file naming an unregistered function now fails with an
+  error listing what is available and naming the remedy. A name or kernel key
+  that collides with a built-in is refused, since shadowing `monod` would
+  change what existing model files mean, and only registration can add a
+  function — defining a node class is never enough on its own. A function may
+  optionally declare how its result's dimension follows from its arguments', so
+  `check_units` can check expressions using it. `registered_rate_functions`
+  lists what is registered. A rate function subclasses the public
+  `aquakin.RateFunction`, so extending aquakin as documented needs no private
+  name. Its `op` gets none of the built-in guards, so the guarded helpers it
+  can use — `safe_pow`, `safe_sqrt` and `safe_log` in `aquakin.core.kernels` —
+  are public too: a fractional power written as plain `x**n` has an infinite
+  derivative at a depleted species.
+- `plant.digester_gas(solution)` now reports the biogas of a `HeadspaceDigesterUnit`,
+  not only of an ADM1 digester: the flow normalized to the vent pressure, the CH₄,
+  CO₂ and H₂ partial pressures and the methane mass flow, in the BSM2 convention
+  and per day whatever the plant's time unit. So `methane_production()` and the
+  biogas line of `plant.mass_balance()` work for a digester on any model that
+  declares its gases.
+
+### Changed
+
+- `aquakin.calibrate(..., diff=aquakin.DifferentiationConfig(method="stable"))`
+  now integrates with the reactor's own integrator: `IntegratorConfig(order=...)`
+  (Kvaerno3 by default) or an explicit `IntegratorConfig(solver=...)`, with its
+  `factormax` step-growth cap (3 by default). It used to run Kvaerno5, with
+  diffrax's own step-growth cap, whatever the reactor was configured with. A stable-adjoint fit with
+  a default reactor can therefore move slightly: on a small first-order decay fit
+  the fitted rate constant changed by under one part per million. To reproduce an
+  earlier result exactly, build the reactor with
+  `integrator=aquakin.IntegratorConfig(order=5, factormax=None)`. ([#643](https://github.com/DeGrootResearchGroup/aquakin/issues/643))
+- `plant.mass_balance` says when its nitrogen and phosphorus closure is only
+  approximate: each `ComponentBalance` has a `notes` list, which `summary()`
+  prints. A `TakacsClarifier` with `composition_mode="lumped_tss"` (the BSM2
+  default) tracks only total solids, so it values its blanket's N and P at the
+  model's default solids composition; while the blanket fills or empties, N
+  misses by about 0.2% (on BSM1 over days 1 to 3 from the warm start) however
+  finely the solution is saved, and the balance now notes this on N and P. COD
+  is unaffected, and at steady state the balance closes. Use
+  `composition_mode="per_species"` for an exact transient N/P balance. ([#806](https://github.com/DeGrootResearchGroup/aquakin/issues/806))
+- **Breaking:** `SBRUnit` now needs a `feed` mode, with no default, and an SBR
+  built or read from a flowsheet file without one is refused with a message
+  listing the modes. Before, an SBR took `feed_flow` from its feed port during
+  fill phases whatever arrived there, so inflow outside a fill phase, or above
+  `feed_flow`, was silently lost (and `plant.mass_balance` reported it as an
+  imbalance). To keep the old behaviour, feed the SBR only during its fill phases
+  at `feed_flow` and set `feed="batch"`; a continuous feed needs
+  `feed="continuous"` or `feed="storage"`. With `feed="continuous"`, `feed_flow`
+  is left unset (`None`). ([#857](https://github.com/DeGrootResearchGroup/aquakin/issues/857))
+- `Aeration`'s `alpha`, and with `temperature_correction=True` its `kla_theta`
+  correction, now apply to a kLa set by a DO controller (`do_setpoint=`) or a
+  control signal (`kla_signal=`), exactly as to a fixed `kla`: the controller
+  output is the clean-water kLa, and a fouled tank asks its controller for more
+  of it. Gases stripped with oxygen follow the corrected kLa. The energy figures
+  of `evaluate_bsm1` / `evaluate_bsm2` follow one convention in every mode: the
+  benchmark aeration energy (`AE = S_sat·V·kLa/1800`) uses the kLa the tank
+  actually delivers (times `alpha` and, when on, the temperature factor), since
+  its 1.8 kg O₂/kWh is a field efficiency; with an `AerationSystem`, the blower
+  energy and air flow use the clean-water kLa, as does the mixing energy's
+  aerated-or-not test, so a fouled tank's blower energy rises with the extra
+  clean-water kLa it needs. A fixed-`kla` tank's AE is `alpha × kla`, as before. A new
+  `AerationUnit.delivered_oxygen_kla` gives the delivered kLa, and
+  `kla_vector` / `oxygen_kla` report the clean-water kLa (also for a fixed
+  `kla`; pass `process_water=True` for the kLa times `alpha`). Results with the
+  defaults (`alpha=1.0`, no temperature correction) are unchanged. ([#900](https://github.com/DeGrootResearchGroup/aquakin/issues/900))
+- A plant created without `time_unit` whose kinetic models use different time
+  units, for example an ozonation model in seconds next to ASM1 in days, now
+  raises `UnitsError` when solved; give it a `time_unit` and the models are
+  converted to it. Such a plant was integrated against one clock and gave
+  wrong results without a warning.
+- A plant solve whose span runs past the last sample of a time-varying influent
+  record, or starts before its first, warns once with the new
+  `aquakin.plant.InfluentRangeWarning`, naming the influent, the record's range
+  and the requested span. Outside its samples a record holds the nearest one, so
+  the feed there was an unannounced extrapolation. A constant feed, the same at
+  every sample, and an `InfluentExpression` never warn. The check runs for
+  `Plant.solve` (every route, including `forward_fast`, located events,
+  `run_to_steady_state` and calibration) and `Plant.solve_sensitivity`.
+- Errors from the `aquakin serve` worker, from `aquakin.plant.catalog.check_unit`
+  and from `aquakin.plant.spec.check_spec` now carry the message and the
+  exception's class apart, `{"error": "volume must be positive", "type":
+  "ValueError"}`, instead of `"ValueError: volume must be positive"`; the
+  `aquakin study run --json` error event does the same. The flowsheet editor
+  shows the message as it stands.
+- Every shipped model now evaluates its reaction rates with negative
+  concentrations treated as zero (`clip_negative_states: true`). A stiff solve
+  can step a nearly depleted species slightly below zero; in `adm1`, `asm3`,
+  `ozone_bromate`, `uv_h2o2` and the `wats_sewer*` family a rate could then turn
+  slightly negative, running the reaction backwards. Those rates now take their
+  value at zero, as the ASM1, ASM2d and precipitation models already did.
+  Solutions where every concentration stays non-negative are unchanged; the BSM2
+  digester and whole-plant steady states are bit-identical.
+- Every shipped model now passes `check_units()`: all ADM1 parameters declare
+  units, and the ADM1 gas-outflow terms, whose units are knowingly
+  unconventional, are acknowledged.
+- Plant gradients with the default `DifferentiationConfig(method="stable")` use
+  the sparse (colored) Jacobian in the backward pass from 50 states instead of
+  100, so plants of that size, such as BSM1 with its ideal clarifier, take it by
+  default; their repeated gradients, as in a calibration, are about 1.5 times as
+  fast and unchanged in value.
+  `plant.colored_jacobian_decision()` reports the choice, and
+  `IntegratorConfig(colored_jacobian=False)` keeps the dense backward.
+- The ASM1↔ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) read the species
+  units the connected models declare and convert them into the units their
+  equations use, instead of assuming ASM1 in g/m3 and ADM1 in kg/m3 and
+  kmol/m3. A model declared on another basis (an ADM1 in g/m3) now translates
+  correctly. A declared unit that cannot be converted to the interface's (for
+  example inorganic N as a mass where moles are expected, or a model left at
+  the schema's default `mol/L` species units) now raises when the translator
+  is built; a unit that cannot be read gives a warning and is taken to be the
+  interface's. `Plant.connect` rejects a translator built for models that
+  declare different units from the models it connects. Results with the
+  shipped models are unchanged.
+- The layered secondary clarifier (`TakacsClarifier`, and the settler of
+  `build_bsm1(use_takacs=True)` / `build_bsm2`) now settles solids between its
+  layers with the Godunov flux of the settling conservation law (Bürger, Diehl &
+  Nopens 2011) instead of the Takács minimum-flux rule of the BSM benchmark
+  settlers. This is a deliberate departure from the benchmark. The two rules
+  differ only where an upper layer is denser than the one below it; there the
+  Takács rule switches between the two layers' fluxes whenever their order
+  flips, which made the sludge blanket pulse and forced small steps. The BSM2
+  steady state is unchanged, and on the dynamic BSM2 influent the effluent's
+  mean concentrations differ by under 0.1%, while a forward solve took about a
+  third of the steps and wall time and the default diffrax solve about a fifth
+  of the steps. `interface_flux="takacs"` (`settler_interface_flux="takacs"` on
+  the builders) reproduces the benchmark settler exactly.
+- The lean forward integrator (`Plant.solve(forward_fast=True)`) and the
+  staggered `Plant.solve_sensitivity` now Anderson-accelerate the Newton
+  iteration of each implicit stage, using the step's Jacobian factorization as
+  the preconditioner. Their results change within the solver tolerance. On a
+  dynamic BSM2 window, half as many steps failed Newton convergence and a
+  forward solve ran about 30% faster.
+- The lean forward integrator and the staggered `Plant.solve_sensitivity` no
+  longer grow the step right after a rejected step, and the Newton iteration of
+  each implicit stage now stops on the change in the stage value rather than in
+  its slope, so its tolerance no longer depends on the time unit or the step
+  size; a stage whose first correction is already small enough is accepted
+  without a second. On a dynamic BSM2 window a forward solve used about a fifth
+  fewer right-hand-side evaluations, with the same accuracy against a
+  tight-tolerance solve, and a staggered `solve_sensitivity` started at a steady
+  state no longer stalls at tiny steps. Results change within the solver
+  tolerance.
+- The worker's `list_studies` and `study_results` replies, and the `done` event
+  of `aquakin study run --json`, say whether the study has results
+  (`has_results`); `list_studies` also gives the spec each study builds its plant
+  from (`flowsheet`), and `study_results` where the study stands (`state`,
+  `reasons`, `notes`). The editor's results now say why they are out of date
+  (which input changed) rather than only that the flowsheet changed.
+- `C_named`, `list_species` and `calibrate(free_ic=...)` now accept any unit
+  whose state starts with its concentrations, followed by a volume or other
+  scalars. This covers the filtered primary clarifier, `StorageTank`,
+  `MBRUnit` and `SBRUnit`.
+- `IFASUnit` / `MBBRUnit` now default to `n_layers=16`, up from 4. The biofilm
+  discretization is first order and its error is governed by the penetration
+  ratio `L_f/delta` rather than thickness alone: at `L_f/delta = 4` four layers
+  put the substrate flux 26% high, where sixteen keep a typical carrier biofilm
+  within a couple of per cent. The class docstring carries the error table; lower
+  it again for a thin, fully penetrated film, where four layers are accurate to
+  well under a per cent and cheaper.
+- `Plant.connect` raises `WiringError` when an explicit `translator=` was
+  built for models whose species lists differ from the ones it connects.
+- `Plant.solve_sensitivity` now caches its compiled solve on the plant. Repeated
+  calls with new parameter values, initial state, time span, save times (of the
+  same length) or tolerances reuse it instead of recompiling, which helps
+  `dynamic_dgsm` samples, chained windows and parameter sweeps.
+- `Plant.solve_sensitivity` now uses the staggered corrector by default (see
+  above). Its results agree with the previous solve to the solver tolerance. It
+  is forward-only: it needs concrete `params` and `y0`, and differentiating
+  through it raises an error that points to `corrector="simultaneous"`.
+  `factormax=None` now means the staggered controller's own growth cap of 2.
+- `PrimaryClarifier` can compute its retention time from a first-order filtered
+  inflow, as the BSM2 reference does: pass `t_m` (the filter time constant, in
+  days) and `initial_flow`. The filtered flow becomes one extra state entry
+  after the concentrations, and only the particulate removal uses it; the
+  underflow is still `f_PS` times the instantaneous inflow. The default
+  `t_m=0` keeps the old behaviour and state layout.
+- `SensitivityResult.ranked_params()` now ranks parameters by their elasticity
+  `(dy/dp)·p/y`, the relative change in the output per relative change in the
+  parameter, rather than by the raw gradient, whose size depends on each
+  parameter's units. The new `SensitivityResult.elasticities()` returns the
+  values, and `ranked_params(elasticity=False)` gives the previous ranking.
+  `SensitivityResult` now also records the `params` it was evaluated at.
+- `SpatialConditions.with_` (and so `model.default_conditions().with_(...)`)
+  refuses a field the conditions do not carry, with a `ValueError` naming it and
+  listing the declared fields. It used to add the field silently, so a misspelt
+  name (`with_(Temp=283.15)`) left the intended condition at its default with no
+  sign anything was wrong. Build conditions with a new field with
+  `SpatialConditions.uniform(...)`.
+- `asm2d`, `asm2d_tud`, `asm3` and `asm3_biop` (and `asm2d_chemp`, which extends
+  `asm2d`) have realistic default concentrations instead of 1.0 for every species,
+  so `model.default_concentrations()` is a usable starting point: `asm3` takes
+  the aerated mixed liquor `asm1` declares, and the bio-P models an established
+  bio-P mixed liquor (about 4300 g TSS/m³). A run that starts from these
+  defaults gives different results; pass your own initial concentrations to keep
+  the previous ones.
+- `build_a2o` now builds the ten-layer Takács secondary clarifier by default
+  (`use_takacs=True`), as `build_bsm1` and `build_bsm2` do, instead of the
+  stateless `IdealClarifier`. A²O results change (the effluent and the reactor
+  states move, since the settler holds solids of its own) and the plant state is
+  longer (the settler's layer states), so a `y0` saved from the old default does
+  not fit it; a flowsheet file keeps the clarifier it was saved with. Solves take
+  longer (a 200-day solve about ten times as long). Pass
+  `build_a2o(use_takacs=False)` for the previous ideal clarifier.
+  `a2o_warm_start` now seeds the reactors with the default plant's steady-state
+  solids, so `Plant.steady_state` started from it reaches the nitrifying
+  operating point rather than the plant's other steady state, where the
+  nitrifiers have washed out.
+- `build_bsm1` now builds the benchmark's ten-layer Takács secondary clarifier by
+  default (`use_takacs=True`), the same settler `build_bsm2` uses, instead of the
+  stateless `IdealClarifier`. BSM1 results change: the steady state, the dynamic
+  effluent, EQI / OCI and the sludge age all move, and the plant state is longer
+  (the settler's layer states), so a `y0` saved from the old default does not fit
+  it; a flowsheet file keeps the clarifier it was saved with. Solves take longer.
+  Pass `build_bsm1(use_takacs=False)` for the previous ideal clarifier and its
+  results.
+- `build_bsm2` now uses the reference filter (`t_m=0.125` d, seeded at
+  `Q_ref`). Steady states are unchanged. Dynamic BSM2 results change: on the
+  609-day influent the average effluent ammonia was 2.8% above the reference
+  without the filter and is 0.1% above it with the filter. The primary's state
+  is now one entry longer, so a hand-built `initial_state(overrides=...)` entry
+  for `"primary"` needs the filtered flow appended.
+- `create_study` and `update_study` accept an absolute `flowsheet:` path and
+  store it relative to the study folder (leaving it out when it is the
+  project's `flowsheet.yaml`). Study files on disk keep their names and format.
+- `model.check_units()` reads an inline half-saturation constant written as
+  `c / (c + X)` as a dimensionless inhibition term, so the WATS sewer models
+  no longer report false findings. `mg` and `mmol` are now parsed as units
+  rather than as a metre times a gram or mole.
+- `ozone_bromate` no longer declares a temperature condition `T`: none of its
+  rates depend on temperature, so asking for one suggested a temperature
+  correction the model does not have. Code that still passes `T` keeps working;
+  the value is ignored, as it always was.
+- `plant.check()` includes the unit audit: `PlantCheck.ok` is now also false
+  when `Plant.check_units` finds an error, and `check(raise_on_error=True)`
+  raises `UnitsError` for one.
+
+### Deprecated
+
+- Creating a `Plant` without `time_unit` gives a `FutureWarning`. The plant
+  then uses the time unit its models share, as before. Pass it explicitly,
+  e.g. `Plant("my_plant", time_unit="d")`; it will be required in a future
+  release.
+
+### Removed
+
+- The sewer nitrate-dosing models are no longer shipped: `wats_sewer_extended`,
+  its structural variants and `wats_sewer_extended_v0`, the
+  `wats_sewer_khalil_paper*` family (including the depth-resolved biofilm
+  variants) and `wats_sewer_khalil_thesis`. They were built for one study and
+  now live with it. `aquakin.load_model` no longer finds them; to keep using one,
+  load a copy of its YAML with `aquakin.load_model_from_file`. The reference WATS
+  model, `wats_sewer`, is still shipped.
+- `CalibrationResult.predictive_band` no longer takes `eig_keep`, which was
+  deprecated and has had no effect: the band is always drawn from the
+  calibration's `posterior_cov`. A call that still passes `eig_keep=` now raises
+  a `TypeError`; delete the argument. `aquakin.identifiability(..., eig_keep=)` is
+  unchanged.
+- `aquakin.integrate.calibrate` no longer re-exports names it does not define.
+  Its `__all__` is now `calibrate`, `CalibrationResult`, `FreeICConfig`,
+  `LaplaceConfig`, `OptimizerConfig` and `PredictiveBand`. Import
+  `DifferentiationConfig`, `check_finite_gradient` and `forward_adjoint` from
+  `aquakin` (they were always public there). `native_time_factor`,
+  `to_unconstrained`, `from_unconstrained`, `dphysical_dunconstrained`, `observe`,
+  `observation_size` and `observation_takes_time` were internal helpers and are
+  no longer importable from this module; `Reactor` and `with_adjoint` are still
+  importable from it but are no longer listed as its API.
+
+### Fixed
+
+- `direct_n2o_emission` now reports the N₂O the solve actually stripped from a tank
+  whose `Aeration` strips it, aeration temperature correction included. It used
+  the uncorrected kLa, so with `Aeration(temperature_correction=True)` away from
+  the reference temperature it disagreed with the solve and with
+  `plant.mass_balance()` (by about 27 % at 10 °C above it). Tanks that do not strip
+  the gas in the solve, or an explicit `kla_ratio=`, still get the estimate from
+  the oxygen kLa. ([#670](https://github.com/DeGrootResearchGroup/aquakin/issues/670))
+- `plant.mass_balance()` now evaluates each reactor's reactions at the temperature
+  the solve ran them at (the flow-weighted inlet temperature, or the tank's own
+  temperature under `HeatBalanceTemperature`) rather than the reactor's static `T`.
+  Before, a feed warmer or colder than the static `T` showed up as a spurious
+  imbalance in the N and COD closure (about 17 % of N for a feed 10 K colder in
+  an anoxic tank). The solve itself is unchanged. ([#724](https://github.com/DeGrootResearchGroup/aquakin/issues/724))
+- Error messages and docstrings about differentiating a solve now name the
+  arguments that exist. They advised `ad_mode='forward'`, `gradient=
+  'stable_adjoint'` and building a reactor with `adjoint=aquakin.forward_adjoint()`,
+  all of which raise `TypeError`; they now say
+  `diff=aquakin.DifferentiationConfig(mode="forward")` for `sensitivity` / `dgsm`,
+  `diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")`
+  for a reactor (including the one built inside a `dgsm` `fn`) and for a
+  forward-mode `calibrate`, and `diff=aquakin.DifferentiationConfig(method="stable")`
+  for the cap-free reverse gradient. Affects the non-finite-gradient errors of
+  `calibrate` and `sensitivity`, the forward-mode errors of `dgsm` and of
+  `jax.jacfwd` through a reactor, and `reactor.check_gradient_finite`. ([#743](https://github.com/DeGrootResearchGroup/aquakin/issues/743))
+- `aquakin.calibrate` and `Plant.calibrate` with the default `loss="mse"` now
+  fit data in small units. On concentrations in mol/L (values near 1e-6) the
+  loss and its gradient were below the optimizer's absolute stopping
+  tolerance at any start, so the fit returned its starting parameters with
+  `converged=True`, and a `starts=` grid returned each start unchanged. The
+  optimizer now sees the loss divided by its value at the start (when that is
+  below 1; each start of a multistart or `starts=` list by its own), so `OptimizerConfig(tol=)` acts relative to the starting misfit and
+  the same data give the same fit in any unit. The minimum, the reported
+  `loss` and the Laplace posterior are unchanged; a fit on well-scaled data
+  may stop at a slightly different point within the tolerance. ([#744](https://github.com/DeGrootResearchGroup/aquakin/issues/744))
+- `final_named` and `C_named_many` take a single species name as a bare
+  string: `sol.final_named("HOCl")` returns `{"HOCl": ...}`, the same as
+  `sol.final_named(["HOCl"])`, instead of looking up each character and raising
+  `KeyError: Unknown species 'H'`. This holds on every solution, on a plant
+  stream (`StreamSeries`) and on `PlantSolution` (`final_named(unit, "SNH")`). ([#746](https://github.com/DeGrootResearchGroup/aquakin/issues/746))
+- A plant extended after it has been solved now works as if it had been built
+  that way. Adding a unit, connection or influent after a solve left some of
+  what the plant had worked out about its old layout in place, so a later
+  solve ran but `plant.stream(sol, "<new unit>.out")` raised a `KeyError`, and
+  a closed-loop aerated tank (or feedback dosing unit) added after a solve was
+  refused because its controller was never created. ([#749](https://github.com/DeGrootResearchGroup/aquakin/issues/749))
+- `CFDReactor.step` raises the same `RuntimeError` for a per-cell solve that
+  exhausts its `max_steps` budget on every call. It used to raise
+  `jax.errors.JaxRuntimeError` when the failing call compiled the step and
+  `ValueError` once the step had been compiled, so a coupled flow solver catching
+  one of them missed the other. The message now names the step budget and the
+  remedies, as the batch, plug-flow and particle-track reactors already do. ([#785](https://github.com/DeGrootResearchGroup/aquakin/issues/785))
+- The shipped `asm2d_tud` model now clamps the state to zero when it evaluates
+  the process rates (`clip_negative_states: true`), as `asm1` and `asm2d` already
+  do. Before, at a slightly negative substrate concentration (such as the
+  -1e-9 a stiff solver can produce once fermentable substrate and acetate are
+  depleted), `model.rates()` returned small negative heterotroph growth rates on
+  SF and SA; they are now exactly 0, as in the other ASM models. Solutions at
+  non-negative states are unchanged. ([#788](https://github.com/DeGrootResearchGroup/aquakin/issues/788))
+- Solves with located events (`Plant.solve(events=...)`, every SBR plant, and
+  `BatchReactor.solve(events=...)`) no longer recompile each segment on every
+  call. All segments of a solve share one compiled program, and a repeat solve
+  with the same settings reuses it: a small SBR cycle that took about 14 s on
+  every call now takes about 4 s the first time and well under a second after.
+  A time-event solve can also be wrapped in `jax.jit` with a save grid built
+  inside the traced function, which used to fail with
+  `TracerArrayConversionError`. ([#805](https://github.com/DeGrootResearchGroup/aquakin/issues/805))
+- Running a study again in the same process, such as from the flowsheet editor,
+  no longer compiles the plant's solve again: plants built with `Plant.from_spec`
+  from the same flowsheet (same settings, wiring, model and influent-table
+  content) now share their compiled dynamic and steady-state solves, so a warm
+  re-run of a small study takes a fraction of a second instead of several. A
+  plant changed after it is built (a unit added, `set_temperature`) compiles its
+  own, and results are bit-identical either way. ([#812](https://github.com/DeGrootResearchGroup/aquakin/issues/812))
+- `aquakin.fit` fits data in small units, such as concentrations in mol/L. Its
+  sum of squares was so small that SciPy's stopping tests, which are absolute
+  below 1, passed at the start, so it returned the initial guess unchanged and
+  reported convergence. The optimizer now sees the loss relative to its value at
+  the start, as `aquakin.calibrate` already does; `FitResult.loss` is still the
+  unscaled sum of squares. ([#819](https://github.com/DeGrootResearchGroup/aquakin/issues/819))
+- `FisherInformation.covariance()` (and so `std()` and `relative_std()`) raises
+  `numpy.linalg.LinAlgError` for a Fisher information that is singular up to
+  round-off, on every platform. It used to rely on `numpy.linalg.inv`, which on
+  some LAPACK builds (such as macOS Accelerate) returns a huge, meaningless inverse
+  instead of raising, so a design that cannot identify a parameter combination
+  could report finite Cramér-Rao bounds. The matrix counts as singular when its
+  smallest eigenvalue is at most 1e-10 of its largest, the same test
+  `aquakin.identifiability` uses for a non-identifiable direction. ([#825](https://github.com/DeGrootResearchGroup/aquakin/issues/825))
+- `solve_ph` no longer returns a wrong pH at strong-ion imbalances far beyond
+  the buffering (around 1 M). There a Newton step overshot to the edge of the
+  search range and then crept back by a fixed amount per step, so the 40-step
+  cap was reached first and the solver returned a finite pH up to several units
+  off, with no warning. Such a step is now replaced by bisection, and these
+  inputs converge within 17 steps. This is the default solver
+  (`activity_model="none"`, used by ADM1 and BSM2); ordinary inputs change only
+  in the last digits (about 1e-14 in pH). The activity-corrected solver
+  (`"davies"`, `"debye_huckel"`) is unchanged. ([#835](https://github.com/DeGrootResearchGroup/aquakin/issues/835))
+- `plant.mass_balance` now counts a sequencing batch reactor's gas exchange. The
+  SBR was left out of the gas term, so the oxygen its aerobic phases transfer
+  (COD) and the nitrate its anoxic phases denitrify to N₂ (N) showed up as
+  imbalance instead: on a two-cycle aerobic/anoxic/decant run the imbalance was
+  several times the throughput. Both are now integrated at the SBR's liquid
+  volume and active phase at each saved time, and the balance closes to the
+  `t_eval` sampling, as it does for a CSTR. A custom unit takes part by
+  implementing the new `ReactionBalanceUnit` and `OxygenTransferUnit` protocols
+  in `aquakin.plant.units`. ([#852](https://github.com/DeGrootResearchGroup/aquakin/issues/852))
+- `Plant.steady_state` no longer reuses a continuation or pseudo-arclength kernel
+  compiled for another scale. A second fallback on the same plant, from a known
+  point of a different magnitude or with a different `scale_floor`, used to run
+  with the first call's scale, so the arclength rung could fail to reach a target
+  it reaches on a fresh plant, and the continuation rung could stop on the wrong
+  convergence test. A forward-mode solve
+  (`DifferentiationConfig(mode="forward", method="through_solve")`) of a plant or
+  a reactor now reuses its compiled program instead of compiling again on every
+  call. ([#859](https://github.com/DeGrootResearchGroup/aquakin/issues/859))
+- The shipped `asm2d_tud` model's glycogen-formation rates are now finite when
+  stored glycogen (`XGLY`) is exactly 0, instead of NaN, so a simulation can start
+  with no glycogen. Results are unchanged wherever `XGLY` is positive.
+
+  Its poly-P storage rates are now finite when stored polyphosphate (`XPP`) is
+  exactly 0. The published rates are inversely proportional to the stored
+  fraction `XPP/XPAO`, which makes them infinite there and very stiff as `XPP`
+  runs down. As a numerical guard, not part of the published model, that factor
+  is now floored at a stored fraction of 0.001 g P/g COD. Above the floor, which
+  covers normal operation, the rates and results are exactly as before. Below it
+  the rates are capped, so a simulation can start with no stored poly-P, and an
+  anaerobic run that empties the poly-P pool no longer exhausts the solver. ([#861](https://github.com/DeGrootResearchGroup/aquakin/issues/861))
+- `optimize_experiment` no longer compiles its criterion again on every call. A
+  repeat call with the same reactor, estimated quantities, criterion, subset,
+  observations and upper time bound reuses the compiled program, even from a
+  different starting design, so it returns in a fraction of a second instead of
+  seconds. `calibrate(..., laplace=True)` and `Plant.calibrate(..., laplace=True)`
+  with the default finite-difference Hessian now reuse the gradient the fit
+  already compiled, rather than compiling a second one, unless
+  `LaplaceConfig(dtmax=...)` asks for a tighter step cap. Results are unchanged. ([#871](https://github.com/DeGrootResearchGroup/aquakin/issues/871))
+- In the flowsheet editor, choosing a dosing unit's reagent model (or another
+  choice that redraws a unit's form) no longer loses species or values entered
+  right after it: the form waits, dimmed, until it has been redrawn. ([#875](https://github.com/DeGrootResearchGroup/aquakin/issues/875))
+- A fractional power is guarded where it is singular, so `[X] ** 0.5` and
+  `sqrt([X])` behave the same. `d/dx x**e` is infinite at zero whenever `e < 1`,
+  which broke the gradient of a half-order rate law written as a power while
+  leaving the forward solve looking correct. **No value changes anywhere** — the
+  guard moves the derivative at a zero base from infinite to 0, exactly as the
+  `sqrt` guard does, and only where the exponent is below one, so `x**1` keeps
+  its derivative of 1 and `x**2` is untouched. A negative base under a
+  fractional exponent still gives NaN, since it has no real value. Verified
+  bit-identical across every shipped model's rates.
+- A plant with `HeatBalanceTemperature` can now be solved inside `jax.jit` or
+  `jax.vmap`, so `aquakin.monte_carlo`, `aquakin.compare_scenarios` and
+  `aquakin.dgsm` work over it (they jit the function even with
+  `batched=False`). Building its initial temperatures converted a traced value
+  to a Python float and raised `ConcretizationTypeError`.
+- A rate constant's temperature correction can name a model parameter as its
+  `theta` (`temperature: {theta: theta_A, ref_T: 293.15}`) instead of a fixed
+  number. The temperature sensitivity is then part of the parameter vector, so
+  `calibrate` can estimate it and `sensitivity`, `fisher_information`,
+  `identifiability`, `dgsm` and Monte Carlo include it, with no recompile
+  needed to sweep it. Several rate constants may share one `theta` parameter.
+  Models with numeric `theta` values behave exactly as before.
+- A reaction can declare `units_acknowledged: "<reason>"` for a rate whose
+  units are knowingly unconventional. `check_units()` then leaves its findings
+  out; `check_units(include_acknowledged=True)` still shows them.
+- A reactor or plant solve that runs out of integrator steps raises aquakin's
+  `RuntimeError` naming the remedies without first printing a JAX callback
+  traceback and Equinox's banner to the log. This covers every solve: the batch,
+  plug-flow, particle-track, CFD and biofilm reactors and their
+  `solve_sensitivity`, located events, and the plant's forward, `forward_fast`,
+  `solve_sensitivity` and steady-state solves. Under `jax.grad` or `jax.jit` the
+  solve fails as before.
+- A unit can no longer be named after one of its plant's models (for example a
+  splitter named `asm1`), which made `plant.parameter_index("asm1.muH")` return
+  the splitter's flow setpoint instead of the kinetic rate. Unit, port and
+  influent names containing `.`, `->` or whitespace are refused too, since
+  endpoints are written `unit.port`. Both raise `WiringError`.
+- A unit catalogue for front ends, `aquakin.plant.catalog`. It describes each
+  plant unit type as plain JSON-compatible data: its settings, with types,
+  defaults and the help text from the unit's docstring; how its ports follow
+  from those settings; and which settings must be given one at a time. Settings
+  are read from each unit's constructor, so new arguments appear without
+  editing the catalogue. `check_unit(kind, name, settings)` builds the real unit
+  and reports its ports or the constructor's error.
+- An `aquakin` command. `aquakin catalog` prints the catalogue as JSON, and
+  `aquakin serve` answers JSON-line requests on standard input and output
+  (`catalog`, `models`, `model`, `check_unit`, `check_spec`, `ping`), so a separate process
+  such as a flowsheet editor can use aquakin without importing it.
+- An influent that follows a pattern rather than a table:
+  `aquakin.plant.InfluentExpression` takes the flow, temperature and any species
+  as expressions of the plant's clock — `Q="18446 + 4000*sin(2*pi*t)"` — so a
+  diurnal or weekly load no longer needs a CSV generated beside the flowsheet.
+  Any value may equally be a plain number, and a species that is not named is
+  absent from the feed. The same values are accepted in a flowsheet spec's
+  `influent` unit (`Q`, `T` and each `composition` entry) and in the flowsheet
+  editor's unit form, where the whole feed stays text and no table file is
+  written. Expressions are read by `aquakin.plant.compile_time_expression`
+  (`aquakin.plant.time_expr`), compile to plain JAX arithmetic — so a solve
+  driven by one still differentiates — and offer `sin`, `cos`, `tan`, `exp`,
+  `log`, `log10`, `sqrt`, `abs`, `floor`, `min`, `max`, `mod`, `clip`, `step`,
+  `pi` and `e`. There is deliberately no comparison or conditional: a value that
+  switches uses `step` or `clip`, which stay differentiable. An unreadable
+  expression raises `aquakin.plant.TimeExpressionError` (a `ValueError`) when the
+  influent or spec is read, naming the field, rather than failing inside the
+  first solve.
+- Every plant unit with a volume (CSTR, MBR, IFAS/MBBR, digester, primary
+  clarifier, storage tank, SBR, UV and chlorine contact) refuses a volume that
+  is not a positive finite number; a zero or negative volume used to build, and
+  a steady-state solve of the plant then did not end.
+- Example projects in `examples/projects/`: BSM1, and BSM2 with its 15 °C ASM1 as
+  a model file that extends the shipped ASM1. The BSM2 project rebuilds the plant
+  `build_bsm2` makes, run with the BSM2 parameter set, to a bit-identical
+  right-hand side.
+- Expressions read more of Python's syntax, in rate expressions and expressions
+  of time alike: a number may carry Python's underscore separators
+  (`18446_000`), a call may end with a trailing comma (`monod([SS], KS,)`), and
+  `max` and `min` take any number of arguments (`max(a, b, c)`) as Python's do.
+  Nothing that parsed before parses differently — every expression in every
+  shipped model is unchanged. What stays deliberately absent is anything that
+  cannot be traced: comparisons, `if`/`else`, `%` and `//`. `^` is still refused
+  rather than read as exclusive-or, since a reader means a power by it.
+- Influents can declare the units their data are in with `units=` on
+  `InfluentSeries`, `model.influent(...)`, `InfluentSeries.constant` and
+  `read_influent_csv`, e.g. `{"t": "h", "Q": "m3/h", "T": "degC", "SS":
+  "mg/L"}`, and the data are converted to the units the plant works in: time to
+  the model's time unit, flow to m3 per that unit, temperature to Kelvin, and
+  each species to the model's declared unit. Only the scale is converted: a
+  unit that measures another quantity (moles where the model has grams, g COD
+  where it has g N) or cannot be read is rejected. The BSM influent loaders
+  declare their units.
+- Measured channels of your own, written as a weighted sum: a channel may now be
+  given as the text `"BOD5 = 0.65*[SS] + 0.65*[XS]"` wherever a species or a
+  measurement keyword is accepted -- `plant.calibrate`, `plant_fisher_information`,
+  `plant_profile_likelihood`, `plant_rank_sensor_sets`, a study's `observables:`,
+  and the flowsheet editor's study dialog, where it is typed straight into the
+  channels field. Species go in brackets and the measurements (`COD`, `TKN`,
+  `NOx`, `TN`, `TP`, `TSS`, `Q`, `T`) are named as they are, so a channel can be
+  built on them as well as on species (`"sCOD = COD - [XS] - [XI]"`); their
+  weights keep following the composition parameters of the run, so a custom
+  channel built on `TN` moves with a fitted `i_XB` exactly as `TN` does. The
+  combination must stay linear -- a `*` needs a plain number on one side -- which
+  is what lets a channel remain a column of the measurement matrix. Results are
+  reported under the channel's name. `aquakin.plant.parse_measure` reads one in
+  Python, `aquakin.plant.Measure` gains a `keywords=` argument for the same thing
+  built by hand, and an unreadable expression raises
+  `aquakin.plant.MeasureSyntaxError` (a `ValueError`) when the study is written,
+  not when it runs.
+- Plant observables can measure more than species: `"Q"` (flow), `"T"`
+  (temperature), `"COD"`, `"TKN"`, `"NOx"`, `"TN"` (`TKN + NOx`), `"TP"`,
+  `"TSS"`, or a `Measure` (any weighted sum of species, flow and temperature),
+  in `PlantObservable` / `SensorSet` channels. They follow what a laboratory
+  measures: dissolved oxygen, nitrate, hydrogen and methane are not COD,
+  dissolved N₂, N₂O and NO are in no nitrogen channel, and a digester's
+  headspace is in none. The composition weights follow the run's parameters, so
+  a fit of `i_XB` sees TN move with it. Calibration, plant Fisher information,
+  profile likelihood and sensor ranking all accept them. `StreamSeries` gains a
+  `T` trajectory for a stream that carries a temperature.
+  `composition_table` also serves a model read from a file that `extends:` a
+  shipped model with the same species, evaluated with its own parameters.
+- Plant states by name: every unit names its state entries
+  (`unit.state_names()`), and `Plant.state_names()`, `Plant.named_state(y)` and
+  `Plant.state_from_named(named)` turn a flat state into
+  `{unit: {name: value}}` and back, so a stored state survives a change of unit
+  order. **Custom units** implementing the `Unit` protocol should add
+  `state_names()`.
+- Progress reports and cancelling: `Plant.calibrate`,
+  `plant_profile_likelihood`, `plant_rank_sensor_sets` and
+  `plant_fisher_information` take `progress=`, a callable that receives an
+  `aquakin.Progress` at each objective evaluation, profile point or run, and
+  can raise `aquakin.Cancelled` to stop the analysis.
+- Rate expressions gain four general math functions — `exp(x)`, `log(x)`,
+  `sqrt(x)` and `min(a, b)` — for rate laws the activated-sludge vocabulary
+  does not cover. `exp` and `log` matter most: a term such as a Beer–Lambert
+  attenuation `exp(-alpha * {z})`, a thermal-inactivation factor or a
+  logarithmic driving force previously had to be computed outside the model
+  and injected as a condition field, which put its coefficients outside the
+  parameter vector and so outside calibration, sensitivity and
+  identifiability. Written in the rate expression they are ordinary model
+  parameters that `jax.grad` reaches through a solve. `sqrt` is the clearer
+  spelling of half-order kinetics than `[X] ** 0.5`, and `min` is the ceiling
+  counterpart of the existing `max`. `log` and `sqrt` are guarded so their
+  gradient stays finite at a fully depleted species, where an unguarded
+  derivative is infinite and would make the whole parameter gradient
+  non-finite; `sqrt(0)` is `0`, while `log` keeps the mathematically honest
+  `-inf` there, so a model using it must keep its argument positive.
+  `check_units` requires the argument of `exp` and `log` to be dimensionless,
+  which catches an attenuation coefficient in the wrong units, and treats
+  `sqrt` as halving the argument's dimension. The shipped `uv_h2o2` model
+  deliberately keeps its fluence rate as a condition field — attenuation there
+  is a property of the reactor geometry, not the chemistry — and now says why.
+- Reusing a plant from separate jitted functions with the same closed-over
+  parameter vector no longer leaks cached parameter slices between traces.
+- Stable-adjoint gradients (`DifferentiationConfig(method="stable")`) on large
+  plants such as BSM2 could be wrong while staying finite. The colored backward
+  Jacobian, on by default for larger plants, missed couplings: those from the
+  settler to the sludge train and the reactors, and the loops through the
+  solids-dependent thickener and dewatering flows. Gradients from the activated
+  sludge into the digester (for example `asm1.muA` on digester methane) were off
+  by up to 2.3×. The sparsity pattern now covers these couplings. The colored
+  backward is also checked against the dense Jacobian at several states,
+  including the solve's start state, and falls back to the dense Jacobian with
+  a warning if anything is missed. Gradients within one domain were unaffected
+  or only slightly affected. If you computed cross-domain BSM2 gradients with
+  the default settings, recompute them; `IntegratorConfig(colored_jacobian=False)`
+  gave correct values before this fix.
+- Studies (`aquakin.study`, `aquakin study run|check|freeze|unfreeze|copy`): an
+  analysis of a flowsheet project saved in the project with its results: a
+  simulation (steady state or dynamic), a Fisher information, a calibration
+  against a data table, a profile likelihood, or a ranking of sensor sets. Results are
+  plain YAML / CSV files keyed by name. A study is reported stale when the
+  flowsheet, a model or an influent table it ran on changes (saying which), and
+  a newer aquakin is noted without making it stale. A frozen study runs on a
+  snapshot of its plant with every model flattened (shipped models too), so
+  neither project edits nor upgrades change it; unfreezing deletes its results.
+  A run replaces a study's results only once it succeeds: a run that fails or
+  is cancelled (or is killed) keeps the earlier results and notes the attempt.
+  Calibration and profile studies always fit the Gaussian likelihood of the
+  data, so they need each channel's measurement error (`sigma`, one value for
+  all or one per channel) or `estimate_sigma: true`; least squares, which
+  ignores the error and leaves uncertainties, profile intervals and priors
+  without a scale, remains available from Python (`Plant.calibrate`).
+  A study can also be set up from plain settings: `study_form()` describes
+  every setting, `plant_choices(spec)` lists the streams, parameters and
+  measurable channels a study of that flowsheet may name, and `create_study`,
+  `read_study` and `update_study` write and read `study.yaml`, checked as a run
+  reads it, with a data table or saved state copied into the study.
+  `simulation_study(spec)` gives the settings of a plain simulation (the plant
+  at steady state, saving the streams that leave it with their flow, COD, TKN,
+  NOx, TN and TSS), and `study_results(path)` reads a study's results back as
+  plain data with their units (temperature in °C; the files keep kelvin).
+- The A²O plant now counts its suspended solids as TSS. Its influent
+  (`a2o_influent`) and warm start (`a2o_warm_start`) carried no ASM2d `XTSS`, so
+  the reactors' `XTSS` stayed near 20 g/m³ beside some 5000 g/m³ of solids; both
+  now set it from their particulates with the model's `iTSS` factors (193.5 g
+  TSS/m³ in the influent). The Takács settler of `build_a2o`, whose settling
+  velocity depends on the solids concentration, added COD, phosphorus and `XTSS`
+  together; it now weighs each particulate by its `iTSS` factor. `plant.sludge_age`
+  on an ASM2d or ASM3 plant counted only the ASM1-named particulates in the tanks
+  and streams and now weighs every solid the same way. A²O results with the
+  Takács settler change: the steady effluent phosphate moves from 4.10 to 3.89
+  g P/m³ and the effluent suspended solids from 48 to 54 g TSS/m³, which the
+  effluent `XTSS` now reports (it read 0.2 g/m³). Results with
+  `use_takacs=False` are unchanged apart from `XTSS`.
+- The A²O plant's influent (`a2o_influent`) and warm start (`a2o_warm_start`)
+  gave the alkalinity `SALK` as 7.0, meant as mol/m³, but `asm2d` declares
+  `SALK` in kmol/m³, so it read as 7 kmol/m³, a thousand times a municipal
+  alkalinity, and the alkalinity terms of the growth rates could never limit.
+  They now give 0.007 kmol/m³ (7 mol/m³). A²O results change slightly (with the
+  ideal clarifier, the steady effluent ammonia moves from 0.10 to 0.13 g N/m³).
+- The `asm2d`, `asm2d_tud`, `asm3` and `asm3_biop` models describe themselves
+  in `model.summary()` rather than naming the spreadsheet they were imported
+  from, and `asm3` and `asm3_biop` now cite their literature (Gujer et al. 1999;
+  Rieger et al. 2001 for the Bio-P module) instead of an empty reference. The
+  models themselves are unchanged.
+- The membrane bioreactor (`MBRUnit`) and sequencing batch reactor (`SBRUnit`)
+  now apply a model's positivity limiter, as the CSTR, IFAS/MBBR tank and
+  digester already did. They computed the raw reaction term, so for a model
+  that declares `positivity_limiter:` (ASM2d, for example) a nearly
+  exhausted species such as oxygen or nitrate kept its full consumption rate and
+  could go negative. Results change only for such models, and only where a
+  species is near zero. `plant.mass_balance()` now integrates the same limited
+  reaction term the reactors do.
+- The shipped sewer (`wats_sewer*`) and `adm1` model descriptions shown by
+  `model.summary()` now describe the model and how a variant differs from its
+  base, instead of its development history; the models themselves are unchanged.
+- The thickener (`IdealThickener`) and the Takács settler (with its default
+  BSM settling parameters) put the TSS of each solids species on the `g/m3`
+  basis of their built-in constants from the unit the model declares for it,
+  so a model with its particulates in `kgCOD/m3` thickens and settles exactly
+  as one in `g/m3`. A solids species declared in moles cannot be converted;
+  it is used as before and `Plant.check_units()` reports it.
+- Under a heat-balance temperature model (`HeatBalanceTemperature`), an MBR and
+  an IFAS/MBBR tank now run their kinetics and aeration at their own lagged
+  temperature state. They used the inlet temperature, so the plant tracked a
+  temperature for them that their kinetics ignored. Plants on the default
+  algebraic temperature are unchanged.
+- Unit labels of several SUMO-derived ASM models now match their stoichiometry
+  and source parameter tables. Values are unchanged:
+  - `asm2d`: `qPP` in g P/(g COD·d), `YPHA` in g COD/g P, `kRED` in
+    g P/(g TSS·d), `iTSS_XPP` in g TSS/g P, `iNO3_N2` in g COD/g N and the
+    `iCharge_*` factors in kmol per gram. These carry over to `asm2d_chemp`.
+  - `asm3_biop`: the same corrections to `qPP`, `YPHA`, `iTSS_XPP`, `iNO3_N2`
+    and `iCharge_*`.
+  - `asm3`: `iNO3_N2` and the `iCharge_*` factors.
+  - `asm3_2step_n2o`: the AOB enzyme rates `q_AOB_AMO`, `q_AOB_HAO`,
+    `q_AOB_N2O_NN` and `q_AOB_N2O_ND` in g N/(g COD·d).
+- Unit strings accept the micro prefix on masses and amounts of substance:
+  `umol/L`, `µmol/L` (either the micro sign or the Greek mu) and `ug/L` are read
+  everywhere a unit is declared or converted (influent `units=`, observation and
+  output units, `check_units`, the speciation `molar_mass` audit). They were
+  unreadable, so an influent declared in `umol/L` was refused and a species in
+  `µmol/L` was skipped by the unit check.
+- Unit strings now read `dm` as the decimetre, so `mol/dm3` and `g/dm3` are
+  concentrations wherever a unit is converted (influent `units=`, calibration
+  `observation_units=`, translator and solids conversions): `mol/dm3` is exactly
+  `mol/L`. They were read as a day times a metre, which refused the conversion
+  or, with a time unit present, gave a wrong factor. A bare `d` is still the day
+  (`1/d`, `g/m3/d`), and an exponent may now also be written `**` (`dm**3`).
+- `Aeration(stripped={"SN2O": 1.0, "SNO": 1.0})` strips dissolved gases other
+  than oxygen in an aerated tank, inside the solve. Each gas transfers at
+  `ratio × kLa_O2 × (sat − C)`, with the saturation 0 by default, and follows the
+  controller's kLa under DO control. It works in CSTR, IFAS/MBBR, and MBR tanks.
+  `direct_n2o_emission` then reports the N₂O the solve removed, using each
+  tank's own ratio, and `plant.mass_balance` counts the stripped gases in its gas
+  term. `stripped_n2o` accepts a per-reactor ratio and saturation.
+- `IFASUnit.layer_resolution(state)` reports, per soluble species, the largest
+  fractional concentration drop across one biofilm layer -- how well `n_layers`
+  resolves the gradient the substrate flux is read from. A few per cent is well
+  resolved; a value near 1 means the substrate is consumed inside a single layer
+  and `n_layers` is too low. It distinguishes a limiting substrate from one that
+  penetrates freely.
+- `IFASUnit` / `MBBRUnit` can grow their biofilm. `dynamic_thickness=True` makes
+  the thickness `L_f` a state instead of a fixed parameter: with
+  `biofilm_density` setting the incompressible film's density and
+  `detachment_rate` / `detachment_law` closing the surface balance, the film
+  thickens as it grows,
+  thins when decay outruns growth, and sorts its species by depth. This is the
+  one-dimensional multispecies biofilm of Wanner & Gujer (1986): net production
+  anywhere inside an incompressible film has to displace material outward, and
+  that displacement carries the species with it. `L_f` is the final state entry
+  and is named `L_f` in `state_names()`. Validated against the closed form a
+  fully penetrated film must satisfy, `L_f = mu_net / lambda`, to better than
+  0.3%.
+- `Plant(name, time_unit="d")` sets the plant's clock: `t_span`, flows (m3 per
+  that unit) and every unit parameter with a time in it are in that unit.
+  Everything that has its own time unit is converted to it before the solve:
+  each kinetic model's rates (so a model in seconds can run beside one in
+  days, with its parameters left in their own units), each influent's times
+  and flows, and the constants built into the UV reactor, the primary
+  clarifier and the Takács settler's default settling velocities, which
+  previously required a plant in days. The BSM1, BSM2 and A²O builders use
+  days, and `InfluentSeries.in_time_unit(...)` moves a series onto another
+  clock.
+- `Plant.calibrate()` now refuses an unknown `OptimizerConfig(method=...)` with
+  the same `ValueError` as `aquakin.calibrate()`, naming the valid methods.
+  Before, the plant fit started and then failed inside SciPy with an unhelpful
+  `TypeError: 'NoneType' object is not callable`. The method is now checked when
+  the `OptimizerConfig` is built, so an invalid one is refused before any fit.
+- `Plant.check_units()` checks a plant's units before you solve it and
+  returns a `PlantUnitsReport`. On a plant created without `time_unit` it
+  confirms that the kinetic models agree on their time unit, and it reports a
+  solids species the thickener or Takács settler could not put on their
+  `g/m3` basis (one declared in moles, say).
+  Comparisons account for scale, so `mg/L` matches `g/m3` but `kg/m3` does
+  not. `plant.check()` includes the report.
+- `Plant.run_to_steady_state()` no longer reports convergence in silence when its
+  default `criterion="norm"` has stopped early. That test compares `||dy/dt||`
+  with `ss_atol + ss_rtol*||y||`, so every state inflates the tolerance that
+  every other state is held to -- and an IFAS/MBBR tank defeats it, because its
+  held-fixed attached biomass contributes `n_layers * density` to `||y||` and
+  nothing to `||dy/dt||`. A solve could stop with the tank's bulk still moving by
+  70% of its own value per day and call it converged. The componentwise scaled
+  residual the result already carried is now checked against the verdict, and a
+  `RuntimeWarning` names the offending state and points at
+  `criterion="scaled_residual"`. No steady state changes: this is a check on the
+  verdict, not on the solve.
+- `Plant.set_temperature()` now sets the temperature of MBR and SBR units too;
+  it skipped them before. An SBR's kinetics run at this static temperature: it
+  does not follow its inlet temperature and a heat-balance model does not track
+  it, since its volume changes over the cycle.
+- `Plant.solve_sensitivity(corrector=...)` chooses how each implicit stage of
+  the `[y; S]` sensitivity solve is solved. The new default, `"staggered"`,
+  converges the plant state first and then solves the sensitivity, which is
+  linear in `S`, with the same factorization. It forms no second derivatives,
+  so each sensitivity parameter adds only Jacobian-vector products to a step.
+  Its step controller limits step growth by the Newton contraction rate, so
+  fewer steps are wasted on Newton divergence. On a one-day BSM2 window with 16
+  parameters, a cached solve ran several times faster.
+  `"simultaneous"` is the previous diffrax augmented solve, which stays
+  differentiable. The two agree to the solver tolerance.
+- `Plant.solve_sensitivity(return_stats=True)` also returns the step counts of
+  the staggered solve: attempted, accepted, Newton-nonconverged and
+  error-test-rejected steps.
+- `Plant.solve_sensitivity(sens_error_control=False)` chooses the steps on the
+  state's error alone, leaving the sensitivity out of the error test (the CVODES
+  `errconS = false` option; staggered corrector only). The sensitivity is still
+  converged in every step but its error is no longer bounded; where the
+  sensitivity forces smaller steps than the state it is much faster (about half
+  the time on a dynamic BSM2 window with 16 parameters), for screening runs or
+  otherwise very long ones. `dynamic_sensitivity`
+  and `dynamic_dgsm` pass it through in forward mode. The default (`True`) is
+  unchanged.
+- `Plant.solve` errors about the stable discrete adjoint and about `event=` no
+  longer name the removed `gradient=` argument; they give the
+  `diff=aquakin.DifferentiationConfig(...)` setting that applies instead.
+- `Plant.steady_state` no longer reports a loose forward fallback as converged.
+  When pseudo-transient continuation did not converge, the forward run it fell
+  back on stopped on `run_to_steady_state`'s default norm test and ignored the
+  `tol` and `scale_floor` you passed, so a result with `method="ptc->forward"`
+  could say `converged=True` with a scaled residual orders of magnitude above
+  `tol` (about 2e-3 against `tol=1e-8` on BSM1). The fallback now stops on the
+  same scaled-residual test with your `tol` and `scale_floor` (still
+  overridable through `fallback_kwargs`), and reports `converged` only when the
+  returned residual meets that tolerance.
+- `Plant.steady_state`'s pseudo-arclength fallback (and
+  `arclength_continuation_solve`) no longer reports a steady state on a
+  different branch as the operating point past a fold. Near a saddle-node the
+  continuation step could converge onto the other branch, so a target past the
+  fold came back as `method="arclength"`, `operating_point_exists=True` with
+  that branch's state instead of `"past_fold"`. A step that lands far from its
+  predictor is now rejected and retried shorter (`max_correction`, default
+  0.5 of the step), so the fold is detected. Screens that use
+  `operating_point_exists` to exclude samples (`steady_state_dgsm`) are
+  affected.
+- `Plant.to_spec()` and `Plant.from_spec(spec)`: a plant as a JSON/YAML file and
+  back. A spec (format 2) writes every setting, defaults included, with the
+  aquakin version that wrote it, so a later change of default cannot change a
+  saved plant. It lists each unit by its stable name with an optional display
+  `label` (`Plant.labels`), the connections as `"unit.port -> unit.port"` (or
+  with a state translator or recycle seed), constant influents, named streams,
+  endpoints and recycle options, and every model under `models:`, either shipped
+  or a model YAML file next to the spec, each with a content fingerprint; reading
+  a spec whose model has changed since warns (`SpecWarning`). Specs are validated
+  strictly: an unknown or misspelled setting, a value of the wrong type or a
+  model that is not listed is an error naming where it is, and YAML is read with
+  YAML 1.2 rules (`1e-5` is a number, `on` is text). A rebuilt BSM1 has a
+  bit-identical right-hand side. What a spec cannot express yet (a heat-balance
+  temperature model, array-valued settings) raises a `SpecError` naming it.
+  Controllers derived from a closed-loop `Aeration` or feedback `DosingUnit` are
+  not written; they are derived again. Writing a spec to a path
+  (`aquakin.plant.write_spec`, also exported with `load_spec_file`, `check_spec`,
+  `spec_inputs` and `spec_changes`) checks everything before touching the disk,
+  copies a model file from outside the project into `models/` together with
+  every file it `extends:`, and replaces the spec atomically. NaN is refused as a
+  setting everywhere (`inf` stays allowed where it means "no limit"), and a model
+  file may not take the name of a shipped model.
+- `UnitScalingTranslator` converts between two models that list the same
+  species but declare some of them in different units. `Plant.connect` and
+  `Plant.add_influent` insert it automatically for such a pair, and raise
+  `WiringError` when a pair of units cannot be converted.
+- `aquakin-ui` (`pip install "aquakin[ui]"`): a browser flowsheet editor. Drag
+  units from a palette, wire their ports, edit settings in a form generated from
+  each unit's own documentation, see aquakin's errors for each unit and for the
+  whole plant, and open or save flowsheet specs (saved by the same writer as
+  `Plant.to_spec`, so a model or influent file from elsewhere is copied into
+  the project). A Studies tab lists the project's studies with their status and
+  runs them in the background with progress and cancel. **Simulate** runs the
+  plant: it saves the flowsheet, sets up a `simulation` study the first time
+  (one per flowsheet file in the folder) and
+  shows its results, a steady state as tables of the streams leaving the plant
+  and a run in time as a chart per channel (**Results** on any study shows them
+  again; temperature is shown in °C). Fisher information, sensor-set ranking,
+  calibration (the data against the fit) and profile studies show their results
+  as tables and charts too. Unit forms show each setting's unit where its help
+  names one, plain help text, and an unreadable value under its field; new
+  settling units take the particulates of their model, and selecting a unit
+  opens its form. Replacing a study's results asks first,
+  with a **Don't ask again** box; the Studies tab's **Ask before replacing
+  results** switch turns the question back on, and the choice is kept for the
+  user between sessions. **New study** and
+  **Edit** set a study up in a dialog that offers the plant's own streams,
+  parameters and channels; Save refuses to
+  overwrite a flowsheet that changed on disk since it was opened; opening
+  another file with unsaved edits asks first, **Undo** takes back the last
+  edits, and running a study saves the drawing first.
+- `aquakin-ui` no longer leaves aquakin worker processes behind. A worker that
+  stopped reading was replaced but kept running (with JAX loaded) until the
+  editor closed, and a worker that timed out stayed a zombie; both are now
+  killed and reaped, and the pipes of every worker and study run are closed
+  when it ends.
+- `aquakin.calibrate`, `aquakin.profile_likelihood` and `Plant.calibrate`
+  take `observation_units={"SNH": "mg/L", "XS": "kgCOD/m3"}` for data measured
+  in units other than the model's. The named columns, and an absolute `sigma`
+  in the same units, are converted to the model's units before the fit, so the
+  results are in the model's units. A unit of another quantity raises.
+- `aquakin.design_from_candidates` chooses the best set of measurements from
+  a pool of candidates under a budget, given each candidate's Fisher
+  information (for example the `groups=` output of
+  `fisher_information_from_fn`). It supports per-candidate costs, required
+  candidates, replicates and information already in hand. It solves the
+  relaxed problem for D and A, which bounds every design and gives the chosen
+  design's efficiency, and it runs greedy and exchange searches. Small pools
+  are searched exhaustively. Scoring a subset of parameters and averaging over
+  parameter draws work as in `design_criterion`.
+- `aquakin.fisher_information_from_fn` gives the Fisher information of any
+  forward model written as a JAX function `fn(theta) -> y`, not only an
+  aquakin reactor. The Jacobian comes from AD, `noise="lognormal"` observes
+  `log y`, and `transforms=` evaluates the information in unconstrained
+  coordinates. With `groups=` it also returns each candidate measurement's own
+  information. The result works with `identifiability` and `design_criterion`
+  unchanged.
+- `aquakin.plant.plant_fisher_information` gives the Fisher information of a
+  plant design, the plant version of `fisher_information`. Measured channels
+  are named as for `Plant.calibrate`, including a unit's state such as
+  `("digester", ["S_IN", "S_gas_ch4"])`. `sigma` can be absolute or relative
+  to the signal, a `mask` drops unmeasured samples, and several runs add their
+  information. The sensitivity comes from `Plant.solve_sensitivity` (the
+  default, `mode="forward"`) or from the stable adjoint (`mode="reverse"`). At
+  a `Plant.calibrate` result with `loss="nll"` and the Gauss-Newton Laplace,
+  the reverse-mode matrix equals the Laplace Hessian.
+- `aquakin.plant.plant_profile_likelihood` profiles one plant parameter. It
+  re-fits the others with `Plant.calibrate` at each grid value and returns a
+  `ProfileResult` with the likelihood-ratio interval. The sweep is the same as
+  for `profile_likelihood`, and every grid point reuses one compiled
+  objective.
+- `aquakin.plant.plant_rank_sensor_sets` ranks candidate sensor sets on a plant
+  by a design criterion of the Fisher information each adds to the sensors
+  already in place. It is the plant version of `rank_experiments`. A candidate
+  is a `SensorSet`: its observables, with an absolute or relative `sigma` and
+  an optional `mask`. Every candidate is scored from one shared sensitivity
+  solve, and `param_draws=` averages the criterion over uncertain parameters.
+- `aquakin.units_match(a, b)` compares two unit strings with scale included,
+  and `aquakin.conversion_factor(a, b)` gives the factor between them.
+- `asm2d_tud` declares the units its parameters actually have rather than 1/d
+  or mol: `mAN` in g P/(g COD·d); `qPP` in (g P/g COD)²/d, since the poly-P
+  storage rate is inversely proportional to the stored fraction XPP/XPAO
+  (Murnleitner et al. 1997, which quotes it in g P/(g COD·d) by treating that
+  fraction as a pure ratio); `iTSS_PP` in g TSS/g P; `iNO3_N2` in g COD/g N; and
+  the `iCharge_*` factors in kmol per gram. The model now cites Meijer et al.
+  (2001), Murnleitner et al. (1997) and van Veldhuizen et al. (1999). Values and
+  kinetics are unchanged.
+- `asm3_2step_n2o` grows AOB at Pocquet et al.'s maximum growth rate. The
+  hydroxylamine-oxidation growth process (Pocquet 2016, Table 3, process 2) used
+  the specific HAO rate `q_AOB_HAO` (5.2 g N/(g COD·d), which is μ/Y) as if it
+  were the growth rate, so AOB grew about 6.7 times too fast. It now uses
+  `muAOB`, set to the paper's 0.78 1/d (0.0325 1/h) with its growth-rate
+  temperature dependence. Results from this model change; recalibrate any fits
+  made with it.
+- `asm3_2step_n2o` now follows Pocquet et al. (2016) in two places, which
+  changes its N₂O and ammonia-oxidation rates. The ND-pathway dissolved-oxygen
+  factor had an inverted constant ratio and peaked near 5.3 instead of 1,
+  overstating ND-pathway N₂O; it now peaks at exactly 1 at
+  DO = sqrt(K_O2_AOB_ND * KI_O2_AOB) (about 0.63 g O₂/m³). Ammonia oxidation
+  (AMO) was Monod in total ammonium; it is now Monod in free ammonia, the base
+  fraction of ammonium at the operating pH and temperature, so it depends on pH
+  and is slower at typical pH for the same affinity constant.
+- `build_bsm1` no longer counts non-COD particulates as suspended solids for a
+  model without a composition table. `solids_species` now reads the declared
+  units: only particulates in a COD mass per volume count towards TSS, so the
+  metal precipitates (mol/m3), stored polyphosphate (g P/m3) and the lumped
+  `XTSS` state of `asm2d_chemp` no longer inflate the settler's solids (#672).
+- `build_bsm1` runs activated-sludge models other than ASM1, such as an N₂O model
+  that splits the autotrophs into AOB and NOB. The clarifier's settling and TSS
+  species are derived from the model (new `settling_species=` / `tss_species=`
+  arguments override them), and the new `aeration=` argument replaces the
+  aeration of named tanks, for example with DO control and gas stripping.
+- `detachment_law="balance"` on a growing `IFASUnit` / `MBBRUnit`: **a specified
+  total thickness.** Detachment is set to exactly the velocity arriving at the
+  surface, so `dL_f/dt` is zero by construction and the film stays at
+  `biofilm_thickness` -- while the species still grow, advect and stratify, and
+  biomass still leaves at the surface. It is what a problem means by a specified
+  average thickness "maintained by detachment", and it takes no
+  `detachment_rate`. The rate-driven laws (`"quadratic"`, `"linear"`,
+  `"constant"`) are unchanged and still let the thickness follow from the
+  physics, so a thickness can now be either specified or predicted.
+- `direct_n2o_emission` now reports kg N/d whatever the plant's time unit, as its
+  documentation says and as `carbon_footprint` labels it. On a plant whose clock
+  is not days it returned kg N per unit of that clock (on an hourly plant, 24 times
+  too small). Plants in days, such as the BSM1 and BSM2 builders, are unchanged.
+- `direct_n2o_emission` works on a plant whose model names dissolved oxygen
+  other than `SO`, such as the shipped `asm3_2step_n2o` (`SO2`); it raised
+  `KeyError: 'SO'`. It, and the aeration and mixing energy terms of the BSM
+  evaluations, now read each tank's oxygen kLa from the species its `Aeration`
+  names. Aerated units (CSTR, IFAS/MBBR, MBR) gain the
+  public readers `oxygen_kla()`, `kla_vector()`, `saturation_vector` and
+  `stripped_gases`.
+- `model.check_units()` also checks each rate against the species whose
+  stoichiometric coefficient is a fixed +1 or -1: such a species changes by
+  exactly the rate, so the rate must be in its concentration per time. This
+  catches a rate constant declared in the wrong units, such as a specific
+  phosphorus uptake rate written as 1/d where the stoichiometry is per g P.
+  Turn it off with `check_units(check_stoichiometry=False)`.
+- `plant.mass_balance()` now accounts for an IFAS/MBBR tank. Its state is a depth
+  profile rather than a single concentration vector, so the balance skipped the
+  unit outright -- its bulk liquid as well as its attached biomass -- and the
+  shortfall appeared as an imbalance the size of the whole tank.
+- `plant.mass_balance()` now counts the oxygen an aerated tank receives with the
+  aeration temperature correction on (`Aeration(temperature_correction=True)`) as
+  the solve does; it used the uncorrected saturation and kLa, so COD did not close
+  away from the reference temperature. Saving a plant (`Plant.to_spec`) no longer
+  drops an aeration's hand-listed stripped gases (`Aeration(stripped={...})`).
+- `plant.mass_balance` falls back on a model's own declared species
+  `composition:` when there is no shipped composition table for it.
+- `read_influent_table` / `write_influent_table`: an influent as a headed table
+  (`t`, `Q`, optional `T`, species) that reads back exactly. A flowsheet spec
+  keeps a time-varying influent as such a table beside it, with a fingerprint.
+- `solve_ph` with `activity_model="davies"` or `"debye_huckel"` (the activity
+  corrections a `speciation:` block opts into, or
+  `load_model(..., activity_model=...)`) no longer returns a wrong pH for some
+  inputs. The ionic strength was updated in the middle of the bracketed pH
+  search, which could leave the true root outside the bracket. The search then
+  stopped at the bracket edge with no warning, at any iteration cap. In a sweep
+  of digester-like compositions about 12% of results were wrong: by up to
+  0.1 pH between pH 5 and 9, and by several pH units at the extremes. The pH is
+  now solved at a fixed ionic strength, and the ionic strength is updated
+  between solves until it settles. The ideal default (`activity_model="none"`)
+  and ADM1 with activities at its default state are unaffected.
+- `spec_fingerprint(spec)`: a hash of the plant a flowsheet file builds
+  (settings, wiring, model and influent content; not layout, labels, file
+  locations or whether a number is written `1000` or `1000.0`), to tell when a
+  saved result no longer matches its flowsheet.
+- `sqrt` and `log` in an expression of time are now the guarded definitions the
+  rate language uses (`aquakin.core.kernels`), so a solve driven by a pattern
+  such as `Q="2000 + 500*sqrt(t)"` differentiates. Unguarded they broke only the
+  gradient — the forward solve was unaffected — and did so as an exhausted
+  solver step budget rather than a visible NaN. This matters on a clock in
+  particular, since every solve starts at `t = 0`, which is where their
+  derivative is infinite. `log`'s guard protects the gradient only: its value at
+  zero is still `-inf`, so write `log(1 + t)` rather than `log(t)`. `log10` is
+  guarded the same way.
+- `to_latex` no longer raises on a node type it has no explicit branch for; it
+  renders any rate function as `\mathrm{name}(args)`. Previously a model using
+  such a node could be solved but not written up.
+
+
 ## [0.2.0] - 2026-10-29
 
 This release extends parameter estimation into uncertainty quantification and
@@ -472,5 +1575,6 @@ functions integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
   sensitivity & calibration), the YAML model-authoring reference, a catalog of
   every shipped model, and an API reference generated from the public surface.
 
+[0.3.0]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DeGrootResearchGroup/aquakin/releases/tag/v0.1.0

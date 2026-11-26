@@ -32,7 +32,7 @@ that wrote it:
 
 ```yaml
 format: 2
-aquakin: 0.2.0
+aquakin: 0.3.0
 name: BSM1
 models:
   asm1: {source: shipped, sha256: ...}
