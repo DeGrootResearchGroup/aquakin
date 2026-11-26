@@ -190,8 +190,11 @@ def parameters() -> dict:
     # Anoxic reduction of the PAO and GAO aerobic rates (TU Delft etaNO_PAO; the
     # GAOs' is assumed equal).
     add("etaNO3_BIOP", 0.8, "-", bounds=(0.1, 1.0), transform="logit")
-    # Decay without O2 and NO3 (decision 12; ASM2d b_PAO at 20 C).
-    add("b_BIOP", 0.2, "1/d", bounds=(0.05, 1.0))
+    # Decay without O2 and NO3 (decision 12), at the rate of the core's other
+    # anaerobic groups: ASM2d's 0.2 1/d also runs in activated-sludge anaerobic
+    # zones, where the source has none, and shifted its PAO-GAO competition by
+    # up to 48 points at 30 C; 0.02 1/d stays within a few points.
+    add("b_BIOP", 0.02, "1/d", bounds=(0.005, 0.5))
     return p
 
 

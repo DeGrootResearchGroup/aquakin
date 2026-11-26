@@ -310,11 +310,11 @@ parameters:
     - 1.0
     transform: logit
   b_BIOP:
-    value: 0.2
+    value: 0.02
     units: 1/d
     bounds:
-    - 0.05
-    - 1.0
+    - 0.005
+    - 0.5
     transform: positive_log
 expressions:
   nutrient_limit: monod([SNH4], KNH4_H) * monod([SPO4], KP_H)
