@@ -127,7 +127,7 @@ solve's adjoint.
 | fast | `tests/unit`, `tests/integration` and `tests/ui`, `-m "not validation and not slow"` | every PR (the merge gate) |
 | slow | `@pytest.mark.slow`, or use of a fixture named in `_SLOW_PLANT_FIXTURES` (`conftest.py`) | merge to `main`, and `full-ci` PRs |
 | validation | `@pytest.mark.validation` | merge to `main`, and `full-ci` PRs |
-| docs examples | the python blocks of `README.md` and the user guide (root `conftest.py`); `plants.md` and `sensitivity_and_calibration.md` are `slow` | every PR (`docs-examples`); the slow pages as `docs-examples-slow`. See `.claude/rules/docs-examples.md` |
+| docs examples | the python blocks of `README.md` and the user guide (root `conftest.py`); the pages in its `SLOW_PAGES` are `slow` | every PR (`docs-examples`); the slow pages as `docs-examples-slow`. See `.claude/rules/docs-examples.md` |
 | heavy / xheavy | `@pytest.mark.heavy` (`xheavy` too for the one test over 16 GB) | path-filtered, one test per process |
 
 - **A test in `tests/validation/` without `@pytest.mark.validation` runs in no CI

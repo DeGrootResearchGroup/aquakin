@@ -159,8 +159,8 @@ print(jax.grad(chlorine_after_24_h)(model.default_parameters()))
 
 Both entries of the gradient are finite and the second, for `k_bulk`, is large
 and negative: a faster bulk decay leaves less chlorine. The
-[Sensitivity & calibration](sensitivity_and_calibration.md) guide goes on from
-here.
+[Sensitivity analysis](sensitivity_and_calibration.md) and
+[Calibration](calibration.md) pages go on from here.
 
 ## Common mistakes
 

@@ -7,6 +7,16 @@ Benchmark Simulation Models BSM1 (an activated-sludge line) and BSM2 (the
 activated-sludge line plus primary treatment and an anaerobic sludge train) ship
 ready to build.
 
+This page runs the benchmark plants: their steady state, a dynamic run and its
+performance indices, design and reporting, and checking a plant's units and mass
+balance. The other plant pages build on it:
+
+| Page | Covers |
+|---|---|
+| [Building a flowsheet](custom_flowsheets.md) | a plant of your own: units, wiring, the time unit, events, and every unit operation |
+| [Influents](influents.md) | feeds that follow a pattern, scheduled pumps, laboratory and SCADA records, influent units |
+| [Flowsheet files, studies and the editor](plant_files.md) | saving a plant as a file, reproducible studies, and the browser flowsheet editor |
+
 If you have not used aquakin before, read [Getting started](getting_started.md)
 first; single reactors, integrator settings and events are covered in
 [Reactors](reactors.md). The shipped kinetic models are listed in the
@@ -278,246 +288,7 @@ The other integrator settings are described in
 settings in
 [Differentiating a solve](sensitivity_and_calibration.md#differentiating-a-solve).
 
-## Building a custom flowsheet
-
-The benchmark builders are convenience wrappers over the general `Plant` API.
-To assemble your own flowsheet, create a plant with its time unit, add the
-units (in any order: recycles are found automatically), wire the influents and
-connections, and solve. The flowsheet is built in a function here because
-later sections extend copies of it:
-
-```python
-def two_tanks(name):
-    plant = aquakin.Plant(name, time_unit="d")
-    plant.add_unit(aquakin.CSTRUnit("anoxic", model, volume=1000.0,
-                                    input_port_names=["in"], conditions={"T": 293.15}))
-    plant.add_unit(aquakin.CSTRUnit("aerobic", model, volume=1333.0,
-                                    input_port_names=["in"], conditions={"T": 293.15},
-                                    aeration=aquakin.Aeration(kla=240.0)))
-    plant.add_influent("feed", model.influent(bsm1_feed, Q=18446.0, T=288.15),
-                       to="anoxic.in")           # wire the feed to the first tank's inlet
-    plant.connect("anoxic.out", "aerobic.in")    # unit to unit, as "unit.port"
-    return plant
-
-plant = two_tanks("my_plant")
-t_eval = jnp.linspace(0.0, 10.0, 241)
-sol = plant.solve(t_span=(0.0, 10.0), t_eval=t_eval)
-print("effluent SNH:", round(float(plant.stream(sol, "aerobic.out").C_named("SNH")[-1]), 1))
-# effluent SNH: 32.4
-```
-
-With no clarifier to hold the sludge, the biomass washes out of these two
-tanks, so there is no nitrification and the effluent ammonia ends up above the
-feed's (organic nitrogen is still released). The benchmark builders show a
-full activated-sludge line. A plant can still be extended after it has been
-solved: units, connections and influents added later are used by the next
-solve and by `plant.stream`. A solution from before the change keeps the old
-layout, so solve again before reading streams from the extended plant.
-
-### The plant's time unit
-
-`time_unit=` sets the plant's clock. `t_span` and `t_eval` are in it, flows are
-in m³ per that unit, and so is every unit setting that contains a time: an
-aeration `kla`, a primary clarifier's filter time constant `t_m`, an SBR's phase
-lengths, a controller's integral time. Everything that comes with its own time
-unit is converted to the clock before the solve: each kinetic model's rates (a
-model whose rate constants are per second can run beside one that is per day,
-and the model's parameters stay in their own units), each influent's times and
-flows, and the constants built into the unit operations (the UV reactor's
-exposure time in seconds, the primary clarifier's removal correlation in
-minutes, the default BSM settling velocities in m/d).
-
-The BSM1, BSM2 and A²O builders use days. A plant created without `time_unit`
-still works: it takes the time unit its models share with a `FutureWarning`,
-and raises `UnitsError` if the models disagree. `time_unit` will be required in
-a future release.
-
-### Pumps, doses and switches: events
-
-Discontinuous operations are **events**, exactly as on a single reactor (see
-[Reactors](reactors.md#events-pumps-dosing-phase-switches)): `at_times=` fires
-at known times and keeps `jax.grad` finite, `cond_fn=` fires when a condition
-crosses zero. On a plant the state passed to `cond_fn` and `apply` is the flat
-plant state; find an entry from `plant.state_names()`, which lists each unit's
-entries in state order. SBR phase switches are added automatically.
-
-```python
-names = plant.state_names()
-flat = [(unit, entry) for unit, entries in names.items() for entry in entries]
-i_ss = flat.index(("anoxic", "SS"))
-
-slug = aquakin.Event(at_times=[5.0], apply=lambda t, y, p: y.at[i_ss].add(50.0),
-                     name="slug")
-sol_ev = plant.solve(t_span=(0.0, 10.0), t_eval=t_eval, events=[slug])
-print(sol_ev.events_log)
-# [(5.0, 'slug')]
-```
-
-This flattening holds while every unit's states are contiguous; under the
-heat-balance temperature model (below) the temperatures sit at the end of the
-flat vector instead.
-
-## Unit operations
-
-The plant library provides these units, all importable from `aquakin.plant`.
-Every one documents its settings in the [API reference](api.md).
-
-| Unit | What it models |
-|---|---|
-| `CSTRUnit` | a completely mixed reactor running a kinetic model, with optional `Aeration` |
-| `IFASUnit` / `MBBRUnit` | a mixed tank with a depth-resolved biofilm on carrier media |
-| `SBRUnit` | a sequencing batch reactor with timed phases (`SBRPhase`) |
-| `MBRUnit` | a membrane bioreactor |
-| `ADM1DigesterUnit` | a continuously fed, mesophilic ADM1 digester with a gas headspace |
-| `HeadspaceDigesterUnit` | a digester whose gas headspace belongs to the unit, for any model that declares its dissolved gases (`gases:`) |
-| `TakacsClarifier` | a layered secondary clarifier |
-| `IdealClarifier` | a stateless ideal clarifier that sends a fixed fraction of the particulates to the underflow |
-| `PrimaryClarifier` | a primary clarifier with a flow-dependent removal correlation |
-| `IdealThickener` | an ideal solids separator: thickener or dewatering |
-| `MixerUnit`, `RatioSplitter`, `SetpointSplitter`, `ThresholdSplitter` | joining and splitting streams |
-| `StorageTank`, `HydraulicDelayUnit` | variable-volume storage with an overflow bypass, and a first-order hydraulic lag |
-| `DosingUnit` | inline chemical dosing of a `Reagent` (fixed or feedback-controlled) |
-| `UVUnit`, `ChlorineContactUnit` | disinfection |
-| `PIController` | a proportional-integral controller with anti-windup |
-| `ASM1toADM1`, `ADM1toASM1` | translators between the activated-sludge and digester models |
-
-`build_a2o` builds an anaerobic–anoxic–oxic (A²O) biological nutrient removal
-plant on ASM2d in the same way as the BSM builders.
-
-### IFAS and MBBR tanks
-
-An integrated fixed-film activated sludge (IFAS) or moving-bed biofilm reactor
-(MBBR) tank is a mixed bulk coupled to a biofilm on carrier media, resolved over
-`n_layers` layers between the bulk and the carrier wall. `MBBRUnit` is the same
-class as `IFASUnit`. By default the attached biomass is a mature film held at
-its initial inventory, while solubles diffuse and react through it.
-
-```python
-from aquakin.plant import MBBRUnit
-
-mbbr = MBBRUnit("mbbr", model, volume=500.0, input_port_names=["in"],
-                specific_surface_area=500.0, fill_fraction=0.5,   # biofilm area 250 m²/m³
-                biofilm_thickness=2e-4, n_layers=8,
-                conditions={"T": 293.15}, aeration=aquakin.Aeration(kla=240.0))
-mbbr_plant = aquakin.Plant("mbbr_demo", time_unit="d")
-mbbr_plant.add_unit(mbbr)
-mbbr_plant.add_influent("feed", model.influent(
-    {"SS": 60.0, "SNH": 25.0, "SO": 2.0, "SALK": 7.0}, Q=2000.0), to="mbbr.in")
-
-mbbr_ss = mbbr_plant.run_to_steady_state(criterion="scaled_residual")
-worst = mbbr.layer_resolution(mbbr_plant.states_by_unit(mbbr_ss.state)["mbbr"])
-print(round(max(worst.values()), 3))
-# 0.058
-```
-
-`layer_resolution` reports, for each soluble species, the largest fractional
-drop in concentration across one layer. A few per cent is well resolved; a
-value near 1 means the substrate is used up inside a single layer and
-`n_layers` should be raised. Use `criterion="scaled_residual"` for the steady
-state of a plant with these tanks: the fixed biofilm adds a large constant block
-to the state, which can make the default norm test stop while the bulk is still
-changing.
-
-To let the film grow, pass `dynamic_thickness=True` with `biofilm_density=`
-(the film's particulate density, e.g. `1e4` g COD/m³). The thickness `L_f` then
-becomes the last state entry, and the species stratify by growth rate.
-`detachment_law=` sets what happens at the surface: `"quadratic"` (the
-default), `"linear"` or `"constant"`, with `detachment_rate=`, let the thickness
-follow from the balance of growth and detachment; `"balance"` holds the total
-thickness at `biofilm_thickness` while the species still grow and stratify.
-
-### Sequencing batch reactors: how the feed arrives
-
-An `SBRUnit` cycles one tank through timed phases (`SBRPhase`: fill, react,
-settle, decant, idle). A real SBR only takes its feed during the fill, so what
-happens to wastewater that arrives at other times depends on the plant. The
-SBR's `feed` setting says which plant it is, and it has no default:
-
-| `feed=` | A plant like | What happens to the inflow |
-|---|---|---|
-| `"continuous"` | a continuous-inflow SBR (ICEAS or CFID type) | The tank takes the inflow whenever it arrives, in every phase; its volume follows the inflow minus the decant. `feed_flow` is left unset. |
-| `"storage"` | an equalization (holding) tank ahead of the SBR | A holding volume inside the unit, `storage_volume` m³, receives the inflow; the fill pump draws `feed_flow` from it during fill phases. What it cannot hold leaves through the `overflow` port; when it runs empty, the draw falls to what arrives. |
-| `"batch"` | a laboratory or reservoir-fed SBR | The inlet must deliver `feed_flow` during fill phases and nothing in any other phase. Each solve checks the influent feeding the SBR over the solve span and refuses one that does not, or an SBR fed by another unit, whose flow is not known before the solve. |
-
-Plants with several SBRs in parallel, the influent routed to whichever is
-filling, are not modelled yet.
-
-Here the influent arrives continuously and a holding volume buffers it for the
-fill pump:
-
-```python
-from aquakin.plant import InterfaceSettling, SBRPhase, SBRUnit, storage_report
-
-phases = [SBRPhase("fill", 0.1, feed=True), SBRPhase("react", 0.3, kla=240.0),
-          SBRPhase("settle", 0.1, settle=True), SBRPhase("decant", 0.1, decant=True),
-          SBRPhase("idle", 0.05)]                       # one cycle every 0.65 d
-sbr = SBRUnit("sbr", model, phases, full_volume=1000.0, feed_flow=5000.0,
-              decant_flow=5000.0, settling=InterfaceSettling(v_settle=400.0, area=200.0),
-              particulate_species=["XI", "XS", "XB_H", "XB_A", "XP", "XND"],
-              initial_fraction=0.5, conditions={"T": 293.15},
-              feed="storage", storage_volume=600.0)
-sbr_plant = aquakin.Plant("sbr_demo", time_unit="d")
-sbr_plant.add_unit(sbr)
-sbr_plant.add_influent("feed", model.influent(bsm1_feed, Q=769.0), to="sbr.feed")
-print(sbr.output_ports)
-# ['effluent', 'overflow']
-
-sbr_sol = sbr_plant.solve(t_span=(0.0, 1.3), t_eval=jnp.linspace(0.0, 1.3, 261))
-report = storage_report(sbr_plant, sbr_sol, "sbr")
-print(report.summary())
-```
-
-% invisible-code-block: python
-%     assert sbr.output_ports == ["effluent", "overflow"], "the ports stated above changed"
-%     assert report.level.max() <= 600.0 * (1 + 1e-6) and report.level.min() > 0.0
-%     assert abs(sbr_plant.mass_balance(sbr_sol)["COD"].relative_imbalance) < 2e-2
-
-`storage_report` gives the holding volume's level and its inflow, draw,
-overflow and shortfall over the saved times, with the overflow and the
-shortfall integrated. The overflow is also a stream (`sbr.overflow`) that can be
-wired onward, and `plant.mass_balance` counts it as an outflow when it is left
-unconnected, like the effluent. The holding volume is part of the SBR's state
-(`storage.<species>`, `storage.V`) and of its inventory in the mass balance.
-Its pump cuts out over the bottom 1 % of `storage_volume` and the overflow takes
-over in the top 1 %, so the level stays between them without a located event,
-and `jax.grad` flows through both.
-
-For `feed="batch"`, write a fill-only influent as an expression of time (see
-[A feed that follows a pattern](#a-feed-that-follows-a-pattern)), for the
-cycle above `Q="5000*(1 - step(mod(t, 0.65) - 0.1))"`, or as a table whose flow
-steps at the phase boundaries.
-
-### Disinfection
-
-`UVUnit` and `ChlorineContactUnit` pass the process stream through unchanged and
-reduce an indicator-organism density carried on the stream (read back as
-`StreamSeries.org`). The UV dose is the fluence rate times the exposure time
-`V/Q` in seconds. The chlorine credit is CT, the residual times the contact time
-T10 (the time by which 10% of the water has passed through,
-`T10 = baffling_factor × V/Q`), with the residual a state that decays.
-
-```python
-from aquakin.plant import UVUnit, ChlorineContactUnit
-
-dis_plant = two_tanks("disinfection")
-dis_plant.add_unit(UVUnit("uv", model, volume=1.0, intensity=10.0, d10=5.0,
-                          max_log=4.0, inlet_density=1e6))   # mW/cm², mJ/cm² per log
-dis_plant.add_unit(ChlorineContactUnit("cct", model, volume=400.0, dose=5.0,
-                                       ct_per_log=4.0 / 1440.0,   # 4 mg·min/L, in mg·d/L
-                                       decay_rate=2.0, max_log=4.0))
-dis_plant.connect("aerobic.out", "uv.in")
-dis_plant.connect("uv.out", "cct.in")
-
-dis_sol = dis_plant.solve(t_span=(0.0, 10.0), t_eval=t_eval)
-removal = jnp.log10(1e6 / dis_plant.stream(dis_sol, "cct.out").org[-1])
-print(f"{float(removal):.1f} log")
-# 8.0 log
-```
-
-T10 and CT are in the **plant's** time unit, so convert a CT table given in
-mg·min/L (divide by 1440 for a plant in days). `uv_dose`, `uv_log_inactivation`,
-`ct_value`, `ct_log_removal`, `t10_from_baffling` and `t10_from_rtd` compute
-the same credits standalone, for sizing a contactor.
+## Design and reporting
 
 ### Aeration design
 
@@ -555,169 +326,38 @@ print(size_activated_sludge(SRT=10.0, Q=18446.0, HRT_h=8.0, n_tanks=5, ras_ratio
 print(dyn.sludge_age(dyn_sol).summary())
 ```
 
-### Plant temperature
+### Greenhouse gases, cost and scenarios
 
-By default a unit's temperature is the flow-weighted mix of its inlets, with no
-thermal storage (`AlgebraicTemperature`). `HeatBalanceTemperature` instead gives
-every tank with a volume (except the heated digester) a temperature state,
-`V dT/dt = Q_in (T_in − T)`, so tanks lag and damp a diurnal or seasonal
-influent temperature:
+On top of the EQI/OCI evaluation, `aquakin` reports a **greenhouse-gas
+footprint** (kg CO₂-equivalent per day) and a monetized **operating cost**
+(currency per day), and tabulates scenarios side by side. This block uses the
+BSM2 runs from above and takes several minutes:
 
-```python
-from aquakin.plant import HeatBalanceTemperature
-
-thermal = two_tanks("thermal")
-thermal.set_temperature_model(HeatBalanceTemperature())
-sol_T = thermal.solve(t_span=(0.0, 10.0), t_eval=t_eval)
-T_out = thermal.stream(sol_T, "aerobic.out").T
-print(float(T_out[0]), "->", round(float(T_out[-1]), 2), "K")
-# 293.15 -> 288.15 K
-```
-
-The model changes the length of the plant state, so build a new `y0` after
-setting it. It needs an influent that carries a temperature, and
-`build_bsm2(temperature_model=...)` accepts it too. A flowsheet file cannot hold
-it yet.
-
-## Influents
-
-`model.influent({...}, Q=..., T=...)` gives a constant feed; the BSM loaders
-read the benchmark load files. Three more ways to describe a feed follow, and
-`InfluentSeries` holds any measured record.
-
-### A feed that follows a pattern
-
-A load that follows a *shape* rather than a measured record needs no table file.
-`InfluentExpression` takes the flow, the temperature and any species as
-expressions of the plant's clock:
+% skip: next "a BSM2 solve that takes several minutes; its API is checked by the BSM2 tests"
 
 ```python
-from aquakin.plant import InfluentExpression
+_, _, bsm2_do_eval = run_bsm2(do_control=True)
 
-diurnal = build_bsm1(model)
-diurnal.add_influent("feed", InfluentExpression(
-    model,
-    Q="18446 + 4000*sin(2*pi*t)",                 # a diurnal flow
-    composition={"SNH": "31.6 + 8*sin(2*pi*t - 0.5)", "SS": 69.5},
-))
+fp = aquakin.carbon_footprint(                     # kg CO2e/d, with a breakdown
+    bsm2_eval.total_energy(), grid_factor=0.4,
+    methane_production=bsm2_eval.methane_production, ch4_fugitive_fraction=0.015)
+
+oc = aquakin.operating_cost(                       # currency/d
+    energy_kwh_per_d=bsm2_eval.total_energy(), carbon_kg_cod_per_d=bsm2_eval.carbon_mass,
+    sludge_kg_tss_per_d=bsm2_eval.sludge_production,
+    methane_kg_per_d=bsm2_eval.methane_production,
+    factors=aquakin.CostFactors(energy_price=0.12), co2e_per_d=fp.total_co2e)
+
+print(fp)   # labelled CO2e breakdown
+print(oc)   # labelled cost breakdown
+print(aquakin.kpi_comparison({"open loop": bsm2_eval, "DO control": bsm2_do_eval}).table())
 ```
 
-Each value may equally be a plain number, so only the parts that vary need an
-expression; a species that is not named is absent from the feed. The expressions
-are ordinary arithmetic with `t`, the constants `pi` and `e`, and the functions
-in `aquakin.plant.time_expr.FUNCTIONS` (`sin`, `cos`, `tan`, `exp`, `log`,
-`log10`, `sqrt`, `abs`, `floor`, `min`, `max`, `mod`, `clip`, `step`). They are
-evaluated inside the solve, so a run driven by one still differentiates.
-
-There is no `if`: a value that switches uses `step` or `clip`, which stay
-differentiable. A wastage pump that steps up for half the year is
-`"300 + 150*step(t - 182)"`.
-
-`t` is the plant's clock, and the expressions keep the clock they were written
-on, so one written for a plant running on days still means days if the plant is
-later put on hours. Because the whole feed is text, it goes into a flowsheet
-file as it stands, with no table file beside it:
-
-```yaml
-feed:
-  kind: influent
-  model: asm1
-  Q: 18446 + 4000*sin(2*pi*t)
-  composition: {SNH: 31.6 + 8*sin(2*pi*t - 0.5), SS: 69.5}
-```
-
-### Pumps and splits that follow a schedule
-
-The same expressions drive the plant's own flow setpoints: a clarifier's
-`underflow_Q` or `overflow_Q`, a `SetpointSplitter`'s pump flows, a
-`ThresholdSplitter`'s `threshold` and a primary clarifier's sludge fraction
-`f_PS`. Write the expression where the number would go:
-
-```python
-from aquakin.plant import PrimaryClarifier, SetpointSplitter
-
-sludge = SetpointSplitter("sludge_split", model,
-                          {"waste": "385 + 75*step(t - 30)"},   # wastage up on day 30
-                          remainder_port="ras")
-primary = PrimaryClarifier("primary", model, volume=900.0,
-                           f_PS="0.007*(1 + 0.2*sin(2*pi*t))")  # a diurnal sludge draw
-print(sludge.scheduled_setpoints(), primary.scheduled_setpoints())
-# ('waste',) ('f_PS',)
-```
-
-% invisible-code-block: python
-%     assert sludge.scheduled_setpoints() == ("waste",)
-%     assert primary.scheduled_setpoints() == ("f_PS",)
-
-Like every unit setting, a setpoint is on the plant's clock: `t` is in the
-plant's time unit and a flow in m³ per that unit. Its value is clipped as it is
-evaluated, a flow to zero or more and a fraction to between 0 and 1, because no
-check made when the unit is built can tell what an expression does over a whole
-run; a constant that is out of range is still refused. In a flowsheet file the
-expression is the setting's value:
-
-```yaml
-sludge_split:
-  kind: setpoint_splitter
-  model: asm1
-  output_port_flows: {waste: 385 + 75*step(t - 30)}
-  remainder_port: ras
-```
-
-A run driven by such a setpoint differentiates with respect to the model
-parameters and the other setpoints; the numbers inside an expression are not
-parameters, so to differentiate with respect to a pump flow, keep that flow a
-number. A plant with a setpoint that varies in time works out its recycle
-streams afresh at every step instead of reusing a map computed once per run, so
-it solves somewhat more slowly than the same plant with constant setpoints.
-
-### A feed from laboratory measurements
-
-`characterize_influent` splits the aggregate measurements a laboratory reports
-(total COD, TKN, ammonia, alkalinity, and optionally filtered COD) into the
-ASM1 states, with the fractions in `InfluentFractions`. `read_influent_csv`
-reads a time series, and its `column_map=` names your file's own columns, so a
-laboratory or SCADA export is read as it stands; aggregate columns are
-fractionated row by row.
-
-```python
-from pathlib import Path
-from aquakin.plant import characterize_influent, read_influent_csv
-
-lab_feed = characterize_influent(model, flow=18446.0, total_cod=420.0, tkn=40.0,
-                                 ammonia=28.0, alkalinity=7.0, T=288.15)
-
-Path("scada.csv").write_text(
-    "hours,flow_m3h,COD_mgL,TKN_mgL,NH4_mgL,temp_C\n"
-    "0,700,420,40,28,15\n6,900,480,44,31,15.5\n12,800,450,42,30,16\n24,700,420,40,28,15\n")
-scada_feed = read_influent_csv(
-    "scada.csv", model,
-    column_map={"t": "hours", "Q": "flow_m3h", "T": "temp_C",
-                "total_cod": "COD_mgL", "tkn": "TKN_mgL", "ammonia": "NH4_mgL"},
-    units={"t": "h", "Q": "m3/h", "T": "degC"})
-print(scada_feed.t, scada_feed.Q)
-# [0.   0.25 0.5  1.  ] [16800. 21600. 19200. 16800.]
-```
-
-### Influent units
-
-Influent data in other units are converted. Declare the units with `units=` on
-`model.influent(...)`, `InfluentSeries` or `read_influent_csv`:
-
-```python
-feed = model.influent({"SS": 0.06}, Q=760.0, T=15.0,
-                      units={"Q": "m3/h", "T": "degC", "SS": "kgCOD/m3"})
-print(feed.Q[0], feed.T[0], feed.C[0, model.species_index["SS"]])
-# 18240.0 288.15 60.0
-```
-
-Time goes to the model's time unit, flow to m³ per that unit, temperature to
-kelvin, and each species to the unit the model declares for it; `feed.units`
-lists the converted units. Only the scale changes, so a unit that measures
-something else (an amount in moles where the model has a mass, or g COD where it
-has g N) raises, as does a unit that cannot be read. Where the model leaves a
-unit undeclared the data are used as given. The BSM influent loaders declare
-their units for you.
+`carbon_footprint` weights grid-energy CO₂e, direct N₂O (`n2o_emission=`, for
+a model that resolves it) and fugitive biogas methane, crediting recovered
+biogas energy; `operating_cost` prices energy, carbon, sludge and biogas; and
+`kpi_comparison` collects any of these report objects into one standardized KPI
+table.
 
 ## Checking a plant
 
@@ -729,7 +369,7 @@ and the g/m³ constants built into the solids units. `plant.check_units()`
 reports what is left, before you solve:
 
 ```python
-print(plant.check_units().summary())
+print(bsm1.check_units().summary())
 # Plant units: OK (time unit: d)
 ```
 
@@ -784,282 +424,3 @@ at steady state it closes. The balance then lists the reason in
 `mb["N"].notes` and `mb["P"].notes`, and `summary()` prints it. Use
 `composition_mode="per_species"` when you need the transient nitrogen and
 phosphorus balance exact.
-
-## Uncertainty and scenarios
-
-`aquakin.monte_carlo` and `aquakin.compare_scenarios` run a function of a few
-inputs many times; on a plant, the function sets the parameters and solves.
-Here the input is the autotroph growth rate `asm1.muA` of the MBBR tank above,
-whose biofilm nitrifies, and the output its effluent ammonia after two days
-from the steady state:
-
-```python
-p0 = mbbr_plant.default_parameters()
-i_mu = mbbr_plant.parameter_index("asm1.muA")
-
-def effluent_snh(x):
-    run = mbbr_plant.solve(t_span=(0.0, 2.0), params=p0.at[i_mu].set(x[0]),
-                           y0=mbbr_ss.state)
-    return mbbr_plant.stream(run, "mbbr.out").C_named("SNH")[-1]
-
-mc = aquakin.monte_carlo(effluent_snh, {"muA": {"dist": "normal", "mean": 0.8, "std": 0.1}},
-                         n_samples=8, batched=False)
-print(mc.summary())
-
-cs = aquakin.compare_scenarios(effluent_snh, {"base": {}, "slow nitrifiers": {"muA": 0.5}},
-                               input_names=["muA"], baseline=[0.8], batched=False)
-print(cs.table())
-```
-
-`batched=False` solves one sample at a time. `aquakin.optimize_design` uses the
-same kind of function to minimize a cost subject to effluent limits; see
-[Uncertainty propagation and design](sensitivity_and_calibration.md#uncertainty-propagation-and-design).
-Fitting plant parameters to measured streams (`Plant.calibrate`) is in
-[Calibrating a plant](sensitivity_and_calibration.md#calibrating-a-plant), and
-the Fisher information and sensor ranking of a plant in
-[Identifiability of plant parameters](sensitivity_and_calibration.md#identifiability-of-plant-parameters).
-
-## Reporting: GHG, cost, and scenarios
-
-On top of the EQI/OCI evaluation, `aquakin` reports a **greenhouse-gas
-footprint** (kg CO₂-equivalent per day) and a monetized **operating cost**
-(currency per day), and tabulates scenarios side by side. This block uses the
-BSM2 runs from above and takes several minutes:
-
-% skip: next "a BSM2 solve that takes several minutes; its API is checked by the BSM2 tests"
-
-```python
-_, _, bsm2_do_eval = run_bsm2(do_control=True)
-
-fp = aquakin.carbon_footprint(                     # kg CO2e/d, with a breakdown
-    bsm2_eval.total_energy(), grid_factor=0.4,
-    methane_production=bsm2_eval.methane_production, ch4_fugitive_fraction=0.015)
-
-oc = aquakin.operating_cost(                       # currency/d
-    energy_kwh_per_d=bsm2_eval.total_energy(), carbon_kg_cod_per_d=bsm2_eval.carbon_mass,
-    sludge_kg_tss_per_d=bsm2_eval.sludge_production,
-    methane_kg_per_d=bsm2_eval.methane_production,
-    factors=aquakin.CostFactors(energy_price=0.12), co2e_per_d=fp.total_co2e)
-
-print(fp)   # labelled CO2e breakdown
-print(oc)   # labelled cost breakdown
-print(aquakin.kpi_comparison({"open loop": bsm2_eval, "DO control": bsm2_do_eval}).table())
-```
-
-`carbon_footprint` weights grid-energy CO₂e, direct N₂O (`n2o_emission=`, for
-a model that resolves it) and fugitive biogas methane, crediting recovered
-biogas energy; `operating_cost` prices energy, carbon, sludge and biogas; and
-`kpi_comparison` collects any of these report objects into one standardized KPI
-table.
-
-## Saving a plant as a file
-
-A plant can be written as a YAML (or JSON) file and rebuilt from it:
-
-```python
-bsm1.to_spec("flowsheet.yaml")
-rebuilt = aquakin.Plant.from_spec("flowsheet.yaml")
-```
-
-The file lists every unit by its name, with an optional display `label` and all
-of its settings (defaults included, so the file means the same plant whatever
-the defaults of a later aquakin), the connections as `unit.port -> unit.port`,
-the influents, named streams and recycle options, and the version of aquakin
-that wrote it:
-
-```yaml
-format: 2
-aquakin: 0.2.0
-name: BSM1
-models:
-  asm1: {source: shipped, sha256: ...}
-units:
-  feed: {kind: influent, model: asm1, Q: 18446.0, composition: {SI: 30.0, SS: 69.5, ...}}
-  tank3: {kind: cstr, label: Aerobic zone 1, model: asm1, volume: 1333.0, ...}
-connections:
-  - tank2.out -> tank3.inlet
-```
-
-Every model a unit uses is listed under `models:`, either a shipped model or a
-model YAML file beside the flowsheet. A model file can `extends:` a shipped
-model, so a variant is a few lines: `examples/projects/bsm2/` holds BSM2 this
-way, with its 15 °C ASM1 parameter set as `models/asm1_bsm2.yaml`. Each model
-carries a fingerprint of its content, and reading a flowsheet whose model has
-changed since it was written warns.
-
-A time-varying influent is kept as a table file beside the flowsheet (columns
-`t`, `Q`, optionally `T`, and species; see `aquakin.plant.read_influent_table`).
-`to_spec(path)` writes it to `data/<influent>.csv` unless it was already read
-from a table inside the flowsheet's folder.
-
-An SBR's phases are a list with one mapping per phase, in `SBRPhase`'s own
-field names, and its settling model a mapping that names its `kind`
-(`interface` for `InterfaceSettling`, `layered` for `LayeredSettling`) and that
-model's arguments. A field left out takes its default (`mixed: null` lets the
-phase decide from `feed` and `kla`), and `to_spec` writes every field. The
-`feed` mode is required (a flowsheet written before SBRs had one is refused,
-naming the three modes), and the holding volume's settings go with
-`feed: storage`:
-
-```yaml
-  sbr:
-    kind: sbr
-    model: asm1
-    phases:
-      - {name: fill, duration: 0.1, feed: true}
-      - {name: react, duration: 0.3, kla: 240.0}
-      - {name: settle, duration: 0.1, settle: true}
-      - {name: decant, duration: 0.1, decant: true}
-    settling: {kind: interface, v_settle: 400.0, area: 200.0}
-    full_volume: 1000.0
-    feed: storage
-    feed_flow: 5000.0
-    storage_volume: 600.0
-    storage_initial_fraction: 0.5
-    decant_flow: 5000.0
-```
-
-Reading a file checks it strictly: a misspelled setting (a phase's too, named by
-its entry), a value of the wrong type or a model that is not listed is an error
-that names where it is. Anything a file cannot express yet (array-valued
-settings such as initial concentrations, a heat-balance temperature model)
-raises a `SpecError` that names it rather than being left out.
-
-`aquakin.plant.spec_fingerprint(spec)` gives a fingerprint of the plant a file
-builds: its settings, wiring and the content of its models and influent tables,
-but not its layout, labels or where its files sit. Record it beside a result to
-tell later whether the result still matches the flowsheet.
-
-## Studies
-
-A *study* is one analysis of a flowsheet saved in the project with its results.
-Each study is a folder under `studies/` with a `study.yaml` saying what to run:
-
-```yaml
-# studies/effluent/study.yaml
-study:
-  kind: simulate
-  parameters: {asm1.muH: 5.0}          # changed from the flowsheet's
-  initial_state: steady                # or default, or a named-state file
-  time: {t_span: [0, 14], t_eval: {start: 0, stop: 14, num: 337}}
-  streams: [effluent]                  # saved whole: flow, temperature, species
-  observables:
-    - stream: effluent
-      channels: [COD, TKN, NOx, TN, TSS]
-```
-
-```bash
-aquakin study run studies/effluent      # writes results/ and run.yaml
-aquakin study check studies/effluent    # fresh, stale (and why), damaged or failed
-```
-
-or `aquakin.study.run_study(path)` / `check_study(path)` from Python. Every
-result is keyed by name (parameters by `model.param`, states by unit and state
-name, trajectories as CSV columns such as `effluent.SNH`), so results stay
-readable after the flowsheet is reorganized. A channel is a species, a
-laboratory measurement (`COD`, `TKN`, `NOx`, `TN`, `TP`, `TSS`, `Q`, `T`) or a
-weighted sum of your own; see
-[A channel of your own](sensitivity_and_calibration.md#a-channel-of-your-own).
-
-Besides `simulate`, a study can be a `fisher` information of a sensor design, a
-`calibrate` fit to observations, a `profile` likelihood of one parameter, or a
-`rank` of candidate sensor sets (the methods are described in
-[Designing experiments](sensitivity_and_calibration.md#designing-experiments)).
-A fit reads its observations from a CSV table in the study folder, a `t` column
-and one `<stream>.<channel>` column per measured channel. Because it fits the
-likelihood of the data, it needs each channel's measurement error: `sigma`, one
-value for all channels or one per channel, or `estimate_sigma: true` to
-estimate it from the fit:
-
-```yaml
-study:
-  kind: calibrate
-  free: [asm1.muH, asm1.KS]
-  observables:
-    - {stream: effluent, channels: [SNH, TSS]}
-  data: data.csv          # columns t, effluent.SNH, effluent.TSS
-  sigma: [0.2, 2.0]       # each channel's measurement error
-  laplace: true
-```
-
-A study follows the flowsheet: once a setting, a connection, a model or an
-influent table it was run on changes, `check` reports it **stale** and names
-what changed. A newer aquakin is noted but does not make a result stale; read
-the changelog to decide whether to run it again. Running a study that has
-results replaces them only when asked (`--replace`); `aquakin study copy` keeps
-a copy first. The new results take the old ones' place only when the run
-succeeds: a run that fails or is cancelled leaves the earlier results as they
-were, and `check` notes the attempt.
-
-`aquakin study freeze` instead pins a study to a snapshot of its plant, taken
-inside the study folder with every model flattened (shipped models too) and
-every influent table copied, so neither an edit to the project nor an aquakin
-upgrade can change what it runs. `aquakin study unfreeze --discard-results`
-makes it follow the flowsheet again and deletes its results, which were
-computed on the snapshot.
-
-From Python, `aquakin.study.create_study(project, name, settings)` and
-`update_study(path, settings)` write a `study.yaml`, checking the settings as a
-run would read them; `plant_choices(spec)` lists what a study of that flowsheet
-may name, and `study_results(path)` reads a study's results back.
-
-## The flowsheet editor
-
-```bash
-pip install "aquakin[ui]"
-aquakin-ui examples/projects/bsm2/flowsheet.yaml
-```
-
-([Installing the editor without Python](installing_the_editor.md) covers a
-computer without Python: one download or one pasted line.)
-
-opens a flowsheet editor in your browser, served on this machine only. Drag
-units from the palette, wire their ports, and edit each unit in a form generated
-from its own documentation; aquakin builds each unit and then the whole plant as
-you edit and lists any errors.
-
-- **Open** and **Save** read and write the files described above. Save writes
-  exactly what `plant.to_spec(path)` would, copying a model (with every file it
-  `extends:`) or influent table from outside the project folder into it. Save
-  refuses to overwrite a flowsheet that changed on disk since the window opened
-  it, so two windows cannot silently undo each other's work.
-- Opening another file while the flowsheet has unsaved edits asks first (save
-  them, or discard them). **Undo** takes back the last edits: a removed unit or
-  wire, a move, a new unit or wire, or an applied form. Delete removes the
-  selected units and wires (Backspace does not).
-- Edits typed into a unit's form are applied when you select another unit, and
-  a value that cannot be read is named under its field.
-- A chemical dosing unit's reagent is set in its form: choose the model it is
-  written in first, then add each species it contains with its concentration.
-- A sequencing batch reactor's phases are a table in its form: add a phase,
-  move it up or down, or remove it. Its settling model is a choice of kind,
-  after which that model's arguments appear.
-
-**Simulate** saves the flowsheet, creates a study called `simulation` the first
-time (`simulation_<file name>` for a file not named `flowsheet.yaml`, so each
-flowsheet in a folder has its own), runs the plant to steady state, and shows a
-table of every stream that leaves the plant: its flow, COD, TKN, NOx, TN and TSS,
-with every species under *Flow and species* (temperatures in °C). To run in time
-instead, or to save other streams, **Edit** the `simulation` study; a study that
-runs in time shows a chart per channel of the stream you pick. From Python,
-`aquakin.study.simulation_study(spec)` gives those settings.
-
-The **Studies** tab lists the project's studies and their status (fresh, stale
-and why, not run, failed, cancelled). From it you can run a study and watch its
-progress or cancel it; freeze, unfreeze or copy it; and open **Results**: a
-simulation's streams, a Fisher study's standard deviations, design criteria and
-information matrix, a ranking of sensor sets, a calibration's fitted parameters
-with the data against the fit, or a profile's curve and interval. Running a
-study first saves the flowsheet's unsaved edits, so it runs what you see (a
-frozen study runs its snapshot). Replacing results or unfreezing asks first and
-offers to keep a copy. Tick **Don't ask again** to replace results without the
-question from then on; the **Ask before replacing results** switch at the top of
-the tab brings it back (the choice is kept in `aquakin/ui.json` in your
-configuration folder). Unfreezing always asks.
-
-**New study** sets one up in a dialog: pick its kind, and the fields that kind
-uses appear, with the plant's own streams, parameters and measurable channels to
-choose from; **Edit** opens a study's settings in the same dialog. The dialog
-writes the same `study.yaml` you would write by hand, and a data table or saved
-state chosen from elsewhere is copied into the study folder. A study set up in
-the editor follows the flowsheet file that is open.

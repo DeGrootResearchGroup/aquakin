@@ -18,10 +18,9 @@ documentation follows the order you will need it in:
    biofilm reactors with pumps, dosing and phase switches; plant-wide
    flowsheets such as the BSM1 and BSM2 benchmarks, saved as files and analyzed
    in reproducible studies, with a browser flowsheet editor.
-4. **[Sensitivity, calibration and design](analysis.md)** — every solve is
-   differentiable, so you can compute sensitivities, fit parameters to data,
-   check which parameters the data can determine, and choose the experiment
-   that determines them best.
+4. **[Analysis](analysis.md)** — every solve is differentiable, so you can
+   compute sensitivities, fit parameters to data, check which parameters the
+   data can determine, and choose the experiment that determines them best.
 5. **[Reference](reference.md)** — the API grouped by task, and every public
    function and class.
 
@@ -32,7 +31,7 @@ documentation follows the order you will need it in:
 getting_started
 models
 simulation
-Analysis <analysis>
+analysis
 reference
 ```
 

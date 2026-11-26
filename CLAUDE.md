@@ -89,7 +89,7 @@ them:
 |---|---|
 | `docs/index.md` | landing page + the hidden root toctree; its five entries are the site's top navigation bar |
 | `docs/models.md`, `docs/simulation.md`, `docs/analysis.md`, `docs/reference.md` | section landing pages: a "which page do I need" table and the section's toctree (a new page goes in one of them, not in `index.md`) |
-| `docs/getting_started.md`, `docs/reactors.md`, `docs/plants.md`, `docs/sensitivity_and_calibration.md` | the task-oriented user guide |
+| `docs/getting_started.md`, `docs/reactors.md`, `docs/plants.md`, `docs/custom_flowsheets.md`, `docs/influents.md`, `docs/plant_files.md`, `docs/sensitivity_and_calibration.md`, `docs/calibration.md`, `docs/experiment_design.md`, `docs/plant_calibration.md` | the task-oriented user guide |
 | `docs/model_format.md`, `docs/adding_models.md` | YAML model-authoring reference |
 | `docs/model_catalog.md` | user-facing catalog of every shipped model (what it is, provenance, size, how to load) |
 | `docs/public_api.md` | task-grouped map of the public API, linking into the generated `api.md` |

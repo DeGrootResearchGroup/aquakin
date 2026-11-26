@@ -201,8 +201,14 @@ The full documentation is at **[aquakin.readthedocs.io](https://aquakin.readthed
 | [Your first model](https://aquakin.readthedocs.io/en/latest/adding_models.html) | writing a model of your own, step by step |
 | [YAML model format](https://aquakin.readthedocs.io/en/latest/model_format.html) | every key, function and rule of a model file |
 | [Reactors](https://aquakin.readthedocs.io/en/latest/reactors.html) | batch, plug-flow, biofilm and particle-track reactors; events; integrator settings |
-| [Plant-wide simulation](https://aquakin.readthedocs.io/en/latest/plants.html) | BSM1 / BSM2, custom flowsheets, reporting, projects, studies, the editor |
-| [Sensitivity & calibration](https://aquakin.readthedocs.io/en/latest/sensitivity_and_calibration.html) | gradients, sensitivity analysis, fitting, identifiability, experiment design |
+| [Plant-wide simulation](https://aquakin.readthedocs.io/en/latest/plants.html) | the BSM1 / BSM2 benchmarks, performance indices, reporting, unit and mass-balance checks |
+| [Building a flowsheet](https://aquakin.readthedocs.io/en/latest/custom_flowsheets.html) | a plant of your own and every unit operation |
+| [Influents](https://aquakin.readthedocs.io/en/latest/influents.html) | patterned feeds, pump schedules, laboratory and SCADA records |
+| [Flowsheet files, studies and the editor](https://aquakin.readthedocs.io/en/latest/plant_files.html) | saving a plant, reproducible studies, the browser editor |
+| [Sensitivity analysis](https://aquakin.readthedocs.io/en/latest/sensitivity_and_calibration.html) | which tool answers which question, gradients, local and global sensitivity, uncertainty propagation |
+| [Calibration](https://aquakin.readthedocs.io/en/latest/calibration.html) | fitting parameters to data, posteriors, profile likelihood, identifiability, model comparison |
+| [Experiment design](https://aquakin.readthedocs.io/en/latest/experiment_design.html) | Fisher information, scoring and optimizing a design, choosing measurements |
+| [Calibrating a plant](https://aquakin.readthedocs.io/en/latest/plant_calibration.html) | plant fits, measured channels, plant identifiability and sensor ranking |
 | [Worked example: designing an experiment](https://aquakin.readthedocs.io/en/latest/worked_example_design.html) | an ozone-demand study from first design to calibrated model |
 | [Public API](https://aquakin.readthedocs.io/en/latest/public_api.html) | the API grouped by task |
 

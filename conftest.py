@@ -40,7 +40,13 @@ GUIDE_PAGES = [
     "docs/installing_the_editor.md",
     "docs/reactors.md",
     "docs/plants.md",
+    "docs/custom_flowsheets.md",
+    "docs/influents.md",
+    "docs/plant_files.md",
     "docs/sensitivity_and_calibration.md",
+    "docs/calibration.md",
+    "docs/experiment_design.md",
+    "docs/plant_calibration.md",
     "docs/model_format.md",
     "docs/adding_models.md",
     "docs/model_catalog.md",
@@ -48,7 +54,13 @@ GUIDE_PAGES = [
 ]
 
 # Pages whose examples run whole-plant solves for minutes.
-SLOW_PAGES = {"plants.md", "sensitivity_and_calibration.md"}
+SLOW_PAGES = {
+    "plants.md",
+    "custom_flowsheets.md",
+    "sensitivity_and_calibration.md",
+    "calibration.md",
+    "experiment_design.md",
+}
 
 _NAMED_FILE = re.compile(r"\A#\s*(?P<name>[\w.-]+\.ya?ml)\s*\n")
 

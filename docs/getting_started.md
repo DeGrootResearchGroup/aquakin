@@ -233,7 +233,9 @@ not one of the model's species.
 - [Reactors](reactors.md) — batch, plug-flow, particle-track, and biofilm
   reactors; operating conditions; discontinuous events; and the integrator
   settings.
-- [Plant-wide simulation](plants.md) — assemble full treatment-plant flowsheets
-  such as the BSM1 and BSM2 benchmarks.
-- [Sensitivity & calibration](sensitivity_and_calibration.md) — differentiate a
-  solve, run sensitivity analysis, and fit parameters to data.
+- [Plant-wide simulation](plants.md) — run the BSM1 and BSM2 benchmarks, and
+  [build a flowsheet](custom_flowsheets.md) of your own.
+- [Sensitivity analysis](sensitivity_and_calibration.md),
+  [Calibration](calibration.md) and [Experiment design](experiment_design.md) —
+  differentiate a solve, see which parameters matter, fit them to data, and
+  plan the experiment that determines them best.
