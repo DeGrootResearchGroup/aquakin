@@ -1003,12 +1003,16 @@ starts from healthy bio-P sludge rather than the slow, seed-sensitive cold-start
 PAO establishment. The default config (ten-layer Takács settler) reaches a
 feasible steady state with full nitrification (effluent SNH4 ≈ 0.2 g N/m³),
 partial denitrification (effluent SNO3 ≈ 10 g N/m³ from 25 g N/m³ influent
-ammonia) and **partial biological P removal** (effluent SPO4 ≈ 4 g P/m³ from 8;
-clear anaerobic release and aerobic uptake). With `use_takacs=False` the ideal
+ammonia) and **partial biological P removal** (effluent SPO4 ≈ 3.9 g P/m³ from 8;
+clear anaerobic release and aerobic uptake). The settler reads its solids as
+TSS through the `asm2d` `iTSS` factors (MLSS ≈ 4750 g TSS/m³ in the last
+aerated tank); at that loading the sludge blanket reaches the eighth of its ten
+layers and the effluent carries ≈ 54 g TSS/m³. With `use_takacs=False` the ideal
 clarifier gives SNH4 ≈ 0.1, SNO3 ≈ 10 and SPO4 ≈ 5. A 200-day dynamic solve to
-that steady state takes ~15 min with the Takács settler against ~1.5 min with
-the ideal clarifier; `Plant.steady_state` from `a2o_warm_start` takes ~2 min
-against ~35 s. The plant also has a second steady state, where the nitrifiers
+that steady state takes ~1 min with either settler (60 s Takács, 51 s ideal,
+compile included, on a 4-core machine; under a concurrent load the Takács solve
+took 3 min), and `Plant.steady_state` from `a2o_warm_start` ~40 s against
+~30 s. The plant also has a second steady state, where the nitrifiers
 have washed out (SNH4 ≈ 31, SNO3 = 0): `Plant.steady_state` from a seed far
 from the operating point can converge there, which is why the warm start's
 particulates are the operating point's. The RAS returns nitrate to the anaerobic zone, where denitrifying
