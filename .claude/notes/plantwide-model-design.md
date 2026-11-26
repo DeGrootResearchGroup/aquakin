@@ -308,6 +308,64 @@ kept equal by putting the organic-N difference in ammonium.
   P/d into the digester, 22% returning as soluble phosphate, effluent TP 6.4
   g/m3 open loop; model outputs, usable as a later plausibility check.
 
+## Who ferments in activated sludge (A2O comparison, 2026-11-26)
+
+**Finding.** On `build_a2o` (anaerobic zone 23% of the reactor volume, ASM2d's
+default influent with all VFA as acetate, 20 C), the bio-P level's acidogens
+wash out under every literature parameter set. The invasion rate (largest
+eigenvalue of the plant Jacobian's `XFE` block at the acidogen-free steady
+state) is negative for ADM1's sugar degraders (-0.052 1/d), ADM1 with
+`K_S_su` 50 (-0.019), Ribes et al. (2002) (-0.194), and even ADM1 with no
+decay (-0.045). Only Ribes with no decay (+0.136) or with decay scaled to the
+anaerobic share (+0.060) invades. Without fermentation the anaerobic zone
+ends at 14.9 g/m3 `SF` (ASM2d 0.93); effluent phosphate is 7.1 g P/m3 against
+ASM2d's 5.1, PAOs 522 against 774 g COD/m3.
+
+**What the literature does.**
+- Fermentation is OHO (heterotroph) activity in ASM2d (a transformation,
+  `qfe` 3/d, `KF` 4), Barker & Dold (1997; anaerobic growth, 4 1/d, `K` 2,
+  yield 0.1, off with O2 or NO3), UCTPHO+, and Ikumi (2011; activated sludge
+  only, with separate acidogens in the digester behind a model interface).
+  Hauduc et al. (2013) review seven models: "fermentation is a growth process
+  under anaerobic conditions for OHOs", and anaerobic growth "may not be
+  neglected" for large anaerobic zones.
+- The commercial plant-wide model the owner supplied (the Varga et al. 2018
+  lineage) has OHOs ferment by anaerobic growth (0.3 1/d, yield 0.1,
+  half-saturation 5 g/m3 in activated sludge and 350 in digesters, chosen by
+  unit type), hydrogen yield switching from 0.35 to 0.10 as VFA rises past
+  50 g/m3, OHO decay 0.62 1/d aerobic, x0.5 anoxic, x0.25 anaerobic; and
+  PAOs ferment too, switched by ORP (Tetrasphaera-type).
+- BNRM1 (Seco et al., 2004) is the one with separate acidogens in activated
+  sludge: fermentation inhibited by O2 only (it runs in anoxic zones),
+  lysis unswitched; and in practice the acidogens are seeded with the influent
+  (Ruano et al., 2012, p. 1011: "Because of the presence of acidogenic
+  bacteria in the sewerage system, the simulations were carried out by
+  considering these bacteria in the influent").
+- Ruel et al. (2002) fit "heterotrophic acidogenic biomass" in 13 raw
+  wastewaters at 20 C: 3 to 20 g COD/m3; growth 0.70 1/d, yield 0.10,
+  half-saturation 8.5 g/m3, decay 0.20 1/d; products 0.45 to 0.60 acetate,
+  0.27 to 0.49 propionate.
+- Nielsen et al. (2012): glucose fermenters are 39% of the biovolume in ten
+  full-scale EBPR plants, mostly Tetrasphaera (33%); "most seem to be
+  facultative fermenters", and some take up glucose aerobically as well.
+
+**Measured on the A2O** (steady states by PTC; "not conv." did not converge
+and is indicative only):
+
+| Variant | `SF` end of anaerobic zone | PAO | Competibacter | Effluent PO4 |
+|---|---|---|---|---|
+| ASM2d | 0.93 | 774 | - | 5.13 |
+| acidogens, ADM1 kinetics (current) | 14.9 | 522 | 0 | 7.08 |
+| heterotrophs ferment, 3 1/d substrate, `K` 5 (not conv.) | 0.48 | 1022 | 0 | 4.67 |
+| BNRM1-type: fermentation off by O2 only, Ruel kinetics, 10 g/m3 acidogens in the influent | 5.4 | 806 | 0 | 5.82 |
+| the same without influent acidogens | 13.9 | 0 | 552 | 9.69 |
+
+The last row also shows the PAO/GAO outcome depending on the starting state:
+it differs from the current-kinetics row mainly in the acidogens seeded in the
+warm start (50 against 0), and ends GAO- instead of PAO-dominated. Whether the
+A2O has two stable states here, or the pseudo-transient solve stops in a slow
+transient, is to be checked by a long forward solve.
+
 ## Structure: a linear `extends:` chain
 
 ```
