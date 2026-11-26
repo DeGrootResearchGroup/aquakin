@@ -189,9 +189,13 @@ expressions:
   ph_inhibition_h2: "pH_inhibit(pH_LL_h2, pH_UL_h2)"
   nh3_inhibition_ac: "monod_inh([SNH4] * (1 - pH_switch(pKa_IN)), K_I_nh3)"
   h2_inhibition_pro: "monod_inh([SH2], K_I_h2_pro)"
-  # Heterotroph substrate terms (ASM2d): SF and SA compete in proportion.
-  on_SF: "safe_div(monod([SF], KF) * [SF], [SA] + [SF])"
-  on_SA: "safe_div(monod([SA], KA_H) * [SA], [SA] + [SF])"
+  # Heterotroph substrate terms (ASM2d): SF and the fermentation products
+  # compete in proportion. ASM2d's SA is all the fermentation products; here
+  # they are acetate and propionate, sharing ASM2d's VFA kinetics on their sum,
+  # so the terms are ASM2d's whenever there is no propionate.
+  on_SF:   "safe_div(monod([SF], KF) * [SF], [SA] + [SPRO] + [SF])"
+  on_SA:   "safe_div(monod([SA] + [SPRO], KA_H) * [SA], [SA] + [SPRO] + [SF])"
+  on_SPRO: "safe_div(monod([SA] + [SPRO], KA_H) * [SPRO], [SA] + [SPRO] + [SF])"
 
 reactions:
   # --- Hydrolysis ---------------------------------------------------------
@@ -216,6 +220,12 @@ reactions:
   - name: anoxic_growth_on_SA
     rate: "muH * etaNO3_H * anoxic * on_SA * nutrient_limit * [XH]"
     stoichiometry: {SA: "-1 / YH", XH: 1.0, SNO3: "-(1 - YH) / (40 / 14 * YH)", SN2: auto, SNH4: auto, SIC: auto}
+  - name: aerobic_growth_on_SPRO
+    rate: "muH * aerobic * on_SPRO * nutrient_limit * [XH]"
+    stoichiometry: {SPRO: "-1 / YH", XH: 1.0, SO2: auto, SNH4: auto, SIC: auto}
+  - name: anoxic_growth_on_SPRO
+    rate: "muH * etaNO3_H * anoxic * on_SPRO * nutrient_limit * [XH]"
+    stoichiometry: {SPRO: "-1 / YH", XH: 1.0, SNO3: "-(1 - YH) / (40 / 14 * YH)", SN2: auto, SNH4: auto, SIC: auto}
   - name: decay_of_heterotrophs
     description: "Death-regeneration decay, slower without oxygen or nitrate."
     rate: "bH * (aerobic + anoxic + eta_b_AN * anaerobic) * [XH]"

@@ -203,3 +203,40 @@ def test_gradient_of_batch_methane_matches_a_central_difference(core):
     assert jax.config.x64_enabled
     assert float(grad) == pytest.approx(float(fd), rel=1e-4)
     assert float(grad) > 0.0
+
+
+@pytest.mark.parametrize("SO2", [2.0, 0.0])
+def test_heterotrophs_take_up_propionate_as_asm2d_takes_up_its_vfa(core, SO2):
+    """ASM2d's SA is all the fermentation products; the core splits them into
+    acetate and propionate. With 6 g/m3 acetate and 4 propionate, the core's
+    heterotrophs consume the two together, and use oxygen or nitrate, at
+    exactly ASM2d's rates for 10 g/m3 of its SA (same switches as the test
+    above). Without growth on propionate the core's VFA uptake was 44% short."""
+    asm2d = aquakin.load_model("asm2d")
+    common = dict(SO2=SO2, SF=30.0, SNH4=15.0, SNO3=5.0, SI=30.0, XI=500.0, XS=200.0,
+                  XH=1500.0, XAUT=100.0)  # fmt: skip
+    c_core = _vector(core, {**common, "SA": 6.0, "SPRO": 4.0, "SIC": 60.0})
+    c_asm2d = _vector(asm2d, {**common, "SA": 10.0, "SPO4": 1e6, "SALK": 1e6})
+    p_core = (
+        core.default_parameters()
+        .at[core.param_index["q_FE"]]
+        .set(0.0)
+        .at[core.param_index["eta_b_AN"]]
+        .set(1.0)
+    )
+    etafe = core.default_parameters()[core.param_index["etafe"]]
+    p_asm2d = (
+        asm2d.default_parameters()
+        .at[asm2d.param_index["qfe"]]
+        .set(0.0)
+        .at[asm2d.param_index["etafe"]]
+        .set(etafe)
+    )
+    r_core = core.dCdt(c_core, p_core, core.default_conditions().fields, 0)
+    r_asm2d = asm2d.dCdt(c_asm2d, p_asm2d, asm2d.default_conditions().fields, 0)
+    i, j = core.species_index, asm2d.species_index
+    vfa_core = r_core[i["SA"]] + r_core[i["SPRO"]]
+    np.testing.assert_allclose(vfa_core, r_asm2d[j["SA"]], rtol=1e-6)
+    assert float(r_core[i["SPRO"]]) < 0.0
+    for s in ("SO2", "SNO3", "XH", "SF"):
+        np.testing.assert_allclose(r_core[i[s]], r_asm2d[j[s]], rtol=1e-6, atol=1e-9)

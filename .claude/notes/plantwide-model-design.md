@@ -458,6 +458,36 @@ days 75 to 150) and nothing else moves, so these are stable steady states
 | BNRM1-type (off by O2 only, Ruel kinetics, 10 g/m3 acidogens in the influent) | 5.35 | 846 | 139 | 5.65 |
 | as adopted (decision 16: also slower anaerobic decay, `etafe` 0.144) | 0.36 | 1057 | - | 4.41 |
 
+## The core on BSM1 (2026-11-26)
+
+`examples/plantwide/bsm1` runs the core and `asm2d` on `build_bsm1` (open loop,
+ideal clarifier) with BSM1's constant influent carried into each model's
+species (`tests/validation/test_plantwide_core_bsm1.py`).
+
+- *Aligned* (the core's fermentation off and anaerobic decay as aerobic;
+  ASM2d's fermentation off and its `etafe` set to the core's): the steady
+  states agree to six figures once ASM2d's positivity limiter (threshold
+  1e-3) is off. With it on they differ by 0.2% (effluent ammonium 1.151
+  against 1.153 g N/m3): oxygen in the anoxic tanks sits below the threshold,
+  where the limiter throttles its uptake.
+- *A defect it found:* the core split ASM2d's `SA` (all fermentation products)
+  into acetate and propionate but gave the heterotrophs only acetate, so
+  1.3 g COD/m3 of propionate (and 0.9 of hydrogen, with the aeration not
+  stripping the declared gases) left the plant. The heterotrophs now grow on
+  propionate with oxygen and nitrate, on ASM2d's VFA kinetics applied to
+  acetate plus propionate (exactly ASM2d without propionate); the BSM1
+  comparison strips the core's declared gases in the aerated tanks, which is
+  how the commercial model of the Varga et al. (2018) lineage removes hydrogen
+  in activated sludge (gas transfer only, no biological uptake). Left: 0.004
+  g COD/m3 of each.
+- *As shipped*, the core leaves 11.0 g N/m3 of nitrate against ASM2d's 10.4,
+  ammonium 1.11 against 1.12: its fermentation in the anoxic tanks turns some
+  substrate into hydrogen, which is stripped rather than used for
+  denitrification; the lower `etafe` and the slower anaerobic decay add to it.
+- `build_a2o`'s aeration strips nothing, so on the A2O the core's hydrogen
+  leaves in the effluent (a small COD loss); giving `build_a2o` the
+  `aeration` argument `build_bsm1` has would fix that.
+
 ## Structure: a linear `extends:` chain
 
 ```
@@ -631,17 +661,11 @@ gas phase has its own balance in the unit).
 
 ## Engine and plant work the model needs
 
-1. **Gas-phase species.** The digester unit defaults to ADM1's headspace
-   species (`ADM1_GAS_SPECIES` in `plant/digester.py`) but takes them as its
-   `gas_species` argument, so a model with its own headspace states can run in
-   it. Whether a model should declare its gas-phase species itself is a
-   model-format question (owner's decision). The core level has no gas phase:
-   methane, hydrogen and CO₂ stay dissolved.
-2. **Gas transfer in aerated units** for species other than O₂ (CO₂ and N₂
-   stripping, NH₃ at the chemistry level): to check what the aeration units
-   support today.
-3. **The digester unit's assumptions about units and species names** (ADM1's
-   kg/m³ basis): to check, so a g/m³ model runs in it unchanged.
+1. **Gas-phase species** (done): a model declares its dissolved gases in a
+   `gases:` block and the unit owns the gas phase (*Gas phase* above).
+2. **Gas transfer in aerated units** (done): `Aeration(stripped="model")`
+   strips every gas the model declares.
+3. **The digester unit** (done): `HeadspaceDigesterUnit` runs the g/m³ core.
 4. **Performance.** The unified model is larger in every unit than the model it
    replaces there. Measure the right-hand side, the coloured Jacobian and a
    BSM2-sized dynamic and steady solve at each level before optimizing
@@ -653,10 +677,14 @@ gas phase has its own balance in the unit).
   chemistry level) passes on every reaction, as a unit test.
 - **Per level, against its sources:**
   - core aerobic / anoxic reaction terms against `asm2d` with fermentation
-    switched off (done: equal to 1e-6), then on a BSM1-type flowsheet;
+    switched off (done: equal to 1e-6), then on a BSM1-type flowsheet (done,
+    2026-11-26: the steady states agree to six figures with the processes the
+    models do not share switched off and ASM2d's positivity limiter off; see
+    *The core on BSM1*);
   - core digestion against `adm1` on the BSM2 digester feed: methane
     production, VS destruction, effluent ammonium;
-  - bio-P against `asm2d` / `asm2d_tud` on an A2O flowsheet;
+  - bio-P against `asm2d` / `asm2d_tud` on an A2O flowsheet (`asm2d` done,
+    `examples/plantwide/a2o`; `asm2d_tud` not yet);
   - nitrite and anammox against `asm3_2step` / `asm3_2step_anammox` batch
     cases;
   - pH and precipitation against the existing speciation and precipitation
@@ -678,7 +706,7 @@ gas phase has its own balance in the unit).
    repository) or surface complexation. Recommendation: start with the
    existing approach; add surface complexation as its own level if aged-iron
    and P-desorption behaviour is needed.
-5. **Gas-phase species in the model format** (*Engine work* item 1).
+5. **Gas-phase species in the model format.** Settled: the `gases:` block.
 6. **The closure declaration**, after `plantwide_bio_p` is written.
 7. **Shipped or example.** Recommendation: keep the levels out of the shipped
    catalogue until the plant-wide study is done, then ship them with a catalogue

@@ -379,6 +379,12 @@ reactions:
 - name: anoxic_growth_on_SA
   stoichiometry:
     SPO4: auto
+- name: aerobic_growth_on_SPRO
+  stoichiometry:
+    SPO4: auto
+- name: anoxic_growth_on_SPRO
+  stoichiometry:
+    SPO4: auto
 - name: decay_of_heterotrophs
   stoichiometry:
     SPO4: auto
