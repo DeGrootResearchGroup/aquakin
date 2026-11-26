@@ -54,7 +54,7 @@ RECORDED_LINES = {
     "aquakin/plant/a2o.py::build_a2o": 156,
     "aquakin/plant/bsm/bsm1.py::build_bsm1": 171,
     "aquakin/plant/bsm/bsm2.py::build_bsm2": 354,
-    "aquakin/plant/bsm/evaluation.py::evaluate_bsm2": 118,
+    "aquakin/plant/bsm/evaluation.py::evaluate_bsm2": 112,
     "aquakin/plant/calibrate.py::_resolve_plant_problem": 211,
     "aquakin/plant/dynamic_solve.py::solve": 178,
     "aquakin/plant/ifas.py::IFASUnit.__post_init__": 110,

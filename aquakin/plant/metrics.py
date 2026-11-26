@@ -346,7 +346,15 @@ def aeration_energy(
     Parameters
     ----------
     t : (n_t,) save times in days
-    kla_history : (n_t, n_aerated_tanks) kLa value at each save time
+    kla_history : (n_t, n_aerated_tanks) kLa value at each save time: the
+        delivered process kLa (a tank's fixed ``kla`` or its controller output
+        times its gain, times ``alpha`` and, with the temperature correction
+        on, ``kla_theta**(T - ref_T)``;
+        :meth:`~aquakin.plant.cstr.AerationUnit.delivered_oxygen_kla`). The
+        1.8 kg O₂/kWh is an empirical field efficiency, so it applies to the
+        transfer actually delivered and a tank's ``alpha`` is not counted
+        twice. The clean-water blower formulas of
+        :mod:`aquakin.plant.aeration_system` take the clean-water kLa instead.
     volumes : (n_aerated_tanks,) liquid volume of each aerated tank
     saturation : float
         Dissolved-oxygen saturation concentration (mg/L).
@@ -467,7 +475,9 @@ def mixing_energy(
                     + digester_unit × V_digester ]
 
     where ``frac_unaerated_i`` is the time fraction reactor ``i`` has
-    ``kLa < kla_threshold``.
+    ``kLa < kla_threshold``. The kLa is the clean-water kLa the blowers deliver
+    (before ``alpha`` and the temperature factor), since it is the air flow,
+    not the oxygen it transfers, that mixes the tank.
 
     Parameters
     ----------

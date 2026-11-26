@@ -103,8 +103,10 @@ def test_unknown_stripped_species_raises(toy):
 def test_open_loop_gas_kla_is_ratio_times_o2_kla(toy):
     tank = _tank(toy, Aeration(kla=KLA, alpha=0.5, stripped={"SN2O": RATIO}))
     i_o, i_g = toy.species_index["SO"], toy.species_index["SN2O"]
-    assert float(tank._kla_vec[i_o]) == pytest.approx(0.5 * KLA)
-    assert float(tank._kla_vec[i_g]) == pytest.approx(0.5 * KLA * RATIO)
+    process = tank.kla_vector(process_water=True)
+    assert float(process[i_o]) == pytest.approx(0.5 * KLA)
+    assert float(process[i_g]) == pytest.approx(0.5 * KLA * RATIO)
+    assert float(tank.kla_vector()[i_g]) == pytest.approx(KLA * RATIO)
     assert float(tank._sat_vec[i_g]) == 0.0
     C = toy.default_concentrations()
     transfer = aeration_transfer(tank._av, C, None, None, toy)
@@ -123,6 +125,20 @@ def test_closed_loop_gas_reads_signal_times_gain_times_ratio(toy):
     i_o, i_g = toy.species_index["SO"], toy.species_index["SN2O"]
     assert float(transfer[i_g]) == pytest.approx(-200.0 * 0.5 * RATIO * float(C[i_g]))
     assert float(transfer[i_o]) == pytest.approx(200.0 * 0.5 * (8.0 - float(C[i_o])))
+
+
+def test_closed_loop_gas_follows_the_corrected_kla(toy):
+    """A gas co-stripped under a signal-driven kLa rides on the process kLa:
+    ``signal * gain * ratio * alpha * theta**(T - ref_T)``, toward its
+    uncorrected saturation."""
+    aer = Aeration(do_setpoint=2.0, gain=0.5, alpha=0.6, temperature_correction=True,
+                   stripped={"SN2O": (RATIO, 0.3)})
+    tank = _tank(toy, aer)
+    C = jnp.zeros(toy.n_species)
+    T = aer.ref_T + 10.0
+    transfer = aeration_transfer(tank._av, C, T, {"_aer_tank_kla": jnp.asarray(200.0)}, toy)
+    expected = 200.0 * 0.5 * RATIO * 0.6 * aer.kla_theta**10.0 * 0.3
+    assert float(transfer[toy.species_index["SN2O"]]) == pytest.approx(expected, rel=1e-12)
 
 
 def test_temperature_correction_scales_gas_kla_not_gas_saturation(toy):
