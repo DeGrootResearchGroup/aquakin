@@ -156,6 +156,24 @@ kept equal by putting the organic-N difference in ammonium.
     use) are exact, carried in the rates; the nonlinear GAO acetate-PHA yield
     is fixed at a reference pH. The error of both against a faithful
     implementation of the source is measured before the level is committed.
+    *Measured (2026-11-26)* with a reference implementation of the source
+    (scratch, numpy/scipy; the corrections below applied; PHA by type, yields
+    from the current composition) on the source's own 36-condition grid
+    (10/20/30 C, pH 6.0/7.0/7.5, four acetate:propionate ratios; reconstructed
+    SBR: 6 h cycle, 2 h anaerobic, 3.5 h aerobic, 50% exchange, SRT 8 d, 5
+    C-mmol/L VFA, 0.40 P-mmol/L, 50 d):
+    - the reference reproduces the source's Fig. 6 outcome in 33 of 36
+      conditions; the three others are at 30 C, a 7-12 point PAO excess at the
+      60% dominance threshold, plausibly the unreported SBR operation; at 20 C
+      the shares agree with Fig. 4 within a few points;
+    - pools by origin with every pH-dependent amount in the rates (P release,
+      glycogen use and PHA made per acid, as a rate times the coefficient,
+      stoichiometry +1) and only the pool compositions fixed at pH 7: worst
+      population-share deviation from the reference 3.1 points, outcome
+      matching the reference in 35/36 and the paper in 34/36;
+    - fixing the GAO acetate PHA yield at pH 7 instead costs up to 22 points
+      at pH 6 and 7.5, so pH-dependent amounts go in the rates, not in fixed
+      stoichiometry.
 11. **Anoxic processes and decay come from elsewhere**: the source has neither.
     PAO anoxic processes from the TU Delft model (`asm2d_tud`); the GAOs get
     the same anoxic reduction factor, an assumption stated as such; PAOs and
@@ -213,6 +231,11 @@ kept equal by putting the organic-N difference in ammonium.
     for a substrate of 4 e-/C-mol (glycogen); for PHA (4.5 to 5) it is short
     by `redox_PHA / 4 - 1` O2 per C-mmol, 0.5 to 0.9 e-/C-mmol of
     maintenance. Use the balanced `Y_SX / Y_OX - redox_PHA / 4`.
+- **Two parameter details**: the PAO anaerobic maintenance's temperature
+  factor 1.096^(T-20) is not capped above 20 C (the uptake and aerobic rates
+  are; capping it gave a PAO excess at 30 C); the PAO glycogen rate on
+  propionate is 0.008 (Table 4), where Appendix 5 prints 0.077 under a
+  mislabelled symbol.
 - **GAO anaerobic maintenance**, undefined in López-Vázquez's appendices
   (its matrix names `Y_PHA,mANA`, `Y_GLY,mANA` without values), comes from
   Zeng et al. (2003a), Eq. 21: 1 C-mol glycogen -> 1/6 PHB + 5/12 PHV +
