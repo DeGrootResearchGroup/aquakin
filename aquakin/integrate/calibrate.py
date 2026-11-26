@@ -266,7 +266,8 @@ def calibrate(
         ``mode="reverse", method="stable"`` replaces the integrator's adjoint with
         an explicit per-step transposed-stage solve
         (:func:`~aquakin.esdirk_adjoint_solve`) -- a robust adaptive ESDIRK forward
-        whose backward is finite with no cap (batch reactors only; its gradient
+        (the reactor's own integrator ``order`` or ``solver``: Kvaerno3 by
+        default) whose backward is finite with no cap (batch reactors only; its gradient
         agrees with the capped ``through_solve`` path to the optimiser tolerance).
         ``mode="forward"`` uses ``jacfwd`` and builds a forward-capable reactor
         adjoint internally (forward-mode AD stays finite at any step -- the fix for

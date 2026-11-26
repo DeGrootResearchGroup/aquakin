@@ -51,8 +51,9 @@ class _ReactorForwardModel:
     ``solve_trajectory`` returns the full ``(n_t, n_species)`` trajectory (the
     generic layer slices out the observed columns). On the ``stable_adjoint``
     backend it integrates the cap-free ESDIRK discrete-adjoint solve built from
-    the reactor's model + single-location conditions; otherwise it calls the
-    reactor's own diffrax ``solve``.
+    the reactor's model + single-location conditions, with the ESDIRK the
+    reactor's :class:`~aquakin.IntegratorConfig` selects (its ``order``, or an
+    explicit ``solver``); otherwise it calls the reactor's own diffrax ``solve``.
     """
 
     reactor: Reactor
@@ -83,6 +84,8 @@ class _ReactorForwardModel:
                 p,
                 tspan,
                 tobs,
+                order=self.reactor.order,
+                solver=self.reactor.solver,
                 rtol=self.reactor.rtol,
                 atol=self.reactor.atol,
                 max_steps=self.stable_adjoint_max_steps,

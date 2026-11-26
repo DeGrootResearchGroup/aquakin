@@ -121,7 +121,7 @@ What each entry point does with it:
 | Entry point | Default | Notes |
 |---|---|---|
 | `reactor.solve` under `jax.grad` | through the solve | a reactor has no cap-free adjoint for a bare solve; cap `dtmax` for a stiff model |
-| `aquakin.calibrate` | `method="through_solve"` | `method="stable"` is the cap-free adjoint (batch reactors); `mode="forward"` needs `method="through_solve"` and suits `OptimizerConfig(method="gauss_newton")` |
+| `aquakin.calibrate` | `method="through_solve"` | `method="stable"` is the cap-free adjoint (batch reactors), integrated with the reactor's `IntegratorConfig` order (Kvaerno3 by default); `mode="forward"` needs `method="through_solve"` and suits `OptimizerConfig(method="gauss_newton")` |
 | `aquakin.sensitivity`, `aquakin.dgsm` | reverse | `mode="forward"` builds a forward-capable solve, finite through a stiff model |
 | `plant.solve`, `plant.calibrate` | `method="stable"` | the plant's cap-free discrete adjoint: `jax.grad` through a stiff plant is finite with nothing to tune |
 
