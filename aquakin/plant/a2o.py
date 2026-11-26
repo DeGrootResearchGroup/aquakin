@@ -154,11 +154,11 @@ def a2o_influent(
     return model.influent(comp, Q=Q, T=T)
 
 
-# A healthy bio-P mixed-liquor seed (g/m³): an established EBPR sludge with a
-# large PAO population carrying stored poly-P. Seeding from a healthy sludge (as
-# a real plant is) avoids the slow, seed-sensitive cold-start establishment of the
-# PAO population; the solve relaxes it to the steady state, so the exact values
-# affect settling time, not the operating point.
+#: A healthy bio-P mixed-liquor seed (g/m³): an established EBPR sludge with a
+#: large PAO population carrying stored poly-P. Seeding from a healthy sludge (as
+#: a real plant is) avoids the slow, seed-sensitive cold-start establishment of the
+#: PAO population; the solve relaxes it to the steady state, so the exact values
+#: affect settling time, not the operating point.
 A2O_WARM_REACTOR_COMPOSITION = {
     "SO2": 2.0,
     "SF": 2.0,
