@@ -53,7 +53,7 @@ class _ReactorForwardModel:
     backend it integrates the cap-free ESDIRK discrete-adjoint solve built from
     the reactor's model + single-location conditions, with the ESDIRK the
     reactor's :class:`~aquakin.IntegratorConfig` selects (its ``order``, or an
-    explicit ``solver``); otherwise it calls the reactor's own diffrax ``solve``.
+    explicit ``solver``, and its ``factormax`` step-growth cap); otherwise it calls the reactor's own diffrax ``solve``.
     """
 
     reactor: Reactor
@@ -86,6 +86,7 @@ class _ReactorForwardModel:
                 tobs,
                 order=self.reactor.order,
                 solver=self.reactor.solver,
+                factormax=self.reactor.factormax,
                 rtol=self.reactor.rtol,
                 atol=self.reactor.atol,
                 max_steps=self.stable_adjoint_max_steps,
