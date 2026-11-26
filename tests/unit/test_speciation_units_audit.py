@@ -63,6 +63,9 @@ reactions:
         ("mol/m3", "molar"),
         ("kmol/m3", "molar"),
         ("kmolC/m3", "molar"),
+        ("umol/L", "molar"),
+        ("\u00b5mol/L", "molar"),  # the micro sign
+        ("ug_N/L", "mass"),
         ("gC/m3", "mass"),
         ("gCOD/m3", "mass"),
         ("gN/m3", "mass"),
