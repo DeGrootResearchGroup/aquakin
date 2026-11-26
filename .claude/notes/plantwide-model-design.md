@@ -141,6 +141,27 @@ kept equal by putting the organic-N difference in ammonium.
   as ammonium.
 - Pinned by `tests/validation/test_plantwide_core_digester.py`.
 
+9. **Two GAO groups**, as López-Vázquez et al. (2009): *Competibacter*
+   (acetate; propionate uptake negligible) and *Alphaproteobacteria*-GAO
+   (propionate preferred, acetate at half the rate). The core's separate `SA`
+   and `SPRO` are what tell them apart, and the paper's Fig. 4 benchmark needs
+   both.
+10. **PHA pools by origin, constant stoichiometry.** The source's yields depend
+    on each population's stored-PHA composition (aerobic: through the
+    acetyl- and propionyl-CoA fractions λ, β) and on pH (anaerobic), but the
+    engine evaluates stoichiometry once per solve. Each population therefore
+    keeps two PHA pools, PHA made from acetate and PHA made from propionate,
+    each with its Table 1 composition, so its aerobic yields are constants.
+    pH effects linear in the transport-energy term α(pH) (P release, glycogen
+    use) are exact, carried in the rates; the nonlinear GAO acetate-PHA yield
+    is fixed at a reference pH. The error of both against a faithful
+    implementation of the source is measured before the level is committed.
+11. **Anoxic processes and decay come from elsewhere**: the source has neither.
+    PAO anoxic processes from the TU Delft model (`asm2d_tud`); the GAOs get
+    the same anoxic reduction factor, an assumption stated as such; PAOs and
+    GAOs decay by the core's death-regeneration, releasing their storage
+    pools.
+
 ## What the bio-P and acidogen sources give (read 2026-11-26)
 
 - **López-Vázquez et al. (2009)** models three populations, not two:
@@ -153,9 +174,15 @@ kept equal by putting the organic-N difference in ammonium.
   processes, 21 components. The main text gives the anaerobic uptake rates
   and PHA splits (Table 1), temperature coefficients (Table 2), the calibrated
   aerobic rates per carbon source (Table 4) and the shared half-saturations;
-  the stoichiometric matrix, rate expressions and parameter table are in its
-  online supplement (Appendices 1-7), which is needed before writing the
-  processes. Its Fig. 4 (population shares after 50 d for 36 combinations of
+  the online supplement (Appendices 1-7, read) gives the 14-component,
+  19-process matrix, the anaerobic stoichiometry as functions of pH and of
+  the PHA type made (App. 2), the aerobic yields from δ, K1, K2 and the PHA
+  composition (App. 3, 4; biomass CH1.84O0.5N0.19P0.015), the temperature-
+  and pH-dependent rate constants (App. 5: piecewise in T, constant above
+  20 C for uptake; GAO uptake times 10^-pH/(1.2e-8 + 10^-pH)), the rate
+  expressions with Murnleitner storage-fraction switches (App. 6) and the
+  half-saturations and maximum storage fractions (App. 7). It has no anoxic
+  processes and no decay (maintenance only), and works in C-mmol / P-mmol. Its Fig. 4 (population shares after 50 d for 36 combinations of
   10/20/30 C, pH 6.0/7.0/7.5 and four acetate:propionate ratios) is a
   benchmark a reimplementation should reproduce.
 - **Meijer et al. (2001)** prints no matrix; it uses the TUDP model of van
