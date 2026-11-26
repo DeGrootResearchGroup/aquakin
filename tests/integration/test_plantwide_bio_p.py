@@ -113,3 +113,25 @@ def test_anaerobic_phosphate_release_per_acetate_and_its_gradient(biop):
     grad = jax.grad(lambda q: release(q, S_A0) - release(q, 0.0))(p)[k]
     assert float(grad) == pytest.approx(31 / 32 * S_A0, rel=1e-6)
     assert jax.config.x64_enabled
+
+
+def test_a2o_clarifier_settles_every_particulate_of_the_model(biop):
+    """``build_a2o`` reads the clarifier's particulates from the model, so the
+    plant-wide model's storage pools and acidogens settle with its biomass.
+    Fed a stream at 1 g/m3 of everything, the ideal clarifier returns each
+    X species to the underflow at capture * Q_in / Q_under and each soluble
+    at its inlet concentration."""
+    from aquakin.plant import build_a2o
+    from aquakin.plant.streams import Stream
+
+    clarifier = build_a2o(biop).units["clarifier"]
+    Q_in = 30000.0
+    feed = Stream(Q=jnp.asarray(Q_in), C=jnp.ones(biop.n_species), model=biop)
+    params = jnp.zeros(0)
+    out = clarifier.compute_outputs(0.0, jnp.zeros(0), {"inlet": feed}, params)
+    under = out["underflow"]
+    thickened = clarifier.capture_efficiency * Q_in / float(under.Q)
+    for s, i in biop.species_index.items():
+        expected = thickened if s.startswith("X") else 1.0
+        assert float(under.C[i]) == pytest.approx(expected, rel=1e-9), s
+    assert {"XGLY_PAO", "XPHA_GAOC_PR", "XFE", "XPP"} <= set(clarifier.particulate_species)

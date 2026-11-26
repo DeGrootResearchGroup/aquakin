@@ -13,7 +13,7 @@ close the loop:
 - **Return activated sludge** ``Q_r`` from the clarifier underflow back to the
   anaerobic zone, with the remainder wasted as ``Q_w``.
 
-It runs the shipped ``asm2d`` model, which already carries the biological
+It runs the shipped ``asm2d`` model by default, which already carries the biological
 phosphorus model (PAO / poly-P / PHA) and ASM2d's own simple metal-phosphate
 precipitation (``XMeOH`` / ``XMeP``), so the plant simultaneously removes carbon,
 nitrogen and phosphorus. It is the home for the chemical-phosphorus (metal-salt
@@ -37,6 +37,7 @@ from aquakin.plant._builder_support import (
     recycle_pump_flows,
     register_recycle_streams,
 )
+from aquakin.plant._constants import solids_species
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.mixer import MixerUnit, SetpointSplitter
@@ -48,22 +49,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
     from aquakin.plant.influent import InfluentSeries
 
-
-# ASM2d particulate species — settle in the clarifier (everything that is not a
-# soluble S* component). XTSS is the lumped solids tracer; XMeOH / XMeP are the
-# metal-hydroxide / metal-phosphate precipitate solids.
-ASM2D_PARTICULATES = (
-    "XI",
-    "XS",
-    "XH",
-    "XPAO",
-    "XPP",
-    "XPHA",
-    "XAUT",
-    "XTSS",
-    "XMeOH",
-    "XMeP",
-)
 
 # Default A²O design (a defensible municipal layout, not a published benchmark).
 A2O_Q_AVG = 18446.0  # m³/d, dry-weather average (BSM scale, for a familiar size)
@@ -219,7 +204,7 @@ def build_a2o(
     conditions: dict[str, float] | None = None,
     use_takacs: bool = False,
 ) -> Plant:
-    """Assemble an A²O biological-nutrient-removal plant on ASM2d.
+    """Assemble an A²O biological-nutrient-removal plant (ASM2d by default).
 
     Flowsheet (7 reactors): an anaerobic selector (2 tanks) → anoxic zone
     (2 tanks) → aerobic zone (3 tanks) → secondary clarifier, with the
@@ -229,7 +214,10 @@ def build_a2o(
     Parameters
     ----------
     model : CompiledModel, optional
-        ASM2d model. Defaults to ``aquakin.load_model("asm2d")``.
+        The activated-sludge model. Defaults to ``aquakin.load_model("asm2d")``.
+        Another model works if it names its particulates with an ``X`` prefix
+        (they settle in the clarifier) and its oxygen ``SO2``; the ferric
+        dose needs ``XMeOH``.
     Q_avg : float
         Design inlet flow used to size the recycle pumps (m³/d).
     wastage_flow : float
@@ -264,6 +252,10 @@ def build_a2o(
 
     if conditions is None:
         conditions = reactor_conditions(model)
+    # Every X-prefixed species settles in the clarifier: ASM2d's biomass,
+    # storage pools, inerts, the TSS tracer and the metal precipitates, or the
+    # particulates of whichever activated-sludge model is passed.
+    particulates = solids_species(model)[0]
 
     plant = Plant("A2O", time_unit="d")
 
@@ -356,9 +348,9 @@ def build_a2o(
             area=A2O_CLARIFIER_AREA,
             height=A2O_CLARIFIER_HEIGHT,
             init_underflow_Q=Q_underflow,
-            particulate_species=list(ASM2D_PARTICULATES),
+            particulate_species=list(particulates),
         ),
-        ideal_kwargs=dict(particulate_species=list(ASM2D_PARTICULATES)),
+        ideal_kwargs=dict(particulate_species=list(particulates)),
     )
 
     # ----- Underflow splitter: RAS Qr + wastage Qw -----
