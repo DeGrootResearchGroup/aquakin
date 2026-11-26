@@ -38,7 +38,7 @@ include every field the model requires, and edit what differs:
 
 ```python
 conditions = model.default_conditions()                    # all declared defaults
-conditions = model.default_conditions().with_(T=283.15)    # ...run it at 10 °C
+conditions = model.default_conditions().with_(pH=8.0)      # ...run it at pH 8
 ```
 
 For a simple case you can also build one from scratch with
@@ -47,7 +47,7 @@ supply **every** field the model needs, or building a reactor from it raises a
 `ValueError` naming the missing ones:
 
 ```python
-conditions = aquakin.OperatingConditions(pH=7.5, T=293.15, OH_scavenging=5.0e4)
+conditions = aquakin.OperatingConditions(pH=7.5, OH_scavenging=5.0e4)
 ```
 
 Both are single-location conditions. For a spatially varying case (a plug-flow
@@ -57,12 +57,11 @@ over `n_locations`:
 ```python
 # The same value at every one of 101 locations:
 uniform = aquakin.SpatialConditions.uniform(
-    n_locations=101, pH=7.5, T=293.15, OH_scavenging=5.0e4)
+    n_locations=101, pH=7.5, OH_scavenging=5.0e4)
 
 # A pH that rises from 7.0 to 8.0 along those locations:
 gradient = aquakin.SpatialConditions(fields={
     "pH": jnp.linspace(7.0, 8.0, 101),
-    "T": jnp.full(101, 293.15),
     "OH_scavenging": jnp.full(101, 5.0e4),
 })
 ```

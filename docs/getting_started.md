@@ -52,10 +52,10 @@ import jax.numpy as jnp
 model = aquakin.load_model("ozone_bromate")
 
 # 2. Operating conditions. Start from the model's declared defaults — they
-#    always supply every field the model needs (here pH, temperature T in
-#    kelvin, and a hydroxyl-radical scavenging rate) — and change only what
-#    differs with .with_(...). The defaults are pH 7.5 and 20 °C.
-conditions = model.default_conditions().with_(pH=8.0, T=288.15)   # 15 °C
+#    always supply every field the model needs (here the pH and a
+#    hydroxyl-radical scavenging rate) — and change only what differs with
+#    .with_(...). The default pH is 7.5.
+conditions = model.default_conditions().with_(pH=8.0)
 
 # 3. A batch (0-D, well-mixed) reactor.
 reactor = aquakin.BatchReactor(model, conditions)

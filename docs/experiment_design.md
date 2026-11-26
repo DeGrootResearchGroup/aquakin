@@ -50,7 +50,7 @@ operating conditions):
 
 ```python
 reactor_ph8 = aquakin.BatchReactor(
-    model, aquakin.SpatialConditions.uniform(1, pH=8.0, T=293.15, OH_scavenging=5e4))
+    model, aquakin.SpatialConditions.uniform(1, pH=8.0, OH_scavenging=5e4))
 design = [
     aquakin.Experiment(C0, t_obs=t_obs, sigma=sigma, observed_species=observed),
     aquakin.Experiment(C0.at[i["Br-"]].set(2e-6), t_obs=t_obs, sigma=sigma,
