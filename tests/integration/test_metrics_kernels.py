@@ -131,7 +131,7 @@ def test_derived_BOD_f_P_needs_an_f_P_parameter():
     says to pass the parameters instead, which works."""
     asm3 = aquakin.load_model("asm3")
     C = _distinct(asm3)
-    with pytest.raises(ValueError, match="has no f_P parameter.*pass params="):
+    with pytest.raises(ValueError, match=r"has no f_P parameter.*pass params="):
         aquakin.derived_BOD(C, asm3, f_P=0.08)
     params = asm3.default_parameters().at[asm3.param_index["fXI"]].set(0.08)
     p = {"fSI": float(params[asm3.param_index["fSI"]]), "fXI": 0.08}

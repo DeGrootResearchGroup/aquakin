@@ -516,9 +516,9 @@ def test_a2o_srt_weighs_the_solids_by_their_itss_factors():
         C["SF"] + C["SA"] + C["XPHA"] + (1.0 - p["fSI"]) * C["XS"]
         + (1.0 - p["fXI"]) * (C["XH"] + C["XPAO"] + C["XAUT"])
     )
-    assert m.FM == pytest.approx(mean(Q * cod) / mean(reactor), rel=1e-9)
+    assert pytest.approx(mean(Q * cod) / mean(reactor), rel=1e-9) == m.FM
     by_bod = sludge_metrics(plant, sol)
-    assert by_bod.FM == pytest.approx(mean(Q * bod) / mean(reactor), rel=1e-9)
+    assert pytest.approx(mean(Q * bod) / mean(reactor), rel=1e-9) == by_bod.FM
     assert by_bod.SRT == m.SRT
 
 

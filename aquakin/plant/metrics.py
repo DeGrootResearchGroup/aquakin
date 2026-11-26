@@ -241,7 +241,7 @@ def _biodegradable_weights(model: CompiledModel, params=None) -> list[tuple[floa
         if max(ratios) - min(ratios) > 1e-9:
             raise ValueError(
                 f"model '{model.name}': the reactions consuming {s} leave different inert "
-                "fractions, so its BOD cannot be determined; use substrate=\"COD\" "
+                'fractions, so its BOD cannot be determined; use substrate="COD" '
                 "(derived_COD) instead."
             )
         groups.setdefault((1.0 - ratios[0]) * cod[s], []).append(col[s])
