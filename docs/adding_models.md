@@ -2,7 +2,7 @@
 
 This page walks through writing a reaction model of your own, from an empty
 file to a model you can solve, check and differentiate. The
-[Model file format](model_format.md) is the reference for every key used here.
+[YAML model format](model_format.md) is the reference for every key used here.
 
 The example is chlorine decay in a water sample. Free chlorine (HOCl) is used up
 in two ways: quickly by a small amount of reactive material R, and slowly by
@@ -56,6 +56,8 @@ parameters:
     transform: positive_log
     temperature: {theta: 1.05, ref_T: 293.15}
 
+clip_negative_states: true
+
 reactions:
   - name: fast_demand
     reference: "Your citation"
@@ -80,6 +82,11 @@ What each block does:
   the model: `positive_log` keeps a rate constant positive and lets it vary
   over orders of magnitude. The `temperature:` block makes `k_bulk` increase by
   5 % per degree above 20 °C (293.15 K).
+- `clip_negative_states: true` evaluates the rates as if a negative
+  concentration were zero. A stiff solve can step a nearly used-up species
+  slightly below zero, where a rate such as `k_fast * [HOCl] * [R_fast]` would
+  turn negative and run the reaction backwards. Every shipped model sets it;
+  set it in yours.
 - `reactions:` gives each reaction a rate, written in the
   [rate-expression language](model_format.md#rate-expression-grammar) with
   species in `[...]`, and a stoichiometry saying how much of each species one
@@ -157,8 +164,17 @@ print(model.parameters)                            # the order of the parameter 
 print(jax.grad(chlorine_after_24_h)(model.default_parameters()))
 ```
 
-Both entries of the gradient are finite and the second, for `k_bulk`, is large
-and negative: a faster bulk decay leaves less chlorine. The
+% invisible-code-block: python
+%     _g = jax.grad(chlorine_after_24_h)(model.default_parameters())
+%     _i = model.param_index
+%     assert float(_g[_i["k_bulk"]]) < -1.0, "the k_bulk gradient stated below changed"
+%     assert 0.0 < float(_g[_i["k_fast"]]) < 0.1, "the k_fast gradient stated below changed"
+
+The second entry, for `k_bulk`, is large and negative: a faster bulk decay
+leaves less chlorine. The first, for `k_fast`, is small and positive, which
+may surprise: the fast demand uses up all of R_fast either way, so a larger
+`k_fast` only makes that 0.5 mg/L drop happen sooner, and the slow first-order
+decay then works on less chlorine for the rest of the day. The
 [Sensitivity analysis](sensitivity_and_calibration.md) and
 [Calibration](calibration.md) pages go on from here.
 

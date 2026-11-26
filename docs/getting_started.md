@@ -21,7 +21,8 @@ pip install "aquakin[plot]"        # solution.plot(...) via matplotlib
 pip install "aquakin[ui]"          # the browser flowsheet editor
 ```
 
-The flowsheet editor is described in [Plant-wide simulation](plants.md). To
+The flowsheet editor is described in
+[Flowsheet files, studies and the editor](plant_files.md#the-flowsheet-editor). To
 install the editor on a computer without Python, for a colleague who does not
 use Python, see [Installing the editor without Python](installing_the_editor.md).
 
@@ -81,10 +82,16 @@ print(f"[BrO3-] at 10 min: {float(sol.C_named('BrO3-')[-1]):.3g} mol/L")
 minimal call is `reactor.solve(C0, t_span=(0.0, 600.0))`. Without `t_eval`
 the solution holds only the final state.
 
+To see what a model contains before you run it — its species, parameters,
+conditions and literature — `print(model.summary())`; more in
+[Inspecting a model](#inspecting-a-model) below.
+
 ## Setting the initial state by name
 
-`model.default_concentrations()` returns the model's declared reference state.
-For a real run you usually want to set a few species and leave the rest at their
+`model.default_concentrations()` returns the model's declared reference state
+(for the activated-sludge models, a typical aerated mixed liquor). It is a
+starting point for trying a model, not a description of your system. For a real
+run you usually want to set a few species and leave the rest at their
 defaults. Build the concentration vector **by name** rather than juggling array
 indices. The rest of this page uses an activated-sludge model, so it builds a
 new reactor for it:
@@ -108,6 +115,10 @@ value:
 feed = model.concentrations({"SS": 60.0, "SNH": 25.0}, base="zero")
 ```
 
+A plant's influent is built the same way, with its flow, by
+`model.influent({...}, Q=...)`, which also starts from zero
+([Influents](influents.md)).
+
 You can also set parameters and per-species solver tolerances by name:
 
 ```python
@@ -119,7 +130,8 @@ atol   = model.atol({"SO": 1e-8}, default=1e-6)   # tighter tolerance on oxygen
 
 There is **no global time unit**. `t_span` and `t_eval` are in whatever unit the
 model's rate constants use, and it differs by model — the ozone and UV models
-are in **seconds**, the biological models (ASM, ADM, WATS) in **days**. Check
+are in **seconds**, the biological models (ASM, ADM, WATS) and the mineral
+precipitation models in **days**. Check
 before choosing an integration window:
 
 ```python

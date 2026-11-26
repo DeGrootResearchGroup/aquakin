@@ -66,15 +66,12 @@ A model is a YAML file. Here is first-order chlorine decay:
 ```yaml
 # decay.yaml
 model:
-  name: chlorine_decay
+  name: first_order_chlorine
   version: "1.0"
   description: "First-order chlorine decay"
 
 species:
   - {name: HOCl, units: mg/L, default_concentration: 2.0}
-
-conditions:
-  - {name: T, default: 293.15}
 
 reactions:
   - name: decay
