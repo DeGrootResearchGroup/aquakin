@@ -12,8 +12,12 @@
 # in sync with the (raised) floors in pyproject.toml.
 
 # --- JAX numerical stack (fast-moving; the main reason this lock exists) ------
-jax==0.10.2
-jaxlib==0.10.2
+# JAX 0.11 dropped Python 3.11, which requires-python still admits: the 3.11
+# jobs keep testing the newest JAX that release can install.
+jax==0.12.1; python_version >= "3.12"
+jaxlib==0.12.1; python_version >= "3.12"
+jax==0.10.2; python_version < "3.12"
+jaxlib==0.10.2; python_version < "3.12"
 diffrax==0.7.2
 optimistix==0.1.0
 equinox==0.13.8
