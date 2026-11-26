@@ -95,6 +95,21 @@ against.
    tell the candidates apart, so ADM1's sugar degraders stay until an
    anaerobic-zone VFA comparison against `asm2d` on an A2O flowsheet.
 
+## Decisions made (owner, 2026-11-26)
+
+8. **Bio-P populations: metabolic PAOs and separate GAOs.** The PAO is the
+   TU Delft metabolic form (Meijer et al., 2001; as in the shipped
+   `asm2d_tud`), with polyphosphate, PHA and glycogen; the GAO is that of
+   López-Vázquez et al. (2009), which extends the same metabolic model, so
+   the two share one framework. Each population keeps its own PHA and
+   glycogen. Their competition for acetate and propionate uses the core's
+   separate `SA` and `SPRO`, so the A2O comparison that settles the acidogen
+   kinetics (decision 7) also tests the PAO / GAO balance. Considered and
+   left for later: fermentative PAOs (sugar and amino-acid uptake; recent
+   metabolic models, parameters not yet settled), a metabolic shift of PAOs
+   to glycogen-based metabolism when polyphosphate runs out, and a separate
+   denitrifying-PAO group.
+
 ### The BSM2 digester comparison (2026-11-25)
 
 The BSM2 open-loop steady state's digester feed (aquakin's BSM2, the ASM1
@@ -189,8 +204,8 @@ anyone who knows the IWA family.
 | Dissolved | `SO2`, `SNH4`, `SNO3`, `SN2`, `SH2`, `SCH4`, `SIC` (total inorganic carbon, g C/m³) |
 | Not yet | inorganic suspended solids (for TSS) and the gas phase (see *Engine work*) |
 
-**`plantwide_bio_p` adds** `SPO4`, `XPAO`, `XPP`, `XPHA` (and `XGAO`, `XGLY` if
-GAOs are included, see *Open decisions*).
+**`plantwide_bio_p` adds** `SPO4`, `XPAO`, `XPP`, `XPHA`, `XGLY` (the PAO's
+storage pools) and `XGAO`, `XPHA_GAO`, `XGLY_GAO` (decision 8).
 
 **`plantwide_nitrite` replaces** `XAUT` with `XAOB`, `XNOB` and adds `SNO2`,
 `XAMX`.
@@ -235,8 +250,8 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
 
 | Processes | Primary source |
 |---|---|
-| PHA storage with P release, polyphosphate storage, PAO growth on PHA (aerobic, anoxic), lysis of PAO, PP and PHA | ASM2d (Henze et al., 1999); metabolic form as in Meijer et al. (2001) |
-| GAO glycogen storage and competition for VFA (if included) | López-Vázquez et al. (2009) |
+| PAO: anaerobic VFA uptake into PHA with P release and glycogen use, polyphosphate and glycogen storage, growth on PHA (aerobic, anoxic), maintenance, decay of the cell and its pools | TU Delft metabolic model (Meijer et al., 2001), as in the shipped `asm2d_tud` |
+| GAO: anaerobic VFA uptake into PHA from glycogen, glycogen storage and growth on PHA (aerobic, anoxic), maintenance, decay; acetate / propionate, temperature and pH effects on the competition | López-Vázquez et al. (2009) |
 | P release in the sludge line | checked against Solon et al. (2017) |
 
 ### `plantwide_nitrite`
@@ -332,11 +347,8 @@ gas phase has its own balance in the unit).
 
 ## Open decisions (the owner's)
 
-1. **Bio-P populations.** PAOs only (ASM2d), PAOs and GAOs as separate
-   populations (López-Vázquez et al., 2009), or a single carbon-storing
-   population whose metabolism switches with conditions (Varga et al., 2018).
-   Recommendation: separate PAOs and GAOs, the more established and more easily
-   benchmarked form; read Varga et al. before deciding.
+1. **Bio-P populations.** Settled: metabolic PAOs and separate GAOs
+   (decision 8).
 2. **Acidogen kinetics** (deferred to `plantwide_bio_p`, decision 7). BNRM2's parameter sources (Barat et al., 2013,
    appendix p. x) name none for the anaerobic groups; Ribes et al. (2002, primary
    settler fermentation) is the likeliest source for acidogens tested in
@@ -452,4 +464,9 @@ paper itself before citing it in a model file.
   https://doi.org/10.1128/aem.65.7.3248-3250.1999
 - Varga, E., Hauduc, H. et al. (2018). Recent advances in bio-P modelling – a
   new approach verified by full-scale observations. *Water Sci. Technol.*
+  78(10), 2119–2130. Its abstract and index records describe separate PAO and
+  GAO populations with ordinary heterotrophs and nitrifiers, not one
+  switching population (this note said so earlier); the PAO-to-GAO metabolic
+  shift is from a related full-scale metabolic study by overlapping authors.
+  Not read in full: the postprint host is not reachable from these sessions.
   https://doi.org/10.2166/wst.2018.490 (also presented at WRRmod 2018).
