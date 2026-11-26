@@ -54,7 +54,7 @@ def _limited_state(model):
     threshold, so the limiter throttles their (net) consumption."""
     C = np.asarray(model.default_concentrations(), dtype=float).copy()
     thr = model.positivity_threshold
-    values = {"SF": 50.0, "SA": 50.0, "SNH4": 20.0, "SPO4": 5.0, "SALK": 5.0}
+    values = {"SF": 50.0, "SA": 50.0, "SNH4": 20.0, "SPO4": 5.0, "SALK": 0.005}
     values.update({"XH": 2000.0, "XPAO": 500.0, "XAUT": 100.0, "XPHA": 50.0, "XPP": 50.0})
     values.update({"SO2": 0.2 * thr, "SNO3": 0.2 * thr})
     for sp, v in values.items():

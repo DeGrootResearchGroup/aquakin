@@ -61,7 +61,7 @@ def test_autotrophs_grow_not_crash_under_aeration(asm2d):
             "SNO3": 1.0,
             "SPO4": 5.0,
             "SI": 30.0,
-            "SALK": 7.0,
+            "SALK": 0.007,
             "XH": 1800.0,
             "XPAO": 400.0,
             "XPP": 50.0,
@@ -144,7 +144,7 @@ def test_cstr_reaction_term_routes_through_dCdt(asm2d):
             "SNH4": 5.0,
             "SNO3": 3.0,
             "SPO4": 15.0,
-            "SALK": 7.0,
+            "SALK": 0.007,
             "XH": 1200.0,
             "XPAO": 300.0,
             "XPP": 80.0,
@@ -242,6 +242,24 @@ def test_a2o_warm_start_seeds_reactors(asm2d):
     # The aerobic reactors are seeded with a non-trivial biomass composition.
     sb = plant.states_by_unit(y0)
     assert float(jnp.sum(sb["aer3"])) > 0.0
+
+
+def test_a2o_alkalinity_is_municipal_in_the_models_declared_unit(asm2d):
+    """The influent and warm-start alkalinity, converted from the unit the model
+    declares for SALK (kmol/m³ for asm2d) to mol/m³, is a municipal alkalinity:
+    2-10 mol/m³ (100-500 mg CaCO₃/L). A value written in mol/m³ into the
+    kmol/m³ model reads 1000 times too high (7 kmol/m³), so the alkalinity
+    switches in the growth rates could never limit."""
+    from aquakin.utils.units import conversion_factor
+
+    to_mol = conversion_factor(asm2d.units_of("SALK"), "mol/m3")
+    salk = asm2d.species_index["SALK"]
+    influent = float(a2o_influent(asm2d).at(0.0).C[salk]) * to_mol
+    assert 2.0 <= influent <= 10.0
+    plant = build_a2o(asm2d, use_takacs=False)
+    for unit, state in plant.states_by_unit(a2o_warm_start(plant)).items():
+        if unit in plant.activated_sludge_reactors():
+            assert 2.0 <= float(state[salk]) * to_mol <= 10.0, unit
 
 
 def test_ferric_dose_defaults_and_frozen():
@@ -361,7 +379,7 @@ def test_asm2d_grad_flows(asm2d):
             "SNO3": 2.0,
             "SPO4": 8.0,
             "SI": 30.0,
-            "SALK": 7.0,
+            "SALK": 0.007,
             "XH": 1500.0,
             "XPAO": 600.0,
             "XPP": 150.0,

@@ -79,9 +79,11 @@ A2O_WASTAGE_FLOW = 120.0  # m³/d (a long SRT, to retain PAOs)
 A2O_CLARIFIER_AREA = 1500.0  # m²
 A2O_CLARIFIER_HEIGHT = 4.0  # m
 
-# A typical municipal ASM2d raw-influent composition (g/m³ except SALK in
-# mol HCO₃⁻/m³). The fermentation product SA (volatile fatty acids) is what
-# drives biological P removal in the anaerobic selector, so it is non-trivial.
+# A typical municipal ASM2d raw-influent composition, in the units the ``asm2d``
+# model declares: g/m³ of COD, N or P, except the alkalinity SALK in kmol
+# HCO₃⁻/m³ (0.007 kmol/m³ = 7 mol/m³, a moderately buffered municipal sewage).
+# The fermentation product SA (volatile fatty acids) is what drives biological P
+# removal in the anaerobic selector, so it is non-trivial.
 A2O_INFLUENT = {
     "SO2": 0.0,
     "SF": 40.0,  # fermentable COD
@@ -90,7 +92,7 @@ A2O_INFLUENT = {
     "SNO3": 0.0,
     "SPO4": 8.0,  # soluble inorganic P
     "SI": 30.0,  # soluble inert COD
-    "SALK": 7.0,  # alkalinity
+    "SALK": 0.007,  # alkalinity (kmol/m³)
     "SN2": 0.0,
     "XI": 30.0,  # particulate inert COD
     "XS": 180.0,  # slowly biodegradable COD
@@ -154,11 +156,11 @@ def a2o_influent(
     return model.influent(comp, Q=Q, T=T)
 
 
-#: A healthy bio-P mixed-liquor seed (g/m³): an established EBPR sludge with a
-#: large PAO population carrying stored poly-P. Seeding from a healthy sludge (as
-#: a real plant is) avoids the slow, seed-sensitive cold-start establishment of the
-#: PAO population; the solve relaxes it to the steady state, so the exact values
-#: affect settling time, not the operating point.
+#: A healthy bio-P mixed-liquor seed (g/m³, SALK in kmol/m³): an established EBPR
+#: sludge with a large PAO population carrying stored poly-P. Seeding from a
+#: healthy sludge (as a real plant is) avoids the slow, seed-sensitive cold-start
+#: establishment of the PAO population; the solve relaxes it to the steady state,
+#: so the exact values affect settling time, not the operating point.
 A2O_WARM_REACTOR_COMPOSITION = {
     "SO2": 2.0,
     "SF": 2.0,
@@ -167,7 +169,7 @@ A2O_WARM_REACTOR_COMPOSITION = {
     "SNO3": 2.0,
     "SPO4": 4.0,
     "SI": 30.0,
-    "SALK": 7.0,
+    "SALK": 0.007,
     "SN2": 5.0,
     "XI": 1500.0,
     "XS": 80.0,
