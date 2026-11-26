@@ -378,6 +378,42 @@ validation case), so the cause in the A2O (the anoxic zone and the GAOs'
 anoxic processes, carbon limitation, the recycles) is to be found before the
 fermentation structure is chosen.
 
+**Why GAOs win on the A2O (2026-11-26).** Two separate effects.
+
+1. *The source's storage switches are on absolute concentrations*:
+   anaerobic uptake carries `monod([XGLY], K_GLY_BIOP)` (and the PAOs'
+   `monod([XPP], K_PP_BIOP)`), aerobic glycogen storage `monod(PHA,
+   K_PHA_BIOP)`, with K = 0.31 to 0.36 g/m3 (the source's 0.01 C-mmol/L,
+   the same form in `lopez_vazquez_2009/model.py`). Near 1 for a population of
+   hundreds of g/m3, they throttle a rare one, so the outcome depends on
+   history: a Competibacter seed of 1 g/m3 (glycogen 0.3) in the PAO-only
+   steady state dies out (-0.077 1/d over days 60 to 120), a seed of 30 grows
+   (+0.0023). With the three K at 1e-3 both seeds grow at +0.0045. The
+   linearized invasion rate cannot see this (the storage ratios are 0/0 at
+   zero biomass); a seeded forward solve can. In the source's SBR every
+   population starts at about 1000 g COD/m3, so there the switches are inert.
+   ASM2d writes its poly-P switch on the ratio `XPP/XPAO`, which has no such
+   effect.
+2. *The A2O's conditions sit on the PAO / GAO boundary*, tipped to
+   Competibacter by the anoxic zone. In the source's SBR at 20 C, acetate,
+   pH 7, the PAOs win slowly (53% at day 50, 65% at day 400; the generated
+   model 54% and 67%), so the source's "coexistence" there is a 50-day
+   snapshot. On the A2O (K at 1e-3, seed 1 g/m3, Competibacter growth rate
+   days 60 to 120, 1/d): base +0.0045; no anoxic bio-P activity
+   (`etaNO3_BIOP` 1e-6) +0.0002; no internal recycle +0.0034; sludge age 8 d
+   instead of 19 +0.0030; anaerobic zone doubled +0.0030; no bio-P decay
+   +0.0046; 15 C -0.037; pH 7.5 -0.013; feed VFA 75% acetate / 25%
+   propionate -0.028. So the GAOs' edge is small and comes mostly from their
+   anoxic processes (decision 11); temperature, pH and a propionate share,
+   all as the source predicts, turn it to the PAOs.
+
+Consequences: an A2O comparison at 20 C on all-acetate VFA tests the knife
+edge, not the plant; a feed with a propionate share (typical of sewage) is
+clear of it. The absolute storage switches are a choice for the owner
+(faithful to the source and history-dependent, or written on ratios to the
+biomass, as ASM2d does, which leaves the SBR validation's large populations
+unchanged).
+
 ## Structure: a linear `extends:` chain
 
 ```
