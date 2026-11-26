@@ -11,7 +11,7 @@ biology and the clarifier serves mainly to recycle biomass via the RAS.
 It produces deterministic, stable behaviour without the per-layer
 mass-balance dynamics. For literature-comparable BSM1 effluent metrics,
 use the layered :class:`aquakin.plant.takacs.TakacsClarifier` instead
-(``build_bsm1``'s default; ``build_bsm1(use_takacs=False)`` selects this one);
+(the default of ``build_bsm1`` and ``build_a2o``; ``use_takacs=False`` selects this one);
 both expose the same ports, so they are drop-in interchangeable in a flowsheet.
 """
 

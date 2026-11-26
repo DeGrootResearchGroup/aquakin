@@ -13,6 +13,9 @@ close the loop:
 - **Return activated sludge** ``Q_r`` from the clarifier underflow back to the
   anaerobic zone, with the remainder wasted as ``Q_w``.
 
+The secondary clarifier is the ten-layer Takács settler by default;
+``use_takacs=False`` swaps in the fast stateless ``IdealClarifier``.
+
 It runs the shipped ``asm2d`` model, which already carries the biological
 phosphorus model (PAO / poly-P / PHA) and ASM2d's own simple metal-phosphate
 precipitation (``XMeOH`` / ``XMeP``), so the plant simultaneously removes carbon,
@@ -219,7 +222,7 @@ def build_a2o(
     ras_ratio: float = A2O_RAS_RATIO,
     ferric: FerricDose | None = None,
     conditions: dict[str, float] | None = None,
-    use_takacs: bool = False,
+    use_takacs: bool = True,
 ) -> Plant:
     """Assemble an A²O biological-nutrient-removal plant on ASM2d.
 
@@ -244,8 +247,12 @@ def build_a2o(
         Per-tank condition overrides (e.g. ``{"T": 288.15}`` for winter).
         Defaults to the model's declared defaults.
     use_takacs : bool
-        Use the layered Takács secondary clarifier instead of the fast
-        stateless ``IdealClarifier`` (the default).
+        If True (default), use the ten-layer Takács secondary clarifier, with
+        its own per-layer solids state, settling between layers with the
+        Godunov interface flux (:class:`~aquakin.plant.takacs.TakacsClarifier`'s
+        defaults). If False, use the fast stateless ``IdealClarifier``, which
+        captures a fixed fraction of the particulates and has no state of its
+        own.
 
     Returns
     -------
