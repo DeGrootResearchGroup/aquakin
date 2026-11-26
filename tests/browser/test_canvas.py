@@ -8,6 +8,8 @@ import re
 
 import pytest
 
+from .conftest import checks_done
+
 expect = pytest.importorskip("playwright.sync_api").expect
 
 NODE = ".vue-flow__node"
@@ -159,13 +161,12 @@ def test_edits_typed_while_the_checks_run_still_travel_with_the_next_selection(p
     """The checks an Apply starts end with a redraw of the flowsheet; edits typed
     before it are still unapplied edits after it, so the next selection applies
     them rather than dropping them."""
-    _checks_done(page)
     _unit(page, "tank1").click()
     page.get_by_label("volume *").fill("1500")
     page.get_by_role("button", name="Apply changes").click()  # starts a round of checks
     page.get_by_role("tab", name="Unit").click()
     page.get_by_label("volume *").fill("1700")
-    _checks_done(page)  # the round has ended, with its redraw
+    checks_done(page)  # the round has ended, with its redraw
     _unit(page, "tank2").click()
     expect(_unit(page, "tank1").locator(".ak-summary")).to_have_text("volume 1700")
 
@@ -183,26 +184,16 @@ def test_an_unreadable_edit_keeps_its_unit_and_names_the_field(page, bad):
     expect(_unit(page, "tank1").locator(".ak-summary")).to_have_text("volume 1000")
 
 
-def _checks_done(page):
-    """Wait until aquakin's background checks have finished (after which no
-    republish of the flowsheet is pending)."""
-    page.get_by_role("tab", name=re.compile(r"^Checks")).click()
-    expect(page.get_by_text("None: aquakin built every unit and the plant.")).to_be_visible(
-        timeout=60_000
-    )
-
-
 def test_the_first_checks_are_reported_when_they_finish(page):
     """The checks the editor starts with run while the page connects; when
     they finish, the page stops saying "checking" and says there are none."""
-    _checks_done(page)
+    checks_done(page)
     expect(page.get_by_text("aquakin is checking the flowsheet")).to_have_count(0)
 
 
 def test_the_canvas_shows_the_unit_python_keeps_selected(page):
     """When the form's edits cannot be read, Python keeps their unit selected,
     and the canvas shows that unit selected rather than the one clicked."""
-    _checks_done(page)
     _unit(page, "tank1").click()
     page.get_by_label("volume *").fill("lots")
     _unit(page, "tank2").click()
