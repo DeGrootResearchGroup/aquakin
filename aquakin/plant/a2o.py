@@ -162,8 +162,13 @@ def a2o_influent(
 #: A healthy bio-P mixed-liquor seed (g/m³, SALK in kmol/m³): an established EBPR
 #: sludge with a large PAO population carrying stored poly-P. Seeding from a
 #: healthy sludge (as a real plant is) avoids the slow, seed-sensitive cold-start
-#: establishment of the PAO population; the solve relaxes it to the steady state,
-#: so the exact values affect settling time, not the operating point.
+#: establishment of the PAO population. The particulates are the default plant's
+#: steady-state mixed liquor, rounded (a 200-day solve of ``build_a2o`` on
+#: :func:`a2o_influent`), and the solubles a generic aerated liquor. A dynamic
+#: solve relaxes any healthy seed to the same operating point; the algebraic
+#: ``Plant.steady_state`` needs the seed near it, since from a seed far off its
+#: Newton steps can reach the other steady state, where the nitrifiers have
+#: washed out.
 A2O_WARM_REACTOR_COMPOSITION = {
     "SO2": 2.0,
     "SF": 2.0,
@@ -174,14 +179,14 @@ A2O_WARM_REACTOR_COMPOSITION = {
     "SI": 30.0,
     "SALK": 0.007,
     "SN2": 5.0,
-    "XI": 1500.0,
-    "XS": 80.0,
-    "XH": 1500.0,
-    "XPAO": 900.0,
-    "XPP": 250.0,
-    "XPHA": 20.0,
-    "XAUT": 150.0,
-    "XTSS": 5500.0,
+    "XI": 2500.0,
+    "XS": 100.0,
+    "XH": 1750.0,
+    "XPAO": 700.0,
+    "XPP": 200.0,
+    "XPHA": 25.0,
+    "XAUT": 90.0,
+    "XTSS": 20.0,
     "XMeOH": 0.0,
     "XMeP": 0.0,
 }
