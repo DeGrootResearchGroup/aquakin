@@ -82,6 +82,43 @@ def test_checks_only_the_commits_being_pushed(repo):
     assert result.returncode == 0
 
 
+def test_skips_commits_merged_in_from_a_branch_already_on_the_remote(repo):
+    """A branch that merges ``main`` brings in ``main``'s commits, which are
+    already on the remote: they are not this push's, so a link in one of them
+    (a squash message GitHub wrote, which no hook saw) must not block it."""
+    _git(repo, "checkout", "-q", "-b", "feature")
+    pushed = _commit(repo, "Feature work")
+    _git(repo, "push", "-q", "origin", "feature")
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, f"Squashed elsewhere (#1)\n\nClaude-Session: {LINK}")
+    _git(repo, "push", "-q", "--no-verify", "origin", "main")
+    _git(repo, "fetch", "-q", "origin")
+    _git(repo, "checkout", "-q", "feature")
+    _git(repo, "merge", "-q", "--no-edit", "origin/main")
+    head = _commit(repo, "More feature work")
+    result = _run_hook(repo, f"refs/heads/feature {head} refs/heads/feature {pushed}\n")
+    assert "link to a Claude session" not in result.stderr
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_linked_commit_of_this_branch_still_blocks_after_a_merge(repo):
+    """Excluding what the remote already has must not hide the branch's own
+    new commits: a link in one of them still blocks the push."""
+    _git(repo, "checkout", "-q", "-b", "feature")
+    pushed = _commit(repo, "Feature work")
+    _git(repo, "push", "-q", "origin", "feature")
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "Clean main change")
+    _git(repo, "push", "-q", "origin", "main")
+    _git(repo, "fetch", "-q", "origin")
+    _git(repo, "checkout", "-q", "feature")
+    _git(repo, "merge", "-q", "--no-edit", "origin/main")
+    head = _commit(repo, f"Linked feature work\n\nClaude-Session: {LINK}")
+    result = _run_hook(repo, f"refs/heads/feature {head} refs/heads/feature {pushed}\n")
+    assert result.returncode == 1
+    assert "Linked feature work" in result.stderr
+
+
 def test_passes_clean_commits_and_deletions(repo):
     clean = _commit(repo, "Clean\n\nCo-Authored-By: Someone <s@example.com>")
     assert _run_hook(repo, f"refs/heads/b {clean} refs/heads/b {ZERO}\n").returncode == 0
