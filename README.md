@@ -194,15 +194,16 @@ install it with one download (Windows) or one pasted line (macOS, Linux): see
 
 The full documentation is at **[aquakin.readthedocs.io](https://aquakin.readthedocs.io/en/latest/)**:
 
-| Guide | |
+| Page | |
 |---|---|
 | [Getting started](https://aquakin.readthedocs.io/en/latest/getting_started.html) | installation, a first solve, building inputs, reading results |
-| [Reactors](https://aquakin.readthedocs.io/en/latest/reactors.html) | batch, plug-flow, biofilm and particle-track reactors; events |
+| [Model catalogue](https://aquakin.readthedocs.io/en/latest/model_catalog.html) | every shipped model, its provenance and how to load it |
+| [Your first model](https://aquakin.readthedocs.io/en/latest/adding_models.html) | writing a model of your own, step by step |
+| [YAML model format](https://aquakin.readthedocs.io/en/latest/model_format.html) | every key, function and rule of a model file |
+| [Reactors](https://aquakin.readthedocs.io/en/latest/reactors.html) | batch, plug-flow, biofilm and particle-track reactors; events; integrator settings |
 | [Plant-wide simulation](https://aquakin.readthedocs.io/en/latest/plants.html) | BSM1 / BSM2, custom flowsheets, reporting, projects, studies, the editor |
-| [Sensitivity & calibration](https://aquakin.readthedocs.io/en/latest/sensitivity_and_calibration.html) | gradients, sensitivity analysis, fitting, identifiability, experiment design, solver options |
+| [Sensitivity & calibration](https://aquakin.readthedocs.io/en/latest/sensitivity_and_calibration.html) | gradients, sensitivity analysis, fitting, identifiability, experiment design |
 | [Worked example: designing an experiment](https://aquakin.readthedocs.io/en/latest/worked_example_design.html) | an ozone-demand study from first design to calibrated model |
-| [Model format](https://aquakin.readthedocs.io/en/latest/model_format.html) and [Adding models](https://aquakin.readthedocs.io/en/latest/adding_models.html) | writing your own models |
-| [Model catalog](https://aquakin.readthedocs.io/en/latest/model_catalog.html) | every shipped model, its provenance and how to load it |
 | [Public API](https://aquakin.readthedocs.io/en/latest/public_api.html) | the API grouped by task |
 
 Runnable scripts are in [`examples/`](https://github.com/DeGrootResearchGroup/aquakin/tree/main/examples), and the

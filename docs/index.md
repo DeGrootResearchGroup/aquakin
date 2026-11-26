@@ -5,52 +5,35 @@ You declare a reaction model in YAML, and `aquakin` compiles it into rate
 functions that JAX can differentiate, integrated by
 [Diffrax](https://github.com/patrick-kidger/diffrax).
 
-It ships a library of ready-to-use models — ozonation and UV/H₂O₂ chemistry,
-the ASM activated-sludge family, ADM1 anaerobic digestion, WATS sewer processes,
-and mineral precipitation (see the [Model catalogue](model_catalog.md)) — and the
-tools to work with them:
+It ships a library of ready-to-use models and the tools to work with them. The
+documentation follows the order you will need it in:
 
-- **Reactors** — batch, plug-flow, particle-track and biofilm reactors, with
-  located events for pumps, dosing and phase switches ([Reactors](reactors.md)).
-- **Plant-wide flowsheets** — the BSM1 and BSM2 benchmarks or your own plant,
-  saved as a flowsheet file and analyzed in reproducible studies, with a browser
-  flowsheet editor ([Plant-wide simulation](plants.md)).
-- **Sensitivity, calibration and experiment design** — every solve is
-  differentiable, so you can compute sensitivities, fit parameters to data,
-  check which parameters the data can determine, and choose the experiment
-  that determines them best
-  ([Sensitivity & calibration](sensitivity_and_calibration.md),
-  [a worked example](worked_example_design.md)).
-- **Your own models** — write a model in YAML, including rate functions of your
-  own registered from Python ([Model file format](model_format.md)).
+1. **[Getting started](getting_started.md)** — install `aquakin`, solve a
+   shipped model, and read the results.
+2. **[Models](models.md)** — the shipped models (ozonation and UV/H₂O₂
+   chemistry, the ASM activated-sludge family, ADM1 anaerobic digestion, WATS
+   sewer processes and mineral precipitation), and how to write your own in
+   YAML.
+3. **[Simulation](simulation.md)** — batch, plug-flow, particle-track and
+   biofilm reactors with pumps, dosing and phase switches; plant-wide
+   flowsheets such as the BSM1 and BSM2 benchmarks, saved as files and analyzed
+   in reproducible studies, with a browser flowsheet editor.
+4. **[Sensitivity, calibration and design](analysis.md)** — every solve is
+   differentiable, so you can compute sensitivities, fit parameters to data,
+   check which parameters the data can determine, and choose the experiment
+   that determines them best.
+5. **[Reference](reference.md)** — the API grouped by task, and every public
+   function and class.
 
 ```{toctree}
+:hidden:
 :maxdepth: 2
-:caption: Guide
 
 getting_started
-installing_the_editor
-reactors
-plants
-sensitivity_and_calibration
-worked_example_design
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: Authoring models
-
-model_format
-adding_models
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: Reference
-
-model_catalog
-public_api
-api
+models
+simulation
+Analysis <analysis>
+reference
 ```
 
 ## Installation

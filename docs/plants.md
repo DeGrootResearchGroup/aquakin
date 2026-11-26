@@ -273,8 +273,10 @@ Two other settings tune the ordinary solve, through
   (BSM2 yes, BSM1 no; `plant.colored_jacobian_decision()` reports the choice);
   `True` forces it on, `False` off.
 
-Gradient settings are described in
-[Sensitivity & calibration](sensitivity_and_calibration.md#choosing-the-integrator).
+The other integrator settings are described in
+[Choosing the integrator](reactors.md#choosing-the-integrator), and gradient
+settings in
+[Differentiating a solve](sensitivity_and_calibration.md#differentiating-a-solve).
 
 ## Building a custom flowsheet
 

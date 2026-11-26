@@ -87,7 +87,7 @@ Useful construction options (all keyword-only):
   `model.atol({...})` to build one) when trace intermediates sit orders of
   magnitude below the bulk species.
 - `integrator=IntegratorConfig(...)` — the ESDIRK order, step caps, and Jacobian
-  strategy. See [Choosing the integrator](sensitivity_and_calibration.md#choosing-the-integrator).
+  strategy. See [Choosing the integrator](#choosing-the-integrator).
 - `diff=DifferentiationConfig(...)` — how a solve under `jax.grad` is
   differentiated. For a stiff model (ASM, ADM, WATS) a reverse-mode gradient
   through a reactor solve needs a step cap; see
@@ -222,3 +222,31 @@ sol.events_log     # audit trail: [(0.1, 'event0'), (0.208..., 'denitrified')]
 After a terminal event, the remaining `t_eval` points repeat the state the
 solve stopped in, so `sol.t` still runs to 0.5 here. With `t_eval=None` the
 solution is the single point where the solve stopped.
+
+## Choosing the integrator
+
+The integrator is configured with one value object, `aquakin.IntegratorConfig`,
+passed as `integrator=` to a reactor or to `plant.solve`. Its defaults are:
+
+```python
+aquakin.IntegratorConfig(order=3, factormax=3.0, colored_jacobian="auto",
+                         dtmax=None, max_steps=100_000, solver=None)
+```
+
+- `order`: the ESDIRK method, `3` (`Kvaerno3`, the default) or `5` (`Kvaerno5`,
+  higher order and more robust). Raise it to 5 if a solve struggles to
+  converge.
+- `factormax`: caps how fast the step size may grow from one step to the next.
+- `dtmax`: caps the step. Set it **only** for a reverse-mode gradient taken
+  *through* a stiff solve (`method="through_solve"`); it is in the model's
+  time unit. The cap-free gradient methods in
+  [Differentiating a solve](sensitivity_and_calibration.md#differentiating-a-solve)
+  do not need it.
+- `colored_jacobian`: builds the implicit-step Jacobian sparsely. It applies to
+  plants only; reactors ignore it.
+- `max_steps`: the step budget; `solver` overrides `order` with an explicit
+  Diffrax solver.
+
+`rtol` and `atol` stay separate arguments of the reactor and of `plant.solve`.
+For faster plant solves, including `forward_fast`, see
+[Plant-wide simulation](plants.md#faster-dynamic-solves).

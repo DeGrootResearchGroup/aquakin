@@ -87,7 +87,8 @@ them:
 
 | Page | Contents |
 |---|---|
-| `docs/index.md` | landing page + toctree (Guide / Authoring / Reference) |
+| `docs/index.md` | landing page + the hidden root toctree; its five entries are the site's top navigation bar |
+| `docs/models.md`, `docs/simulation.md`, `docs/analysis.md`, `docs/reference.md` | section landing pages: a "which page do I need" table and the section's toctree (a new page goes in one of them, not in `index.md`) |
 | `docs/getting_started.md`, `docs/reactors.md`, `docs/plants.md`, `docs/sensitivity_and_calibration.md` | the task-oriented user guide |
 | `docs/model_format.md`, `docs/adding_models.md` | YAML model-authoring reference |
 | `docs/model_catalog.md` | user-facing catalog of every shipped model (what it is, provenance, size, how to load) |

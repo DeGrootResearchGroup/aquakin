@@ -1314,29 +1314,3 @@ opt = aquakin.optimize_design(
     x0=[50.0])
 opt.x_named, opt.feasible     # about 42.7 µmol/L, True
 ```
-
-## Choosing the integrator
-
-The integrator is configured with one value object, `aquakin.IntegratorConfig`,
-passed as `integrator=` to a reactor or to `plant.solve`. Its defaults are:
-
-```python
-aquakin.IntegratorConfig(order=3, factormax=3.0, colored_jacobian="auto",
-                         dtmax=None, max_steps=100_000, solver=None)
-```
-
-- `order`: the ESDIRK method, `3` (`Kvaerno3`, the default) or `5` (`Kvaerno5`,
-  higher order and more robust). Raise it to 5 if a solve struggles to
-  converge.
-- `factormax`: caps how fast the step size may grow from one step to the next.
-- `dtmax`: caps the step. Set it **only** for a reverse-mode gradient taken
-  *through* a stiff solve (`method="through_solve"`); it is in the model's
-  time unit. The cap-free methods above do not need it.
-- `colored_jacobian`: builds the implicit-step Jacobian sparsely. It applies to
-  plants only; reactors ignore it.
-- `max_steps`: the step budget; `solver` overrides `order` with an explicit
-  Diffrax solver.
-
-`rtol` and `atol` stay separate arguments of the reactor and of `plant.solve`.
-For faster plant solves, including `forward_fast`, see
-[Plant-wide simulation](plants.md#faster-dynamic-solves).
