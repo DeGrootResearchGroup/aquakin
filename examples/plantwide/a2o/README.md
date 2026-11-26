@@ -37,7 +37,7 @@ both influents below give a stable PAO state.
 
 | | SF end of anaerobic zone (g COD/m3) | PAO (g COD/m3) | Effluent PO4 (g P/m3) |
 |---|---|---|---|
-| ASM2d | 0.93 | 784 | 5.13 |
+| ASM2d | 0.95 | 794 | 5.09 |
 | plant-wide, VFA 75/25 | 0.36 | 1057 | 4.41 |
 | plant-wide, all acetate | 0.36 | 1027 | 4.56 |
 

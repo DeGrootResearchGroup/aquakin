@@ -208,6 +208,35 @@ def a2o_warm_start(plant: Plant) -> jnp.ndarray:
     return plant.initial_state(overrides=dict.fromkeys(reactors, ml))
 
 
+def _add_a2o_clarifier(
+    plant: Plant, model: CompiledModel, Q_underflow: float, use_takacs: bool
+) -> None:
+    """Add the A²O secondary clarifier, named ``clarifier``, to ``plant``.
+
+    Every X-prefixed species of ``model`` settles: ASM2d's biomass, storage
+    pools, inerts, TSS state and metal precipitates, or the particulates of
+    whichever activated-sludge model is passed. The Takács settler reads the
+    solids as TSS (each particulate through the model's ``iTSS`` factor, the TSS
+    state itself at 0, so no solid is counted twice), which only a model with a
+    TSS state carries; the ideal clarifier needs none.
+    """
+    particulates = list(solids_species(model)[0])
+    add_secondary_clarifier(
+        plant,
+        model=model,
+        underflow_Q=Q_underflow,
+        use_takacs=use_takacs,
+        takacs_kwargs=dict(
+            area=A2O_CLARIFIER_AREA,
+            height=A2O_CLARIFIER_HEIGHT,
+            init_underflow_Q=Q_underflow,
+            particulate_species=particulates,
+            tss_factors=lumped_tss_weights(model) if use_takacs else None,
+        ),
+        ideal_kwargs=dict(particulate_species=particulates),
+    )
+
+
 def build_a2o(
     model: CompiledModel | None = None,
     *,
@@ -274,15 +303,6 @@ def build_a2o(
 
     if conditions is None:
         conditions = reactor_conditions(model)
-    # Every X-prefixed species settles in the clarifier: ASM2d's biomass,
-    # storage pools, inerts, the TSS tracer and the metal precipitates, or the
-    # particulates of whichever activated-sludge model is passed.
-    particulates = solids_species(model)[0]
-    # The Takács settling velocity reads the solids as TSS: each particulate
-    # through the model's iTSS factor, and XTSS itself (which already sums
-    # them) at 0, so no solid is counted twice. Only that settler needs them,
-    # and only a model with a TSS state has them.
-    tss_factors = lumped_tss_weights(model) if use_takacs else None
 
     plant = Plant("A2O", time_unit="d")
 
@@ -366,20 +386,7 @@ def build_a2o(
     )
 
     # ----- Secondary clarifier (Takács 1-D settler, or the fast IdealClarifier) -----
-    add_secondary_clarifier(
-        plant,
-        model=model,
-        underflow_Q=Q_underflow,
-        use_takacs=use_takacs,
-        takacs_kwargs=dict(
-            area=A2O_CLARIFIER_AREA,
-            height=A2O_CLARIFIER_HEIGHT,
-            init_underflow_Q=Q_underflow,
-            particulate_species=list(particulates),
-            tss_factors=tss_factors,
-        ),
-        ideal_kwargs=dict(particulate_species=list(particulates)),
-    )
+    _add_a2o_clarifier(plant, model, Q_underflow, use_takacs)
 
     # ----- Underflow splitter: RAS Qr + wastage Qw -----
     plant.add_unit(
