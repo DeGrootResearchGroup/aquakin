@@ -175,7 +175,7 @@ kept equal by putting the organic-N difference in ammonium.
       at pH 6 and 7.5, so pH-dependent amounts go in the rates, not in fixed
       stoichiometry.
     *The generated model (`plantwide_bio_p`, 2026-11-26)* on the same grid,
-    through its own `dCdt`: worst deviation from the reference 13.9 points,
+    through its own `dCdt`: worst deviation from the reference 13.8 points,
     every condition within 5 points except propionate at pH 7.5 (14 at 30 C,
     6 at 20 C), outcome matching the reference in 34/36 and the paper in
     32/36. The pH 7.5 propionate gap is the COD-balanced PAO propionate
@@ -426,6 +426,20 @@ clear of it. The absolute storage switches are a choice for the owner
 (faithful to the source and history-dependent, or written on ratios to the
 biomass, as ASM2d does, which leaves the SBR validation's large populations
 unchanged).
+
+**Fermentation variants on the decided base (decisions 14 and 15).** 75%
+acetate / 25% propionate VFA, 20 C, pH 7, storage switches on fractions.
+Steady state by PTC, then both GAO groups seeded at 1 g/m3 (glycogen 0.3) and
+150 days forward: in every variant both die out (-0.025 to -0.029 1/d over
+days 75 to 150) and nothing else moves, so these are stable steady states
+(g/m3; ASM2d, with one VFA, from its all-acetate run):
+
+| Variant | `SF` end of anaerobic zone | PAO | Acidogens | Effluent PO4 |
+|---|---|---|---|---|
+| ASM2d | 0.93 | 774 | - | 5.13 |
+| acidogens, ADM1 kinetics (current) | 14.5 | 571 | 0 (washed out) | 6.86 |
+| heterotrophs ferment (3 1/d substrate, `K` 5, yield 0.1) | 0.47 | 1061 | - | 4.52 |
+| BNRM1-type (off by O2 only, Ruel kinetics, 10 g/m3 acidogens in the influent) | 5.35 | 846 | 139 | 5.65 |
 
 ## Structure: a linear `extends:` chain
 
