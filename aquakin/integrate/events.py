@@ -45,6 +45,7 @@ from aquakin.integrate._common import (
     concrete_settings_key,
     friendly_solve_errors,
 )
+from aquakin.integrate._solver import check_solve_result
 
 # Relative tolerance (scaled by the span) for deciding a save time coincides with
 # a segment boundary, so it is assigned to the segment ending there (its
@@ -277,7 +278,9 @@ def build_segment_solver(
     -------
     callable
         ``solve_segment(ctx, y0, t0, t1, args, t_eval, tol)`` returning
-        ``(t_end, y_end, fired, mask, ys)``: where the segment stopped and its
+        ``((t_end, y_end, fired, mask, ys), result)``, the solve's diffrax
+        ``result`` for :func:`~aquakin.integrate._solver.check_solve_result`
+        beside the outputs: where the segment stopped and its
         state there, whether a state event stopped it, the per-state-event
         fired flags, and -- with ``has_t_eval`` -- the state at every ``t_eval``
         point (meaningful for the points in ``(t0, t_end]``; a point within
@@ -329,7 +332,7 @@ def build_segment_solver(
             t_safe = jnp.where(inside, t_eval, 0.5 * (t0 + t_end))
             ys = jax.vmap(sol.evaluate)(t_safe)
             ys = jnp.where(at_end[:, None], y_end, ys)
-        return t_end, y_end, fired, mask, ys
+        return (t_end, y_end, fired, mask, ys), sol.result
 
     return solve_segment
 
@@ -496,10 +499,10 @@ def run_segmented(
     # MaxStepsReached chatter.
     t0, t1 = float(t_span[0]), float(t_span[1])
     with friendly_solve_errors(settings.max_steps, what="event solve"):
-        return _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, settings.max_segments)
+        return _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, settings)
 
 
-def _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, max_segments):
+def _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, settings):
     """Segmented event driver, shared by the time- and state-event cases.
 
     With **no** state event the segment boundaries are the static time-event
@@ -523,7 +526,8 @@ def _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, max_segments):
 
     The ``t_eval`` points are assigned to segments by mask (each point to the
     first segment whose end it does not exceed, by more than the tolerance), so
-    the grid need not be concrete.
+    the grid need not be concrete. Each segment's solve result is checked with
+    ``settings.max_steps``; ``settings.max_segments`` caps a state-event loop.
     """
     root_events = root_events_of(events)
     has_root = bool(root_events)
@@ -550,7 +554,7 @@ def _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, max_segments):
     if terminal:
         return _assemble(out, claimed, t_eval, y, t_report, y_report, log)
 
-    n_iter = max_segments if has_root else len(time_times) + 1
+    n_iter = settings.max_segments if has_root else len(time_times) + 1
     for _ in range(n_iter):
         if seg_t0 >= t1:
             break
@@ -559,7 +563,10 @@ def _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, max_segments):
         if seg_t1 <= seg_t0:
             seg_t0 = seg_t1
             continue
-        t_seg_end, y_end, fired, mask, ys = solve_segment(ctx, y, seg_t0, seg_t1, args, t_eval, tol)
+        segment, result = solve_segment(ctx, y, seg_t0, seg_t1, args, t_eval, tol)
+        t_seg_end, y_end, fired, mask, ys = check_solve_result(
+            result, segment, max_steps=settings.max_steps, what="event solve"
+        )
         if has_root:
             fired_root = bool(fired)
             t_end = float(t_seg_end)
@@ -595,7 +602,7 @@ def _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, max_segments):
     else:
         if has_root:
             raise RuntimeError(
-                f"event solve exceeded max_segments={max_segments}; a state "
+                f"event solve exceeded max_segments={settings.max_segments}; a state "
                 f"event may be firing repeatedly without advancing (check its "
                 f"apply reset moves the state off the threshold)."
             )

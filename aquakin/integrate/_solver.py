@@ -119,6 +119,73 @@ def is_forward_mode_ad_error(exc: BaseException) -> bool:
     return "forward-mode autodiff" in msg and "custom_vjp" in msg
 
 
+def step_budget_message(max_steps, what: str) -> str:
+    """The error raised when a solve runs out of integrator steps, naming the
+    remedies; shared by :func:`check_solve_result` and
+    :func:`friendly_solve_errors`."""
+    return (
+        f"The {what} hit its integrator step budget (max_steps={max_steps}) "
+        "before completing. This is almost always a stiff transient, not a "
+        "bug. Try, in order: (1) warm-start from a settled state -- for a "
+        "plant, pass y0 from plant.run_to_steady_state (or a previous run); "
+        "(2) loosen rtol (the default atol already auto-scales to the state "
+        "magnitudes); or (3) raise max_steps. If none help, the model may be "
+        "genuinely unstable at these parameters/inputs."
+    )
+
+
+def check_solve_result(result, outputs, *, max_steps, what: str):
+    """Raise if a solve run with ``throw=False`` did not finish; else return ``outputs``.
+
+    A solve whose ``diffeqsolve`` raises on failure (``throw=True``) does so
+    from a JAX callback inside the compiled program, and JAX logs that
+    callback's traceback, with Equinox's banner, before the error reaches
+    Python. So a compiled solve runs with ``throw=False``, returns its
+    ``result`` beside its outputs, and its caller checks it here, on the host.
+    A concrete result that is not okay raises: a ``RuntimeError`` with the
+    step-budget message (:func:`step_budget_message`) when the budget ran out,
+    else an ``equinox.EquinoxRuntimeError`` (the type ``throw=True`` raised)
+    with Diffrax's reason. A traced result (the solve under an outer ``jax.jit`` / ``jax.grad``
+    / ``jax.vmap``) cannot be read on the host, so the check is put back into
+    the trace exactly as ``throw=True`` would have put it, and the outputs carry
+    it.
+
+    Parameters
+    ----------
+    result : diffrax.RESULTS
+        The solve's ``result`` (any batch shape).
+    outputs : pytree
+        What the solve returns; passed through.
+    max_steps : int
+        The step budget, quoted in the message.
+    what : str
+        A short label for the solve (e.g. ``"batch reactor solve"``).
+
+    Returns
+    -------
+    pytree
+        ``outputs`` (under tracing, carrying the runtime check).
+
+    Raises
+    ------
+    RuntimeError
+        If a concrete ``result`` reports a failed solve
+        (``equinox.EquinoxRuntimeError``, a subclass, unless the budget ran out).
+    """
+    failed = jnp.invert(diffrax.is_okay(result))
+    if isinstance(failed, jax.core.Tracer):
+        return result.error_if(outputs, failed)
+    failed = np.asarray(failed)
+    if not failed.any():
+        return outputs
+    if np.asarray(result == diffrax.RESULTS.max_steps_reached).any():
+        raise RuntimeError(step_budget_message(max_steps, what))
+    reason = diffrax.RESULTS[result] if failed.ndim == 0 else "an element of the batch failed"
+    # Equinox's error type, as ``throw=True`` raised: callers that recognize a
+    # failed solve by it (the calibration multistart) keep doing so.
+    raise eqx.EquinoxRuntimeError(f"The {what} stopped before the end of its span: {reason}")
+
+
 @contextlib.contextmanager
 def friendly_solve_errors(max_steps, *, what: str = "solve"):
     """Re-raise two opaque solve-time failures as domain-level errors.
@@ -156,15 +223,7 @@ def friendly_solve_errors(max_steps, *, what: str = "solve"):
     except Exception as exc:
         msg = str(exc).lower()
         if "maximum number of solver steps" in msg:
-            raise RuntimeError(
-                f"The {what} hit its integrator step budget (max_steps={max_steps}) "
-                "before completing. This is almost always a stiff transient, not a "
-                "bug. Try, in order: (1) warm-start from a settled state -- for a "
-                "plant, pass y0 from plant.run_to_steady_state (or a previous run); "
-                "(2) loosen rtol (the default atol already auto-scales to the state "
-                "magnitudes); or (3) raise max_steps. If none help, the model may be "
-                "genuinely unstable at these parameters/inputs."
-            ) from None
+            raise RuntimeError(step_budget_message(max_steps, what)) from None
         if is_forward_mode_ad_error(exc):
             raise RuntimeError(
                 f"Forward-mode autodiff (jax.jacfwd / jax.jvp) cannot flow through "
@@ -488,6 +547,13 @@ def _run_diffeqsolve(
     gradient is finite and matches both forward mode and finite differences.
     This is reverse-mode-specific and independent of the adjoint flavour. See
     the "Differentiating stiff models" discussion in CLAUDE.md.
+
+    The solve runs with ``throw=False``: a failed solve (out of steps, a
+    collapsed step size) is returned, not raised inside the program, so **every
+    caller must check** ``sol.result`` with :func:`check_solve_result` -- a
+    compiled solve returns it beside its outputs and the caller checks it on the
+    host. Raising inside the program would make JAX log the callback's
+    traceback and Equinox's banner before the error.
     """
     term = diffrax.ODETerm(rhs)
     # Build the solver + controller from the shared single-source-of-truth helpers
@@ -512,6 +578,7 @@ def _run_diffeqsolve(
         progress_meter=(
             progress_meter if progress_meter is not None else diffrax.NoProgressMeter()
         ),
+        throw=False,
     )
 
 
@@ -593,7 +660,8 @@ def solve_chemistry(
     - ``saveat`` / ``t0`` / ``t1`` select the output points and the span.
 
     Returns the diffrax ``Solution``; callers read ``sol.ts`` / ``sol.ys`` (or
-    ``sol.ys[-1]`` for a single-endpoint step).
+    ``sol.ys[-1]`` for a single-endpoint step), and must check ``sol.result``
+    with :func:`check_solve_result` (see :func:`_run_diffeqsolve`).
     """
     rhs = make_chemistry_rhs(model, params, cond_fn=cond_fn, rate_scale=rate_scale)
 

@@ -1903,3 +1903,9 @@ Dynamic-solve performance numbers formerly in `.claude/rules/plant-solve.md`
   coloured-backward entries above for the re-measured numbers).
 - **Cached recycle flow map `A`:** 1.076× (7.6%) on the 60-day dynamic BSM2
   forward solve.
+
+## Compile versus run time (moved from the integration rule, 2026-11-26)
+
+Compiling a stiff solve dominates its cost: measured ~1.6 s compile against
+~0.02 s run for an ASM1 batch solve, and ~34 s against ~4 s for the full BSM2
+plant. This is why every integrator caches its compiled solve.

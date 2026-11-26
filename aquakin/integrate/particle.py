@@ -34,6 +34,7 @@ from aquakin.integrate._common import (
     solve_chemistry,
     validate_C0_params,
 )
+from aquakin.integrate._solver import check_solve_result
 
 
 @dataclass
@@ -178,7 +179,10 @@ class ParticleTrackReactor(GradientCheckMixin):
         cache_key = None if settings is None else ("particle", id(self.model), settings)
         jitted = cached_jitted_solver(cache_key, self._build_jitted_solve, self.model, self.adjoint)
         with friendly_solve_errors(self.max_steps, what="particle-track solve"):
-            ts, ys = jitted(C0, params, t_grid, self.track.fields, t_save)
+            ts, ys, result = jitted(C0, params, t_grid, self.track.fields, t_save)
+            ts, ys = check_solve_result(
+                result, (ts, ys), max_steps=self.max_steps, what="particle-track solve"
+            )
         return TrackSolution(t=ts, C=ys, model=self.model)
 
     def _build_jitted_solve(self):
@@ -218,7 +222,7 @@ class ParticleTrackReactor(GradientCheckMixin):
                 factormax=factormax,
                 solver=solver,
             )
-            return sol.ts, sol.ys
+            return sol.ts, sol.ys, sol.result
 
         return _solve
 

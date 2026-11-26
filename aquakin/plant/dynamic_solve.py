@@ -31,6 +31,7 @@ from aquakin.integrate._common import (
     to_native_time,
 )
 from aquakin.integrate._config import FORWARD_THROUGH_SOLVE_DIFF, STABLE_REVERSE_DIFF
+from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.integrate.events import (
     Event,
@@ -867,9 +868,10 @@ def _solve_jax_adjoint(
 
     with friendly_solve_errors(max_steps, what="plant solve"):
         if t_eval is None:
-            ts, ys = jitted(y0, params)
+            ts, ys, result = jitted(y0, params)
         else:
-            ts, ys = jitted(y0, params, t_eval)
+            ts, ys, result = jitted(y0, params, t_eval)
+        ts, ys = check_solve_result(result, (ts, ys), max_steps=max_steps, what="plant solve")
     return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
 
 
@@ -1063,7 +1065,7 @@ def _build_jitted_solve(
                 saveat=diffrax.SaveAt(ts=t_eval),
                 **kw,
             )
-            return sol.ts, sol.ys
+            return sol.ts, sol.ys, sol.result
 
         return _solve
 
@@ -1076,7 +1078,7 @@ def _build_jitted_solve(
             saveat=diffrax.SaveAt(t1=True),
             **kw,
         )
-        return sol.ts, sol.ys
+        return sol.ts, sol.ys, sol.result
 
     return _solve
 

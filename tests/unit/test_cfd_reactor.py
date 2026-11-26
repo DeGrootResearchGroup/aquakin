@@ -151,11 +151,14 @@ def test_invalid_on_nan_rejected(simple_model):
 
 
 def _inject_nonfinite_inner(reactor, n_cells, bad_row):
-    """Pre-populate the jit cache with a stub that returns a non-finite cell,
-    isolating step()'s post-solve finiteness/mask handling from the solver."""
+    """Pre-populate the jit cache with a stub that returns a non-finite cell
+    (beside a successful solve result, as the compiled step returns its
+    per-cell results), isolating step()'s post-solve finiteness/mask handling
+    from the solver."""
+    import diffrax
 
     def fake(C, cond, dt, params):
-        return C.at[bad_row, 0].set(jnp.nan)
+        return C.at[bad_row, 0].set(jnp.nan), diffrax.RESULTS.successful
 
     reactor._jit_cache[n_cells] = fake
 
