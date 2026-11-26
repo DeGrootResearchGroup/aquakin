@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,14 @@ def test_a_version_that_does_not_resolve_fails_and_is_named(tmp_path):
     assert "cannot be installed on Python 3.11," in result.stderr
 
 
+def test_the_lint_extra_provides_uv():
+    # The skip message tells the reader to install the `lint` extra; that only
+    # works while the extra lists uv.
+    pyproject = tomllib.loads((SCRIPT.parents[1] / "pyproject.toml").read_text())
+    lint = pyproject["project"]["optional-dependencies"]["lint"]
+    assert any(re.match(r"uv\b", requirement) for requirement in lint), lint
+
+
 def test_without_uv_it_skips_and_passes(tmp_path):
     if os.path.exists("/usr/bin/uv") or os.path.exists("/bin/uv"):
         pytest.skip("uv is installed system-wide, so it cannot be hidden from PATH")
@@ -113,3 +122,4 @@ def test_without_uv_it_skips_and_passes(tmp_path):
     assert result.returncode == 0
     assert asked == []
     assert "uv not found on PATH -- skipping" in result.stderr
+    assert 'pip install -e ".[lint]"' in result.stderr

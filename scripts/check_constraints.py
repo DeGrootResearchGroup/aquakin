@@ -14,9 +14,10 @@ Usage::
 
     python scripts/check_constraints.py
 
-Run it from the repository root. It needs ``uv`` on ``PATH`` and network access
-to the package index; without ``uv`` it says so and exits 0, so a contributor
-without it is not blocked. The pre-push hook runs it when the commits being
+Run it from the repository root. It needs ``uv`` on ``PATH`` (the ``lint``
+extra installs it) and network access to the package index; without ``uv`` it
+says so and exits 0, so a contributor without it is not blocked. The pre-push
+hook runs it when the commits being
 pushed change ``constraints.txt`` or ``pyproject.toml``. Exits 1 when a version
 does not resolve, printing uv's explanation.
 """
@@ -99,7 +100,7 @@ def main() -> int:
         print(
             "check_constraints: uv not found on PATH -- skipping the check that "
             "constraints.txt resolves on every supported Python.\n"
-            "                   install it from https://docs.astral.sh/uv/",
+            "                   install it with:  pip install -e \".[lint]\"",
             file=sys.stderr,
         )
         return 0
