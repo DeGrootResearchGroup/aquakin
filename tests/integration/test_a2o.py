@@ -382,12 +382,16 @@ def test_a2o_removes_nitrogen_and_phosphorus(asm2d):
 def test_ferric_dosing_polishes_phosphorus(asm2d):
     """On a phosphorus-rich, VFA-limited influent biological P removal alone
     leaves residual phosphate; ferric dosing precipitates it (forming XMeP) and
-    lowers the effluent phosphate -- the combined bio-P + chemical-P behaviour."""
+    lowers the effluent phosphate -- the combined bio-P + chemical-P behaviour.
+
+    It tests the dosing chemistry, not the settling, so it runs on the ideal
+    clarifier: two 200-day solves with the Takács settler take about half an
+    hour."""
     net = asm2d
     overrides = {"SPO4": 15.0, "SA": 20.0}
 
     def effluent_p(ferric):
-        plant = build_a2o(net, ferric=ferric)
+        plant = build_a2o(net, ferric=ferric, use_takacs=False)
         plant.add_influent("feed", a2o_influent(net, overrides=overrides))
         y0 = a2o_warm_start(plant)
         sol = plant.solve(
