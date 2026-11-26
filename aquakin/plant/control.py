@@ -8,21 +8,66 @@ dissolved-oxygen control) reads that signal in its ``rhs``. The plant evaluates
 ``signal_outputs`` on every controller each RHS call and threads the resulting
 signal bus into every unit's ``rhs`` as ``signals`` -- see ``Plant._rhs``.
 
-The shipped controller is :class:`PIController`, a PI loop with back-calculation
-anti-windup (the BSM1/BSM2 dissolved-oxygen / kLa controller form).
+Two controllers ship: :class:`PIController`, a PI loop with back-calculation
+anti-windup (the BSM1/BSM2 dissolved-oxygen / kLa controller form), and
+:class:`ExpressionController`, a stateless control law written as an expression
+(:mod:`aquakin.plant.control_law`). A law may read signals other controllers
+publish; the plant runs each producer after those it reads
+(:func:`aquakin.plant.signal_bus.order_signal_producers`).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import KW_ONLY, dataclass, field
 from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.core.hints import did_you_mean
+from aquakin.plant.control_law import CHANNELS, ControlLawError, compile_law
+from aquakin.plant.errors import WiringError
 from aquakin.plant.streams import Stream
+from aquakin.plant.time_expr import CONSTANTS
+from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
+
+
+def check_sensed_model(owner: str, model, sensed, what: str) -> None:
+    """Refuse a sensed stream whose model orders its species differently.
+
+    A controller resolves species indices against its own ``model``; they index
+    the right species only if the sensed stream shares that ordering. The models
+    are static, so this is a trace-time check (it fires on the first solve, not
+    every step); the ``is`` short-circuit keeps the common same-instance case
+    free, while two instances of the same model (same species order) are still
+    accepted.
+
+    Parameters
+    ----------
+    owner : str
+        The controller, for the message (``"PIController 'do'"``).
+    model : CompiledModel
+        The model its indices were resolved in.
+    sensed : CompiledModel
+        The sensed stream's model.
+    what : str
+        What was resolved, for the message.
+
+    Raises
+    ------
+    ValueError
+        If the two models list different species.
+    """
+    if sensed is not model and getattr(sensed, "species", None) != model.species:
+        raise ValueError(
+            f"{owner} senses a stream in model '{getattr(sensed, 'name', '?')}', but "
+            f"{what} was resolved in model '{model.name}' with a different species "
+            f"ordering -- it would read the wrong species. Build the controller with "
+            f"the sensed unit's model."
+        )
 
 
 @dataclass
@@ -126,22 +171,12 @@ class PIController:
         stream = inputs[self.input_port]
         # ``_meas_idx`` was resolved against ``self.model``; it indexes the right
         # species only if the sensed stream shares that model's species ordering.
-        # The models are static, so this is a trace-time check (it fires on the
-        # first solve, not every step); the ``is`` short-circuit keeps the common
-        # same-instance case free, while two instances of the same model (same
-        # species order) are still accepted.
-        sensed_net = stream.model
-        if sensed_net is not self.model and (
-            getattr(sensed_net, "species", None) != self.model.species
-        ):
-            raise ValueError(
-                f"PIController '{self.name}' senses a stream in model "
-                f"'{getattr(sensed_net, 'name', '?')}', but its measured_species "
-                f"'{self.measured_species}' index was resolved in model "
-                f"'{self.model.name}' with a different species ordering -- it "
-                f"would read the wrong species. Build the controller with the "
-                f"sensed unit's model."
-            )
+        check_sensed_model(
+            f"PIController '{self.name}'",
+            self.model,
+            stream.model,
+            f"its measured_species '{self.measured_species}' index",
+        )
         measured = stream.C[self._meas_idx]
         e = self.setpoint - measured
         u = self.offset + self.Kp * e + state[0]
@@ -154,7 +189,9 @@ class PIController:
         state: jnp.ndarray,
         inputs: dict[str, Stream],
         params: jnp.ndarray,
+        signals: dict | None = None,
     ) -> dict:
+        """Publish the saturated output; the bus so far (``signals``) is not read."""
         _, u_sat, _ = self._output(state, inputs)
         return {self.signal_name: u_sat}
 
@@ -184,3 +221,148 @@ class PIController:
         if self.use_antiwindup:
             dxi = dxi + (1.0 / self.Tt) * (u_sat - u)
         return jnp.reshape(dxi, (1,))
+
+
+@dataclass
+class ExpressionController(StatelessUnit):
+    """A stateless controller whose output is a law written as an expression.
+
+    The law is read once, at construction, into plain JAX arithmetic, and its
+    value is published as the signal ``signal_name`` every right-hand-side call::
+
+        ExpressionController(
+            "nh4_loop", model=asm1, signal_name="kla_tank3",
+            law="clip(offset + Kp*([SNH] - sp), 0, 240)",
+            constants={"Kp": 40.0, "sp": 1.0, "offset": 120.0},
+        )
+
+    A law reads ``[species]`` and the measurement channels ``TSS``, ``COD``,
+    ``TN``, ``TKN``, ``NOx`` and ``TP`` of the stream on its ``measured`` port
+    (the channel weights follow the run's composition parameters), its
+    ``constants``, the plant clock ``t``, ``pi`` and ``e``, and by bare name any
+    signal another unit publishes, so one law can cascade from another's
+    output; the plant runs it after the producers it reads. Limits go in the law
+    with ``clip``; there is no ``if``. See :mod:`aquakin.plant.control_law`.
+    Every setting but ``name`` is passed by keyword.
+
+    Parameters
+    ----------
+    name : str
+        Unit identifier.
+    model : CompiledModel, optional
+        Model of the sensed stream, which the law's species and channels are read
+        in. ``None`` (the default) senses nothing: the controller then has no
+        input port, and its law reads only constants, ``t`` and signals.
+    signal_name : str
+        Name under which the law's value is published on the signal bus.
+    law : str
+        The control law, e.g. ``"clip(offset + Kp*([SNH] - sp), 0, 240)"``.
+    constants : dict[str, float]
+        Named numbers the law uses (gains, setpoints, bounds). They are fixed
+        numbers, not plant parameters.
+    """
+
+    name: str
+    _: KW_ONLY
+    model: CompiledModel | None = None
+    signal_name: str
+    law: str
+    constants: dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        what = f"ExpressionController '{self.name}'"
+        if self.signal_name in CHANNELS:
+            raise ControlLawError(
+                f"{what}: signal_name '{self.signal_name}' is the name of a measurement "
+                f"channel, which a law reads as the channel; choose another name."
+            )
+        self.constants = {str(k): float(v) for k, v in self.constants.items()}
+        self._law = compile_law(self.law, self.constants, self.model, what=what)
+
+    @property
+    def signal_names(self) -> tuple[str, ...]:
+        """The one signal this unit publishes."""
+        return (self.signal_name,)
+
+    @property
+    def required_signals(self) -> tuple[str, ...]:
+        """The signals the law reads from the bus, which the plant computes first."""
+        return self._law.signals
+
+    @property
+    def input_ports(self) -> list[str]:
+        return ["measured"] if self.model is not None else []
+
+    @property
+    def output_ports(self) -> list[str]:
+        return []  # produces a signal, not a material stream
+
+    def check_signals(self, published: Mapping[str, str]) -> None:
+        """Check the law's names against the signals the plant publishes.
+
+        Parameters
+        ----------
+        published : mapping of str to str
+            Every published signal, to the unit that publishes it.
+
+        Raises
+        ------
+        ControlLawError
+            If the law reads a name that is none of its constants, a channel,
+            ``t``, ``pi``, ``e`` or a published signal (with a "did you mean"),
+            or a name that is both a published signal and a channel or constant.
+        """
+        what = f"ExpressionController '{self.name}'"
+        for name in (*self._law.channels, *self.constants):
+            if name in published:
+                role = "measurement channel" if name in CHANNELS else "constant"
+                raise ControlLawError(
+                    f"{what}: '{name}' is both a {role} of its law and a signal "
+                    f"'{published[name]}' publishes, so the law cannot tell which it "
+                    f"reads. Rename the signal or the constant."
+                )
+        known = [*self.constants, *CHANNELS, "t", *CONSTANTS, *published]
+        for name in self._law.signals:
+            if name not in published:
+                raise ControlLawError(
+                    f"{what}: its law reads '{name}', which is not one of its constants, "
+                    f"a measurement channel, 't', 'pi', 'e' or a signal a unit of this "
+                    f"plant publishes.{did_you_mean(name, known)}"
+                )
+
+    def signal_outputs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+        signals: dict | None = None,
+    ) -> dict:
+        """Publish the law's value, read against the bus so far (``signals``)."""
+        C = None
+        if self._law.reads_stream:
+            stream = inputs.get("measured")
+            if stream is None:
+                raise WiringError(
+                    f"ExpressionController '{self.name}' reads the sensed stream, but "
+                    f"nothing is connected to its 'measured' port. Connect the sensed "
+                    f"unit: plant.connect('<unit>.out', '{self.name}.measured')."
+                )
+            check_sensed_model(
+                f"ExpressionController '{self.name}'", self.model, stream.model, "its law"
+            )
+            C = stream.C
+        return {self.signal_name: self._law(t, C, signals or {}, params)}
+
+    def compute_outputs(
+        self,
+        t: jnp.ndarray,
+        state: jnp.ndarray,
+        inputs: dict[str, Stream],
+        params: jnp.ndarray,
+        signals: dict | None = None,
+    ) -> dict:
+        return {}  # no material outputs
+
+    def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
+        return {}

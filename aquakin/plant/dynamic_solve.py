@@ -151,8 +151,8 @@ def solve(
         ``colored_jacobian`` ({"auto", True, False}) selects sparse colored-AD
         materialisation of the per-step Jacobian. ``"auto"`` (default) governs
         the ``mode='reverse', method='stable'`` backward decision -- it enables
-        the colored ``df/dy`` build by plant size (a large plant like BSM2 yes,
-        a small one like BSM1 no), and leaves the forward solve dense; ``True`` forces coloring on both paths; ``False``
+        the colored ``df/dy`` build by plant size (BSM2 and BSM1 yes, BSM1 with
+        its ideal clarifier no), and leaves the forward solve dense; ``True`` forces coloring on both paths; ``False``
         disables it. Reported by :meth:`colored_jacobian_decision`.
     diff : DifferentiationConfig, optional
         How a gradient / sensitivity flows through the solve.

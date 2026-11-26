@@ -79,7 +79,7 @@ from aquakin.integrate.seam import (
     _run_multistart,
     _sigma_per_dataset,
 )
-from aquakin.plant.measures import channel_name, measure_map
+from aquakin.plant.measures import channel_name, measure_map, weights_at
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.plant.plant import Plant
@@ -323,9 +323,7 @@ class _Measurement:
 
     def weights(self, p) -> jnp.ndarray:
         """The species weights ``W(p)``, ``(n_species, width)``."""
-        if self.idx.size == 0:
-            return self.W
-        return self.W + jnp.tensordot(jnp.asarray(p)[self.idx] - self.theta0, self.dW, axes=1)
+        return weights_at(self.W, self.idx, self.theta0, self.dW, p)
 
 
 def _resolve_observable_columns(plant: Plant, observables) -> tuple[tuple, int]:

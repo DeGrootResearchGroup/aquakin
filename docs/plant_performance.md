@@ -1369,7 +1369,7 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
 - **Assembly-time signal validation.** A unit declares the bus names it reads via
   `required_signals` (`CSTRUnit` derives it from its closed-loop aeration) and the
   names it publishes via `signal_names` (`PIController` -> its `signal_name`).
-  `Plant._validate_control_signals` (run from `_build_state_layout`, before the
+  `signal_bus.validate_control_signals` (run from `_build_state_layout`, before the
   RHS is traced) checks every consumed name is published, so a forgotten/mistyped
   controller signal raises a clear `ValueError` naming the unit and the available
   signals -- not a bare `KeyError` from deep in the first jitted solve. It is

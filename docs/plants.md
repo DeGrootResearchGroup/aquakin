@@ -50,16 +50,22 @@ bsm1.add_influent("feed", model.influent(bsm1_feed, Q=18446.0))
 # steady state, so there is no horizon to guess.
 ss = bsm1.run_to_steady_state()
 print("converged:", ss.converged, "after", round(ss.time), "days")
-# converged: True after 33 days
+# converged: True after 37 days
 ```
+
+% invisible-code-block: python
+%     assert bool(ss.converged) and round(ss.time) == 37
 
 Reconstruct the clarified effluent from that run and read its quality:
 
 ```python
 eff = bsm1.stream(ss.solution, bsm1.effluent_endpoint)
 print("effluent SNH:", round(float(eff.C_named("SNH")[-1]), 2), "g N/m³")
-# effluent SNH: 0.46 g N/m³
+# effluent SNH: 0.47 g N/m³
 ```
+
+% invisible-code-block: python
+%     assert round(float(eff.C_named("SNH")[-1]), 2) == 0.47
 
 The plant integrates the state of each unit, not the streams between them, so
 `plant.stream(solution, endpoint)` recomputes a stream (flow and concentrations
@@ -112,14 +118,17 @@ asm1_bsm2)`, with `profile` one of `"dry"`, `"rain"` or `"storm"`.
 
 ### The secondary clarifier and the benchmark
 
-The BSM plants use a ten-layer secondary clarifier (`TakacsClarifier`). By
-default it computes the settling flux from one layer to the next with the
-Godunov flux of the settling conservation law (Bürger, Diehl & Nopens 2011)
-rather than the benchmark's Takács rule. Steady states are the same, the mean
-effluent concentrations of a dynamic BSM2 run differ by under 0.1%, and a
-dynamic solve is several times cheaper. To reproduce the benchmark settler
-exactly, pass `settler_interface_flux="takacs"` to `build_bsm1` / `build_bsm2`
-(or `interface_flux="takacs"` to `TakacsClarifier`).
+Both BSM plants use the benchmark's ten-layer secondary clarifier
+(`TakacsClarifier`) by default. It computes the settling flux from one layer to
+the next with the Godunov flux of the settling conservation law (Bürger, Diehl &
+Nopens 2011) rather than the benchmark's Takács rule. Steady states are the
+same, the mean effluent concentrations of a dynamic BSM2 run differ by under
+0.1%, and a dynamic solve is several times cheaper. To reproduce the benchmark
+settler exactly, pass `settler_interface_flux="takacs"` to `build_bsm1` /
+`build_bsm2` (or `interface_flux="takacs"` to `TakacsClarifier`). For a faster
+BSM1 whose clarifier has no state of its own, `build_bsm1(use_takacs=False)`
+uses the stateless `IdealClarifier`, which sends a fixed fraction of the
+particulates to the underflow.
 
 ```{note}
 Why the two differ: the Takács rule takes the smaller of the two layers'
@@ -193,8 +202,11 @@ parameters.
 ```python
 root = bsm1.steady_state()
 print("converged:", root.converged, "by", root.method, "in", root.iterations, "iterations")
-# converged: True by ptc in 34 iterations
+# converged: True by ptc in 30 iterations
 ```
+
+% invisible-code-block: python
+%     assert bool(root.converged) and root.method == "ptc" and root.iterations == 30
 
 Use `steady_state()` for sweeps and gradients, and `run_to_steady_state()` when
 you also want the path to steady state (`ss.solution`). `root.method` says how
@@ -237,8 +249,11 @@ dyn_sol = dyn.solve(t_span=(7.0, 14.0), t_eval=jnp.linspace(7.0, 14.0, 673),
 
 ev = evaluate_bsm1(dyn, dyn_sol)
 print(f"EQI = {ev.eqi:.0f} kg/d   OCI = {ev.oci:.0f}")
-# EQI = 5051 kg/d   OCI = 14454
+# EQI = 5044 kg/d   OCI = 14409
 ```
+
+% invisible-code-block: python
+%     assert (round(float(ev.eqi)), round(float(ev.oci))) == (5044, 14409)
 
 `print(ev)` gives the full breakdown. `evaluate_bsm2(plant, sol, params)` does
 the same for BSM2 and also reports the sludge-train flows (methane production,
@@ -264,8 +279,11 @@ integrator, which compiles and runs several times faster:
 fast = dyn.solve(t_span=(7.0, 14.0), t_eval=jnp.linspace(7.0, 14.0, 673),
                  y0=first_week.state[-1], forward_fast=True)
 print(f"EQI = {evaluate_bsm1(dyn, fast).eqi:.0f} kg/d")
-# EQI = 5051 kg/d
+# EQI = 5044 kg/d
 ```
+
+% invisible-code-block: python
+%     assert round(float(evaluate_bsm1(dyn, fast).eqi)) == 5044
 
 `forward_fast=True` needs concrete `params` and `y0` (not traced values), and
 its result is **not differentiable**. It honours only `rtol`, `atol` and
@@ -280,7 +298,8 @@ Two other settings tune the ordinary solve, through
 - `colored_jacobian` controls whether the Jacobian of each implicit step is
   built sparsely by graph colouring, which pays on large plants. The default
   `"auto"` uses it for the reverse-mode gradient of a plant with many states
-  (BSM2 yes, BSM1 no; `plant.colored_jacobian_decision()` reports the choice);
+  (BSM2 and BSM1 yes, BSM1 with `use_takacs=False` no;
+  `plant.colored_jacobian_decision()` reports the choice);
   `True` forces it on, `False` off.
 
 The other integrator settings are described in
@@ -408,17 +427,19 @@ across models. The imbalance is computed independently, so it is a real check:
 mb = dyn.mass_balance(dyn_sol)
 print(mb.summary())
 print(mb.closed(rtol=1e-2), round(mb["N"].relative_imbalance, 4))
-# True 0.0008
+# True 0.0007
 ```
+
+% invisible-code-block: python
+%     assert mb.closed(rtol=1e-2) and round(mb["N"].relative_imbalance, 4) == 0.0007
 
 The gas terms are integrated over the saved points, so save them finely enough
 to resolve the dynamics (the 15-minute output above is ample).
 
 One closure is approximate however finely you save: a `TakacsClarifier` with
-`composition_mode="lumped_tss"` (the BSM2 default, and BSM1's with
-`use_takacs=True`) tracks only the total solids in each layer, so it values the
-nitrogen and phosphorus held in its sludge blanket at the model's default
-solids composition. COD is exact. While the blanket is filling or emptying,
+`composition_mode="lumped_tss"` (the default of both BSM plants) tracks only
+the total solids in each layer, so it values the nitrogen and phosphorus held in
+its sludge blanket at the model's default solids composition. COD is exact. While the blanket is filling or emptying,
 nitrogen misses by about 0.2% (on BSM1 over days 1 to 3 from the warm start);
 at steady state it closes. The balance then lists the reason in
 `mb["N"].notes` and `mb["P"].notes`, and `summary()` prints it. Use

@@ -597,3 +597,117 @@ def test_a_new_sbr_is_drawn_with_an_empty_table_and_no_settling_model(ui_catalog
     assert not any(k.startswith("settling.") and k != "settling.kind" for k in rows)
     _, settings = forms.read_rows(doc, "s", forms.rows_for(doc, "s", _info))
     assert "phases" not in settings and "settling" not in settings
+
+
+# -- the expression controller and the signal-driven modes ---------------------
+
+
+@pytest.fixture
+def controllers(ui_catalog):
+    """A tank aerated from a signal and an expression controller publishing it."""
+    units = {
+        "tank": {
+            "kind": "cstr",
+            "model": "asm1",
+            "volume": 1000.0,
+            "conditions": {"T": 293.15},
+            "aeration": {"kla_signal": "kla"},
+        },
+        "loop": {
+            "kind": "expression_controller",
+            "model": "asm1",
+            "signal_name": "kla",
+            "law": "clip(offset + Kp*([SNH] - sp), 0, 240)",
+            "constants": {"Kp": 40.0, "sp": 1.0, "offset": 120.0},
+        },
+        "dose": {"kind": "dosing", "flow_signal": "q"},
+    }
+    return Flowsheet.from_spec(ui_catalog, {"format": 2, "name": "p", "units": units})
+
+
+def test_a_law_is_a_text_field_and_its_constants_named_number_rows(controllers):
+    rows = _rows(controllers, "loop")
+    assert rows["law"]["widget"] == "text"
+    assert rows["law"]["value"] == "clip(offset + Kp*([SNH] - sp), 0, 240)"
+    assert rows["constants"]["widget"] == "named"
+    assert rows["constants"]["value"] == [
+        {"name": "Kp", "value": "40"},
+        {"name": "sp", "value": "1"},
+        {"name": "offset", "value": "120"},
+    ]
+    assert rows["signal_name"]["label"] == "signal_name *"
+
+
+def test_constants_edited_in_the_form_build_that_controller(controllers):
+    from aquakin.plant.catalog import build_unit
+
+    rows = forms.rows_for(controllers, "loop", _info)
+    for r in rows:
+        if r["key"] == "constants":
+            r["value"] = [
+                {"name": "Kp", "value": "20"},
+                {"name": "", "value": ""},  # an added row left blank is no entry
+                {"name": "sp", "value": "2.5"},
+            ]
+        if r["key"] == "law":
+            r["value"] = "Kp*([SNH] - sp)"
+    _, settings = forms.read_rows(controllers, "loop", rows)
+    assert settings["constants"] == {"Kp": 20.0, "sp": 2.5}
+    unit = build_unit("expression_controller", "loop", settings)
+    assert unit.constants == {"Kp": 20.0, "sp": 2.5} and unit.law == "Kp*([SNH] - sp)"
+
+
+def test_constants_all_left_blank_read_back_unset(controllers):
+    rows = forms.rows_for(controllers, "loop", _info)
+    rows = [{**r, "value": [{"name": "", "value": ""}]} if r["key"] == "constants" else r for r in rows]
+    _, settings = forms.read_rows(controllers, "loop", rows)
+    assert "constants" not in settings
+
+
+@pytest.mark.parametrize(
+    ("entries", "message"),
+    [
+        ([{"name": "", "value": "3"}], "constants: give the name of the value 3"),
+        ([{"name": "Kp", "value": ""}], "constants: give Kp a value"),
+        ([{"name": "Kp", "value": "1"}, {"name": "Kp", "value": "2"}], "Kp is listed twice"),
+        ([{"name": "Kp", "value": "big"}], "'big' is not a number"),
+    ],
+)
+def test_an_unreadable_constant_is_named(controllers, entries, message):
+    rows = forms.rows_for(controllers, "loop", _info)
+    rows = [{**r, "value": entries} if r["key"] == "constants" else r for r in rows]
+    with pytest.raises(forms.FieldError, match=message):
+        forms.read_rows(controllers, "loop", rows)
+
+
+def test_the_measured_port_exists_only_with_a_model(ui_catalog, controllers):
+    assert ui_catalog.ports_for("expression_controller", {"model": "asm1"}) == (["measured"], [])
+    assert ui_catalog.ports_for("expression_controller", {}) == ([], [])
+    assert _rows(controllers, "loop")["model"]["widget"] == "select"
+
+
+def test_an_aeration_read_from_a_signal_is_its_name(controllers):
+    rows = _rows(controllers, "tank")
+    assert rows["aeration.mode"]["value"] == "kla_signal"
+    assert "kla_signal" in rows["aeration.mode"]["items"]
+    assert rows["aeration.value"]["value"] == "kla" and rows["aeration.value"]["suffix"] == ""
+    rows["aeration.value"]["value"] = "kla_tank3"
+    _, settings = forms.read_rows(controllers, "tank", list(rows.values()))
+    assert settings["aeration"]["kla_signal"] == "kla_tank3"
+    rows["aeration.value"]["value"] = " "
+    with pytest.raises(forms.FieldError, match="give the name of the signal that sets the kLa"):
+        forms.read_rows(controllers, "tank", list(rows.values()))
+
+
+def test_switching_to_a_signal_mode_leaves_its_name_to_fill_in(bsm1):
+    rows = forms.rows_for(bsm1, "tank3", _info)  # kLa 240
+    next(r for r in rows if r["key"] == "aeration.mode")["value"] = "kla_signal"
+    _, settings = forms.read_rows(bsm1, "tank3", rows)
+    assert settings["aeration"]["kla_signal"] == "" and "kla" not in settings["aeration"]
+
+
+def test_a_dose_read_from_a_signal_is_a_text_field(controllers):
+    rows = _rows(controllers, "dose")
+    assert rows["flow_signal"]["widget"] == "text" and rows["flow_signal"]["value"] == "q"
+    _, settings = forms.read_rows(controllers, "dose", list(rows.values()))
+    assert settings["flow_signal"] == "q" and "flow" not in settings

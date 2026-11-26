@@ -138,12 +138,12 @@ plant.add_influent("feed", model.influent(
 
 ss = plant.run_to_steady_state()     # integrate until the plant settles
 eff = plant.stream(ss.solution, "effluent")
-eff.final_named(["SNH", "SNO"])      # {'SNH': 0.46, 'SNO': 11.6} g N/m³
+eff.final_named(["SNH", "SNO"])      # {'SNH': 0.47, 'SNO': 11.6} g N/m³
 ```
 
 <!-- invisible-code-block: python
 effluent = eff.final_named(["SNH", "SNO"])
-assert round(effluent["SNH"], 2) == 0.46 and round(effluent["SNO"], 1) == 11.6
+assert round(effluent["SNH"], 2) == 0.47 and round(effluent["SNO"], 1) == 11.6
 -->
 
 From there you can:

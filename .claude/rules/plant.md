@@ -54,18 +54,16 @@ respect to one parameter; do not hand-compute block offsets.
 The `Unit` Protocol's docstring is the contract (methods, state names, the
 optional hooks); these are the invariants around it.
 
-- **Every unit has the same fixed signature for each method.** The plant never
-  branches its call on a per-unit capability flag: `signals` reaches every
-  `rhs` and `compute_outputs`, a `FlowContext` reaches every `flow_outputs`, and
-  a unit ignores what it does not use.
+- **Every unit has the same fixed signature for each method.** The plant never branches its call
+  on a capability flag: `signals` reaches every `rhs`, `compute_outputs` and `signal_outputs`, a
+  `FlowContext` every `flow_outputs`; a unit ignores what it does not use.
 - **A new optional capability is a named `runtime_checkable` Protocol in
   `plant/units.py`, detected with `isinstance`** (as `SignalProducer`,
   `LiquidVolumeUnit`, `TemperatureSettable`, `ReactionBalanceUnit`,
   `OxygenTransferUnit`, ...), and is listed in the `Unit` docstring. Only hooks read as values with a default
   (`signal_names`, `required_signals`, `flow_param_defaults`, a translator's
   `needs_src_pH` / `needs_dest_pH`) stay plain look-ups.
-- **A stateless unit inherits `StatelessUnit`** rather than writing the
-  zero-size state members again.
+- **A stateless unit inherits `StatelessUnit`** rather than writing the zero-size state members.
 - **`state_names()` is unique within the unit, and stored results key states by
   it**, never by position; a heat-balance temperature is the unit's `"T"` entry.
 
@@ -143,18 +141,15 @@ optional hooks); these are the invariants around it.
 
 ### Reading results back
 
-- **Discover names with the introspection API** (`plant.list_units()`,
-  `list_ports()`, `list_species()`, `list_streams()`), which works before a
-  solve and gives a "did you mean?" `KeyError`, rather than reading the builder
-  source.
+- **Discover names with the introspection API** (`plant.list_units()`, `list_ports()`,
+  `list_species()`, `list_streams()`; before a solve, with a "did you mean?"), not the builder.
 - **Species-indexed access is limited to units whose state leads with a
   concentration vector**, decided in one place, `Plant._is_concentration_unit`
   (state size equal to the model's species count, or a `LiquidVolumeUnit`).
   Other units (stateless units, the layered Takács settler) are read as streams,
   with an error that says so, never an `IndexError`.
-- **`plant.activated_sludge_reactors()` is the one definition of "the AS
-  reactors"** behind the warm-start, design-sizing and evaluation heuristics;
-  do not write another.
+- **`plant.activated_sludge_reactors()` is the one definition of "the AS reactors"** (warm
+  start, sizing, evaluation); do not write another.
 - **Streams are recomputed from saved states, never stored in the solution.**
   `plant.stream`, `plant.outputs_at`, `plant.derivative` and the RHS all go
   through the one `_resolve_streams`, so a reconstruction matches the integrated
@@ -185,16 +180,21 @@ them); the topic rules above cover IFAS / MBBR and the settlers. Deliberate:
 
 **Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and `plant/measures.py`
 call `aquakin.core.lexer.tokenize`; do not write another tokenizer (`core.md`, not auto-loaded).
+A language that compiles to a callable subclasses `time_expr.ClosureParser` (the control law does).
 
-**Flow setpoints are built by `flow_setpoint.build_setpoints` and read with
-`resolve(flow_params, t)`** in `flow_outputs` (`ctx.t`) and `compute_outputs`
-alike, so a number stays a parameter and an expression of time is clipped to its
-range in one place; any expression disables the cached recycle maps (`plant-solve.md`).
+**The signal bus (`plant/signal_bus.py`).** Producers run in `order_signal_producers` order (each
+after the producers whose `signal_names` it lists in `required_signals`; a cycle is a build error)
+and get the bus so far as `signal_outputs(..., signals)`. A unit whose reads need the published
+names to be checked implements `SignalCheckedUnit`; a unit that reads a user-named signal takes
+the name as a setting (`Aeration(kla_signal=)`, `DosingUnit(flow_signal=)`) and lists it in
+`required_signals`.
 
-**Units in the help.** A setting's numpydoc entry names its unit in parentheses,
-flows and times per day on the plant's clock (`Volume (m³).`, `Fixed dose flow
-(m³/d).`), shown beside the field in the editor. Give each setting its own entry
-(a shared `Kp, Ti, Tt : float` cannot name one unit each).
+**Flow setpoints are built by `flow_setpoint.build_setpoints` and read with `resolve(flow_params,
+t)`** in `flow_outputs` and `compute_outputs` alike (one clip of an expression to its range); any
+expression disables the cached recycle maps (`plant-solve.md`).
+
+**Units in the help.** A setting's numpydoc entry names its unit in parentheses, per day on the
+plant's clock (`Fixed dose flow (m³/d).`), shown in the editor; one entry per setting.
 
 **Kinetic units share one reaction term (`plant/kinetic.py`).** Every unit that
 evaluates a model in its `rhs` inherits `KineticUnit` and builds its reaction
@@ -214,8 +214,7 @@ slaves `V_liq`). A unit whose temperature an operator sets inherits
 unit: the SBR runs at its static `T`, and IFAS evaluates its reaction per
 compartment inside the biofilm RHS (which also calls `model.dCdt`).
 
-**Sizes are checked at construction.** Every unit with a volume, area or other
-size calls `_constants.check_positive(name, "volume", value)` first in
+**Sizes are checked at construction**: `_constants.check_positive(name, "volume", value)` first in
 `__post_init__` (a zero, negative or infinite volume makes a steady state never end).
 
 **Co-stripped gases (`Aeration(stripped=...)`).** A gas stripped with oxygen

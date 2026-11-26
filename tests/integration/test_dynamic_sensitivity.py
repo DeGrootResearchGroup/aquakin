@@ -37,7 +37,9 @@ def _bsm1():
     infl = asm1.influent({"SS": 60., "SNH": 25., "XS": 200., "XB_H": 50.,
                           "SI": 30., "XI": 25., "SND": 6., "XND": 10.,
                           "SALK": 7.}, Q=18446.0)
-    p = build_bsm1()
+    # The ideal clarifier: these tests compare differentiation routes, whose
+    # tolerances were set on this plant, and the smaller state keeps them light.
+    p = build_bsm1(use_takacs=False)
     p.add_influent("feed", infl)
     return p, asm1, bsm1_warm_start(p)
 
@@ -221,7 +223,7 @@ def test_solve_sensitivity_operating_influent_matches_fd():
         c[:, asm1.species_index["SNH"]] *= snh
         i2 = InfluentSeries(t=infl.t, Q=infl.Q * q, C=jnp.asarray(c),
                             model=asm1, T=infl.T)
-        p2 = build_bsm1()
+        p2 = build_bsm1(use_takacs=False)          # the plant _bsm1() builds
         p2.add_influent("feed", i2)
         return float(p2.solve(
             (0.0, T), t_eval=te, params=base, y0=y0,

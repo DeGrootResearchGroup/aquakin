@@ -73,13 +73,17 @@ def make_cstr_plant(simple_model):
     Small enough to compile and solve in seconds, with a closed-form solution
     (``dA/dt = 0.1 (1 - A) - k A``) and a two-state Jacobian whose only
     off-diagonal entry is the A -> B coupling ``k``.
+
+    ``make(aeration=...)`` gives the tank an :class:`~aquakin.plant.Aeration`
+    (on species ``A``, the model having no oxygen), for a plant whose tank is
+    actuated through the signal bus.
     """
     import jax.numpy as jnp
 
     from aquakin.plant import CSTRUnit, Plant
     from aquakin.plant.influent import InfluentSeries
 
-    def make():
+    def make(aeration=None):
         plant = Plant("single_cstr", time_unit="s")
         plant.add_unit(
             CSTRUnit(
@@ -88,6 +92,7 @@ def make_cstr_plant(simple_model):
                 volume=100.0,
                 input_port_names=["inlet"],
                 conditions={"T": 293.15},
+                aeration=aeration,
             )
         )
         influent = InfluentSeries(

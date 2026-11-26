@@ -39,7 +39,7 @@ from typing import Any
 import yaml
 
 from aquakin.plant.clarifier import IdealClarifier
-from aquakin.plant.control import PIController
+from aquakin.plant.control import ExpressionController, PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.delay import HydraulicDelayUnit
 from aquakin.plant.digester import ADM1DigesterUnit
@@ -138,7 +138,8 @@ class PortRule:
         The port names of a ``"fixed"`` rule.
     when : dict, optional
         ``{"setting": name, "values": [...]}``: the rule gives ports only while
-        that setting holds one of those values (see :func:`applies`).
+        that setting holds one of those values; without ``values``, while the
+        setting is set (see :func:`applies`).
     """
 
     side: str
@@ -176,8 +177,13 @@ class PortRule:
 def applies(when: dict | None, settings: dict) -> bool:
     """Whether a setting or port rule with condition ``when`` applies to a unit
     with ``settings``: always without a condition, else while the named setting
-    holds one of the listed values."""
-    return when is None or settings.get(when["setting"]) in when["values"]
+    holds one of the listed ``values``, or, when the condition lists none, while
+    the setting is set (an expression controller's ``measured`` port, with a
+    ``model``)."""
+    if when is None:
+        return True
+    value = settings.get(when["setting"])
+    return value is not None if "values" not in when else value in when["values"]
 
 
 @dataclass(frozen=True)
@@ -907,11 +913,18 @@ def _build_kinds() -> dict[str, UnitKind]:
             "Chemical dosing",
             "treatment",
             DosingUnit,
-            exactly_one_of=[("flow", "setpoint")],
+            exactly_one_of=[("flow", "setpoint", "flow_signal")],
         ),
         _kind("uv", "UV disinfection", "treatment", UVUnit),
         _kind("chlorine_contact", "Chlorine contact tank", "treatment", ChlorineContactUnit),
         _kind("pi_controller", "PI controller", "control", PIController),
+        _kind(
+            "expression_controller",
+            "Expression controller",
+            "control",
+            ExpressionController,
+            fixed=(PortRule("input", "fixed", names=("measured",), when={"setting": "model"}),),
+        ),
     ]
     return {k.kind: k for k in kinds}
 

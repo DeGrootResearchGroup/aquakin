@@ -635,9 +635,11 @@ def bsm1_colored_backward():
     One gradient of the 2-vector gives both partials from one dense and one
     colored solve; each component is the gradient a scalar-parameter test would
     take. Returns the plant, the colored adjoint builder as it stands after the
-    colored gradient, and the two gradients (index 0: muH, index 1: RAS)."""
+    colored gradient, and the two gradients (index 0: muH, index 1: RAS). Built
+    on the ideal clarifier: both solves are forced (``colored_jacobian`` True and
+    False), so the settler adds only cost."""
     asm1 = aquakin.load_model("asm1")
-    plant = build_bsm1(asm1)
+    plant = build_bsm1(asm1, use_takacs=False)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     y0 = bsm1_warm_start(plant)
     base = plant.default_parameters()
@@ -689,18 +691,25 @@ def test_stable_adjoint_colored_jacobian_matches_dense(bsm1_colored_backward):
 
 def test_stable_adjoint_colored_jacobian_auto_decision_size_gated():
     """``colored_jacobian="auto"`` (the default) decides by plant SIZE: the colored
-    backward is enabled iff ``n_states >= _COLORED_BACKWARD_MIN_STATES``. BSM1 is
-    below the threshold, so "auto" deterministically chooses dense. The decision is a
+    backward is enabled iff ``n_states >= _COLORED_BACKWARD_MIN_STATES``. BSM1 with
+    its ideal clarifier is below the threshold, so "auto" deterministically chooses
+    dense; the default BSM1, whose layered settler adds its layer states, is above
+    it and chooses colored. The decision is a
     pure structural property -- no wall-clock measurement and no concrete probe solve
     -- so it is available immediately, before any solve. (That the colored gradient
     equals the dense one is test_stable_adjoint_colored_jacobian_matches_dense; that
     the solve follows the gate is test_auto_colored_backward_is_size_gated.)"""
     asm1 = aquakin.load_model("asm1")
-    plant = build_bsm1(asm1)
+    plant = build_bsm1(asm1, use_takacs=False)
     plant.add_influent("influent", load_bsm1_influent("dry", asm1))
     choice, n = plant.colored_jacobian_decision()
-    assert n < plant._COLORED_BACKWARD_MIN_STATES        # BSM1 is below the gate
+    assert n < plant._COLORED_BACKWARD_MIN_STATES        # ideal-clarifier BSM1: below
     assert choice == "dense"
+    default = build_bsm1(asm1)
+    default.add_influent("influent", load_bsm1_influent("dry", asm1))
+    choice, n = default.colored_jacobian_decision()
+    assert n >= default._COLORED_BACKWARD_MIN_STATES     # Takács BSM1: above the gate
+    assert choice == "colored"
 
 
 @pytest.mark.slow

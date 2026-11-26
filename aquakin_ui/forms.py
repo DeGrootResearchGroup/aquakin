@@ -16,7 +16,7 @@ import re
 from aquakin_ui.catalog import applies
 from aquakin_ui.document import Flowsheet
 
-AERATION_MODES = ("none", "kla", "do_setpoint")
+AERATION_MODES = ("none", "kla", "do_setpoint", "kla_signal")
 _READ_ONLY = ("unsupported",)
 
 
@@ -130,11 +130,13 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
     -------
     list of dict
         One row per field: ``key``, ``label``, ``widget`` (``text``,
-        ``select``, ``multi``, ``readonly``, ``composition``, ``records``),
+        ``select``, ``multi``, ``readonly``, ``composition``, ``named``,
+        ``records``),
         ``value``, ``items``, ``hint``, ``placeholder``, ``suffix``; ``reshape``
         marks a choice that changes which rows the form has. A ``composition``
         row's value is a list of ``{species, value}`` entries, its ``items`` the
         species to choose from and its ``units`` each species' unit. A
+        ``named`` row (a ``number_map``) is a list of ``{name, value}`` entries. A
         ``records`` row's value is a list of records, one mapping of field to
         shown value each; its ``fields`` describe them, ``blank`` is a new
         record and ``item`` names one (``phase``).
@@ -215,6 +217,9 @@ def rows_for(doc: Flowsheet, uid: str, model_info) -> list[dict]:
             rows.append(_records_row(s, value or [], clock))
         elif t == "tagged":
             rows += _tagged_rows(s, value or {}, clock)
+        elif t == "number_map":
+            entries = [{"name": k, "value": _text(v)} for k, v in (value or {}).items()]
+            rows.append(_row(key, label, "named", entries, **common))
         elif t == "unsupported":
             rows.append(
                 _row(
@@ -250,7 +255,7 @@ def _aeration_rows(s: dict, value, info, clock: str) -> list[dict]:
     if mode != "none" and value:  # a mode other than none is read from value
         oxygen = value.get("species") or _oxygen(species) or ""
         units = {sp["name"]: sp.get("unit", "") for sp in info["species"]} if info else {}
-        suffix = f"1/{clock}" if mode == "kla" else units.get(oxygen, "")
+        suffix = {"kla": f"1/{clock}", "kla_signal": ""}.get(mode, units.get(oxygen, ""))
         rows.append(
             _row("aeration.value", mode, value=_text(value[mode]), hint=s["help"], suffix=suffix)
         )
@@ -602,7 +607,7 @@ def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, 
                 # a switch of mode it holds the other mode's number, so it is not read.
                 shown = next((m for m in AERATION_MODES[1:] if old.get(m) is not None), "none")
                 raw = str(values.get("aeration.value", "")).strip() if mode == shown else ""
-                value = _field("aeration.value", _finite, raw) if raw else (old.get(mode) or 0.0)
+                value = _aeration_value(mode, raw, old, switched=mode != shown)
                 kept = {k: v for k, v in old.items() if k not in AERATION_MODES[1:]}
                 if str(values.get("aeration.species") or "").strip():
                     kept["species"] = values["aeration.species"]
@@ -621,6 +626,10 @@ def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, 
             tagged = _read_tagged(s, values)
             if tagged is not None:
                 settings[name] = tagged
+        elif t == "number_map":
+            named = _field(name, _named_numbers, values.get(name) or [])
+            if named:
+                settings[name] = named
         elif t in _READ_ONLY:
             if name in u.settings:
                 settings[name] = u.settings[name]
@@ -638,6 +647,17 @@ def _read_rows(doc: Flowsheet, uid: str, rows: list[dict]) -> tuple[str | None, 
     return label, settings
 
 
+def _aeration_value(mode: str, raw: str, old: dict, *, switched: bool):
+    """An aeration mode's value from its field: a number (empty keeps the
+    unit's, or 0), or for ``kla_signal`` a signal's name, which may be empty
+    only just after switching to that mode (the form then asks for it)."""
+    if mode != "kla_signal":
+        return _field("aeration.value", _finite, raw) if raw else (old.get(mode) or 0.0)
+    if raw or switched:
+        return raw or old.get(mode) or ""
+    raise FieldError("aeration.value", "give the name of the signal that sets the kLa")
+
+
 def _composition(entries: list[dict], species: list[str]) -> dict[str, float]:
     """A composition's entries (``{species, value}``, as the form holds them) as
     a mapping of species to a finite number; a wholly empty entry is skipped.
@@ -646,12 +666,7 @@ def _composition(entries: list[dict], species: list[str]) -> dict[str, float]:
     described: then no name is refused here, and aquakin's check reports one).
     """
     out: dict[str, float] = {}
-    for entry in entries:
-        name = str(entry.get("species") or "").strip()
-        raw = entry.get("value")
-        text = "" if raw is None else str(raw).strip()
-        if not name and not text:
-            continue
+    for name, text in _pairs(entries, "species"):
         if not name:
             raise ValueError(f"choose the species {text} is the concentration of")
         if species and name not in species:
@@ -661,6 +676,33 @@ def _composition(entries: list[dict], species: list[str]) -> dict[str, float]:
         if not text:
             raise ValueError(f"give {name} a concentration")
         out[name] = _finite(text)
+    return out
+
+
+def _named_numbers(entries: list[dict]) -> dict[str, float]:
+    """A ``number_map``'s entries (``{name, value}``, as the form holds them) as
+    a mapping of name to a finite number; a wholly empty entry is skipped."""
+    out: dict[str, float] = {}
+    for name, text in _pairs(entries, "name"):
+        if not name:
+            raise ValueError(f"give the name of the value {text}")
+        if name in out:
+            raise ValueError(f"{name} is listed twice")
+        if not text:
+            raise ValueError(f"give {name} a value")
+        out[name] = _finite(text)
+    return out
+
+
+def _pairs(entries: list[dict], key: str) -> list[tuple[str, str]]:
+    """Each entry's ``key`` and ``value`` as stripped text, wholly empty entries left out."""
+    out = []
+    for entry in entries:
+        name = str(entry.get(key) or "").strip()
+        raw = entry.get("value")
+        text = "" if raw is None else str(raw).strip()
+        if name or text:
+            out.append((name, text))
     return out
 
 
