@@ -1,8 +1,12 @@
 # Calibration
 
-Fit a model's parameters to measured data, check how well the data determine
-them, and compare model structures. Reactor fits are on this page; a whole
-plant is fitted the same way ([Calibrating a plant](plant_calibration.md)).
+Fit a model's parameters to measured data. Reactor fits are on this page; a
+whole plant is fitted the same way ([Calibrating a plant](plant_calibration.md)).
+How well the data determine the fitted values, and which model structure they
+support, is in [Uncertainty and model comparison](fit_uncertainty.md). The
+statistical terms used here (likelihood, prior, posterior, MAP, Laplace
+approximation) are explained in
+[Key ideas](analysis_concepts.md#fitting-likelihood-posterior-and-the-laplace-approximation).
 
 The calibration examples share the setup of
 [Sensitivity analysis](sensitivity_and_calibration.md#the-examples-on-this-page):
@@ -40,8 +44,8 @@ Two entry points fit a model to observations:
 
 - `aquakin.fit`: a point estimate by box-constrained least squares.
 - `aquakin.calibrate`: a maximum a posteriori (MAP) fit with parameter
-  transforms, priors, deterministic multistart and a Laplace posterior for the
-  uncertainty (`laplace=True` by default).
+  transforms, [priors](#priors), deterministic multistart and a Laplace
+  posterior for the uncertainty (`laplace=True` by default).
 
 ```python
 result = aquakin.calibrate(
@@ -56,9 +60,11 @@ result.converged          # True
 ```
 
 `observations` has shape `(n_t,)` for one observed output or `(n_t,
-n_observed)` for several. `t_obs` is in the model's time unit unless you pass
-`time_unit=`. Pass **lists** of `C0`, `observations` and `t_obs` for a joint fit
-of several batches.
+n_observed)` for several, its columns in the order of `observed_species`.
+`t_obs` is in the model's time unit unless you pass `time_unit=`. Pass
+**lists** of `C0`, `observations` and `t_obs` for a joint fit of several
+batches. `result.converged` is not checked for you: see
+[When a fit does not converge](#when-a-fit-does-not-converge).
 
 ### Loss and measurement noise
 
@@ -93,10 +99,102 @@ result_est.sigma_estimate     # (2,) estimated noise std of each observed output
 result_est.params_named_std   # Laplace std at the estimated noise level
 ```
 
-This is the concentrated likelihood: the noise std of each output is replaced
-by its best estimate, the RMS residual over its observed entries (pooled over
-the datasets of a multi-batch fit). It takes one fit, in place of fitting with
-`"mse"` and refitting with `sigma` set to the residual RMS.
+This is the
+[concentrated likelihood](analysis_concepts.md#fitting-likelihood-posterior-and-the-laplace-approximation):
+the noise std of each output is replaced by the RMS residual over its observed
+entries (pooled over the datasets of a multi-batch fit). It takes one fit, in
+place of fitting with `"mse"` and refitting with `sigma` set to the residual
+RMS.
+
+### Using your own measurements
+
+Measured data usually arrive as a table: one row per sample time, one column
+per measured quantity, in the laboratory's units, with gaps where a sample was
+lost. The block below writes such a file from the synthetic data, so that the
+page runs; with your own data, start from the `np.genfromtxt` line.
+
+```python
+# A stand-in for a laboratory file: minutes, mmol/L, one lost bromate sample.
+with open("batch_1.csv", "w") as f:
+    f.write("time_min,O3_mmol,BrO3_mmol\n")
+    for k, (t, (o3, bro3)) in enumerate(zip(t_obs / 60.0, 1e3 * observations)):
+        f.write(f"{t:.1f},{o3:.6f},{'' if k == 4 else f'{bro3:.8f}'}\n")
+
+data = np.genfromtxt("batch_1.csv", delimiter=",", names=True)   # an empty cell is NaN
+t_lab = data["time_min"]                                         # minutes
+obs_lab = np.column_stack([data["O3_mmol"], data["BrO3_mmol"]])  # the order of observed
+
+C0_lab = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-6})     # measured at t = 0, mol/L
+reactor_lab = aquakin.BatchReactor(                              # the batch's conditions
+    model, aquakin.OperatingConditions(pH=7.5, OH_scavenging=5.0e4))
+fit_lab = aquakin.calibrate(
+    reactor_lab, C0_lab, obs_lab, t_lab, free_params,
+    observed_species=["O3", "BrO3-"],           # one per column, in column order
+    observation_units={"O3": "mmol/L", "BrO3-": "mmol/L"},
+    time_unit="min", loss="nll", sigma="estimate",
+)
+fit_lab.n_observations    # 23: the lost sample is left out
+```
+
+% invisible-code-block: python
+%     assert fit_lab.n_observations == 23
+%     assert fit_lab.converged
+
+- **Columns** follow `observed_species`, whatever the file calls them. A
+  quantity that is not one species is an `observation_fn`
+  ([What you observe](#what-you-observe)).
+- **Times** may be in any unit `time_unit=` names (`"s"`, `"min"`, `"h"`,
+  `"d"`); they are converted to the model's unit before the solve.
+- **A missing sample** is a `NaN`, which `np.genfromtxt` gives for an empty
+  cell; it is left out of the fit.
+- **Units** of the measurements go in `observation_units=`
+  ([What you observe](#what-you-observe)).
+- **Initial values** are what you measured at the start, set by name with
+  `model.concentrations({...})`; species you do not name keep the model's
+  defaults. An initial pool you did not measure can be
+  [fitted](#fitting-initial-pools).
+- **Conditions** (pH, temperature, scavenging, ...) are those of the batch,
+  given to its reactor ([Reactors](reactors.md)). A joint fit of several
+  batches shares one reactor, so it suits batches that differ only in their
+  initial state.
+
+With pandas installed (the `dataframe` extra),
+`pd.read_csv("batch_1.csv")[["O3_mmol", "BrO3_mmol"]].to_numpy()` reads the same
+array; an empty cell is again `NaN`.
+
+### Priors
+
+A prior is a Gaussian belief about a parameter, `(mean, std)` in physical
+units, added to the objective as `0.5 * ((p - mean) / std) ** 2`. Pass priors
+by name with `priors=`; only free parameters use them:
+
+```python
+result_prior = aquakin.calibrate(reactor, C0, observations, t_obs, free_params,
+                                 observed_species=observed, loss="nll", sigma=sigma,
+                                 priors={"O3_Br_direct.k1": (160.0, 40.0)})
+result_prior.priors_applied     # {'O3_Br_direct.k1': (160.0, 40.0)}
+```
+
+% invisible-code-block: python
+%     assert result_prior.priors_applied == {"O3_Br_direct.k1": (160.0, 40.0)}
+
+A model can also declare priors on its parameters with a `prior:` block
+([Model file format](model_format.md#bounds-transforms-and-priors)); the
+shipped `asm1`, `adm1` and `wats_*` models do. **These are applied by
+default** (`use_priors=True`) to every free parameter that declares one, so a
+fit of those models is pulled toward the literature values unless you say
+otherwise. An entry in `priors=` replaces the declared prior of that
+parameter, and `use_priors=False` ignores the declared ones. Check
+`result.priors_applied` to see which priors a fit used. A fitted initial pool
+takes a prior in log space with `FreeICConfig(prior_log_std=)`.
+
+A prior is weighed against the data term, so use it with `loss="nll"` and a
+`sigma`: the objective is then a log posterior. With `"mse"` the data term is
+in the square of the data's units (about 1e-12 for concentrations in mol/L),
+so the same prior can swamp the data or count for nothing depending on the
+units the data happen to be in. A fit that carries a prior is not a
+maximum-likelihood fit, which matters when
+[comparing model structures](fit_uncertainty.md#comparing-model-structures).
 
 ### Parameter transforms, bounds and starting values
 
@@ -228,9 +326,9 @@ fitted pools held at their best values. When a rate constant and a pool trade
 off against each other (for example `k` and `[X]0` when only their product
 shapes the data), that understates the rate uncertainty. Ask for the joint
 covariance instead. Here the rates are also fitted in log space, so that every
-coordinate of the joint covariance is relative and the
-[identifiability report](#identifiability-report) below compares like with
-like:
+coordinate of the joint covariance is relative and an
+[identifiability report](fit_uncertainty.md#identifiability-report) of it
+compares like with like:
 
 ```python
 joint = aquakin.calibrate(
@@ -242,14 +340,15 @@ joint = aquakin.calibrate(
 )
 joint.joint_names        # ['O3_Br_direct.k1', 'O3_decay_OH.k_dec', 'ic[0].Br-']
 joint.joint_cov          # rates and log-space pools, in the fit's coordinates
-joint.joint_hessian      # with loss="nll" and gauss_newton: the Fisher information
+joint.joint_hessian      # the Hessian it inverts
 joint.params_named_std   # rate std devs, now marginal over the pools
 joint.ic_named_std       # [{'Br-': ...}] pool std devs in mol/L, per dataset
 ```
 
 Strong correlation between a rate and a pool in `joint_cov` is a sign that the
-experiment cannot separate them; the [identifiability report](#identifiability-report)
-says which combination the data do determine.
+experiment cannot separate them; the
+[identifiability report](fit_uncertainty.md#identifiability-report) says which
+combination the data do determine.
 
 When the total of some pools is known and only its split is uncertain (a
 measured total COD divided between readily and slowly biodegradable substrate,
@@ -299,224 +398,35 @@ Anything in the model's parameter vector can be fitted, and is also reached by
   Its coefficients are written as ordinary model parameters in the rate
   expression, so they are fitted and differentiated like any other.
 
-## How certain is the fit?
+## When a fit does not converge
 
-### The Laplace posterior
+`calibrate` does not warn when the optimizer stops without converging: check
+`result.converged` before using a fit. When it is `False`:
 
-With `laplace=True` (the default), `calibrate` approximates the posterior by a
-Gaussian at the optimum. `result.params_named_std` holds the marginal
-standard deviations and `result.posterior_cov` the covariance. Read them as
-uncertainties only with `loss="nll"` and a calibrated `sigma` (or
-`sigma="estimate"`): with `"mse"` or `"wmse"` they have the right shape but
-not the right scale. `LaplaceConfig(method="gauss_newton")` forms the Hessian
-from the residual Jacobian, which with `loss="nll"` is the Fisher information.
-
-A parameter that ends on a bound, its own or one of its initial pools
-(`"ic[k].<species>"`), is listed in `result.at_bound` (for example
-`{"O3_Br_direct.k1": "lower"}`), with a warning. The Laplace approximation is
-not valid on an active bound, so its standard deviation is `nan`, it has zero
-variance in `posterior_cov` (posterior draws keep it on the bound), and the
-other parameters' standard deviations are conditional on it staying there.
-`aquakin.identifiability(result)` carries the same flag. A
-[profile likelihood](#profile-likelihood) gives the one-sided interval for
-such a parameter.
-
-Sample the posterior and propagate it through a solve to get per-time-point
-predictive envelopes (the `C0` may be a held-out validation batch):
-
-```python
-band = result.predictive_band(reactor, C0, t_obs, n_draw=200,
-                              percentiles=(2.5, 97.5))
-band.median, band.lo, band.hi        # each (12, 6): (n_t, n_species)
-
-draws = result.posterior_draws(model, n_draw=50, seed=0)   # (50, 7) parameter vectors
-```
-
-### Sampling the posterior
-
-The Laplace posterior is a Gaussian at the MAP, built from the local
-curvature. It describes the posterior well when the data determine the
-parameters precisely enough that the model is close to linear over their
-uncertainty, in the coordinates of their transforms. It misdescribes a
-posterior that is curved (a ridge where only a product or a sum of
-parameters is seen), skewed, or cut by a bound, and those errors carry into
-everything built on its draws: predictive bands and robust experiment
-designs.
-
-`aquakin.sample_posterior` draws from the posterior itself by Markov chain
-Monte Carlo, starting from a fit:
-
-```python
-samples = aquakin.sample_posterior(
-    result, reactor,
-    config=aquakin.SamplerConfig(n_chains=2, n_draws=200, n_warmup=100, seed=0),
-)
-samples.params_named["O3_Br_direct.k1"]   # (400,) draws, physical units
-samples.draws                             # (400, 7) parameter vectors, as posterior_draws
-samples.r_hat, samples.ess_bulk           # convergence diagnostics, by coordinate
-samples.acceptance_rate                   # per chain
-```
-
-The run above is short to keep this page quick. For a real analysis keep the
-default `SamplerConfig()` (4 chains of 1000 draws after 500 warm-up steps) and,
-before using the draws, check that every `r_hat` is below about 1.01 and that
-`ess_bulk` is large enough for what you report: the Monte Carlo error of a
-posterior mean is about its standard deviation over `sqrt(ess_bulk)`. A larger
-`r_hat` means the chains disagree; run them longer.
-
-The sampled density is the one `calibrate` maximized, so the likelihood, the
-priors and the transforms are the same. It needs `loss="nll"` (the other
-losses are not likelihoods) and a Laplace posterior, which supplies the
-starting points and the proposal. Fitted initial pools are sampled together
-with the rates, which needs `LaplaceConfig(include_ic=True)`. With
-`sigma="estimate"` the density is the posterior with each output's noise level
-integrated out under the prior `p(sigma) ∝ 1/sigma`, so its intervals are
-wider than the Laplace ones by the extra uncertainty of an estimated noise
-level. The draws stay inside the bounds the fit used.
-
-The sampler is a random-walk Metropolis. Each chain starts from a draw of the
-Laplace posterior and proposes Gaussian steps shaped by the Laplace
-covariance, adapting their size during the warm-up. Each step costs one
-forward solve per chain and no gradient, so it suits a stiff model, but a few
-thousand solves add up: a plant, or a model whose posterior is far from the
-Laplace shape, needs patience. A plant fit is sampled with
-`plant.sample_posterior(result)`, through the plant's own solves.
-
-The draws plug into what takes Laplace draws:
-
-```python
-band = result.predictive_band(reactor, C0, t_obs, draws=samples.draws)
-robust_draws = samples.draws[::40]      # e.g. param_draws for optimize_experiment
-```
-
-When the Laplace intervals are enough, read them in the coordinates the fit
-ran in. For a parameter with `transform: positive_log`, the interval
-`exp(log(p) ± 1.96 sd)`, with `sd` the square root of the diagonal of
-`result.posterior_cov`, follows a skewed posterior far better than `p ± 1.96 *
-params_named_std`, which is the same uncertainty mapped linearly to physical
-units.
-
-### Profile likelihood
-
-The Laplace covariance is a local, quadratic approximation. For an exact
-analysis, which tells a well-constrained parameter from one the data cannot
-pin down, use `aquakin.profile_likelihood`. It fixes one quantity at each
-point of a grid, re-optimizes everything else, and reports the confidence
-interval where the profile rises by the likelihood-ratio threshold:
-
-```python
-prof = aquakin.profile_likelihood(
-    reactor, C0, observations, t_obs, free_params,
-    grid=jnp.linspace(80.0, 280.0, 9), profile_param="O3_Br_direct.k1",
-    observed_species=observed, loss="nll", sigma=sigma)
-prof.mle    # grid value at the profile minimum
-prof.ci     # (lo, hi); None on a side means the parameter is unidentified there
-```
-
-A 95 % interval is where the profile rises by 1.92 (`0.5 * chi2_{1, 0.95}`, the
-default `delta`). With `sigma` known, the profile is the `"nll"` loss itself.
-With `sigma="estimate"` and one output, the rise is `(N / 2) log(SSE /
-SSE_min)`, so the interval is where the sum of squares grows by a factor
-`exp(2 * 1.92 / N)`.
-
-### Identifiability report
-
-`aquakin.identifiability` analyzes a Fisher information matrix and reports
-which parameter combinations the data can and cannot determine. It accepts a
-`CalibrationResult` fitted with `loss="nll"` and
-`LaplaceConfig(method="gauss_newton")`, the output of `fisher_information`
-(below), or a bare matrix with `names=`:
-
-```python
-rep = aquakin.identifiability(joint)
-for d in rep.unidentifiable:          # directions the data barely constrain
-    print(d.relative_eigenvalue, d.loadings)
-rep.correlation                       # correlation matrix, ordered as rep.names
-rep.relative_std                      # Cramér-Rao relative standard errors
-rep.collinearity_index(["O3_Br_direct.k1", "ic[0].Br-"])
-rep.largest_identifiable_subset(threshold=15.0)
-```
-
-In this fit the report flags two weak directions, and `rep.correlation` shows
-`k_dec` and the initial bromide strongly anticorrelated (about -0.94): ozone
-and bromate alone barely tell faster ozone decay with less bromide from slower
-decay with more.
-
-Each eigen-direction carries its eigenvector loadings by name. In the log
-coordinates used for positive parameters and initial pools, equal and opposite
-loadings on a rate constant and a pool (for example `+0.71` on `k` and `-0.71`
-on `ic[0].X`) mean the data see only their product `k [X]0`. Such a pair should
-be lumped into one parameter or separated by a new experiment. A direction is
-flagged when its eigenvalue is below `eig_keep` (default `1e-2`) times the
-largest. Flagging is a diagnostic only. The standard deviations here, like
-`params_named_std` from `calibrate`, come from the full inverse of the
-information, so a weakly identified quantity has a large standard deviation,
-and a quantity on an exactly null direction has an infinite one.
-
-The collinearity index of a subset is `1 / sqrt(λ_min)` of the information
-normalized to unit diagonal. It is 1 when the subset's sensitivities are
-orthogonal and grows without bound as they become linearly dependent,
-regardless of how sensitive the output is to each parameter.
-`rep.identifiable_subsets()` lists every subset below a threshold (default
-15), largest first.
-
-## Comparing model structures
-
-When several model structures could explain the same data (a different rate
-law, an extra pathway, a parameter fitted or held at a literature value), an
-information criterion says which the data support, charging each structure for
-the quantities it estimates. A fit with `loss="nll"` carries what they need:
-
-- `result.log_likelihood`: the Gaussian log-likelihood of the observations at
-  the fit, complete with its `-(N/2) log(2π)` constant and without any prior.
-  It is not `-result.loss`, which leaves out the constant and includes the
-  prior penalty.
-- `result.n_observations`: the observed entries over every dataset (a `NaN` is
-  not counted).
-- `result.n_estimated`: the free rate parameters, plus the fitted initial
-  pools of every dataset, plus one noise level per observed output with
-  `sigma="estimate"`.
-
-`aquakin.aic(result)`, `aquakin.aicc(result)` and `aquakin.bic(result)` give
-the criteria, and `aquakin.compare_models` ranks several fits of the same
-observations. Here the question is whether the data call for fitting
-`k_dec`, or whether its default value will do:
-
-```python
-k1_only = aquakin.calibrate(reactor, C0, observations, t_obs, ["O3_Br_direct.k1"],
-                            observed_species=observed, loss="nll", sigma=sigma)
-table = aquakin.compare_models({"k1 and k_dec": result, "k1 only": k1_only},
-                               criterion="aicc")
-table.best       # 'k1 only'
-table.delta      # how far each is behind the best
-table.weights    # {'k1 only': 0.59, 'k1 and k_dec': 0.41} (to two decimals)
-```
-
-% invisible-code-block: python
-%     assert table.best == "k1 only"
-%     assert round(table.weights["k1 only"], 2) == 0.59
-%     assert round(table.weights["k1 and k_dec"], 2) == 0.41
-%     assert (result.n_estimated, k1_only.n_estimated, result.n_observations) == (2, 1, 24)
-
-Lower is better, and only differences between fits of the same observations
-mean anything, so `compare_models` refuses fits whose observations or
-observation times differ. Fitting `k_dec` as well raises the likelihood too
-little to pay for the extra parameter, though a weight of 0.41 says the data do
-not rule it out either. As a rule of thumb, a difference below 2 is weak
-evidence and one above 10 is decisive. AICc corrects AIC for small samples and
-is the safer default unless there are many more observations than estimated
-quantities (more than about 40 per quantity); BIC charges more for each
-parameter and favours the simpler structure more strongly as the data grow.
-
-Some fits cannot be compared this way:
-
-- `"mse"` and `"wmse"` are not likelihoods, so the criteria refuse them. Refit
-  with `loss="nll"` and `sigma="estimate"`, which is the least-squares form of
-  the criteria with one noise level estimated per output.
-- A prior (a model-declared one with `use_priors=True`, an explicit `priors=`,
-  or `FreeICConfig(prior_log_std=)`) moves the fit off the maximum-likelihood
-  point, so the criteria warn. Refit with `use_priors=False` and no priors to
-  compare structures.
-- `aicc` needs more observations than estimated quantities plus one.
-
-`plant.calibrate` results work the same way.
+1. **Read `result.message`**, the optimizer's reason for stopping. If
+   `result.n_iter` reached `OptimizerConfig(max_iter=)` (default 500), raise
+   `max_iter`.
+2. **Start from more places.** `OptimizerConfig(n_starts=8)` adds jittered
+   restarts, and `starts=[...]` runs a grid; the best fit is kept. Starts that
+   end far apart with similar losses point to a parameter the data do not
+   determine ([Identifiability report](fit_uncertainty.md#identifiability-report)).
+3. **Try the least-squares optimizer**, `OptimizerConfig(method="gauss_newton")`,
+   which works on the residual vector rather than the scalar loss and is often
+   more robust on a stiff reaction model.
+4. **Fit positive parameters in log space** with
+   `transforms={name: "positive_log"}` (or `transform:` in the model file),
+   so that a rate constant of 1e9 and one of 0.1 take steps of the same size.
+5. **Keep a stiff model's solve feasible.** A start whose solve fails is
+   skipped with a warning. If the optimizer keeps stepping into such a region,
+   bound the search with `OptimizerConfig(param_halfwidth=np.log(100.0))` (two
+   decades either side of the start, for `positive_log` parameters) or
+   `OptimizerConfig(bounds={...})`. A non-finite gradient raises an error
+   naming its remedies: the cap-free adjoint
+   `diff=aquakin.DifferentiationConfig(method="stable")` (batch reactors), or a
+   step cap on the reactor, `integrator=aquakin.IntegratorConfig(dtmax=...)`.
+6. **Look at `result.at_bound`.** A parameter that ends on a bound is held
+   there, which can stop the others short. Widen the bound if it is not
+   physical, or fix the parameter.
+7. **Check the noise level.** With `loss="nll"`, a `sigma` far from the real
+   noise makes the objective very flat or very steep; `sigma="estimate"`
+   avoids guessing it.
