@@ -222,9 +222,11 @@ ever formed.
 
 - **`calibrate(diff=DifferentiationConfig(method="stable"))`** uses
   `esdirk_adjoint_solve` on the reactor's `model.dCdt`, for batch reactors only. It
-  is reverse-only, so `mode="forward"` with `method="stable"` is rejected. Its
-  forward is the function's default `Kvaerno5`, not the reactor's integrator, so it
-  agrees with the capped `through_solve` path to the optimizer tolerance, not
+  is reverse-only, so `mode="forward"` with `method="stable"` is rejected. It must
+  pass the reactor's `order` and `solver` (`IntegratorConfig`, default Kvaerno3),
+  not rely on `esdirk_adjoint_solve`'s own `order=5` default, so the fit uses the
+  integrator the user configured. Its forward clips steps to the observation times,
+  so it agrees with the capped `through_solve` path to the optimizer tolerance, not
   bit-for-bit.
 - **`plant.solve` with the default `diff` (`mode="reverse", method="stable"`)**
   routes a concrete forward solve to the fast cached through-solve path and a solve

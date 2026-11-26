@@ -105,9 +105,11 @@ class BatchReactor(GradientCheckMixin):
         any ``time_unit=`` passed to :meth:`solve`.
     diff : DifferentiationConfig, optional
         Autodiff configuration. ``mode="reverse"`` (default) differentiates the
-        solve with ``RecursiveCheckpointAdjoint`` (reactors have no stable
-        reverse adjoint -- that is plant-only -- so ``method`` is ignored for
-        reverse mode). ``mode="forward", method="through_solve"`` builds a
+        solve with ``RecursiveCheckpointAdjoint``: a bare ``solve`` under
+        ``jax.grad`` has no stable reverse adjoint, so ``method`` is ignored for
+        reverse mode here (:func:`aquakin.calibrate` with ``method="stable"``
+        fits through the cap-free discrete adjoint instead of calling
+        ``solve``). ``mode="forward", method="through_solve"`` builds a
         forward-capable ``DirectAdjoint`` so ``jax.jvp`` / ``jax.jacfwd`` flow
         through the solve; ``mode="forward", method="stable"`` is the augmented
         ``solve_sensitivity`` path (cap-free).

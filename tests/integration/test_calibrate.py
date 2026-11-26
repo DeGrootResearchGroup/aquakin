@@ -422,6 +422,44 @@ def test_laplace_cov_matches_closed_form_fisher(band_fit):
     assert cov[0, 0] == pytest.approx(1.0 / fisher, rel=1e-3)
 
 
+def test_fd_laplace_reuses_the_fit_gradient(setup):
+    """With the fit's own step cap, the finite-difference Laplace Hessian
+    evaluates the gradient program the fit compiled rather than compiling a
+    second one: the model output is traced as often with the posterior as
+    without it. The posterior is still the closed-form inverse Fisher
+    information of log k (as in the test above)."""
+    reactor, C0, t_obs, obs_clean, _ = setup
+    i_b = reactor.model.species_index["B"]
+    traces = []
+
+    def obs_b(C, p):
+        traces.append(1)  # runs on tracing (and once for the size check), not per call
+        return C[i_b]
+
+    def fit(laplace):
+        traces.clear()
+        result = aquakin.calibrate(
+            reactor,
+            C0,
+            observations=obs_clean,
+            t_obs=t_obs,
+            free_params=["A_to_B.k"],
+            transforms={"A_to_B.k": "positive_log"},
+            observation_fn=obs_b,
+            loss="nll",
+            sigma=jnp.asarray(0.02),
+            laplace=laplace,
+        )
+        return result, len(traces)
+
+    _, without = fit(False)
+    result, with_posterior = fit(True)
+    assert with_posterior == without
+    k, t = 0.25, np.asarray(t_obs)
+    fisher = np.sum((k * t * np.exp(-k * t) / 0.02) ** 2)
+    assert float(result.posterior_cov[0, 0]) == pytest.approx(1.0 / fisher, rel=1e-3)
+
+
 @pytest.mark.slow  # heavy: calibrate + FD Laplace
 def test_gauss_newton_laplace_matches_fd(setup):
     """The Gauss-Newton Laplace Hessian (AD ``J^T J``, first-order reverse-mode)

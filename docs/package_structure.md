@@ -100,7 +100,7 @@ aquakin/
 │   │   │                            #   solver (shared_factor=True, Option A):
 │   │   │                            #   factorise the shared diagonal block once
 │   │   ├── discrete_adjoint.py      # implicit_euler_adjoint_solve /
-│   │   │                            #   esdirk_adjoint_solve (Kvaerno5): cap-free
+│   │   │                            #   esdirk_adjoint_solve (Kvaerno3/5): cap-free
 │   │   │                            #   REVERSE-mode gradient via a hand-written
 │   │   │                            #   discrete adjoint (no autodiff through the solve)
 │   │   ├── colored_jacobian.py      # ColoredVeryChord: sparse (column-compressed

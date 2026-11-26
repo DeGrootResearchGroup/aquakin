@@ -169,11 +169,10 @@ def test_ifas_plant_evaluates_kla_history(asm1):
     """The BSM evaluator must score a plant containing an IFAS tank.
 
     ``_as_reactors`` collects the IFAS unit (it carries an ``aeration`` spec) and
-    ``_kla_history`` then reads its ``_controlled_kla`` / ``_kla_vec`` -- which the
-    shared ``AerationUnit`` mixin supplies, so the previously-missing accessors no
-    longer raise ``AttributeError`` mid-evaluation. Open-loop, so the constant-kLa
-    tiling path is exercised (and ``_controlled_kla`` is read for the controlled
-    check)."""
+    ``_kla_history`` then reads its kLa through the readers the shared
+    ``AerationUnit`` mixin supplies (``required_signals``, ``oxygen_kla``), so the
+    evaluation does not raise ``AttributeError`` mid-way. Open-loop, so the
+    constant-kLa tiling path is exercised."""
     from aquakin.plant.bsm.evaluation import _as_reactors, _kla_history
 
     p = _plant(_ifas(asm1, aeration=Aeration(kla=600.0)), asm1)

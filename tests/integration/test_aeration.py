@@ -45,21 +45,20 @@ def test_requires_exactly_one_mode():
 def test_open_loop_sets_kla_and_saturation(asm1):
     tank = _tank(asm1, "t", Aeration(kla=240.0, do_sat=8.0))
     so = asm1.species_index["SO"]
-    assert float(tank._kla_vec[so]) == 240.0
-    assert float(tank._sat_vec[so]) == 8.0
+    assert float(tank.kla_vector()[so]) == 240.0
+    assert float(tank.saturation_vector[so]) == 8.0
     assert tank.required_signals == ()                # no control signal
-    assert tank._controlled_kla == {}
 
 
 def test_do_sat_defaults_to_eight(asm1):
     tank = _tank(asm1, "t", Aeration(kla=120.0))
-    assert float(tank._sat_vec[asm1.species_index["SO"]]) == 8.0
+    assert float(tank.saturation_vector[asm1.species_index["SO"]]) == 8.0
 
 
 def test_anoxic_tank_has_no_aeration(asm1):
     tank = _tank(asm1, "t", None)
-    assert float(tank._kla_vec.max()) == 0.0
-    assert float(tank._sat_vec.max()) == 0.0
+    assert float(tank.kla_vector().max()) == 0.0
+    assert float(tank.saturation_vector.max()) == 0.0
     assert tank.required_signals == ()
     assert not tank.kla_temperature_corrected
     assert float(tank.delivered_oxygen_kla({}, None)) == 0.0
@@ -121,8 +120,11 @@ def test_shared_controller_drives_several_tanks(asm1):
     ctrls = [n for n, u in p.units.items() if hasattr(u, "setpoint")]
     assert ctrls == ["do"]
     # both tanks read the same signal; gains differ
-    assert p.units["tankA"]._controlled_kla["SO"] == ("_aer_do_kla", 1.0)
-    assert p.units["tankB"]._controlled_kla["SO"] == ("_aer_do_kla", 0.5)
+    signal = {"_aer_do_kla": 100.0}
+    for name, gain in (("tankA", 1.0), ("tankB", 0.5)):
+        tank = p.units[name]
+        assert tank.required_signals == ("_aer_do_kla",)
+        assert float(tank.oxygen_kla(signal)) == pytest.approx(100.0 * gain, rel=1e-15)
 
 
 def test_shared_controller_disagreement_raises(asm1):
@@ -204,7 +206,7 @@ def test_default_aeration_is_bit_faithful(asm1):
     constants and the rhs ignores the inlet temperature (the IWA benchmark)."""
     tank = _tank(asm1, "t", Aeration(kla=240.0, do_sat=8.0))
     so = asm1.species_index["SO"]
-    assert float(tank._sat_vec[so]) == 8.0 and float(tank._kla_vec[so]) == 240.0
+    assert float(tank.saturation_vector[so]) == 8.0 and float(tank.kla_vector()[so]) == 240.0
     # Aeration term is the same whether the inlet is warm or at the reference.
     warm, _ = _aeration_term(asm1, Aeration(kla=240.0), 303.15)
     ref, _ = _aeration_term(asm1, Aeration(kla=240.0), 293.15)
@@ -218,10 +220,10 @@ def test_constant_factors_scale_kla_and_saturation(asm1):
     aer = Aeration(kla=240.0, do_sat=8.0, alpha=0.6, beta=0.95, pressure_factor=0.9)
     tank = _tank(asm1, "t", aer)
     so = asm1.species_index["SO"]
-    assert float(tank._kla_vec[so]) == 240.0
+    assert float(tank.kla_vector()[so]) == 240.0
     assert float(tank.oxygen_kla()) == 240.0
     assert float(tank.oxygen_kla(process_water=True)) == pytest.approx(240.0 * 0.6, rel=1e-15)
-    assert float(tank._sat_vec[so]) == pytest.approx(8.0 * 0.95 * 0.9)
+    assert float(tank.saturation_vector[so]) == pytest.approx(8.0 * 0.95 * 0.9)
     term, so_val = _aeration_term(asm1, aer, 293.15)
     assert term == pytest.approx(0.6 * 240.0 * (8.0 * 0.95 * 0.9 - so_val), rel=1e-12)
 
@@ -305,8 +307,8 @@ def test_build_bsm2_do_temperature_correction_flag():
 
     base = build_bsm2()
     t3 = base.units["tank3"]
-    assert t3._av.temp_correct is False
-    assert float(t3._sat_vec[t3.model.species_index["SO"]]) == 8.0
+    assert t3.kla_temperature_corrected is False
+    assert float(t3.saturation_vector[t3.model.species_index["SO"]]) == 8.0
 
     corr = build_bsm2(do_temperature_correction=True)
     t3c = corr.units["tank3"]

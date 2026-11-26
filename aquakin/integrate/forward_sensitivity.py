@@ -1,10 +1,14 @@
 """Forward (variational) sensitivity solve: integrate ``S = dy/dtheta`` with ``y``.
 
 Computing ``d(output)/d(params)`` through a stiff reactor solve by ordinary AD
-breaks down: above an integrator-step threshold the differentiated solve returns
-non-finite values (in both forward and reverse mode), and the workaround is a
-global ``dtmax`` cap that forces tiny steps over the *whole* solve even though
-the tight step is only needed in small, local stiff regions.
+breaks down. Reverse mode (``jax.grad`` through the solve) returns non-finite
+values above an integrator-step threshold, an overflow in the backward
+accumulation. Forward mode (``jax.jvp`` / ``jax.jacfwd`` through the solve)
+stays finite at any step, but once the step outgrows the fastest reaction
+timescale it differentiates a solve that damps the unresolved fast modes, and so
+loses accuracy. The workaround for both is a global ``dtmax`` cap that forces
+tiny steps over the *whole* solve even though the tight step is only needed in
+small, local stiff regions.
 
 Classical forward sensitivity analysis removes the cap. The sensitivity
 ``S = dy/dtheta`` obeys the variational equation

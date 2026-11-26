@@ -1365,7 +1365,7 @@ inside the one monolithic Diffrax solve and `jax.grad` still flows end to end):
   modes: open loop `Aeration(kla=120, do_sat=8)` (a fixed mass-transfer
   coefficient; `do_sat` defaults to 8.0), and closed loop `Aeration(do_setpoint=2.0)`
   (a DO target). `CSTRUnit.__post_init__` translates the spec into the internal
-  `_kla_vec`/`_sat_vec`/`_controlled_kla` the `rhs` uses, so the aeration term
+  aeration vectors the `rhs` uses, so the aeration term
   `kLa·(do_sat - C)` is unchanged. For closed loop the species' `kLa` is taken from
   `signals[name]·gain` each step (overriding the fixed `kLa`); the signal name is
   derived deterministically from the controller id.
@@ -1539,8 +1539,8 @@ the MBR carries the **flow-weighted inlet temperature** onto its outlet streams 
 into the Arrhenius kinetics/aeration (via `streams.mixed_scalars`), so a
 seasonal influent drives it; and `plant.mass_balance` treats it as a first-class
 reactive aerated unit — its `[C, R_f]` inventory reads the fixed reactor volume (the
-fouling resistance `R_f` is massless), and it exposes the CSTR `_kla_vec`/`_sat_vec`/
-`_controlled_kla` accessors so its aeration-O2 and reaction-gas terms are counted (a
+fouling resistance `R_f` is massless), and it exposes the CSTR aeration readers
+(`kla_vector`, `saturation_vector`, `oxygen_transfer`) so its aeration-O2 and reaction-gas terms are counted (a
 single-MBR plant closes COD/N to a few %). Covered by
 `tests/integration/test_mbr.py`.
 

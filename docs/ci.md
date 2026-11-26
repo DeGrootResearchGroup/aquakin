@@ -59,10 +59,11 @@ nor concentrating it in a few files makes the whole suite fast.
   `aquakin.__all__` at build time. It skips the bare `labeled` event and the
   schedule / dispatch refresh, like the lint gate.
 - The fast tier (`$FAST_MARKERS` = `not validation and not slow`; `unit` and
-  `ui` on Python 3.11/3.12, `integration` on 3.12 only) runs on **every PR and
+  `ui` on Python 3.11/3.13, `integration` on 3.12 only) runs on **every PR and
   every push** and is the merge gate. Integration is the expensive fast job, so
-  it runs on one interpreter; the version floor is guarded by the 3.11 `unit`
-  and `ui` jobs. It is
+  it runs on one interpreter; the ends of the supported range (3.11 to 3.13)
+  are guarded by the 3.11 and 3.13 `unit` and `ui` jobs, so every supported
+  version runs on every PR. It is
   two `pytest-split`-sharded jobs, each shard a fresh process pool of **two**
   xdist workers (`-n 2`), **sharded for memory, not speed**, plus the unsharded
   `ui` job:
@@ -382,10 +383,10 @@ under that stable name.
 
 A green fast gate is the merge gate. The package requires Python 3.11 or later
 (`requires-python >= 3.11`), because the dependency floors (jax/jaxlib 0.10,
-diffrax 0.7, optimistix 0.1) require it; CI tests 3.11 and 3.12. The `unit`
-and `ui` jobs run on both and guard the floor; `integration`, `slow`,
-`validation` and the heavy tier run on 3.12 only, since they are the
-expensive jobs. (Python 3.10
+diffrax 0.7, optimistix 0.1) require it; CI tests 3.11, 3.12 and 3.13. The
+`unit` and `ui` jobs run on 3.11 and 3.13 and guard both ends of the range;
+`integration`, `slow`, `validation` and the heavy tier run on 3.12 only, since
+they are the expensive jobs. (Python 3.10
 was dropped: it had been install-only and untested, and the current JAX stack
 no longer installs on it.) When adding a runtime
 dependency, add it to `pyproject.toml` `dependencies` so the CI install

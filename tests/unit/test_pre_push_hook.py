@@ -5,7 +5,9 @@ a PR description: it means nothing to a reader of the repository, and the
 session can be private. ``.githooks/pre-push`` enforces it for the commits being
 pushed. These tests run the real hook in a throwaway repository, with a ``PATH``
 holding only the system tools, so ruff is not found and the lint gate after the
-check exits early; what they see is the session check alone.
+checks exits early; what they see is the session check and, for a push that
+changes ``constraints.txt`` or ``pyproject.toml``, the check that the pins
+resolve on every supported Python, run against a stub ``uv``.
 """
 
 import os
@@ -50,8 +52,8 @@ def _commit(repo, message):
     return _git(repo, "rev-parse", "HEAD")
 
 
-def _run_hook(repo, stdin):
-    env = {**os.environ, "PATH": "/usr/bin:/bin"}
+def _run_hook(repo, stdin, *, path="/usr/bin:/bin", fail_on=""):
+    env = {**os.environ, "PATH": path, "FAIL_ON": fail_on}
     return subprocess.run(
         ["bash", str(HOOK), "origin", "url"],
         cwd=repo,
@@ -84,3 +86,87 @@ def test_passes_clean_commits_and_deletions(repo):
     clean = _commit(repo, "Clean\n\nCo-Authored-By: Someone <s@example.com>")
     assert _run_hook(repo, f"refs/heads/b {clean} refs/heads/b {ZERO}\n").returncode == 0
     assert _run_hook(repo, f"(delete) {ZERO} refs/heads/b {clean}\n").returncode == 0
+
+
+# A stub uv that fails on the Python versions named in FAIL_ON, so the hook's
+# constraints check can be driven without uv or the network
+# (tests/unit/test_check_constraints.py tests the script itself).
+STUB_UV = """\
+#!/bin/sh
+while [ $# -gt 0 ]; do
+  [ "$1" = "--python-version" ] && version=$2
+  shift
+done
+case " $FAIL_ON " in
+  *" $version "*) echo "no solution on $version" >&2; exit 1 ;;
+esac
+"""
+
+PYPROJECT = """\
+[project]
+name = "demo"
+classifiers = ["Programming Language :: Python :: 3.11"]
+"""
+
+
+@pytest.fixture
+def stub_path(tmp_path):
+    """A PATH whose only uv is the stub."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "uv").write_text(STUB_UV)
+    (bin_dir / "uv").chmod(0o755)
+    return f"{bin_dir}:/usr/bin:/bin"
+
+
+def _commit_file(repo, name, text, message):
+    (repo / name).write_text(text)
+    _git(repo, "add", name)
+    return _commit(repo, message)
+
+
+def test_a_pin_change_that_does_not_resolve_blocks_the_push(repo, stub_path):
+    _commit_file(repo, "pyproject.toml", PYPROJECT, "Add pyproject")
+    sha = _commit_file(repo, "constraints.txt", "jax==0.12.1\n", "Bump jax")
+    result = _run_hook(repo, f"refs/heads/b {sha} refs/heads/b {ZERO}\n",
+                       path=stub_path, fail_on="3.11")
+    assert result.returncode == 1
+    assert "Python 3.11: does not resolve" in result.stderr
+    assert "does not resolve on every supported Python" in result.stderr
+
+
+def test_a_pin_change_that_resolves_passes(repo, stub_path):
+    _commit_file(repo, "pyproject.toml", PYPROJECT, "Add pyproject")
+    sha = _commit_file(repo, "constraints.txt", "jax==0.10.2\n", "Pin jax")
+    result = _run_hook(repo, f"refs/heads/b {sha} refs/heads/b {ZERO}\n", path=stub_path)
+    assert result.returncode == 0, result.stderr
+    assert "Python 3.11: resolves" in result.stderr
+
+
+def test_a_push_without_pin_changes_skips_the_resolve(repo, stub_path):
+    base = _commit_file(repo, "pyproject.toml", PYPROJECT, "Add pyproject")
+    sha = _commit_file(repo, "README.md", "text\n", "Docs only")
+    # The stub would fail, so a run of the check would block the push.
+    result = _run_hook(repo, f"refs/heads/b {sha} refs/heads/b {base}\n",
+                       path=stub_path, fail_on="3.11")
+    assert result.returncode == 0, result.stderr
+    assert "resolves on every supported Python" not in result.stderr
+
+
+def test_a_pin_change_among_many_changed_files_is_still_noticed(repo, stub_path):
+    # The pushed range lists more changed paths than a pipe buffer holds, with
+    # constraints.txt first (newest commit). The check must still run: a reader
+    # that stops at the first match must not turn the writer's SIGPIPE into
+    # "no pin change" under `set -o pipefail`.
+    _commit_file(repo, "pyproject.toml", PYPROJECT, "Add pyproject")
+    many = repo / "many"
+    many.mkdir()
+    for i in range(3000):
+        (many / f"a_file_with_a_long_enough_name_{i:05d}.txt").write_text("")
+    _git(repo, "add", "many")
+    _commit(repo, "Many files")
+    sha = _commit_file(repo, "constraints.txt", "jax==0.12.1\n", "Bump jax")
+    result = _run_hook(repo, f"refs/heads/b {sha} refs/heads/b {ZERO}\n",
+                       path=stub_path, fail_on="3.11")
+    assert result.returncode == 1, result.stderr
+    assert "Python 3.11: does not resolve" in result.stderr

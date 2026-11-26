@@ -107,7 +107,7 @@ def test_open_loop_gas_kla_is_ratio_times_o2_kla(toy):
     assert float(process[i_o]) == pytest.approx(0.5 * KLA)
     assert float(process[i_g]) == pytest.approx(0.5 * KLA * RATIO)
     assert float(tank.kla_vector()[i_g]) == pytest.approx(KLA * RATIO)
-    assert float(tank._sat_vec[i_g]) == 0.0
+    assert float(tank.saturation_vector[i_g]) == 0.0
     C = toy.default_concentrations()
     transfer = aeration_transfer(tank._av, C, None, None, toy)
     assert float(transfer[i_g]) == pytest.approx(-0.5 * KLA * RATIO * float(C[i_g]))
@@ -119,7 +119,8 @@ def test_closed_loop_gas_reads_signal_times_gain_times_ratio(toy):
     tank = _tank(toy, Aeration(do_setpoint=2.0, gain=0.5, stripped={"SN2O": RATIO}))
     signal = "_aer_tank_kla"
     assert tank.required_signals == (signal,)  # one signal, not one per gas
-    assert tank._controlled_kla["SN2O"] == (signal, 0.5 * RATIO)
+    kla = tank.kla_vector({signal: 200.0})
+    assert float(kla[toy.species_index["SN2O"]]) == pytest.approx(200.0 * 0.5 * RATIO, rel=1e-15)
     C = toy.default_concentrations()
     transfer = aeration_transfer(tank._av, C, None, {signal: jnp.asarray(200.0)}, toy)
     i_o, i_g = toy.species_index["SO"], toy.species_index["SN2O"]
