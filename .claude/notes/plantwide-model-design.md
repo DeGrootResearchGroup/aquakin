@@ -207,6 +207,17 @@ kept equal by putting the organic-N difference in ammonium.
     the PAO-GAO competition stays as the source calibrated it; the intercept
     is a parameter with bounds and a prior that reach the full-scale TU Delft
     value (0.36, as in `asm2d_tud`), to be calibrated per plant.
+14. **Storage switches on fractions of the biomass** (owner, 2026-11-26): the
+    depletion switches on glycogen, poly-P and PHA act on the stored fractions
+    (`K_fGLY`, `K_fPP`, `K_fPHA_store`, each the source's 0.01 C-mmol/L at its
+    30 C-mmol/L starting biomass), as ASM2d writes `XPP/XPAO`, not on absolute
+    concentrations as the source does. A population's rates then scale with
+    its size, so the PAO / GAO outcome in a plant does not depend on its
+    history (see *Why GAOs win on the A2O*). The SBR validation is unchanged
+    within its tolerance.
+15. **The A2O comparison's base influent VFA is 75% acetate, 25% propionate**
+    (owner, 2026-11-26), typical of sewage and clear of the PAO / GAO
+    boundary; all-acetate (ASM2d's default influent) is a sensitivity case.
 
 ## What the bio-P and acidogen sources give (read 2026-11-26)
 
@@ -380,10 +391,11 @@ fermentation structure is chosen.
 
 **Why GAOs win on the A2O (2026-11-26).** Two separate effects.
 
-1. *The source's storage switches are on absolute concentrations*:
-   anaerobic uptake carries `monod([XGLY], K_GLY_BIOP)` (and the PAOs'
-   `monod([XPP], K_PP_BIOP)`), aerobic glycogen storage `monod(PHA,
-   K_PHA_BIOP)`, with K = 0.31 to 0.36 g/m3 (the source's 0.01 C-mmol/L,
+1. *The source's storage switches are on absolute concentrations* (as the
+   level first had them; decision 14 replaced them): anaerobic uptake carried
+   a Monod switch on the glycogen concentration (and the PAOs' on poly-P),
+   aerobic glycogen storage one on PHA, with K = 0.31 to 0.36 g/m3 (the
+   source's 0.01 C-mmol/L,
    the same form in `lopez_vazquez_2009/model.py`). Near 1 for a population of
    hundreds of g/m3, they throttle a rare one, so the outcome depends on
    history: a Competibacter seed of 1 g/m3 (glycogen 0.3) in the PAO-only
@@ -393,7 +405,8 @@ fermentation structure is chosen.
    zero biomass); a seeded forward solve can. In the source's SBR every
    population starts at about 1000 g COD/m3, so there the switches are inert.
    ASM2d writes its poly-P switch on the ratio `XPP/XPAO`, which has no such
-   effect.
+   effect. With the switches on fractions (decision 14) the seeds grow at
+   +0.0052 (1 g/m3) and +0.0048 (30 g/m3).
 2. *The A2O's conditions sit on the PAO / GAO boundary*, tipped to
    Competibacter by the anoxic zone. In the source's SBR at 20 C, acetate,
    pH 7, the PAOs win slowly (53% at day 50, 65% at day 400; the generated
