@@ -92,8 +92,15 @@ class DifferentiationConfig:
           cap-free hand-written discrete adjoint (the old
           ``gradient="stable_adjoint"`` / ``"auto"`` routing: a concrete forward
           solve still takes the fast cached path, a differentiated solve takes the
-          discrete adjoint). A **reactor** has no stable reverse adjoint, so it
-          always uses ``RecursiveCheckpointAdjoint`` regardless of ``method``.
+          discrete adjoint). For a **reactor** it depends on the entry point. A
+          bare ``reactor.solve`` under ``jax.grad`` has no stable adjoint: it
+          always differentiates through the solve with
+          ``RecursiveCheckpointAdjoint``, whatever ``method`` is, so a stiff model
+          needs a ``dtmax`` cap there. :func:`~aquakin.calibrate` with
+          ``method="stable"`` does not call ``reactor.solve``: it fits a batch
+          reactor through the cap-free ESDIRK discrete adjoint
+          (:func:`~aquakin.esdirk_adjoint_solve`) on the reactor's model, with the
+          reactor's integrator order.
         - ``mode="reverse", method="through_solve"`` -- differentiate *through*
           the diffrax solve (``RecursiveCheckpointAdjoint``; the old
           ``gradient="jax_adjoint"``). Needs a ``dtmax`` cap for a stiff model.
@@ -172,9 +179,11 @@ class DifferentiationConfig:
     def reactor_adjoint(self):
         """The diffrax adjoint object a reactor / plant solve should carry.
 
-        Reactors and the plant have no hand-written ("stable") reverse adjoint on
-        the reactor object -- reverse mode always uses the default
-        ``RecursiveCheckpointAdjoint`` (signalled by ``None``). ``method`` matters
+        No diffrax adjoint object is the hand-written ("stable") reverse adjoint,
+        so reverse mode always carries the default ``RecursiveCheckpointAdjoint``
+        (signalled by ``None``); the discrete adjoint is invoked explicitly by the
+        callers that use it (``Plant.solve`` under reverse-mode AD and
+        :func:`~aquakin.calibrate` with ``method="stable"``). ``method`` matters
         only for *forward* mode: ``through_solve`` -> a forward-capable
         ``DirectAdjoint`` (:func:`forward_adjoint`); ``stable`` -> the augmented
         ``solve_sensitivity`` backend, invoked explicitly (not via this adjoint),
