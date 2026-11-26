@@ -1,16 +1,54 @@
 # Calibrating a plant
 
-`plant.calibrate` is the plant version of `aquakin.calibrate`: it fits plant
-parameters, by name, against measured channels of one or more streams or
-units. It uses the same transforms, priors, multistart and Laplace posterior,
+`plant.calibrate` is the plant version of `aquakin.calibrate`
+([Calibration](calibration.md)): it fits plant parameters, by name, against
+measured channels of one or more streams or units. It uses the same
+transforms, [priors](calibration.md#priors), multistart and Laplace posterior,
 behind the plant's cap-free adjoint, so the gradient is finite for a stiff
 plant with no `dtmax` to tune. Two defaults differ from `aquakin.calibrate`:
 the loss is `"mse"` and `laplace=False`, so pass `loss="nll"`, `sigma=` and
 `laplace=True` for uncertainties.
 
-The plant examples below use BSM2, built with its influent wired as in
+```{warning}
+The shipped `asm1` and `adm1` models declare priors on their calibration
+parameters, and `plant.calibrate` applies them by default (`use_priors=True`).
+With the default `loss="mse"` the prior is added to a mean squared error in the
+square of the data's units, so how strongly it pulls the fit depends on the
+units the data happen to be in. Fit with `loss="nll"` and each channel's
+`sigma` (or `sigma="estimate"`) so the prior is weighed against a likelihood,
+or pass `use_priors=False`.
+```
+
+## The data of a plant fit
+
+- **Times are on the plant's clock.** `t_obs` is in the plant's time unit
+  (`Plant(name, time_unit=...)`; days for the BSM plants) unless you pass
+  `time_unit=`.
+- **The solve runs over `t_span`**, which defaults to `(t_obs[0], t_obs[-1])`.
+  Starting it earlier, `t_span=(t_start, t_obs[-1])` with `t_start` before the
+  first sample, gives a spin-up window in which a mismatch between `y0` and the
+  real plant decays before the first observation is compared.
+- **`y0` is the state at `t_span[0]`.** Without it the fit starts from
+  `plant.initial_state()`, the units' own default states, which need not
+  resemble the plant's operating point. Pass a steady state
+  (`plant.steady_state().state`) or a warm start (`bsm1_warm_start(plant)`,
+  `bsm2_warm_start(plant)`), ideally under the influent that preceded the
+  data; a BSM2 plant should always be warm-started.
+- **What is measured** is one stream with `target=` and `observed_channels=`,
+  or several with `observables=`, a list of observables. Each observable is a
+  stream (a registered name such as `"effluent"`, a `"unit.port"`, or a unit
+  name for that unit's outlet) with its channels, written as
+  `PlantObservable("effluent", ["SNH", "SNO"])` or the pair
+  `("effluent", ["SNH", "SNO"])`. **The columns of `observations` run in
+  observable order, and in channel order within each**: two observables with
+  two and one channels give three columns. A channel can be a species or one
+  of the [measured channels](#measured-channels) below; `NaN` marks a missing
+  sample, as for a reactor.
+
+The examples below use BSM2, built with its influent wired as in
 [Plant-wide simulation](plants.md#the-benchmark-plants), and need a measured
-`observations` array. A BSM2 solve takes minutes, and a fit many solves.
+`observations` array. A BSM2 solve takes minutes, and a fit many solves, so
+they are not run on this page.
 
 % skip: next "a BSM2 plant calibration that needs measured data; its API is checked by the plant calibration tests"
 
@@ -33,7 +71,10 @@ result.params_named
 Fit against several streams at once with
 `observables=[PlantObservable(...), ...]`, fit initial states of the assembled
 plant with `free_ic=FreeICConfig([...])`, and run a joint multi-batch fit by
-passing list-valued `observations`, `t_obs` and `y0`.
+passing list-valued `observations`, `t_obs` and `y0`. How well the fitted
+values are determined, and how to report them, works as for a reactor
+([Uncertainty and model comparison](fit_uncertainty.md)); the plant tools for
+it are below.
 
 ## Measured channels
 
@@ -60,9 +101,9 @@ everywhere an observable does: calibration, Fisher information, profile
 likelihood and sensor ranking.
 
 ```python
-from aquakin.plant import Measure, PlantObservable, SensorSet
+from aquakin.plant import Measure, PlantObservable
 
-SensorSet([PlantObservable("effluent", ("TKN", "NOx", "TSS", "Q"))], sigma=[1.0, 0.5, 2.0, 50.0])
+PlantObservable("effluent", ("TKN", "NOx", "TSS", "Q"))
 ```
 
 ## A channel of your own
@@ -113,8 +154,8 @@ bounds, initial pools and noise applies to a plant fit too:
 - The fitted initial states are named `"unit.species"` (also the keys of a
   per-pool `FreeICConfig(bounds={...})`), and `fixed_total=True` fits their
   split of the total in `y0`.
-- With `loss="nll"`, `sigma="estimate"` estimates the noise level of each
-  observed channel.
+- With `loss="nll"`, `sigma` gives one noise level per observed column, in
+  column order, and `sigma="estimate"` estimates the noise level of each.
 - `observation_units={"SNH": "mg/L"}` declares channels measured in other
   units, converted to each stream's model units as for a reactor fit.
 
@@ -139,7 +180,9 @@ channel's `sigma` or `estimate_sigma: true`. See
 
 `aquakin.plant.plant_fisher_information` and
 `aquakin.plant.plant_profile_likelihood` are the plant versions of
-`fisher_information` and `profile_likelihood`. They name the measured channels
+`fisher_information` ([Experiment design](experiment_design.md)) and
+`profile_likelihood` ([Profile likelihood](fit_uncertainty.md#profile-likelihood));
+the ideas behind them are in [Key ideas](analysis_concepts.md). They name the measured channels
 the way `plant.calibrate` does, and work in its coordinates, so their results
 feed `aquakin.identifiability` and `aquakin.design_criterion` directly.
 
@@ -174,11 +217,15 @@ observations, so it suits long horizons. `mode="reverse"` differentiates
 `plant.solve` with the cap-free adjoint, one pass per observation, which suits
 a few observations of many parameters. At a `plant.calibrate` result with
 `loss="nll"`, no priors and `LaplaceConfig(method="gauss_newton")`, the
-reverse-mode matrix equals the fit's `hessian_unconstrained`.
+reverse-mode matrix equals the fit's `hessian_unconstrained` (both are the
+[Fisher information](analysis_concepts.md#fitting-likelihood-posterior-and-the-laplace-approximation)).
 
 To choose what to measure, `aquakin.plant.plant_rank_sensor_sets` scores
-candidate `SensorSet`s (observables plus their noise) by a design criterion of
-the information each adds to the sensors already in place (`base=`). One
+candidate sensor sets by a design criterion of the information each adds to
+the sensors already in place (`base=`). A `SensorSet` is a list of
+observables, in either form, with the noise of their channels: `sigma` is one
+value for every channel or one per channel in column order, absolute unless
+`relative_sigma=True`. One
 sensitivity solve is shared by every candidate, so each extra candidate costs
 only linear algebra. It returns the same `CandidateScore` list as
 `rank_experiments`, best first, and takes `criterion=`, `subset=` and
