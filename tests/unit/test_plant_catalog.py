@@ -83,6 +83,12 @@ BUILDABLE = {
         "out_max": 360.0,
         "signal_name": "kla",
     },
+    "expression_controller": {
+        "model": "asm1",
+        "signal_name": "kla",
+        "law": "clip(offset + Kp*([SNH] - sp), 0, 240)",
+        "constants": {"Kp": 40.0, "sp": 1.0, "offset": 120.0},
+    },
     "influent": {"model": "asm1", "Q": 18000.0, "composition": {"SS": 69.5}},
     "sbr": {
         "model": "asm1",

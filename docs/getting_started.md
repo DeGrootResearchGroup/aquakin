@@ -224,13 +224,18 @@ not one of the model's species.
 
 ## Where to go next
 
+- [Model catalogue](model_catalog.md) — every shipped model, to find the one
+  for your process.
+- [Your first model](adding_models.md) and the
+  [YAML model format](model_format.md) — write your own model, including the
+  built-in math functions (`exp`, `log`, `sqrt`, `min`, ...) and rate functions
+  of your own registered with `aquakin.register_rate_function`.
 - [Reactors](reactors.md) — batch, plug-flow, particle-track, and biofilm
-  reactors; operating conditions; and discontinuous events.
-- [Plant-wide simulation](plants.md) — assemble full treatment-plant flowsheets
-  such as the BSM1 and BSM2 benchmarks.
-- [Sensitivity & calibration](sensitivity_and_calibration.md) — differentiate a
-  solve, run sensitivity analysis, and fit parameters to data.
-- [Model catalogue](model_catalog.md) — every shipped model.
-- [Model file format](model_format.md) — write your own model in YAML,
-  including the built-in math functions (`exp`, `log`, `sqrt`, `min`, ...) and
-  rate functions of your own registered with `aquakin.register_rate_function`.
+  reactors; operating conditions; discontinuous events; and the integrator
+  settings.
+- [Plant-wide simulation](plants.md) — run the BSM1 and BSM2 benchmarks, and
+  [build a flowsheet](custom_flowsheets.md) of your own.
+- [Sensitivity analysis](sensitivity_and_calibration.md),
+  [Calibration](calibration.md) and [Experiment design](experiment_design.md) —
+  differentiate a solve, see which parameters matter, fit them to data, and
+  plan the experiment that determines them best.

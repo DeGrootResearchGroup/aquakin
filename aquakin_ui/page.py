@@ -357,7 +357,7 @@ def _unit_form(self: Editor) -> None:
                     update_modelValue="sel_dirty = true",
                     **common,
                 )
-                _composition_input(common)
+                _mapping_inputs(common)
                 _records_input()
                 v3.VTextField(
                     v_else_if="row.widget === 'readonly'",
@@ -387,24 +387,34 @@ _DIRTY = "sel_dirty = true"
 _WAITING = "sel_rows.some(r => r.waiting)"
 
 
-def _composition_input(common: dict) -> None:
+def _mapping_inputs(common: dict) -> None:
     """A composition (``row.value``, entries of a species and its concentration),
-    each species chosen from ``row.items``."""
-    with html.Div(v_else_if="row.widget === 'composition'", classes="ak-composition mb-2"):
+    each species chosen from ``row.items``; and a ``named`` row (a mapping of
+    name to number), each name typed."""
+    _pairs_input(common, "composition", "species", "concentration", "Add a species")
+    _pairs_input(common, "named", "name", "value", "Add a value")
+
+
+def _pairs_input(common: dict, widget: str, key: str, value_label: str, add: str) -> None:
+    """Rows of ``row.value`` entries, each a ``key`` and a number, for the rows
+    whose widget is ``widget``; a species is chosen from ``row.items``, any
+    other key typed."""
+    with html.Div(v_else_if=f"row.widget === '{widget}'", classes=f"ak-{widget} mb-2"):
         html.Div("{{ row.label }}", classes="text-caption text-medium-emphasis mb-1")
         compact = {k: v for k, v in common.items() if k not in ("label", "placeholder", "classes")}
         with html.Div(v_for="(e, ei) in row.value", key="ei", classes="d-flex ga-1 mb-1"):
-            v3.VSelect(
-                **bound("e.species", "sel_rows", _DIRTY),
-                items=("row.items",),
-                label="species",
+            name = v3.VSelect if key == "species" else v3.VTextField
+            name(
+                **bound(f"e.{key}", "sel_rows", _DIRTY),
+                **({"items": ("row.items",)} if key == "species" else {}),
+                label=key,
                 style="flex: 0 0 104px;",
                 **compact,
             )
             v3.VTextField(
                 **bound("e.value", "sel_rows", _DIRTY),
-                label="concentration",
-                suffix=("row.units[e.species] || ''",),
+                label=value_label,
+                suffix=("(row.units || {})[e.species] || ''",),
                 **compact,
             )
             remove_button("row.value", "ei", "sel_rows", _DIRTY)
@@ -413,7 +423,7 @@ def _composition_input(common: dict) -> None:
             v_if="sel_errors[row.key]",
             classes="text-caption text-error mb-1",
         )
-        add_button("Add a species", "row.value", "{species: '', value: ''}", "sel_rows", _DIRTY)
+        add_button(add, "row.value", f"{{{key}: '', value: ''}}", "sel_rows", _DIRTY)
 
 
 def _records_input() -> None:

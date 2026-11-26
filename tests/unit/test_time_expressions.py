@@ -150,6 +150,8 @@ def test_it_is_jit_grad_and_vmap_clean():
         ("min(t)", "min() takes 2 or more argument(s), got 1"),
         ("clip(t, 1, 2, 3)", "clip() takes 3 argument(s), got 4"),
         ("clip(t, 1)", "clip() takes 3 argument(s), got 2"),
+        # A bracket is a species in a control law, and nothing in time.
+        ("[t] + 1", "expected a number, 't' or '(', got '[' at position 0"),
     ],
 )
 def test_what_is_refused(text, message):

@@ -36,7 +36,7 @@ tested, not asserted away.
 |---|---|
 | `worker.py`, `catalog.py` | the only worker client; the catalogue as plain data (ports without a round trip) |
 | `document.py` | **pure** (no page, no worker); units keyed by stable id (the plant's unit name), labels display only; `from_spec` refuses a kind the catalogue lacks (it would break every redraw) |
-| `forms.py` | **pure**; lists no setting, type or choice: every row follows from the catalogue. **Numbers are shown exactly** (`_float_text`): Apply reads every field back, so a rounded display changes values nobody edited. The aeration value is read only in the mode the form was drawn with; a unit's conditions are kept when its model could not be described; read-only settings and unshown aeration fields survive read-back. An unreadable field raises `FieldError` with its row key. Each row's `suffix` is the unit its help names, flows and times on the plant's clock. A choice that redraws the form carries `reshape` (the page reads the flag, never a key). A `choice` setting is a select, with `reshape` when another setting's `when` names it; a setting whose `when` does not hold (an SBR's holding volume without a storage feed) is not drawn and reads back unset, so switching mode does not leave it behind. A reagent is three rows (`reagent.model`, `.label`, `.composition`, its species from the reagent's own model); all empty reads back as unset. A `records` setting (an SBR's phases) is one `records` row whose fields come from the catalogue's `fields` (a box for a true / false field, a default / true / false choice for an optional one); every box and choice is read back, an empty text field is left out, an entry left blank is skipped, and an error names the entry and field. A `tagged` setting (the settling model) is a `<name>.kind` choice that redraws the form and a row per argument of that kind; switching kind keeps the arguments both take |
+| `forms.py` | **pure**; lists no setting, type or choice: every row follows from the catalogue. **Numbers are shown exactly** (`_float_text`): Apply reads every field back, so a rounded display changes values nobody edited. The aeration value is read only in the mode the form was drawn with; a unit's conditions are kept when its model could not be described; read-only settings and unshown aeration fields survive read-back. An unreadable field raises `FieldError` with its row key. Each row's `suffix` is the unit its help names, flows and times on the plant's clock. A choice that redraws the form carries `reshape` (the page reads the flag, never a key). A `choice` setting is a select, with `reshape` when another setting's `when` names it; a setting whose `when` does not hold (an SBR's holding volume without a storage feed) is not drawn and reads back unset, so switching mode does not leave it behind. A reagent is three rows (`reagent.model`, `.label`, `.composition`, its species from the reagent's own model); all empty reads back as unset. A `records` setting (an SBR's phases) is one `records` row whose fields come from the catalogue's `fields` (a box for a true / false field, a default / true / false choice for an optional one); every box and choice is read back, an empty text field is left out, an entry left blank is skipped, and an error names the entry and field. A `tagged` setting (the settling model) is a `<name>.kind` choice that redraws the form and a row per argument of that kind; switching kind keeps the arguments both take. A `number_map` (constants, settling parameters) is one `named` row of `{name, value}` entries; a `kla_signal` aeration's value is a signal's name, required except just after switching to that mode |
 | `icons.py` | the only per-kind presentation table; an unlisted kind gets the tank icon |
 | `study_form.py` | **pure**; lists no setting of its own (all from the worker's `study_form`) |
 | `results.py` | **pure**; one channel per chart, never two y-axes; colours are the dataviz palette (dark-mode blue set in `PAGE_CSS`); `analysis_view` raises on a kind `ANALYSIS_VIEWS` lacks |
@@ -44,7 +44,7 @@ tested, not asserted away.
 | `process.py`, `jobs.py` | starting / discarding child processes (below); `StudyRun`, one `aquakin study run --json` process per run |
 | `app.py` | `Editor`: state, drawing, undo, canvas events, the unit form, and the binding of every function below; do not grow it |
 | `checks.py`, `files.py`, `studies.py`, `page.py`, `study_page.py`, `unit_form.py` | bound `Editor` concerns: checks; Open / Save; studies; the page; the Studies tab; the unit form's redrawing choices and resending its rows |
-| `repeated.py` | the one implementation of lists of records edited on the page (`bound`, `redraw`, `add_button`, `move_button`, `remove_button`), shared by the study dialog and the unit form (composition, phase table) |
+| `repeated.py` | the one implementation of lists of records edited on the page (`bound`, `redraw`, `add_button`, `move_button`, `remove_button`), shared by the study dialog and the unit form (composition, named numbers, phase table) |
 | `widget/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
 
 **`Editor` is split by concern, bound like `Plant`'s modules.** Each module holds
@@ -55,9 +55,8 @@ behaviour in its concern's module and bind it. Do not use mixins (pyright reject
 a mixin method typed `self: Editor`). A builder that never touches the editor is a
 plain function called directly (`_table`), not bound. Annotate in
 `Editor.__init__` every attribute a moved function assigns, or pyright infers it
-from the `None` there alone. `_worker_study` stays in `app.py`: it is the one
-call that names its command by variable, and `tests/ui/test_protocol.py` pins
-where it is.
+from the `None` there alone. `_worker_study` stays in `app.py` (the one call naming
+its command by variable; `tests/ui/test_protocol.py` pins where it is).
 
 New icons (`icons/*.svg`) keep to `icons/README.md`: 24-unit viewBox,
 `currentColor` strokes, one shared vocabulary.
@@ -229,13 +228,12 @@ editor needs at run time goes in its `REQUIRED`.
   skipped without Playwright; not in the fast gate). Run `pytest tests/browser`
   when a change touches the canvas or the form, after rebuilding the bundle, and
   add a page's files beyond BSM1 to the job's path filter.
-- In `tests/browser`, the `page` fixture hands over the page only once the
-  start-up checks have finished (`checks_finished`, `tests/browser/conftest.py`),
-  because every worker request (Open, the study dialog) queues behind a round
-  of checks, which is slow on a loaded machine. A test that starts a round and
-  then needs it over waits for it (`checks_finished`, or `checks_done` to show
-  the Checks tab), never with a longer timeout; read Python's document from the header chip ("N units · M
-  connections · K recycles") and messages through a recorder (the snackbar
+- In `tests/browser`, the `page` fixture waits for the start-up checks
+  (`checks_finished`, `tests/browser/conftest.py`), since every worker request
+  queues behind a round of checks. A test that starts a round and needs it over
+  waits for it (`checks_finished`, or `checks_done` for the Checks tab), never
+  with a longer timeout; read Python's document from the header chip ("N units
+  · M connections · K recycles") and messages through a recorder (the snackbar
   closes after four seconds); never a negative check with no sync point after it.
 
 ## The installers (`installers/`)

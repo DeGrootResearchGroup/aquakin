@@ -722,8 +722,7 @@ jobs:
           fail_ci_if_error: false
 
   # ---- The user-guide pages of whole-plant solves -----------------------------
-  # docs/plants.md and docs/sensitivity_and_calibration.md, marked `slow` by the
-  # root conftest.py. Same triggers as the slow suite. Not part of it: that suite
+  # The pages in SLOW_PAGES of the root conftest.py, marked `slow` there. Same triggers as the slow suite. Not part of it: that suite
   # is split across shards by pytest-split, which could separate a page's blocks
   # from the namespace they share. Each page runs on its own worker
   # (`--dist loadfile`), so at most two whole-plant solves are resident at once.

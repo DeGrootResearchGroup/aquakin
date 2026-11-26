@@ -52,6 +52,7 @@ from aquakin.core.precedence import PrecedenceParser, accepts, spell_arity
 __all__ = [
     "CONSTANTS",
     "FUNCTIONS",
+    "ClosureParser",
     "TimeExpressionError",
     "compile_time_expression",
     "is_time_expression",
@@ -103,18 +104,29 @@ FUNCTIONS: dict[str, tuple[Callable, tuple[int, ...]]] = {
 CONSTANTS: dict[str, float] = {"pi": math.pi, "e": math.e}
 
 
-class _Parser(PrecedenceParser):
-    """The shared precedence, building a callable of ``t``.
+class ClosureParser(PrecedenceParser):
+    """The shared precedence and functions, building a callable of one argument.
 
-    Each rule returns ``f(t) -> value``; the leaves close over their constants,
-    so evaluating the result is plain JAX arithmetic.
+    Each rule returns ``f(x) -> value``; the leaves close over their constants,
+    so evaluating the result is plain JAX arithmetic. What ``x`` is belongs to
+    the language: the clock for an expression of time, everything a control law
+    reads for :mod:`aquakin.plant.control_law`. A language subclasses this and
+    supplies :meth:`variable` (a bare name that is not a call or one of
+    :data:`CONSTANTS`) and, if it has any, :meth:`bracket` (``[name]``); the
+    arithmetic, the numbers and the function calls are written once, here.
+
+    Attributes
+    ----------
+    language : str
+        How a message names the language (``"an expression of time"``).
     """
 
     error = TimeExpressionError
+    language = "an expression of time"
 
     def parse(self) -> Callable:
         if self.peek().kind == "EOF":
-            raise TimeExpressionError("the expression is empty")
+            raise self.error("the expression is empty")
         return super().parse()
 
     def trailing_message(self, token) -> str:
@@ -123,22 +135,22 @@ class _Parser(PrecedenceParser):
     # --- the arithmetic, as closures --------------------------------------
 
     def add(self, left, right, token):
-        return lambda t, a=left, b=right: a(t) + b(t)
+        return lambda x, a=left, b=right: a(x) + b(x)
 
     def subtract(self, left, right, token):
-        return lambda t, a=left, b=right: a(t) - b(t)
+        return lambda x, a=left, b=right: a(x) - b(x)
 
     def multiply(self, left, right, token):
-        return lambda t, a=left, b=right: a(t) * b(t)
+        return lambda x, a=left, b=right: a(x) * b(x)
 
     def divide(self, left, right, token):
-        return lambda t, a=left, b=right: a(t) / b(t)
+        return lambda x, a=left, b=right: a(x) / b(x)
 
     def negate(self, operand, token):
-        return lambda t, a=operand: -a(t)
+        return lambda x, a=operand: -a(x)
 
     def power(self, base, exponent, token):
-        return lambda t, a=base, b=exponent: safe_pow(a(t), b(t))
+        return lambda x, a=base, b=exponent: safe_pow(a(x), b(x))
 
     # --- its leaves -------------------------------------------------------
 
@@ -146,7 +158,7 @@ class _Parser(PrecedenceParser):
         token = self.peek()
         if token.kind == "NUMBER":
             self.advance()
-            return lambda t, v=float(token.value): v
+            return lambda x, v=float(token.value): v
         if token.kind == "LPAREN":
             self.advance()
             fn = self.expression()
@@ -154,32 +166,33 @@ class _Parser(PrecedenceParser):
             return fn
         if token.kind == "IDENT":
             self.advance()
-            return self._name(token)
-        raise TimeExpressionError(
-            f"expected a number, 't' or '(', got {self.describe(token)} at position {token.pos}"
-        )
+            if self.peek().kind == "LPAREN":
+                return self._call(token)
+            if token.value in CONSTANTS:
+                return lambda x, v=CONSTANTS[token.value]: v
+            return self.variable(token)
+        if token.kind == "LBRACK":
+            return self.bracket(token)
+        raise self.error(self.primary_message(token))
 
-    def _name(self, token: Token) -> Callable:
-        name = token.value
-        if self.peek().kind == "LPAREN":
-            return self._call(token)
-        if name == "t":
-            return lambda t: t
-        if name in CONSTANTS:
-            return lambda t, v=CONSTANTS[name]: v
-        known = ["t", *CONSTANTS, *FUNCTIONS]
-        raise TimeExpressionError(
-            f"'{name}' at position {token.pos} is not a value an expression of time can "
-            f"read. Use 't', {', '.join(sorted(CONSTANTS))}, or one of "
-            f"{', '.join(sorted(FUNCTIONS))}.{_hint(name, known)}"
-        )
+    def primary_message(self, token: Token) -> str:
+        """What a leaf may be, for a token that cannot start one."""
+        return f"expected a number, 't' or '(', got {self.describe(token)} at position {token.pos}"
+
+    def variable(self, token: Token) -> Callable:
+        """A bare name that is not a call or a constant; each language says what it is."""
+        raise NotImplementedError(f"{type(self).__name__} does not say what a name reads")
+
+    def bracket(self, token: Token) -> Callable:
+        """A ``[name]``; a language without one refuses it as it refuses any token."""
+        raise self.error(self.primary_message(token))
 
     def _call(self, token: Token) -> Callable:
         name = token.value
         spec = FUNCTIONS.get(name)
         if spec is None:
-            raise TimeExpressionError(
-                f"'{name}' at position {token.pos} is not a function an expression of time "
+            raise self.error(
+                f"'{name}' at position {token.pos} is not a function {self.language} "
                 f"can call. Built-ins are: {', '.join(sorted(FUNCTIONS))}."
                 f"{_hint(name, list(FUNCTIONS))}"
             )
@@ -188,15 +201,30 @@ class _Parser(PrecedenceParser):
         args = self.arglist()
         self.expect("RPAREN")
         if not accepts(name, arities, len(args)):
-            raise TimeExpressionError(
+            raise self.error(
                 f"{name}() takes {spell_arity(name, arities)} argument(s), got {len(args)} "
                 f"(at position {token.pos})"
             )
         if len(args) > max(arities):
             # An associative built-in called on more than it is defined for:
             # fold left, as max(a, b, c) means max(max(a, b), c).
-            return reduce(lambda x, y, f=func: lambda t: f(x(t), y(t)), args)
-        return lambda t, f=func, a=tuple(args): f(*(x(t) for x in a))
+            return reduce(lambda a, b, f=func: lambda x: f(a(x), b(x)), args)
+        return lambda x, f=func, a=tuple(args): f(*(g(x) for g in a))
+
+
+class _Parser(ClosureParser):
+    """An expression of time: ``t`` is its one variable."""
+
+    def variable(self, token: Token) -> Callable:
+        name = token.value
+        if name == "t":
+            return lambda t: t
+        known = ["t", *CONSTANTS, *FUNCTIONS]
+        raise TimeExpressionError(
+            f"'{name}' at position {token.pos} is not a value an expression of time can "
+            f"read. Use 't', {', '.join(sorted(CONSTANTS))}, or one of "
+            f"{', '.join(sorted(FUNCTIONS))}.{_hint(name, known)}"
+        )
 
 
 def _hint(name: str, known: list[str]) -> str:
