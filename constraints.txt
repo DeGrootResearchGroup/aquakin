@@ -9,7 +9,10 @@
 #
 # To refresh after a deliberate dependency upgrade: update the relevant pins to
 # the new known-good versions and re-run the suite before committing. Keep this
-# in sync with the (raised) floors in pyproject.toml.
+# in sync with the (raised) floors in pyproject.toml. Every pin must install on
+# each Python version pyproject.toml's classifiers list (CI tests them all):
+# `python scripts/check_constraints.py` checks that, and the pre-push hook runs
+# it when the pins change.
 
 # --- JAX numerical stack (fast-moving; the main reason this lock exists) ------
 # JAX 0.11 dropped Python 3.11, which requires-python still admits: the 3.11

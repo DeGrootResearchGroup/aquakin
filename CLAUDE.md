@@ -408,7 +408,11 @@ an informational status.
   (`.claude/rules/tests.md`).
 - A dependency added to `pyproject.toml` (any extra) is pinned in
   `constraints.txt` in the same change, since CI and other sessions install
-  with it.
+  with it. A pin must install on every Python version the classifiers list, the
+  oldest included, because CI tests each one:
+  `python scripts/check_constraints.py` resolves it per version (pip alone
+  checks only the Python it runs under), and the pre-push hook runs it when the
+  push changes `constraints.txt` or `pyproject.toml`.
 
 > The full CI architecture — pytest-split sharding, the fast PR gate vs the
 > merge-to-main `slow`/`validation`/`heavy` suites, the memory/heavy-runner
