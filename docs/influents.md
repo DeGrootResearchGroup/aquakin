@@ -15,8 +15,66 @@ model = aquakin.load_model("asm1")
 
 `model.influent({...}, Q=..., T=...)` gives a constant feed, and the BSM
 loaders read the benchmark load files (see
-[Plant-wide simulation](plants.md)). Three more ways to describe a feed follow, and
-`InfluentSeries` holds any measured record.
+[Plant-wide simulation](plants.md)). The sections below build a feed from your
+own record, from a pattern, and from laboratory measurements.
+
+## A measured record
+
+An `InfluentSeries` is a feed sampled at times `t`: the flow `Q` (m³ per the
+model's time unit), the concentrations `C`, one row per time and one column per
+species of the model, and optionally the temperature `T` (K). Build one from
+arrays:
+
+```python
+import jax.numpy as jnp
+from aquakin.plant import InfluentSeries
+
+t = jnp.array([0.0, 0.25, 0.5, 0.75, 1.0])                 # d
+Q = jnp.array([16000.0, 22000.0, 20000.0, 17000.0, 16000.0])
+snh = jnp.array([25.0, 35.0, 32.0, 28.0, 25.0])
+C = jnp.stack([model.concentrations({"SS": 70.0, "SNH": x}, base="zero") for x in snh])
+day = InfluentSeries(t=t, Q=Q, C=C, model=model, T=jnp.full(5, 288.15))
+print(day.at(0.125).Q, day.at(3.0).Q)
+# 19000.0 16000.0
+```
+
+% invisible-code-block: python
+%     assert (float(day.at(0.125).Q), float(day.at(3.0).Q)) == (19000.0, 16000.0)
+
+Between samples the feed is **interpolated linearly**, so a solve sees a
+smoothly varying flow (19 000 m³/d at 3 h, halfway between the first two
+samples). **Outside the samples it holds the nearest one**: before the first
+time the feed is the first sample, and after the last it stays at the last
+sample for as long as the solve runs. A solve whose span reaches outside a
+record that varies warns once with an `InfluentRangeWarning` (from
+`aquakin.plant`) naming the influent, its range and the span; a constant feed,
+the same at every sample, never warns. Make the record cover the whole solve,
+or, for a load that repeats, write it as a pattern
+([below](#a-feed-that-follows-a-pattern)). `base="zero"` leaves the species
+you do not name out of the feed.
+
+A table with a header row naming its columns, `t`, `Q`, optionally `T`, and any
+of the model's species, is read by `read_influent_table` (species not given are
+zero); `write_influent_table` writes one. A pandas `DataFrame` becomes a series
+the same way, through such a file:
+
+```python
+import pandas as pd
+from aquakin.plant import read_influent_table
+
+df = pd.DataFrame({"t": [0.0, 0.25, 0.5, 0.75, 1.0], "Q": Q, "SS": 70.0, "SNH": snh})
+df.to_csv("feed.csv", index=False)
+from_table = read_influent_table("feed.csv", model)
+```
+
+% invisible-code-block: python
+%     import numpy as np
+%     assert np.allclose(from_table.C, day.C) and np.allclose(from_table.Q, day.Q)
+
+The table is in the model's units; `units=` on `InfluentSeries` declares others
+([Influent units](#influent-units)), and `read_influent_csv` reads a file with
+columns of its own naming ([A feed from laboratory
+measurements](#a-feed-from-laboratory-measurements)).
 
 ## A feed that follows a pattern
 
@@ -131,6 +189,22 @@ scada_feed = read_influent_csv(
 print(scada_feed.t, scada_feed.Q)
 # [0.   0.25 0.5  1.  ] [16800. 21600. 19200. 16800.]
 ```
+
+Either is an influent like any other. A builder's plant takes it at its inlet,
+and a plant of your own names the input port with `to=`:
+
+```python
+lab_plant = build_bsm1(model)
+lab_plant.add_influent("feed", lab_feed)            # the plant's inlet
+
+tank = aquakin.Plant("lab_tank", time_unit="d")
+tank.add_unit(aquakin.CSTRUnit("tank", model, volume=1000.0, input_port_names=["in"],
+                               conditions={"T": 293.15}))
+tank.add_influent("feed", scada_feed, to="tank.in")
+```
+
+% invisible-code-block: python
+%     assert lab_plant.check().ok and tank.check().ok
 
 ## Influent units
 

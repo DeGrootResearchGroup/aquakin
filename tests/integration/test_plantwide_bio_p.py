@@ -124,7 +124,7 @@ def test_a2o_clarifier_settles_every_particulate_of_the_model(biop):
     from aquakin.plant import build_a2o
     from aquakin.plant.streams import Stream
 
-    clarifier = build_a2o(biop).units["clarifier"]
+    clarifier = build_a2o(biop, use_takacs=False).units["clarifier"]
     Q_in = 30000.0
     feed = Stream(Q=jnp.asarray(Q_in), C=jnp.ones(biop.n_species), model=biop)
     params = jnp.zeros(0)

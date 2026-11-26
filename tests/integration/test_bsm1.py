@@ -228,8 +228,10 @@ def test_bsm1_dry_weather_runs(asm1):
     pumps (internal recycle, RAS, wastage) deliver fixed setpoint flows, so the
     throughput tracks the influent smoothly instead of the near-singular
     fixed-fraction gain that blew the throughput up to ~20x Qin and made the
-    monolithic solve hit the step ceiling under diurnal forcing (issue #30)."""
-    plant = build_bsm1(model=asm1)
+    monolithic solve hit the step ceiling under diurnal forcing (issue #30).
+    Run on the ideal clarifier; test_bsm1_takacs_dry_weather_runs is the
+    layered settler's counterpart."""
+    plant = build_bsm1(model=asm1, use_takacs=False)
     plant.add_influent("feed", load_bsm1_influent("dry", asm1), to="inlet_mix.fresh")
     sol = _run(plant, t_end=14.0, n_save=8)
     assert jnp.all(jnp.isfinite(sol.state))

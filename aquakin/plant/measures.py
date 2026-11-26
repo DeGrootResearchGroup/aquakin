@@ -66,7 +66,6 @@ __all__ = [
 #: The channel names that are measurements rather than species.
 KEYWORDS = ("Q", "T", "COD", "TKN", "NOx", "TN", "TP", "TSS")
 _COMPOSITION = ("COD", "TKN", "NOx", "TN", "TP")
-_TSS_SPECIES = ("XTSS", "XSS")
 # Dissolved gases carrying COD that a sample loses before its COD is measured.
 _GAS_COD = ("S_h2", "S_ch4", "SH2", "SCH4")
 
@@ -482,10 +481,10 @@ def _composition_weights(model, keyword: str, params) -> np.ndarray:
 
 
 def _tss_weights(model) -> np.ndarray:
-    from aquakin.plant._constants import ASM1_TSS_FACTOR, ASM1_TSS_SPECIES
+    from aquakin.plant._constants import ASM1_TSS_FACTOR, ASM1_TSS_SPECIES, LUMPED_TSS_SPECIES
 
     w = np.zeros(model.n_species)
-    for name in _TSS_SPECIES:
+    for name in LUMPED_TSS_SPECIES:
         if name in model.species_index:
             w[model.species_index[name]] = 1.0
             return w
@@ -494,7 +493,7 @@ def _tss_weights(model) -> np.ndarray:
             w[model.species_index[s]] = ASM1_TSS_FACTOR
         return w
     raise KeyError(
-        f"model '{model.name}' has no TSS species ({', '.join(_TSS_SPECIES)}) and is not of the "
+        f"model '{model.name}' has no TSS species ({', '.join(LUMPED_TSS_SPECIES)}) and is not of the "
         f"ASM1 family; give its TSS as Measure('TSS', {{species: factor, ...}})"
     )
 

@@ -106,7 +106,7 @@ def test_n_locations_zero_for_empty():
 def test_with_rejects_wrong_length_array_override():
     """A 1-D override is used as-is, so it must match the object's location count;
     a wrong length is caught when the merged object is re-validated."""
-    sc = SpatialConditions.uniform(3, pH=7.0)
+    sc = SpatialConditions.uniform(3, pH=7.0, T=293.15)
     with pytest.raises(ValueError, match="length"):
         sc.with_(T=jnp.array([280.0, 285.0]))
 
@@ -122,9 +122,19 @@ def test_with_overrides_field_and_leaves_original():
     assert type(cold) is SpatialConditions
 
 
-def test_with_adds_new_field():
-    c = SpatialConditions.uniform(pH=7.0).with_(T=300.0)
-    assert set(c.fields) == {"pH", "T"}
+def test_with_rejects_an_undeclared_field():
+    """``with_`` edits declared fields only: a name the object does not carry (a
+    typo, or a condition the model never reads) raises, naming it and listing the
+    declared fields, rather than adding a field nothing reads. Following the
+    advice -- build the field set with ``uniform`` -- gives the intended value."""
+    base = SpatialConditions.uniform(pH=7.0, T=293.15)
+    with pytest.raises(ValueError, match=r"undeclared.*\['pHs'\].*\['T', 'pH'\].*Did you mean: pH"):
+        base.with_(pHs=8.0)
+    with pytest.raises(ValueError, match=r"undeclared.*\['DO'\]"):
+        base.with_(T=283.15, DO=2.0)
+    added = SpatialConditions.uniform(**{k: float(v[0]) for k, v in base.fields.items()}, DO=2.0)
+    assert float(added.fields["DO"][0]) == 2.0
+    assert float(added.fields["T"][0]) == pytest.approx(293.15)
 
 
 def test_with_on_default_conditions():
@@ -134,7 +144,7 @@ def test_with_on_default_conditions():
 
 
 def test_with_broadcasts_scalar_and_accepts_array_for_multilocation():
-    sc = SpatialConditions.uniform(3, pH=7.0)
+    sc = SpatialConditions.uniform(3, pH=7.0, T=293.15)
     out = sc.with_(pH=8.0, T=jnp.array([280.0, 285.0, 290.0]))
     assert out.n_locations == 3
     assert jnp.allclose(out.fields["pH"], 8.0)          # scalar broadcast

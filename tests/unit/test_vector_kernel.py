@@ -23,7 +23,7 @@ from aquakin.core.vector_kernel import (
 # the SUMO bio-P models, and a precipitation model (derived SI_/R_ fields).
 _MODELS = [
     "ozone_bromate", "uv_h2o2", "asm1", "asm2d", "asm2d_tud", "asm3",
-    "asm3_2step", "adm1", "wats_sewer", "wats_sewer_extended",
+    "asm3_2step", "adm1", "wats_sewer",
     "precipitation_struvite_calcite",
 ]
 
@@ -102,7 +102,7 @@ def test_kernel_reduces_op_count(name):
 def test_kernel_op_count_reduction_is_large_on_a_big_model():
     """A concrete floor: the kernel cuts the WATS rate jaxpr by >= 3x, the
     headline result of issue #373."""
-    net = aquakin.load_model("wats_sewer_extended")
+    net = aquakin.load_model("wats_sewer")
     C = net.default_concentrations()
     Cc, p, ca = _prepared_inputs(net, C)
     scalar = _count_eqns(
@@ -173,7 +173,7 @@ def test_kernel_matches_scalar_gradient():
     assert jnp.allclose(gk, gs, rtol=1e-10, atol=1e-12)
 
 
-def test_constant_exponent_keeps_derivative_finite():
+def test_constant_exponent_keeps_derivative_finite(stiff_sewer_model):
     """A rate with a constant-exponent power whose base can reach zero -- e.g.
     ``(pH - pH_opt)**2`` -- must keep a finite derivative through the kernel.
 
@@ -184,7 +184,7 @@ def test_constant_exponent_keeps_derivative_finite():
     static (the ``powc`` kind) so it matches the scalar path's finite gradient.
     The whole-model forward bit-identicality test does NOT catch this -- only a
     derivative check does."""
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
+    net = stiff_sewer_model
     C = net.default_concentrations()
 
     # dr/dC through the kernel must be finite everywhere (the state-derived pH

@@ -79,9 +79,8 @@ print(f"[BrO3-] at 10 min: {float(sol.C_named('BrO3-')[-1]):.3g} mol/L")
    stoichiometry matrix and the compiled rate expressions. This is the object
    the reactors integrate.
 
-`model.rates(C, params, condition_arrays, loc_idx)` returns the
-`(n_reactions,)` rate vector, and `model.dCdt(...)` the right-hand side,
-`stoich.T @ rates` with a guard against negative concentrations. Rate
-constants always come in through `params` rather than being fixed inside the
-compiled expressions, which is what lets JAX differentiate a whole solve with
-respect to them for sensitivity analysis and calibration.
+The rate of change of each species is the sum, over the reactions, of each
+reaction's rate times its stoichiometric coefficient for that species. Rate
+constants always come in as an argument (`params`) rather than being fixed
+inside the compiled expressions, which is what lets JAX differentiate a whole
+solve with respect to them for sensitivity analysis and calibration.

@@ -20,7 +20,10 @@ nor concentrating it in a few files makes the whole suite fast.
   `ruff>=0.15,<0.16` so a new ruff release cannot redden the gate without a
   deliberate bump). The same gate runs locally from the committed pre-push hook
   (`.githooks/pre-push`); a Claude Code cloud session enables it, and installs the
-  pinned extras, through the SessionStart hook (`scripts/session_start.py`). The rule set and the per-file ignores live in `[tool.ruff]` in
+  pinned extras, through the SessionStart hook (`scripts/session_start.py`). On
+  a pull request the job first refuses any commit whose message links to a
+  Claude session (`scripts/check_session_links.sh`, the check the pre-push hook
+  also runs), so the rule holds even where the local hook is not enabled. The rule set and the per-file ignores live in `[tool.ruff]` in
   `pyproject.toml`: the `E,F,W,I,B,RUF,NPY,PIE,ICN,FA,UP` families plus `C420`
   and `SIM300` at `line-length = 100` (the width the package is written to), with
   several rules `ignore`d against dedicated audit issues so each can be tackled — and
@@ -59,10 +62,11 @@ nor concentrating it in a few files makes the whole suite fast.
   `aquakin.__all__` at build time. It skips the bare `labeled` event and the
   schedule / dispatch refresh, like the lint gate.
 - The fast tier (`$FAST_MARKERS` = `not validation and not slow`; `unit` and
-  `ui` on Python 3.11/3.12, `integration` on 3.12 only) runs on **every PR and
+  `ui` on Python 3.11/3.13, `integration` on 3.12 only) runs on **every PR and
   every push** and is the merge gate. Integration is the expensive fast job, so
-  it runs on one interpreter; the version floor is guarded by the 3.11 `unit`
-  and `ui` jobs. It is
+  it runs on one interpreter; the ends of the supported range (3.11 to 3.13)
+  are guarded by the 3.11 and 3.13 `unit` and `ui` jobs, so every supported
+  version runs on every PR. It is
   two `pytest-split`-sharded jobs, each shard a fresh process pool of **two**
   xdist workers (`-n 2`), **sharded for memory, not speed**, plus the unsharded
   `ui` job:
@@ -225,7 +229,7 @@ nor concentrating it in a few files makes the whole suite fast.
   3.12) and **`validation`** job (`pytest -m "validation and not heavy"`,
   3.12) run **only on push to `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
   stiff/plant solves (the `slow` marker on `test_bsm2_dynamic`, `test_bsm1`,
-  `test_biofilm`, `test_forward_sensitivity`, the two `test_wats_sewer_*` files)
+  `test_biofilm`, `test_forward_sensitivity`)
   and the published-data checks. A regression a PR's fast gate cannot catch
   therefore surfaces within minutes of merging — revert from there. **The
   validation job selects by marker, and no job collects `tests/validation/` by
@@ -382,10 +386,10 @@ under that stable name.
 
 A green fast gate is the merge gate. The package requires Python 3.11 or later
 (`requires-python >= 3.11`), because the dependency floors (jax/jaxlib 0.10,
-diffrax 0.7, optimistix 0.1) require it; CI tests 3.11 and 3.12. The `unit`
-and `ui` jobs run on both and guard the floor; `integration`, `slow`,
-`validation` and the heavy tier run on 3.12 only, since they are the
-expensive jobs. (Python 3.10
+diffrax 0.7, optimistix 0.1) require it; CI tests 3.11, 3.12 and 3.13. The
+`unit` and `ui` jobs run on 3.11 and 3.13 and guard both ends of the range;
+`integration`, `slow`, `validation` and the heavy tier run on 3.12 only, since
+they are the expensive jobs. (Python 3.10
 was dropped: it had been install-only and untested, and the current JAX stack
 no longer installs on it.) When adding a runtime
 dependency, add it to `pyproject.toml` `dependencies` so the CI install

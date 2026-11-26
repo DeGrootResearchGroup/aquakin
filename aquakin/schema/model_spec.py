@@ -630,15 +630,15 @@ def _units_measure(units: str) -> str | None:
     """
     if not units:
         return None
-    from aquakin.utils.units import parse_units
+    from aquakin.utils.units import parse_units, unit_base
 
     dim = parse_units(units)
     if dim is None:
         return None
-    numerator = {tok for tok, exp in dim.tokens if exp > 0}
-    if numerator & {"mol", "kmol", "mmol"}:
+    numerator = {unit_base(tok) for tok, exp in dim.tokens if exp > 0}
+    if "mol" in numerator:
         return "molar"
-    if numerator & {"g", "kg", "mg"}:
+    if "g" in numerator:
         return "mass"
     return None
 

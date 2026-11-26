@@ -2,7 +2,7 @@
 
 `a2o_comparison.py` runs the plant-wide model's bio-P level
 (`../models/plantwide_bio_p.yaml`) and the shipped `asm2d` on the same A2O
-(`aquakin.plant.build_a2o`) with ASM2d's default influent, and prints, at each
+(`aquakin.plant.build_a2o`, ideal clarifier: the plant-wide model has no TSS state yet) with ASM2d's default influent, and prints, at each
 steady state, the end of the anaerobic zone (fermentable substrate, VFA,
 phosphate), the PAOs and the effluent phosphate. Run it as a script (about 10
 minutes). `tests/validation/test_plantwide_bio_p_a2o.py` checks the results.

@@ -354,34 +354,15 @@ def test_monte_carlo_rejects_output_names_length_mismatch():
 # ---------------------------------------------------------------------------
 # aquakin/integrate/_common.py  -- friendly_solve_errors upstream-message pins
 #
-# friendly_solve_errors / is_forward_mode_ad_error map two opaque upstream
-# failures to domain-level remedies by substring-matching the exception message.
-# That is pragmatic but fragile: a Diffrax/Equinox or JAX wording change would
-# silently stop the match and let the raw traceback leak. These tests provoke the
-# two upstream errors directly (minimal, no reactor) and pin the exact substrings
-# the matchers key on, so such a dependency bump fails here -- loudly and with a
-# clear pointer to the wording that moved -- instead of degrading in the field.
+# friendly_solve_errors / is_forward_mode_ad_error map an opaque upstream
+# failure to a domain-level remedy by substring-matching the exception message.
+# That is pragmatic but fragile: a JAX wording change would silently stop the
+# match and let the raw traceback leak. This test provokes the upstream error
+# directly (minimal, no reactor) and pins the exact substrings the matcher keys
+# on, so such a dependency bump fails here -- loudly and with a clear pointer to
+# the wording that moved -- instead of degrading in the field. (A solve out of
+# steps is recognized by its diffrax result, not by message.)
 # ---------------------------------------------------------------------------
-
-
-def test_upstream_max_steps_message_still_matches():
-    """Diffrax/Equinox still says 'maximum number of solver steps' when a solve
-    exhausts ``max_steps`` (the substring ``friendly_solve_errors`` keys on)."""
-    import diffrax
-
-    term = diffrax.ODETerm(lambda t, y, args: -y)
-    with pytest.raises(RuntimeError) as excinfo:
-        diffrax.diffeqsolve(
-            term,
-            diffrax.Tsit5(),
-            t0=0.0,
-            t1=1.0,
-            dt0=None,
-            y0=jnp.asarray([1.0]),
-            stepsize_controller=diffrax.PIDController(rtol=1e-8, atol=1e-10),
-            max_steps=1,
-        )
-    assert "maximum number of solver steps" in str(excinfo.value).lower()
 
 
 def test_upstream_forward_mode_custom_vjp_message_still_matches():

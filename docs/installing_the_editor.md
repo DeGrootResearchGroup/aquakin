@@ -42,7 +42,8 @@ editor then opens in your web browser. The first start can take a minute.
 Keep the small window open while you work. Close it when you are done to stop
 aquakin. The editor starts in your Documents folder.
 
-The editor itself is described in [Plant-wide simulation](plants.md).
+The editor itself is described in
+[Flowsheet files, studies and the editor](plant_files.md#the-flowsheet-editor).
 
 ## Updating and removing
 

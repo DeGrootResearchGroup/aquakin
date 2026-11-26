@@ -43,8 +43,10 @@ GUIDE_PAGES = [
     "docs/custom_flowsheets.md",
     "docs/influents.md",
     "docs/plant_files.md",
+    "docs/analysis_concepts.md",
     "docs/sensitivity_and_calibration.md",
     "docs/calibration.md",
+    "docs/fit_uncertainty.md",
     "docs/experiment_design.md",
     "docs/plant_calibration.md",
     "docs/worked_example_design.md",
@@ -60,6 +62,7 @@ SLOW_PAGES = {
     "custom_flowsheets.md",
     "sensitivity_and_calibration.md",
     "calibration.md",
+    "fit_uncertainty.md",
     "experiment_design.md",
 }
 

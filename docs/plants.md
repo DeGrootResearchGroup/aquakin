@@ -5,17 +5,17 @@ flowsheets — reactors, clarifiers, mixers, splitters, digesters, and their
 recycle loops — and integrates the whole plant under one solve. The IWA
 Benchmark Simulation Models BSM1 (an activated-sludge line) and BSM2 (the
 activated-sludge line plus primary treatment and an anaerobic sludge train) ship
-ready to build.
+ready to build, with an A²O nutrient-removal plant.
 
-This page runs the benchmark plants: their steady state, a dynamic run and its
-performance indices, design and reporting, and checking a plant's units and mass
-balance. The other plant pages build on it:
+This page runs the shipped plants: their steady state, initial states, a
+dynamic run and its performance indices, reading a plant solution, design and
+reporting, and checking a plant's units and mass balance. The other plant pages build on it:
 
 | Page | Covers |
 |---|---|
-| [Building a flowsheet](custom_flowsheets.md) | a plant of your own: units, wiring, the time unit, events, and every unit operation |
-| [Influents](influents.md) | feeds that follow a pattern, scheduled pumps, laboratory and SCADA records, influent units |
-| [Flowsheet files, studies and the editor](plant_files.md) | saving a plant as a file, reproducible studies, and the browser flowsheet editor |
+| [Building a flowsheet](custom_flowsheets.md) | a plant of your own: units, ports and wiring, an activated-sludge line, the time unit, events, translators between models, temperature, and every unit operation |
+| [Influents](influents.md) | measured records, feeds that follow a pattern, scheduled pumps, laboratory and SCADA records, influent units |
+| [Flowsheet files, studies and the editor](plant_files.md) | saving a plant as a file, the project folder, reproducible studies, the command line, and the browser flowsheet editor |
 
 If you have not used aquakin before, read [Getting started](getting_started.md)
 first; single reactors, integrator settings and events are covered in
@@ -50,21 +50,28 @@ bsm1.add_influent("feed", model.influent(bsm1_feed, Q=18446.0))
 # steady state, so there is no horizon to guess.
 ss = bsm1.run_to_steady_state()
 print("converged:", ss.converged, "after", round(ss.time), "days")
-# converged: True after 33 days
+# converged: True after 37 days
 ```
+
+% invisible-code-block: python
+%     assert bool(ss.converged) and round(ss.time) == 37
 
 Reconstruct the clarified effluent from that run and read its quality:
 
 ```python
 eff = bsm1.stream(ss.solution, bsm1.effluent_endpoint)
 print("effluent SNH:", round(float(eff.C_named("SNH")[-1]), 2), "g N/m³")
-# effluent SNH: 0.46 g N/m³
+# effluent SNH: 0.47 g N/m³
 ```
+
+% invisible-code-block: python
+%     assert round(float(eff.C_named("SNH")[-1]), 2) == 0.47
 
 The plant integrates the state of each unit, not the streams between them, so
 `plant.stream(solution, endpoint)` recomputes a stream (flow and concentrations
 over time) from a solution. An endpoint is a named stream such as
-`"effluent"` (`plant.list_streams()`) or a `"unit.port"` (`plant.list_ports()`).
+`"effluent"` (`plant.list_streams()`) or a `"unit.port"` (`plant.list_ports()`);
+[Reading a plant solution](#reading-a-plant-solution) has the other readers.
 
 ### BSM2
 
@@ -112,14 +119,17 @@ asm1_bsm2)`, with `profile` one of `"dry"`, `"rain"` or `"storm"`.
 
 ### The secondary clarifier and the benchmark
 
-The BSM plants use a ten-layer secondary clarifier (`TakacsClarifier`). By
-default it computes the settling flux from one layer to the next with the
-Godunov flux of the settling conservation law (Bürger, Diehl & Nopens 2011)
-rather than the benchmark's Takács rule. Steady states are the same, the mean
-effluent concentrations of a dynamic BSM2 run differ by under 0.1%, and a
-dynamic solve is several times cheaper. To reproduce the benchmark settler
-exactly, pass `settler_interface_flux="takacs"` to `build_bsm1` / `build_bsm2`
-(or `interface_flux="takacs"` to `TakacsClarifier`).
+Both BSM plants use the benchmark's ten-layer secondary clarifier
+(`TakacsClarifier`) by default. It computes the settling flux from one layer to
+the next with the Godunov flux of the settling conservation law (Bürger, Diehl &
+Nopens 2011) rather than the benchmark's Takács rule. Steady states are the
+same, the mean effluent concentrations of a dynamic BSM2 run differ by under
+0.1%, and a dynamic solve is several times cheaper. To reproduce the benchmark
+settler exactly, pass `settler_interface_flux="takacs"` to `build_bsm1` /
+`build_bsm2` (or `interface_flux="takacs"` to `TakacsClarifier`). For a faster
+BSM1 whose clarifier has no state of its own, `build_bsm1(use_takacs=False)`
+uses the stateless `IdealClarifier`, which sends a fixed fraction of the
+particulates to the underflow.
 
 ```{note}
 Why the two differ: the Takács rule takes the smaller of the two layers'
@@ -168,8 +178,11 @@ strips every declared gas other than the aerated one, each at its transfer
 ratio from the gas library, toward the concentration in equilibrium with its
 share of the air at the tank's temperature (inorganic carbon as its dissolved
 CO₂ at the tank's pH). The air is dry air at one atmosphere times
-`pressure_factor`; give `air={"CO2": 0.02}` to change a gas's mole fraction,
-for example in a covered tank. Oxygen still uses `do_sat`. An unaerated tank
+`pressure_factor` (the `Aeration` setting for the barometric pressure: 1 at sea
+level, below 1 at altitude); give `air={"CO2": 0.02}` to change a gas's mole
+fraction, for example in a covered tank. Oxygen still uses `do_sat`, the
+`Aeration` setting for its saturation concentration (8 g O₂/m³ by default).
+An unaerated tank
 with some surface exchange is `Aeration(kla=<surface kLa>, stripped="model")`;
 without an `Aeration` a tank exchanges no gas.
 
@@ -180,6 +193,40 @@ the solve stripped (kg N/d), time-averaged over the solution: for a tank whose
 correction included. For a tank that does not strip it, or when you pass
 `kla_ratio=`, it is an estimate from that tank's oxygen kLa (read from the
 species its `Aeration` names, so it works whatever the model calls oxygen).
+
+### A²O
+
+`build_a2o` builds an anaerobic–anoxic–oxic (A²O) biological nutrient removal
+plant on ASM2d, which removes phosphorus as well as nitrogen: two anaerobic
+tanks, where the phosphorus-accumulating organisms take up the volatile fatty
+acids, two anoxic and three aerated tanks, and a secondary clarifier, with a
+nitrate recycle from the last aerated tank to the anoxic zone and the RAS to the
+anaerobic zone. It is a representative municipal design rather than a published
+benchmark. `a2o_influent(model)` is a matching constant influent, and
+`a2o_warm_start(plant)` seeds the tanks with an established phosphorus-removing
+sludge, which a cold start takes a long time to grow:
+
+```python
+from aquakin.plant import a2o_influent, a2o_warm_start, build_a2o
+
+asm2d = aquakin.load_model("asm2d")
+a2o = build_a2o(asm2d)
+a2o.add_influent("feed", a2o_influent(asm2d))
+a2o_root = a2o.steady_state(y0=a2o_warm_start(a2o))
+aer3 = a2o.named_state(a2o_root.state)["aer3"]     # the last aerated tank
+print({k: round(aer3[k], 1) for k in ("SNH4", "SNO3", "SPO4")})
+# {'SNH4': 0.2, 'SNO3': 10.3, 'SPO4': 3.9}
+```
+
+% invisible-code-block: python
+%     assert bool(a2o_root.converged)
+%     assert {k: round(aer3[k], 1) for k in ("SNH4", "SNO3", "SPO4")} == {"SNH4": 0.2, "SNO3": 10.3, "SPO4": 3.9}
+
+Its options set the design flow, the wastage flow and the two recycle ratios;
+`ferric=FerricDose(flow=...)` doses a metal salt into the aerated zone to
+precipitate more phosphate, and `use_takacs=False` replaces its ten-layer
+`TakacsClarifier` with the stateless `IdealClarifier`. Its streams are named
+`effluent`, `internal_recycle`, `ras` and `wastage`, as on the BSM plants.
 
 ## Steady state, faster
 
@@ -193,11 +240,16 @@ parameters.
 ```python
 root = bsm1.steady_state()
 print("converged:", root.converged, "by", root.method, "in", root.iterations, "iterations")
-# converged: True by ptc in 34 iterations
+# converged: True by ptc in 30 iterations
 ```
 
+% invisible-code-block: python
+%     assert bool(root.converged) and root.method == "ptc" and root.iterations == 30
+
 Use `steady_state()` for sweeps and gradients, and `run_to_steady_state()` when
-you also want the path to steady state (`ss.solution`). `root.method` says how
+you also want to know how long the plant takes to settle (`ss.time`).
+`ss.solution` is that forward solve, saved at its last time only.
+`root.method` says how
 the state was found: `"ptc"`, or `"ptc->forward"` when PTC did not converge and
 `steady_state()` fell back to integrating forward. The fallback stops on the
 same scaled-residual test, with the `tol` and `scale_floor` you passed, and
@@ -218,6 +270,53 @@ print(root.method, fwd.residual <= 1e-7, root.residual <= 1e-7)
 # ptc True True
 ```
 
+## Initial states and warm starts
+
+A solve without `y0` starts from `plant.initial_state()`, each unit's own
+default: a reactor at its model's default concentrations, the clarifier with its
+default sludge blanket. To start elsewhere, pass a flat state as `y0`. These
+build one:
+
+```python
+from aquakin.plant.bsm import bsm1_warm_start
+
+named = bsm1.named_state(root.state)             # {unit: {state name: value}}
+print(round(named["tank5"]["SNH"], 2))
+# 0.46
+y_edit = bsm1.state_from_named({"tank1": {"XB_A": 150.0}}, base=root.state)
+seed = model.concentrations({"XB_H": 2000.0, "XB_A": 150.0, "XS": 50.0, "SO": 2.0})
+y_seed = bsm1.initial_state(overrides={f"tank{i}": seed for i in range(1, 6)})
+y_bench = bsm1_warm_start(bsm1)
+```
+
+% invisible-code-block: python
+%     assert round(named["tank5"]["SNH"], 2) == 0.46
+%     assert bsm1.named_state(y_edit)["tank1"]["XB_A"] == 150.0
+%     assert y_seed.shape == y_bench.shape == root.state.shape
+
+- **A state you solved before** (`root.state`, `sol.state[-1]`) is the usual
+  warm start: a dynamic run from a steady state, or one scenario from the
+  steady state of another.
+- `plant.named_state(state)` gives a state as plain numbers by unit and state
+  name (`plant.state_names()` lists the names), to save as a file;
+  `plant.state_from_named(named, base=...)` reads such a dictionary back,
+  changing only the entries it names, also into a plant whose units were added
+  in another order.
+- `plant.initial_state(overrides={unit: vector})` replaces whole units' starting
+  states: here every tank starts from a seeded mixed liquor.
+- `bsm1_warm_start`, `bsm2_warm_start` and `a2o_warm_start` seed the builders'
+  reactors with a healthy biomass.
+
+Warm-start whenever the default start is far from where the plant operates.
+BSM1 settles from its default in about the same time; a plant with an anaerobic
+digester does not, because the digester's retention time is weeks, so always
+warm-start BSM2. The organisms of a phosphorus-removing plant also take long
+to establish from a cold start, so start the A²O plant from `a2o_warm_start`;
+the A²O plant also has a steady state where the nitrifiers have washed out,
+which `steady_state` can reach from a seed far from the operating point.
+A solve that runs out of steps from a cold start often succeeds from a warm one
+(see [When a solve fails](reactors.md#when-a-solve-fails)).
+
 ## Dynamic runs and performance indices
 
 For a dynamic simulation, drive a fresh plant with the benchmark's 14-day dry
@@ -237,8 +336,11 @@ dyn_sol = dyn.solve(t_span=(7.0, 14.0), t_eval=jnp.linspace(7.0, 14.0, 673),
 
 ev = evaluate_bsm1(dyn, dyn_sol)
 print(f"EQI = {ev.eqi:.0f} kg/d   OCI = {ev.oci:.0f}")
-# EQI = 5051 kg/d   OCI = 14454
+# EQI = 5044 kg/d   OCI = 14409
 ```
+
+% invisible-code-block: python
+%     assert (round(float(ev.eqi)), round(float(ev.oci))) == (5044, 14409)
 
 `print(ev)` gives the full breakdown. `evaluate_bsm2(plant, sol, params)` does
 the same for BSM2 and also reports the sludge-train flows (methane production,
@@ -264,29 +366,81 @@ integrator, which compiles and runs several times faster:
 fast = dyn.solve(t_span=(7.0, 14.0), t_eval=jnp.linspace(7.0, 14.0, 673),
                  y0=first_week.state[-1], forward_fast=True)
 print(f"EQI = {evaluate_bsm1(dyn, fast).eqi:.0f} kg/d")
-# EQI = 5051 kg/d
+# EQI = 5044 kg/d
 ```
+
+% invisible-code-block: python
+%     assert round(float(evaluate_bsm1(dyn, fast).eqi)) == 5044
 
 `forward_fast=True` needs concrete `params` and `y0` (not traced values), and
 its result is **not differentiable**. It honours only `rtol`, `atol` and
 `IntegratorConfig(max_steps=...)`; any other `IntegratorConfig` setting raises
 rather than being ignored, and it cannot be combined with `events=`.
 
-Two other settings tune the ordinary solve, through
-`integrator=aquakin.IntegratorConfig(...)`:
+The ordinary solve takes the integrator settings of
+[Choosing the integrator](reactors.md#choosing-the-integrator), including the
+sparse Jacobian (`colored_jacobian`) that pays on plants of many states;
+`plant.colored_jacobian_decision()` reports whether a plant uses it. How a
+gradient flows through a plant solve is set by `diff=`, described in
+[Differentiation options](sensitivity_and_calibration.md#differentiation-options).
 
-- `order=5` selects the fifth-order Kvaerno5 method in place of the default
-  third-order Kvaerno3, which can take fewer steps at tight tolerances.
-- `colored_jacobian` controls whether the Jacobian of each implicit step is
-  built sparsely by graph colouring, which pays on large plants. The default
-  `"auto"` uses it for the reverse-mode gradient of a plant with many states
-  (BSM2 yes, BSM1 no; `plant.colored_jacobian_decision()` reports the choice);
-  `True` forces it on, `False` off.
+## Reading a plant solution
 
-The other integrator settings are described in
-[Choosing the integrator](reactors.md#choosing-the-integrator), and gradient
-settings in
-[Differentiating a solve](sensitivity_and_calibration.md#differentiating-a-solve).
+A plant solution holds the state of every unit at the saved times: `sol.t`, in
+the plant's time unit (`sol.time_unit`), and `sol.state`, one row per time. It
+is read by unit, species and stream name:
+
+```python
+print(dyn_sol.t.shape, dyn_sol.time_unit)
+# (673,) d
+snh5 = dyn_sol.C_named("tank5", "SNH")                  # one species in one tank
+tank5 = dyn_sol.C_named_many("tank5", ["SNH", "SNO"])   # {name: trajectory}
+last = dyn_sol.final_named("tank5", ["SNH", "SNO"])     # {name: value at the last time}
+eff = dyn_sol.stream("effluent")                        # t, Q, C and T of a stream
+eff_table = eff.to_dataframe()                          # Q and every species over time
+print(eff.units_named("SNH"), eff_table.shape)
+# g_N/m³ (673, 14)
+```
+
+% invisible-code-block: python
+%     assert dyn_sol.t.shape == (673,) and dyn_sol.time_unit == "d"
+%     assert snh5.shape == (673,) and set(tank5) == {"SNH", "SNO"}
+%     assert eff.units_named("SNH") == "g_N/m³" and eff_table.shape == (673, 14)
+
+- **Names.** `plant.list_units()`, `plant.list_species(unit)`,
+  `plant.list_ports()` and `plant.list_streams()` list what the readers accept;
+  they work before a solve, and a misspelled name raises an error that suggests
+  the closest one.
+- **Tanks.** `C_named`, `C_named_many`, `final_named`, `to_dataframe(unit)`,
+  `to_csv(path, unit=...)` and `plot(unit, species)` read a unit whose state is
+  its concentrations: the reactors, the digester and the other well-mixed
+  tanks. They take `units=` to return species in another unit, as a reactor
+  solution does ([Reading results](getting_started.md#reading-results)).
+  `final_named` returns plain floats; inside a function you differentiate, use
+  `C_named(unit, species)[-1]`.
+- **Streams.** `sol.stream(endpoint)`, the same as `plant.stream(sol,
+  endpoint)`, gives a stream's flow `Q` (m³ per plant time unit), its
+  concentrations, and its temperature `T` (`None` when it carries none), with
+  the same by-name readers. This is how to read a unit that is not a tank of
+  concentrations, such as the layered clarifier or a splitter; `C_named` on one
+  raises an error that says so.
+- **Raw states.** `sol.unit_state(unit)` is one unit's state over time, and
+  `plant.state_names()[unit]` names its entries (`layer1.TSS`, ... for the
+  clarifier).
+
+A solution holds only the times in `t_eval`. Without `t_eval` it holds the end
+of the solve alone, which is all a warm start needs:
+
+```python
+print(first_week.t)
+# [7.]
+```
+
+% invisible-code-block: python
+%     assert first_week.t.tolist() == [7.0]
+
+`plant.solve(..., time_unit="h")` takes `t_span` and `t_eval` in hours and
+reports `sol.t` in hours, whatever the plant's clock.
 
 ## Design and reporting
 
@@ -399,7 +553,7 @@ In brief, the conversions are:
 - Two models with the same species in the same order but some in different
   units are joined directly: `plant.connect` and `plant.add_influent` insert a
   `UnitScalingTranslator`. Models with different species need an explicit
-  translator.
+  translator ([Units that run different models](custom_flowsheets.md#units-that-run-different-models)).
 - The ASM1↔ADM1 translators (`ASM1toADM1`, `ADM1toASM1`) read the units the two
   models declare, so an ADM1 variant declared in g/m³ works unchanged.
 - A pair of units that cannot be converted (moles against grams, or an
@@ -417,17 +571,19 @@ across models. The imbalance is computed independently, so it is a real check:
 mb = dyn.mass_balance(dyn_sol)
 print(mb.summary())
 print(mb.closed(rtol=1e-2), round(mb["N"].relative_imbalance, 4))
-# True 0.0008
+# True 0.0007
 ```
+
+% invisible-code-block: python
+%     assert mb.closed(rtol=1e-2) and round(mb["N"].relative_imbalance, 4) == 0.0007
 
 The gas terms are integrated over the saved points, so save them finely enough
 to resolve the dynamics (the 15-minute output above is ample).
 
 One closure is approximate however finely you save: a `TakacsClarifier` with
-`composition_mode="lumped_tss"` (the BSM2 default, and BSM1's with
-`use_takacs=True`) tracks only the total solids in each layer, so it values the
-nitrogen and phosphorus held in its sludge blanket at the model's default
-solids composition. COD is exact. While the blanket is filling or emptying,
+`composition_mode="lumped_tss"` (the default of both BSM plants) tracks only
+the total solids in each layer, so it values the nitrogen and phosphorus held in
+its sludge blanket at the model's default solids composition. COD is exact. While the blanket is filling or emptying,
 nitrogen misses by about 0.2% (on BSM1 over days 1 to 3 from the warm start);
 at steady state it closes. The balance then lists the reason in
 `mb["N"].notes` and `mb["P"].notes`, and `summary()` prints it. Use

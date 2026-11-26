@@ -27,7 +27,6 @@ def _synthesise_tracks(n_particles: int, t_end: float, n_samples: int):
             t=t,
             fields={
                 "pH": jnp.full_like(t, 7.5),
-                "T": jnp.full_like(t, 293.15),
                 "OH_scavenging": jnp.full_like(t, float(scav_levels[pid])),
             },
         )

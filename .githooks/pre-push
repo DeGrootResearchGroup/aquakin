@@ -5,7 +5,9 @@
 # on the PR. Mirrors the CI `lint` job exactly:
 #     ruff check aquakin aquakin_ui tests scripts examples
 #     ruff format --check aquakin aquakin_ui
-# and, when pyright is installed, the CI `typecheck` job's `pyright`.
+# and, when pyright is installed, the CI `typecheck` job's `pyright`. When the
+# commits being pushed change constraints.txt or pyproject.toml, it also checks
+# that the pins resolve on every supported Python (scripts/check_constraints.py).
 #
 # Enable it once per clone (git does not install repo hooks automatically):
 #     git config core.hooksPath .githooks
@@ -22,6 +24,7 @@ set -euo pipefail
 # remote-tracking ref, for a new branch). This runs before the ruff gate, which
 # exits early when ruff is not installed.
 zero=0000000000000000000000000000000000000000
+pins_changed=0
 while read -r _local_ref local_sha _remote_ref remote_sha; do
   [ "$local_sha" = "$zero" ] && continue          # a branch deletion
   if [ "$remote_sha" = "$zero" ]; then
@@ -29,19 +32,35 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   else
     range=("$remote_sha..$local_sha")
   fi
-  linked=""
-  for commit in $(git rev-list "${range[@]}"); do
-    if git log -1 --format=%B "$commit" | grep -q 'claude\.ai/code/session_'; then
-      linked+="  $(git log -1 --format='%h %s' "$commit")"$'\n'
-    fi
-  done
-  if [ -n "$linked" ]; then
-    echo "pre-push: blocked. These commit messages link to a Claude session:" >&2
-    printf '%s' "$linked" >&2
-    echo "          Remove the link (git commit --amend, or git rebase -i for older commits) and push again." >&2
-    exit 1
+  # Read the whole list before matching: piped into `grep -q`, git would be
+  # killed by SIGPIPE once grep stops at a match, and `pipefail` turns that into
+  # "no pin change" for a push that changes many files.
+  changed_paths=$(git log --format= --name-only "${range[@]}")
+  if grep -qxE 'constraints\.txt|pyproject\.toml' <<<"$changed_paths"; then
+    pins_changed=1
   fi
+  # The same check CI runs on a pull request's commits. Found beside this hook
+  # (not by the working directory), so it is the copy this hook came with.
+  "$(dirname "${BASH_SOURCE[0]}")/../scripts/check_session_links.sh" "${range[@]}"
 done
+
+# A change to the pins or the dependencies must still install on every Python
+# version CI tests, the oldest included: pip resolves only for the interpreter it
+# runs under, so a pin the oldest version cannot install otherwise shows up only
+# as red CI jobs. The script resolves once per supported version with uv, and
+# skips (exit 0) when uv is not installed. Like the session check, it runs
+# before the ruff gate, which exits early when ruff is not installed.
+if [ "$pins_changed" -eq 1 ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "pre-push: python3 not found -- skipping the constraints.txt resolve check." >&2
+  else
+    echo "pre-push: constraints.txt resolves on every supported Python" >&2
+    if ! python3 "$(dirname "$0")/../scripts/check_constraints.py"; then
+      echo "pre-push: blocked. constraints.txt does not resolve on every supported Python (see above)." >&2
+      exit 1
+    fi
+  fi
+fi
 
 # Use whatever ruff is on PATH (the project's pinned one after
 # `pip install -e ".[lint]"`). If ruff is not installed, warn but do not block

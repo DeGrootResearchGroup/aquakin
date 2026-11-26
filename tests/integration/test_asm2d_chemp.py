@@ -38,7 +38,7 @@ def test_saturation_index_tracks_the_dose_and_pH(net):
 
     def fields(pH, fe):
         C = net.concentrations({"SPO4": 15.0, "S_Fe3": fe, "X_FePO4": 1e-4,
-                                "X_FeOH3": 1e-4, "SALK": 7.0}, base="zero")
+                                "X_FeOH3": 1e-4, "SALK": 0.007}, base="zero")
         cond = aquakin.OperatingConditions(T=293.15, pH=pH)
         d = net.derived_condition_fn(C, params, cond.fields, 0)
         return {k: float(v) for k, v in d.items()}
@@ -59,7 +59,7 @@ def test_saturation_index_tracks_the_dose_and_pH(net):
 # heterotroph-growth 0/0 in [SF]/([SA]+[SF])).
 _MIXED_LIQUOR = {
     "SO2": 2.0, "SF": 2.0, "SA": 2.0, "SNH4": 5.0, "SNO3": 3.0, "SPO4": 15.0,
-    "SI": 30.0, "SALK": 7.0, "XI": 800.0, "XS": 40.0, "XH": 1200.0,
+    "SI": 30.0, "SALK": 0.007, "XI": 800.0, "XS": 40.0, "XH": 1200.0,
     "XPAO": 300.0, "XPP": 80.0, "XPHA": 20.0, "XAUT": 80.0, "XTSS": 2800.0,
     "X_FePO4": 1e-4, "X_FeOH3": 1e-4,
 }
@@ -115,7 +115,7 @@ def test_bounded_driver_is_differentiable(net):
 
     def driver(fe):
         C = net.concentrations({"SPO4": 15.0, "X_FePO4": 1e-4, "X_FeOH3": 1e-4,
-                                "SALK": 7.0}, base="zero").at[fe_idx].set(fe)
+                                "SALK": 0.007}, base="zero").at[fe_idx].set(fe)
         return net.derived_condition_fn(C, params, cond.fields, 0)["R_FePO4"]
 
     g = float(jax.grad(driver)(0.3))

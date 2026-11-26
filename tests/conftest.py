@@ -10,6 +10,21 @@ from . import mem_watchdog
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# Each shipped model with a TSS state: that state's name and, per particulate,
+# the parameter converting it to TSS (iTSS_* in ASM2d, iSS_* in ASM3).
+TSS_FACTOR_PARAMS = {
+    "asm3": ("XSS", {"XI": "iSS_XI", "XS": "iSS_XS", "XH": "iSS_BM", "XA": "iSS_BM",
+                     "XSTO": "iSS_STO"}),
+    "asm2d": ("XTSS", {"XI": "iTSS_XI", "XS": "iTSS_XS", "XH": "iTSS_BM", "XPAO": "iTSS_BM",
+                       "XAUT": "iTSS_BM", "XPP": "iTSS_XPP", "XPHA": "iTSS_XPHA"}),
+    "asm2d_tud": ("XTSS", {"XI": "iTSS_XI", "XS": "iTSS_XS", "XH": "iTSS_BM",
+                           "XPAO": "iTSS_BM", "XA": "iTSS_BM", "XPP": "iTSS_PP",
+                           "XPHA": "iTSS_PHA", "XGLY": "iTSS_GLY"}),
+    "asm3_biop": ("XTSS", {"XI": "iTSS_XI", "XS": "iTSS_XS", "XH": "iTSS_BM",
+                           "XPAO": "iTSS_BM", "XA": "iTSS_BM", "XPP": "iTSS_XPP",
+                           "XPHA": "iTSS_XSTO", "XSTO": "iTSS_XSTO"}),
+}
+
 # Fire the memory watchdog at most once per worker process, so an over-limit
 # shard reports a single clear failure at the crossing point rather than
 # flooding the log with one failure per remaining test.
@@ -62,6 +77,19 @@ def simple_model():
     it: a test that needs to change the model loads its own copy.
     """
     return aquakin.load_model_from_file(FIXTURES / "simple_model.yaml")
+
+
+@pytest.fixture(scope="session")
+def stiff_sewer_model():
+    """Load the stiff sewer sulfur-cycle test model, once per session.
+
+    A WATS-based carbon and sulfur model with nitrate-driven sulfide oxidation
+    and a positivity limiter: stiff enough that reverse-mode AD through an
+    uncapped solve overflows, which is what the stable adjoints and the
+    forward-sensitivity solve are tested against. It is a frozen test input,
+    not a shipped model. Do not mutate it.
+    """
+    return aquakin.load_model_from_file(FIXTURES / "wats_sewer_khalil_paper_balanced.yaml")
 
 
 @pytest.fixture

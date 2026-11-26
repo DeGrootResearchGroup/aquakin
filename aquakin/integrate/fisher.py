@@ -30,10 +30,13 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate._common import (
+    ConditionedReactor,
     Reactor,
+    atol_cache_key,
     check_finite_gradient,
     forward_adjoint,
     native_time_factor,
+    reactor_settings_key,
     with_adjoint,
 )
 from aquakin.integrate._linalg import _NULL_RTOL
@@ -587,7 +590,8 @@ class _FisherSetup:
         # are kept in the experiment's own unit (a time-aware observation_fn
         # receives them exactly) and converted to the model's native unit by
         # ``time_factor`` at the solve.
-        self.reactors, self.obs_idx, self.obs_fn, self.sigma = [], [], [], []
+        self.sources, self.reactors, self.obs_idx, self.obs_fn = [], [], [], []
+        self.sigma = []
         self.time_factor, self.keep, self.sigma_div = [], [], []
         self.tobs, self.C0, self.t_end = [], [], []
         for e, ex in enumerate(exps):
@@ -630,6 +634,7 @@ class _FisherSetup:
                         f"experiment {e}: estimated initial pools {self.ic_species} must be "
                         f"positive in C0; got {pools.tolist()}."
                     )
+            self.sources.append(rctr)
             self.reactors.append(with_adjoint(rctr, forward_adjoint()))
             self.obs_idx.append(jnp.asarray([model.species_index[s] for s in obs], dtype=int))
             self.obs_fn.append(ex.observation_fn)
@@ -658,6 +663,71 @@ class _FisherSetup:
         ic_names = _ic_coordinate_names(self.ic_species, len(exps), self.ic_fixed_total)
         self.names = self.free_params + ic_names
         self.transforms = self.rate_transforms + ["positive_log"] * len(ic_names)
+
+    def structure_key(self) -> tuple:
+        """Cache key of everything :meth:`information` bakes into a compiled
+        program.
+
+        A program that takes the parameters, sampling times and initial states
+        as arguments depends on nothing else, so one compiled under this key
+        can be reused by a later call with an equal key. The key holds each
+        experiment's reactor (the object itself, compared by identity, so its
+        ``id`` cannot be reused while the key lives) together with what a
+        reactor reads at each solve and a caller may reassign between calls:
+        its model (by ``id``; keep :meth:`models` alive with the entry),
+        solver settings and condition values. It also holds each
+        experiment's observed columns, ``observation_fn``, noise, mask, time
+        factor and integration end, and the estimated set, transforms and
+        priors. A reactor is otherwise taken as unchanged after construction,
+        as the compiled-solve cache takes it.
+
+        Returns
+        -------
+        tuple
+            The key. It reads every reactor's concrete settings, so it is taken
+            outside any trace, as :func:`aquakin.optimize_experiment` is.
+        """
+        per_experiment = []
+        for e, (src, rctr) in enumerate(zip(self.sources, self.reactors)):
+            conditions = (
+                tuple(sorted((n, atol_cache_key(v)) for n, v in rctr.conditions.fields.items()))
+                if isinstance(rctr, ConditionedReactor)
+                else None
+            )
+            keep = self.keep[e]
+            per_experiment.append(
+                (
+                    src,
+                    type(rctr),
+                    id(rctr.model),
+                    reactor_settings_key(rctr),
+                    conditions,
+                    tuple(int(i) for i in np.asarray(self.obs_idx[e])),
+                    self.obs_fn[e],
+                    None if keep is None else atol_cache_key(keep),
+                    atol_cache_key(self.sigma_div[e]),
+                    self.time_factor[e],
+                    self.t_end[e],
+                )
+            )
+        return (
+            id(self.model),
+            tuple(per_experiment),
+            tuple(int(i) for i in np.asarray(self.free_idx)),
+            tuple(self.rate_transforms),
+            tuple(int(i) for i in np.asarray(self.ic_idx)),
+            self.ic_fixed_total,
+            self.has_rate_prior,
+            atol_cache_key(self.prior_mask),
+            atol_cache_key(self.prior_std),
+            self.ic_prior,
+        )
+
+    def models(self) -> tuple:
+        """The models :meth:`structure_key` keys by ``id``: a cache holding a
+        program under that key holds these too, so no other model can take
+        one of their ``id`` values while the entry lives."""
+        return (self.model, *(r.model for r in self.reactors))
 
     def values(self, p, C0s) -> dict[str, float]:
         """Physical values of the estimated quantities at ``(p, C0s)`` (pool

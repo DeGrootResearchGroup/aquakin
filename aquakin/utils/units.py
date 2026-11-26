@@ -131,29 +131,51 @@ DIMENSIONLESS = Dimension()
 
 # --- the tolerant unit-string parser ----------------------------------------
 
+# The SI prefixes a mass or an amount of substance may carry, and their factors.
+# Micro is written ``u``; the micro sign (U+00B5) and the Greek mu (U+03BC) are
+# rewritten to it before parsing.
+_PREFIXES = {"k": 1.0e3, "m": 1.0e-3, "u": 1.0e-6}
+# The base symbols that take every prefix in ``_PREFIXES``.
+_PREFIXED_BASES = ("g", "mol")
+_PREFIXED_SYMBOLS = {
+    prefix + base: (base, factor)
+    for base in _PREFIXED_BASES
+    for prefix, factor in _PREFIXES.items()
+}
+
+
+def unit_base(token: str) -> str:
+    """The unprefixed symbol of a parsed unit token.
+
+    ``"g"`` for ``"kg"`` / ``"mg"`` / ``"ug"``, ``"mol"`` for ``"kmol"`` and its
+    siblings; any other token is returned unchanged.
+
+    Parameters
+    ----------
+    token : str
+        A token of a :class:`Dimension` from :func:`parse_units`.
+
+    Returns
+    -------
+    str
+        Its base symbol.
+    """
+    return _PREFIXED_SYMBOLS.get(token, (token, 1.0))[0]
+
+
+_MICRO_SPELLINGS = str.maketrans({"\u00b5": "u", "\u03bc": "u"})
+
 # Unit symbols that may carry an exponent (a trailing signed integer, e.g. ``m3``
 # = m^3, ``s-1`` = s^-1, or a caret exponent ``^0.5``). Longest first so the
-# scan prefers ``mol`` over ``m``, ``min`` over ``m`` and ``dm`` (decimetre) over
-# ``d`` (day). ``M`` is molarity and is normalised to ``mol/L`` after parsing.
-_UNIT_SYMBOLS = [
-    "kmol",
-    "mmol",
-    "mol",
-    "min",
-    "kg",
-    "mg",
-    "bar",
-    "Pa",
-    "dm",
-    "g",
-    "m",
-    "L",
-    "d",
-    "s",
-    "h",
-    "M",
-    "K",
-]
+# scan prefers ``mol`` over ``m``, ``min`` over ``m``, ``mg`` over ``m`` and
+# ``dm`` (decimetre) over ``d`` (day). ``M`` is molarity and is normalised to
+# ``mol/L`` after parsing.
+_UNIT_SYMBOLS = sorted(
+    [*_PREFIXED_SYMBOLS, *_PREFIXED_BASES, "min", "bar", "Pa", "dm", "m", "L"]
+    + ["d", "s", "h", "M", "K"],
+    key=len,
+    reverse=True,
+)
 # Chemical "currency" tokens. ``O2`` carries the meaning of oxygen-as-O2;
 # ``TSS`` is suspended-solids mass (a distinct currency in the ASM2d/ASM3
 # models). These are the distinct base dimensions the check exists to keep
@@ -268,7 +290,9 @@ def parse_units(text: str) -> Dimension | None:
     text : str
         A unit string in any of the shipped dialects, e.g. ``"g_COD/m3"``,
         ``"1/d"``, ``"M-1 s-1"``, ``"m3/(g_COD*d)"``, ``"gO2^0.5/m/d"``,
-        ``"mol/L"``, ``"mol/dm3"``. An exponent may be a trailing integer
+        ``"mol/L"``, ``"mol/dm3"``, ``"umol/L"``. A mass or an amount of
+        substance takes the prefix ``k``, ``m`` or micro (``u``, or either
+        ``µ`` character). An exponent may be a trailing integer
         (``m3``), a caret (``m^3``) or ``**`` (``m**3``). The display form is
         accepted too: Unicode superscripts (``m³``) and the multiplication dot
         (``g_COD·m⁻³`` == ``g_COD*m-3``).
@@ -287,7 +311,7 @@ def parse_units(text: str) -> Dimension | None:
     # the prettified form round-trips through the parser.
     # ``**`` is the Python spelling of the caret exponent (``dm**3`` == ``dm^3``);
     # it is rewritten first so the lexer never reads it as two multiplications.
-    s = text.translate(_SUPERSCRIPT_TO_ASCII).replace("**", "^")
+    s = text.translate(_SUPERSCRIPT_TO_ASCII).translate(_MICRO_SPELLINGS).replace("**", "^")
     s = s.replace("·", "*").replace("⋅", "*").strip()
     if s == "":
         return None
@@ -407,10 +431,7 @@ CELSIUS_SPELLINGS = frozenset(
 # ``1e-3 m3`` (one litre), where the float ``0.1 ** 3`` is not.
 _TO_BASE = {
     "dm": ("m", 1, Fraction(1, 10)),
-    "kg": ("g", 1, 1.0e3),
-    "mg": ("g", 1, 1.0e-3),
-    "kmol": ("mol", 1, 1.0e3),
-    "mmol": ("mol", 1, 1.0e-3),
+    **{sym: (base, 1, factor) for sym, (base, factor) in _PREFIXED_SYMBOLS.items()},
     "L": ("m", 3, 1.0e-3),
     "d": ("s", 1, 86400.0),
     "h": ("s", 1, 3600.0),
@@ -744,7 +765,7 @@ def _infer(node: ASTNode, ctx: _Ctx) -> Dimension | None:
 # Time tokens recognized in the canonical "concentration per time" root form.
 # Public: ``CompiledModel.time_unit`` reads the inverse-time token against it.
 TIME_TOKENS = {"d", "s", "h", "min"}
-_MASS_TOKENS = {"g", "kg", "mg", "mol", "kmol", "mmol"}
+_MASS_TOKENS = {*_PREFIXED_BASES, *_PREFIXED_SYMBOLS}
 _VOLUME_LITRE = "L"
 _LENGTH_TOKEN = "m"
 

@@ -31,6 +31,7 @@ from aquakin.integrate._common import (
     to_native_time,
 )
 from aquakin.integrate._config import FORWARD_THROUGH_SOLVE_DIFF, STABLE_REVERSE_DIFF
+from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.discrete_adjoint import esdirk_adjoint_solve
 from aquakin.integrate.events import (
     Event,
@@ -42,6 +43,7 @@ from aquakin.integrate.events import (
     segment_signature,
 )
 from aquakin.integrate.seam import _coerce_atol, _run_diffeqsolve
+from aquakin.plant.influent import warn_if_outside_records
 from aquakin.plant.results import (
     PlantSolution,
 )
@@ -151,9 +153,10 @@ def solve(
         ``colored_jacobian`` ({"auto", True, False}) selects sparse colored-AD
         materialisation of the per-step Jacobian. ``"auto"`` (default) governs
         the ``mode='reverse', method='stable'`` backward decision -- it enables
-        the colored ``df/dy`` build by plant size (a large plant like BSM2 yes,
-        a small one like BSM1 no), and leaves the forward solve dense; ``True`` forces coloring on both paths; ``False``
-        disables it. Reported by :meth:`colored_jacobian_decision`.
+        the colored ``df/dy`` build by plant size (BSM1 and BSM2 yes, a plant
+        of a few tanks no), and leaves the forward solve dense; ``True`` forces
+        coloring on both paths; ``False`` disables it. Reported by
+        :meth:`colored_jacobian_decision`.
     diff : DifferentiationConfig, optional
         How a gradient / sensitivity flows through the solve.
         ``mode='reverse', method='stable'`` (the default) routes a plain
@@ -262,6 +265,7 @@ def solve(
     if events is not None:
         events = events_to_native_time(events, _time_factor)
     _check_inlet_flows(self, t0, t1)
+    warn_if_outside_records(self.influents, t0, t1, self.time_unit)
     unit_events: list[Event] = []
     for unit in self.units.values():
         if isinstance(unit, CycleEventSource):
@@ -631,13 +635,14 @@ def _solve_stable_adjoint(
             "supported on the forward path that differentiates through the "
             f"solve ({FORWARD_THROUGH_SOLVE_DIFF} or method='through_solve')."
         )
-    # solver=/factormax= ARE supported here: the discrete adjoint builds
-    # its backward from the forward solver's Butcher tableau generically
-    # (any ESDIRK with a tableau -- e.g. the cheaper 4-stage Kvaerno3 in
-    # place of the default 7-stage Kvaerno5), and factormax caps the
-    # per-step growth of its PID controller, exactly as on the forward
-    # path. A non-ESDIRK solver raises a clear error from the tableau
-    # extraction. ``solver=None`` keeps the default Kvaerno5.
+    # solver=/order=/factormax= ARE supported here: the discrete adjoint
+    # builds its backward from the forward solver's Butcher tableau
+    # generically (any ESDIRK with a tableau -- the 4-stage Kvaerno3 of the
+    # default order=3, or the 7-stage Kvaerno5 of order=5), and factormax
+    # caps the per-step growth of its PID controller, exactly as on the
+    # forward path. A non-ESDIRK solver raises a clear error from the
+    # tableau extraction. ``solver=None`` builds the canonical solver of
+    # the integrator's ``order``.
     # colored_jacobian colors the per-step df/dy Jacobian build in the
     # BACKWARD pass (its dominant cost), exact (machine-precision) vs dense.
     # It is enabled deterministically by plant SIZE (the reliable signal --
@@ -685,7 +690,7 @@ def _solve_stable_adjoint(
     # forward solve must also fit in that buffer, so this single budget serves
     # both roles here.
     adj_steps = adjoint_max_steps
-    with friendly_solve_errors(adj_steps, what="plant solve"):
+    with friendly_solve_errors(what="plant solve"):
         ys = self._esdirk_stable_adjoint(
             y0,
             params,
@@ -752,8 +757,11 @@ def _solve_forward_fast(
                 rf, t0, t1, rtol=rtol, atol=atol, max_steps=max_steps
             )
             self._solve_cache.put("jit", fkey, jitted)
-        with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
-            ts, ys = jitted(y0, params, te)
+        with friendly_solve_errors(what="plant forward_fast solve"):
+            ts, ys, result = jitted(y0, params, te)
+            ts, ys = check_solve_result(
+                result, (ts, ys), max_steps=max_steps, what="plant forward_fast solve"
+            )
         return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
     warnings.warn(
         "forward_fast: the colored-Jacobian start-state guard failed; "
@@ -863,11 +871,12 @@ def _solve_jax_adjoint(
             # An adjoint keyed by identity (see _adjoint_key) is kept alive with it.
             self._solve_cache.put("jit", cache_key, jitted, adjoint)
 
-    with friendly_solve_errors(max_steps, what="plant solve"):
+    with friendly_solve_errors(what="plant solve"):
         if t_eval is None:
-            ts, ys = jitted(y0, params)
+            ts, ys, result = jitted(y0, params)
         else:
-            ts, ys = jitted(y0, params, t_eval)
+            ts, ys, result = jitted(y0, params, t_eval)
+        ts, ys = check_solve_result(result, (ts, ys), max_steps=max_steps, what="plant solve")
     return self._finalize_solution(ts, ys, time_factor=time_factor, time_unit=time_unit)
 
 
@@ -923,7 +932,7 @@ def _solve_with_events(
     )
     solve_segment = self._event_segment_solver(settings, events, has_t_eval=t_eval is not None)
 
-    with friendly_solve_errors(max_steps, what="plant solve"):
+    with friendly_solve_errors(what="plant solve"):
         res = run_segmented(
             solve_segment,
             maps,
@@ -1061,7 +1070,7 @@ def _build_jitted_solve(
                 saveat=diffrax.SaveAt(ts=t_eval),
                 **kw,
             )
-            return sol.ts, sol.ys
+            return sol.ts, sol.ys, sol.result
 
         return _solve
 
@@ -1074,7 +1083,7 @@ def _build_jitted_solve(
             saveat=diffrax.SaveAt(t1=True),
             **kw,
         )
-        return sol.ts, sol.ys
+        return sol.ts, sol.ys, sol.result
 
     return _solve
 
@@ -1103,7 +1112,7 @@ def _build_jitted_forward_fast(self, root_finder, t0, t1, *, rtol, atol, max_ste
     def _solve(y0, params, t_eval):
         rhs, _ = self._recycle.cached_rhs(t0a, self._split_state(y0), params)
 
-        ys = forward_solve(
+        ys, result = forward_solve(
             rhs,
             state_jacobian(rhs, root_finder),
             y0,
@@ -1115,7 +1124,7 @@ def _build_jitted_forward_fast(self, root_finder, t0, t1, *, rtol, atol, max_ste
             atol=atol,
             control=StepControl(max_steps=max_steps),
         )
-        return t_eval, ys
+        return t_eval, ys, result
 
     return _solve
 

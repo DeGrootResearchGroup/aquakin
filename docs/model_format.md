@@ -116,8 +116,8 @@ loaded rather than silently ignored.
 
 ## Units and the time unit
 
-The `units:` strings are labels: aquakin never converts a value because of
-them. They matter in two ways.
+The solver never converts a value because of its `units:` string: every value
+in the file is used exactly as written. The units matter in three ways.
 
 **The parameter units set the model's time unit.** aquakin has no global time
 unit. `t_span` and `t_eval` are read in whatever unit the rate constants are
@@ -132,6 +132,11 @@ the same time unit.
 **They let `check_units` find dimensional mistakes**, as described in
 [Checking units](#checking-units).
 
+**They label and convert results on request.** A solution reports each species
+in its declared unit, and readers such as `sol.C_named("SNH", units="mg/L")`
+convert to another unit of the same quantity
+([Reading results](getting_started.md#reading-results)).
+
 ## Shared parameters vs reaction-local parameters
 
 Most models of practical interest declare a kinetic constant (e.g. `muH`) once
@@ -142,7 +147,9 @@ slot.
 
 A reaction's own `parameters:` block holds values that belong to that reaction
 alone. Such a parameter is named `<reaction>.<name>` outside the model file, for
-example in `free_params=["decay.k"]`. A name cannot appear in both a
+example in the list of parameters to fit,
+`aquakin.calibrate(..., free_params=["decay.k"])`
+([Calibration](calibration.md)). A name cannot appear in both a
 model-level and a reaction-local `parameters:` block; the loader rejects the
 shadowing.
 
@@ -205,8 +212,8 @@ Example:
 
 ```yaml
 parameters:
-  muH: {value: 6.0, transform: positive_log}
-  KS:  {value: 20.0}
+  muH: {value: 6.0, units: 1/d, transform: positive_log}
+  KS:  {value: 20.0, units: g_COD/m3}
 
 expressions:
   rho_growth: "muH * [SS] / (KS + [SS]) * [XB_H]"
@@ -243,8 +250,7 @@ rate: "k * [O3] * 10 ** ({pH} - 14)"                  # OH- catalyzed
 rate: "{OH_scavenging} * [OH]"                        # lumped sink
 ```
 
-Rate expressions are parsed by a hand-written recursive-descent parser. The
-grammar:
+The grammar of a rate expression:
 
 ```
 expr    := term (('+' | '-') term)*
@@ -352,7 +358,7 @@ compiled, here `-(1 - Y_H) / Y_H`. Because it follows `Y_H`, the reaction stays
 balanced for every value calibration tries. There must be one conserved
 quantity per `auto` coefficient when any other coefficient is an expression,
 and every species in the reaction needs the relevant `composition:` entries.
-The shipped WATS sewer models declare `composition:` on every species.
+The shipped WATS sewer model declares `composition:` on every species.
 
 ## Built-in functions
 
@@ -423,9 +429,11 @@ instead of folding the term into a precomputed condition field — a coefficient
 hidden in a condition field is outside the parameter vector, and so outside
 calibration, sensitivity and identifiability.
 
-A rate function is a node class: a frozen dataclass whose fields are its
-arguments, carrying the call spelling (`FUNCTION_NAME`), a kernel key (`KIND`)
-and the arithmetic itself (`op`), written with `jax.numpy` so it differentiates.
+A rate function is a small class: a frozen dataclass whose fields are its
+arguments, carrying the name it is called by in a rate expression
+(`FUNCTION_NAME`), an identifier (`KIND`: any string no built-in uses, usually
+the same as `FUNCTION_NAME`) and the arithmetic itself (`op`), written with
+`jax.numpy` so it differentiates.
 It subclasses `aquakin.RateFunction`, the base every rate function shares,
 built-in or your own; its arguments are annotated `aquakin.ASTNode`, the type
 of a parsed sub-expression.
@@ -441,7 +449,7 @@ class HillNode(aquakin.RateFunction):
     K: aquakin.ASTNode
     n: aquakin.ASTNode
 
-    KIND = "hill"            # the batched kernel's key for this node type
+    KIND = "hill"            # a unique identifier, usually the function name
     FUNCTION_NAME = "hill"   # how it is spelled in a rate expression
 
     @staticmethod
@@ -469,11 +477,12 @@ differentiates exactly as a built-in does.
 Three things to know:
 
 - **Register before loading.** A model compiles its rate expressions when it is
-  built and `load_model` caches the result, so registration has to happen
-  before the model that uses the function is loaded. A model file naming an
+  loaded, so call `register_rate_function` before the `load_model` or
+  `load_model_from_file` that loads a model using the function. A model file naming an
   unregistered function fails at load, listing what is available.
 - **Names cannot shadow a built-in.** Registering `monod` is refused, because it
-  would change what every existing model file using that name means. Defining a
+  would change what every existing model file using that name means; a `KIND`
+  a built-in already uses is refused too. Defining a
   node class is never on its own enough to add a function — only
   `register_rate_function` is.
 - **Your `op` gets none of the built-in guards.** The built-in functions keep
@@ -593,9 +602,13 @@ variants) and `asm2d_chemp` models show each form.
 
 ## Dissolved gases: `gases:`
 
-A model can say which of its species are dissolved gases. The model itself
-carries no gas phase, so the same model runs in every unit; the units that own
-a gas phase transfer these species, a digester to its headspace, for example.
+A model can say which of its species are dissolved gases, and leave the gas
+phase to the unit it runs in: the same model then runs in every unit, and the
+units that own a gas phase transfer these species (a digester to its
+headspace, an aerated tank to the air). This is the alternative to writing the
+gas phase into the model as states, as `adm1` does with its headspace
+(`S_gas_h2`, `S_gas_ch4`, `S_gas_co2`); no shipped model declares `gases:`
+yet.
 
 ```yaml
 gases:
@@ -622,8 +635,8 @@ can override any of them: `henry` (mol m-3 Pa-1 at 25 C), `henry_temperature`
 `model.gases`.
 
 An aerated tank strips the declared gases with `Aeration(stripped="model")`
-(see [Plants](plants.md)), and `HeadspaceDigesterUnit` transfers them to its
-headspace.
+(see [Other activated-sludge models](plants.md#other-activated-sludge-models)),
+and `aquakin.plant.HeadspaceDigesterUnit` transfers them to its headspace.
 
 ## Inheriting a model: `extends:`
 

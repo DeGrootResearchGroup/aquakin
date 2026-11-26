@@ -70,6 +70,7 @@ from aquakin.integrate._common import (
     to_native_time,
     validate_t_eval,
 )
+from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.steady import solve_steady_state
 
 
@@ -326,7 +327,7 @@ class BiofilmReactor(GradientCheckMixin):
     that holds **only the inert solids** fixed and lets every reactive pool
     evolve:
 
-    >>> net = aquakin.load_model("wats_sewer_khalil_paper_balanced_biofilm_multispecies")
+    >>> net = aquakin.load_model_from_file("sulfur_biofilm.yaml")
     >>> inert = {"X_I"}   # the only genuinely inert, non-depleting solid
     >>> fixed_mask = jnp.array([s in inert for s in net.species])
     >>> reactor = aquakin.BiofilmReactor(
@@ -335,10 +336,11 @@ class BiofilmReactor(GradientCheckMixin):
 
     Everything not named in ``inert`` --- the heterotrophs and functional-group
     biomass, the stored-substrate reservoirs ``X_S1``/``X_S2``, and the reactive
-    sulfur pools ``X_S0``/``X_FeS`` --- then evolves and conserves mass. (The
-    areal ``*_biofilm`` variant, by contrast, deliberately freezes its biomass as
-    a sustained "mature biofilm" reservoir, so its mask holds the biomass fixed
-    too; the rule is always "freeze only what is genuinely non-depleting".)
+    sulfur pools ``X_S0``/``X_FeS`` --- then evolves and conserves mass. (A
+    model whose biofilm reactions carry an areal ``{A_V}`` factor instead of a
+    per-layer biomass state may deliberately freeze its biomass as a sustained
+    "mature biofilm" reservoir, so its mask holds the biomass fixed too; the
+    rule is always "freeze only what is genuinely non-depleting".)
     """
 
     def __init__(
@@ -640,11 +642,14 @@ class BiofilmReactor(GradientCheckMixin):
                 jitted = self._build_jitted_solve(t0, t1, t_eval_arr is not None)
                 self._jit_cache[cache_key] = jitted
 
-        with friendly_solve_errors(self.max_steps, what="biofilm reactor solve"):
+        with friendly_solve_errors(what="biofilm reactor solve"):
             if t_eval_arr is None:
-                ts, ys = jitted(y0, params, condition_arrays)
+                ts, ys, result = jitted(y0, params, condition_arrays)
             else:
-                ts, ys = jitted(y0, params, condition_arrays, t_eval_arr)
+                ts, ys, result = jitted(y0, params, condition_arrays, t_eval_arr)
+            ts, ys = check_solve_result(
+                result, (ts, ys), max_steps=self.max_steps, what="biofilm reactor solve"
+            )
         # ys: (n_t, n_comp, n_species). Bulk is compartment 0.
         if _time_factor != 1.0:
             ts = ts / _time_factor  # native -> requested unit
@@ -890,7 +895,7 @@ class BiofilmReactor(GradientCheckMixin):
                     factormax=factormax,
                     solver=solver,
                 )
-                return sol.ts, sol.ys
+                return sol.ts, sol.ys, sol.result
 
             return _solve
 
@@ -912,7 +917,7 @@ class BiofilmReactor(GradientCheckMixin):
                 factormax=factormax,
                 solver=solver,
             )
-            return sol.ts, sol.ys
+            return sol.ts, sol.ys, sol.result
 
         return _solve
 

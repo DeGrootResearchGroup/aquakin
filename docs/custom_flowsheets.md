@@ -46,9 +46,10 @@ print("effluent SNH:", round(float(plant.stream(sol, "aerobic.out").C_named("SNH
 
 With no clarifier to hold the sludge, the biomass washes out of these two
 tanks, so there is no nitrification and the effluent ammonia ends up above the
-feed's (organic nitrogen is still released). The benchmark builders show a
-full activated-sludge line. A plant can still be extended after it has been
-solved: units, connections and influents added later are used by the next
+feed's (organic nitrogen is still released);
+[An activated-sludge line](#an-activated-sludge-line) adds the clarifier and
+the sludge recycles. A plant can still be extended after it has
+been solved: units, connections and influents added later are used by the next
 solve and by `plant.stream`. A solution from before the change keeps the old
 layout, so solve again before reading streams from the extended plant.
 
@@ -95,6 +96,156 @@ This flattening holds while every unit's states are contiguous; under the
 heat-balance temperature model (below) the temperatures sit at the end of the
 flat vector instead.
 
+## An activated-sludge line
+
+An activated-sludge line holds its biomass with a secondary clarifier and two
+recycles: the return activated sludge (RAS) from the clarifier underflow back to
+the head of the line, and the waste activated sludge (WAS), the rest of the
+underflow, which leaves the plant and sets the sludge age. This one has an
+anoxic tank, an aerated tank, and a nitrate recycle from the end of the aerated
+tank back to the anoxic one, the layout of BSM1 with one tank per zone.
+
+### Ports
+
+Every unit has named **input ports** and **output ports**, and a connection
+always runs from an output port to an input port, written `"unit.port"`:
+
+| Unit | Input ports | Output ports |
+|---|---|---|
+| `CSTRUnit` | the names in `input_port_names` (all inflows mix in the tank) | `out` |
+| `MixerUnit` | the names in `input_port_names` | `out` |
+| `SetpointSplitter` | `in` | a port per key of the flows it pumps, and `remainder_port`, which takes the rest |
+| `RatioSplitter` | `in` | a port per key of its fractions |
+| `TakacsClarifier`, `IdealClarifier` | `inlet` | `overflow` (the clarified effluent), `underflow` (the thickened sludge) |
+
+A tank with several inflows does not need a mixer in front of it: give it one
+input port per inflow. Other units name their ports in their
+[API reference](api.md) entry, and `plant.list_ports(unit)` (outputs) and
+`plant.list_ports(unit, role="input")` list them on a built plant.
+
+`plant.connect(source, dest)` may leave out the port of a unit that has only
+one port in that role, so `plant.connect("anoxic", "aerobic")` means
+`"anoxic.out"` to `"aerobic.in"`. An influent is not a unit: it is wired by
+`plant.add_influent(name, series, to="unit.port")`. Recycles need no marking
+and no initial guess; the plant finds them from the connections.
+
+### Flows
+
+The clarifier's `underflow_Q` is the pumped underflow, the RAS plus the WAS
+flow; the overflow is whatever is left of its inflow. The `sludge_split`
+splitter returns a fixed RAS flow and wastes the rest of the underflow, here
+400 m³/d. The nitrate recycle is a pumped flow of the `aerobic_split` splitter
+in the same way:
+
+```python
+from aquakin.plant import SetpointSplitter, TakacsClarifier
+
+def as_line(name):
+    line = aquakin.Plant(name, time_unit="d")
+    line.add_unit(aquakin.CSTRUnit("anoxic", model, volume=2000.0,
+                                   input_port_names=["feed", "ras", "nitrate"],
+                                   conditions={"T": 288.15}))
+    line.add_unit(aquakin.CSTRUnit("aerobic", model, volume=4000.0,
+                                   input_port_names=["in"], conditions={"T": 288.15},
+                                   aeration=aquakin.Aeration(kla=240.0)))
+    line.add_unit(SetpointSplitter("aerobic_split", model, {"nitrate": 55000.0},
+                                   remainder_port="to_clarifier"))
+    line.add_unit(TakacsClarifier("clarifier", model, area=1500.0, height=4.0,
+                                  underflow_Q=18846.0))      # RAS + WAS, m³/d
+    line.add_unit(SetpointSplitter("sludge_split", model, {"ras": 18446.0},
+                                   remainder_port="was"))
+    line.add_influent("feed", model.influent(bsm1_feed, Q=18446.0), to="anoxic.feed")
+    line.connect("anoxic", "aerobic")
+    line.connect("aerobic", "aerobic_split")
+    line.connect("aerobic_split.to_clarifier", "clarifier")
+    line.connect("aerobic_split.nitrate", "anoxic.nitrate")     # nitrate recycle
+    line.connect("clarifier.underflow", "sludge_split")
+    line.connect("sludge_split.ras", "anoxic.ras")              # RAS
+    line.effluent_endpoint = "clarifier.overflow"
+    line.register_stream("effluent", "clarifier.overflow")
+    line.register_stream("wastage", "sludge_split.was")
+    return line
+
+line = as_line("as_line")
+print(line.list_ports("clarifier"))
+# ['clarifier.overflow', 'clarifier.underflow']
+print(line.check().summary())
+```
+
+% invisible-code-block: python
+%     assert line.list_ports("clarifier") == ["clarifier.overflow", "clarifier.underflow"]
+%     assert line.check().ok
+%     assert sorted(line.check().recycles) == ["aerobic_split.nitrate", "sludge_split.ras"]
+
+`plant.check()` lists the recycles it found and the outputs nothing consumes:
+the effluent and the WAS, which leave the plant. `effluent_endpoint` and
+`register_stream` give the plant's streams the names the reporting tools look
+for: `plant.stream(sol, "effluent")`, `plant.effluent_stream(sol)` and
+`plant.sludge_age(sol)`, which finds the effluent and the wastage by them.
+
+### Solving it
+
+Find the steady state, then run a day from it and read the effluent and the
+sludge age:
+
+```python
+line_ss = line.steady_state()
+line_sol = line.solve(t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 25),
+                      y0=line_ss.state)
+eff = line_sol.stream("effluent")
+print(f"effluent SNH {float(eff.C_named('SNH')[-1]):.1f}, "
+      f"SNO {float(eff.C_named('SNO')[-1]):.1f} g N/m³")
+print(f"SRT {line.sludge_age(line_sol).SRT:.1f} d")
+# effluent SNH 1.5, SNO 16.9 g N/m³
+# SRT 8.8 d
+```
+
+% invisible-code-block: python
+%     assert f"{float(eff.C_named('SNH')[-1]):.1f} {float(eff.C_named('SNO')[-1]):.1f}" == "1.5 16.9"
+%     assert f"{line.sludge_age(line_sol).SRT:.1f}" == "8.8"
+
+The steady state is found algebraically, as described in
+[Steady state, faster](plants.md#steady-state-faster); how to read the solution
+is in [Reading a plant solution](plants.md#reading-a-plant-solution).
+
+## Units that run different models
+
+Each unit runs one kinetic model, and a stream carries the concentrations of
+its source unit's model. A connection between units of different models passes
+the stream through a **translator**, which maps one model's species onto the
+other's. `aquakin.plant` ships these:
+
+| Translator | Maps |
+|---|---|
+| `IdentityTranslator` | nothing: the two units share a model. Used by default. |
+| `UnitScalingTranslator` | the same species, in the same order, some declared in different units (`kgCOD/m3` against `g/m3`). Inserted by `connect` and `add_influent` on their own. |
+| `ASM1toADM1` | activated sludge (ASM1) into the anaerobic digester (ADM1): the BSM2 interface, conserving COD and nitrogen, with the inorganic carbon and alkalinity from a charge balance at the digester's pH |
+| `ADM1toASM1` | the digester effluent back into the water line |
+
+Any other pair of models needs a translator passed to `connect` (or to
+`add_influent`) as `translator=`; one of your own is a class with
+`source_model`, `target_model` and a `translate(C_source, digester_pH=None)`
+method that returns the target model's concentration vector (the
+`StateTranslator` protocol, in the [API reference](api.md)). A sludge train
+crosses to ADM1 at the digester and back after it:
+
+```python
+from aquakin.plant import ADM1DigesterUnit, ADM1toASM1, ASM1toADM1, IdealThickener
+
+adm1 = aquakin.load_model("adm1")
+sludge = aquakin.Plant("sludge_train", time_unit="d")
+sludge.add_unit(IdealThickener("thickener", model, target_tss_percent=7.0))
+sludge.add_unit(ADM1DigesterUnit("digester", adm1, volume=3400.0))
+sludge.add_unit(aquakin.CSTRUnit("reject", model, volume=10.0, input_port_names=["in"],
+                                 conditions={"T": 293.15}))
+sludge.connect("thickener.underflow", "digester", translator=ASM1toADM1(model, adm1))
+sludge.connect("digester", "reject", translator=ADM1toASM1(adm1, model))
+```
+
+Without the translator, `connect` raises a `ValueError` saying that the
+connection crosses models. The full BSM2 sludge train is built this way by
+`build_bsm2` ([BSM2](plants.md#bsm2)).
+
 ## Unit operations
 
 The plant library provides these units, all importable from `aquakin.plant`.
@@ -118,10 +269,11 @@ Every one documents its settings in the [API reference](api.md).
 | `UVUnit`, `ChlorineContactUnit` | disinfection |
 | `PIController` | a proportional-integral controller with anti-windup |
 | `ExpressionController` | a stateless controller whose output is a law written as an expression |
-| `ASM1toADM1`, `ADM1toASM1` | translators between the activated-sludge and digester models |
 
-`build_a2o` builds an anaerobic–anoxic–oxic (A²O) biological nutrient removal
-plant on ASM2d in the same way as the BSM builders.
+The translators that join units of different models are listed in
+[Units that run different models](#units-that-run-different-models), and the
+builders that assemble whole plants from these units (BSM1, BSM2 and A²O) in
+[Plant-wide simulation](plants.md#the-benchmark-plants).
 
 ### IFAS and MBBR tanks
 
@@ -174,7 +326,7 @@ SBR's `feed` setting says which plant it is, and it has no default:
 
 | `feed=` | A plant like | What happens to the inflow |
 |---|---|---|
-| `"continuous"` | a continuous-inflow SBR (ICEAS or CFID type) | The tank takes the inflow whenever it arrives, in every phase; its volume follows the inflow minus the decant. `feed_flow` is left unset. |
+| `"continuous"` | a continuous-inflow SBR: an ICEAS (intermittent cycle extended aeration system) or a CFID (continuous feed, intermittent discharge) plant | The tank takes the inflow whenever it arrives, in every phase; its volume follows the inflow minus the decant. `feed_flow` is left unset. |
 | `"storage"` | an equalization (holding) tank ahead of the SBR | A holding volume inside the unit, `storage_volume` m³, receives the inflow; the fill pump draws `feed_flow` from it during fill phases. What it cannot hold leaves through the `overflow` port; when it runs empty, the draw falls to what arrives. |
 | `"batch"` | a laboratory or reservoir-fed SBR | The inlet must deliver `feed_flow` during fill phases and nothing in any other phase. Each solve checks the influent feeding the SBR over the solve span and refuses one that does not, or an SBR fed by another unit, whose flow is not known before the solve. |
 
@@ -319,11 +471,39 @@ clean-water kLa.
 
 ### Plant temperature
 
-By default a unit's temperature is the flow-weighted mix of its inlets, with no
-thermal storage (`AlgebraicTemperature`). `HeatBalanceTemperature` instead gives
-every tank with a volume (except the heated digester) a temperature state,
-`V dT/dt = Q_in (T_in − T)`, so tanks lag and damp a diurnal or seasonal
-influent temperature:
+A reactor runs its kinetics at its temperature, which becomes the model's `T`
+condition (in kelvin) and so drives the model's
+[temperature corrections](model_format.md#temperature-corrections). The
+temperature comes from one of two places:
+
+- **The inflow**, when it carries one. An influent built with a temperature
+  (`model.influent(..., T=288.15)`, or in °C with `units={"T": "degC"}`) passes
+  it down the plant: by default each unit's temperature is the flow-weighted mix
+  of its inlets, with no thermal storage (`AlgebraicTemperature`).
+- **The reactor's own `T` condition**, when its inflow carries none.
+  `plant.set_temperature(celsius)` sets it on every reactor that has one (or on
+  the units named in `units=`), leaving the heated digester at its own
+  temperature; it does not change a reactor whose inflow carries a temperature.
+
+The influent of the activated-sludge line above carries no temperature, so
+setting the plant to 10 °C slows the nitrifiers:
+
+```python
+cold = as_line("cold").set_temperature(10.0)
+cold_ss = cold.steady_state()
+for label, plant_, state in (("15 °C", line, line_ss.state), ("10 °C", cold, cold_ss.state)):
+    print(label, round(plant_.named_state(state)["aerobic"]["SNH"], 1), "g N/m³")
+# 15 °C 1.5 g N/m³
+# 10 °C 8.8 g N/m³
+```
+
+% invisible-code-block: python
+%     assert round(line.named_state(line_ss.state)["aerobic"]["SNH"], 1) == 1.5
+%     assert round(cold.named_state(cold_ss.state)["aerobic"]["SNH"], 1) == 8.8
+
+`HeatBalanceTemperature` instead gives every tank with a volume (except the
+heated digester) a temperature state, `V dT/dt = Q_in (T_in − T)`, so tanks
+lag and damp a diurnal or seasonal influent temperature:
 
 ```python
 from aquakin.plant import HeatBalanceTemperature
@@ -336,10 +516,14 @@ print(float(T_out[0]), "->", round(float(T_out[-1]), 2), "K")
 # 293.15 -> 288.15 K
 ```
 
+% invisible-code-block: python
+%     assert (float(T_out[0]), round(float(T_out[-1]), 2)) == (293.15, 288.15)
+
+The tanks start at the `T` of their conditions and relax to the influent's.
 The model changes the length of the plant state, so build a new `y0` after
 setting it. It needs an influent that carries a temperature, and
-`build_bsm2(temperature_model=...)` accepts it too. A flowsheet file cannot hold
-it yet.
+`build_bsm2(temperature_model=...)` accepts it too. A flowsheet file cannot
+hold it.
 
 ## Uncertainty and scenarios
 

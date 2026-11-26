@@ -13,6 +13,9 @@ close the loop:
 - **Return activated sludge** ``Q_r`` from the clarifier underflow back to the
   anaerobic zone, with the remainder wasted as ``Q_w``.
 
+The secondary clarifier is the ten-layer Takács settler by default;
+``use_takacs=False`` swaps in the fast stateless ``IdealClarifier``.
+
 It runs the shipped ``asm2d`` model by default, which already carries the biological
 phosphorus model (PAO / poly-P / PHA) and ASM2d's own simple metal-phosphate
 precipitation (``XMeOH`` / ``XMeP``), so the plant simultaneously removes carbon,
@@ -37,7 +40,7 @@ from aquakin.plant._builder_support import (
     recycle_pump_flows,
     register_recycle_streams,
 )
-from aquakin.plant._constants import solids_species
+from aquakin.plant._constants import lumped_tss_weights, solids_species, with_lumped_tss
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.mixer import MixerUnit, SetpointSplitter
@@ -64,9 +67,13 @@ A2O_WASTAGE_FLOW = 120.0  # m³/d (a long SRT, to retain PAOs)
 A2O_CLARIFIER_AREA = 1500.0  # m²
 A2O_CLARIFIER_HEIGHT = 4.0  # m
 
-# A typical municipal ASM2d raw-influent composition (g/m³ except SALK in
-# mol HCO₃⁻/m³). The fermentation product SA (volatile fatty acids) is what
-# drives biological P removal in the anaerobic selector, so it is non-trivial.
+# A typical municipal ASM2d raw-influent composition, in the units the ``asm2d``
+# model declares: g/m³ of COD, N or P, except the alkalinity SALK in kmol
+# HCO₃⁻/m³ (0.007 kmol/m³ = 7 mol/m³, a moderately buffered municipal sewage).
+# The fermentation product SA (volatile fatty acids) is what drives biological P
+# removal in the anaerobic selector, so it is non-trivial. The suspended solids
+# XTSS are not listed: ``a2o_influent`` sets them from these particulates with
+# the model's own TSS factors.
 A2O_INFLUENT = {
     "SO2": 0.0,
     "SF": 40.0,  # fermentable COD
@@ -75,7 +82,7 @@ A2O_INFLUENT = {
     "SNO3": 0.0,
     "SPO4": 8.0,  # soluble inorganic P
     "SI": 30.0,  # soluble inert COD
-    "SALK": 7.0,  # alkalinity
+    "SALK": 0.007,  # alkalinity (kmol/m³)
     "SN2": 0.0,
     "XI": 30.0,  # particulate inert COD
     "XS": 180.0,  # slowly biodegradable COD
@@ -131,19 +138,28 @@ def a2o_influent(
     Returns
     -------
     InfluentSeries
-        A constant-in-time, zero-based influent (unlisted species are 0).
+        A constant-in-time, zero-based influent (unlisted species are 0). Its
+        suspended solids ``XTSS`` are the TSS of its particulates through the
+        model's ``iTSS`` factors, unless ``overrides`` gives them.
     """
     comp = dict(A2O_INFLUENT)
     if overrides:
         comp.update(overrides)
-    return model.influent(comp, Q=Q, T=T)
+    return model.influent(with_lumped_tss(model, comp), Q=Q, T=T)
 
 
-# A healthy bio-P mixed-liquor seed (g/m³): an established EBPR sludge with a
-# large PAO population carrying stored poly-P. Seeding from a healthy sludge (as
-# a real plant is) avoids the slow, seed-sensitive cold-start establishment of the
-# PAO population; the solve relaxes it to the steady state, so the exact values
-# affect settling time, not the operating point.
+#: A healthy bio-P mixed-liquor seed (g/m³, SALK in kmol/m³): an established EBPR
+#: sludge with a large PAO population carrying stored poly-P. Seeding from a
+#: healthy sludge (as a real plant is) avoids the slow, seed-sensitive cold-start
+#: establishment of the PAO population. The particulates are the default plant's
+#: steady-state mixed liquor in the last aerated tank, to two significant figures
+#: (a 200-day solve of ``build_a2o`` on :func:`a2o_influent`), and the solubles a
+#: generic aerated liquor. A dynamic
+#: solve relaxes any healthy seed to the same operating point; the algebraic
+#: ``Plant.steady_state`` needs the seed near it, since from a seed far off its
+#: Newton steps can reach the other steady state, where the nitrifiers have
+#: washed out. The suspended solids XTSS are not listed: ``a2o_warm_start`` sets
+#: them from the particulates with the model's own TSS factors.
 A2O_WARM_REACTOR_COMPOSITION = {
     "SO2": 2.0,
     "SF": 2.0,
@@ -152,16 +168,15 @@ A2O_WARM_REACTOR_COMPOSITION = {
     "SNO3": 2.0,
     "SPO4": 4.0,
     "SI": 30.0,
-    "SALK": 7.0,
+    "SALK": 0.007,
     "SN2": 5.0,
-    "XI": 1500.0,
-    "XS": 80.0,
-    "XH": 1500.0,
-    "XPAO": 900.0,
-    "XPP": 250.0,
-    "XPHA": 20.0,
-    "XAUT": 150.0,
-    "XTSS": 5500.0,
+    "XI": 2400.0,
+    "XS": 53.0,
+    "XH": 1800.0,
+    "XPAO": 680.0,
+    "XPP": 210.0,
+    "XPHA": 1.0,
+    "XAUT": 89.0,
     "XMeOH": 0.0,
     "XMeP": 0.0,
 }
@@ -189,7 +204,7 @@ def a2o_warm_start(plant: Plant) -> jnp.ndarray:
     if not reactors:  # pragma: no cover - a build_a2o plant always has reactors
         raise ValueError("no activated-sludge reactor found in the plant")
     model = plant.units[reactors[0]].model
-    ml = model.concentrations(A2O_WARM_REACTOR_COMPOSITION, base="zero")
+    ml = model.concentrations(with_lumped_tss(model, A2O_WARM_REACTOR_COMPOSITION), base="zero")
     return plant.initial_state(overrides=dict.fromkeys(reactors, ml))
 
 
@@ -202,7 +217,7 @@ def build_a2o(
     ras_ratio: float = A2O_RAS_RATIO,
     ferric: FerricDose | None = None,
     conditions: dict[str, float] | None = None,
-    use_takacs: bool = False,
+    use_takacs: bool = True,
 ) -> Plant:
     """Assemble an A²O biological-nutrient-removal plant (ASM2d by default).
 
@@ -217,7 +232,9 @@ def build_a2o(
         The activated-sludge model. Defaults to ``aquakin.load_model("asm2d")``.
         Another model works if it names its particulates with an ``X`` prefix
         (they settle in the clarifier) and its oxygen ``SO2``; the ferric
-        dose needs ``XMeOH``.
+        dose needs ``XMeOH``, and the Takács settler a TSS state (``XTSS``
+        or ``XSS``), so a model without one is built with
+        ``use_takacs=False``.
     Q_avg : float
         Design inlet flow used to size the recycle pumps (m³/d).
     wastage_flow : float
@@ -230,8 +247,13 @@ def build_a2o(
         Per-tank condition overrides (e.g. ``{"T": 288.15}`` for winter).
         Defaults to the model's declared defaults.
     use_takacs : bool
-        Use the layered Takács secondary clarifier instead of the fast
-        stateless ``IdealClarifier`` (the default).
+        If True (default), use the ten-layer Takács secondary clarifier, with
+        its own per-layer solids state, settling between layers with the
+        Godunov interface flux (:class:`~aquakin.plant.takacs.TakacsClarifier`'s
+        defaults), at a settling velocity set by the solids' TSS through the
+        model's ``iTSS`` factors. If False, use the fast stateless ``IdealClarifier``, which
+        captures a fixed fraction of the particulates and has no state of its
+        own.
 
     Returns
     -------
@@ -256,6 +278,11 @@ def build_a2o(
     # storage pools, inerts, the TSS tracer and the metal precipitates, or the
     # particulates of whichever activated-sludge model is passed.
     particulates = solids_species(model)[0]
+    # The Takács settling velocity reads the solids as TSS: each particulate
+    # through the model's iTSS factor, and XTSS itself (which already sums
+    # them) at 0, so no solid is counted twice. Only that settler needs them,
+    # and only a model with a TSS state has them.
+    tss_factors = lumped_tss_weights(model) if use_takacs else None
 
     plant = Plant("A2O", time_unit="d")
 
@@ -349,6 +376,7 @@ def build_a2o(
             height=A2O_CLARIFIER_HEIGHT,
             init_underflow_Q=Q_underflow,
             particulate_species=list(particulates),
+            tss_factors=tss_factors,
         ),
         ideal_kwargs=dict(particulate_species=list(particulates)),
     )

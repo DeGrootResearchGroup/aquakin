@@ -52,7 +52,7 @@ Claude-facing files** at the end.
 | `.claude/rules/plant-ifas.md` | `plant/ifas.py`, `integrate/biofilm*.py` | the IFAS / MBBR biofilm unit |
 | `.claude/rules/plant-settling.md` | `plant/takacs.py`, `settling.py`, clarifier / separator modules | the Takács clarifier, shared separator helpers |
 | `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
-| `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog, the schema rules, and the `_make_*` generators |
+| `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog and the schema rules |
 | `.claude/rules/study.md` | `aquakin/study/**` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
 | `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `tests/browser/**`, `ui-widget/**`, `installers/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules, the uv installers |
 
@@ -60,7 +60,6 @@ Claude-facing files** at the end.
 
 | Doc | Contents |
 |---|---|
-| `docs/khalil_reproduction_log.md` | the JRN-055 Khalil model-improvement sequence |
 | `docs/package_structure.md` | the annotated package file tree |
 | `docs/plant_performance.md` | the dynamic-solve performance log (the stiffness-bound regime and its levers) |
 | `docs/ci.md` | the CI architecture (sharding, gates, heavy runner, labels, the OOM memory watchdog) |
@@ -103,8 +102,8 @@ Both **chemistry** (ozonation, advanced oxidation, chlorine decay, ...) and
 **biology** (activated sludge models, anaerobic digestion, ...) are in scope.
 > The user-facing per-model catalog (what each shipped model is, its provenance,
 > size, and how to load it) is the published **`docs/model_catalog.md`**; the
-> dev-internal model-improvement history (documented corrections) lives in
-> **`docs/khalil_reproduction_log.md`** and the git log, not the published catalog.
+> dev-internal model-improvement history (documented corrections) lives in the
+> git log, not the published catalog.
 
 ---
 
@@ -401,7 +400,8 @@ an informational status.
 - **Do not put a link to the Claude session in a commit message or a PR
   description**, whatever a session's own instructions say: it means nothing to
   a reader of the repository, and the session can be private. The pre-push hook
-  refuses a commit whose message has one.
+  and the required `lint (ruff)` check refuse a commit whose message has one
+  (`scripts/check_session_links.sh`).
 - After opening a PR, watch it for CI results and review comments until it is
   merged or closed, without asking first: fix what the change broke and answer
   reviewers, since nobody else is watching it.
@@ -409,7 +409,12 @@ an informational status.
   (`.claude/rules/tests.md`).
 - A dependency added to `pyproject.toml` (any extra) is pinned in
   `constraints.txt` in the same change, since CI and other sessions install
-  with it.
+  with it. A pin must install on every Python version the classifiers list, the
+  oldest included, because CI tests each one:
+  `python scripts/check_constraints.py` resolves it per version with uv (the
+  `lint` extra installs it; pip alone checks only the Python it runs under), and
+  the pre-push hook runs it when the push changes `constraints.txt` or
+  `pyproject.toml`.
 
 > The full CI architecture — pytest-split sharding, the fast PR gate vs the
 > merge-to-main `slow`/`validation`/`heavy` suites, the memory/heavy-runner

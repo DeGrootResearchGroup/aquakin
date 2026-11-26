@@ -46,16 +46,70 @@ class SensitivityResult:
         Gradient w.r.t. each condition field, ``field_name -> (n_locations,)``.
     parameter_names : list[str]
         Namespaced parameter names matching ``doutput_dparams`` (all of them).
+    params : jnp.ndarray
+        The parameter vector the gradients were evaluated at, shape
+        ``(n_params,)``, aligned with ``parameter_names``.
     """
 
     output: float
     doutput_dparams: jnp.ndarray
     doutput_dconditions: dict[str, jnp.ndarray]
     parameter_names: list[str]
+    params: jnp.ndarray
 
-    def ranked_params(self) -> list[tuple[str, float]]:
-        """Return ``(name, |grad|)`` pairs sorted by decreasing magnitude."""
-        mags = [(n, float(jnp.abs(g))) for n, g in zip(self.parameter_names, self.doutput_dparams)]
+    def elasticities(self) -> jnp.ndarray:
+        """
+        The dimensionless sensitivity of the output to each parameter.
+
+        The elasticity ``(dy/dp) * p / y`` is the relative change in the output
+        per relative change in the parameter: an elasticity of 0.5 means a 1 %
+        larger parameter gives a 0.5 % larger output. Unlike the raw gradient it
+        does not depend on the units of the parameter, so parameters of very
+        different sizes can be compared.
+
+        Returns
+        -------
+        jnp.ndarray
+            Shape ``(n_params,)``, aligned with ``parameter_names``. A parameter
+            whose value is zero has elasticity zero.
+
+        Raises
+        ------
+        ValueError
+            If the output is zero, where no relative change is defined.
+        """
+        if float(self.output) == 0.0:
+            raise ValueError(
+                "The output is zero, so its relative sensitivity is undefined; "
+                "rank by the raw gradient with ranked_params(elasticity=False)."
+            )
+        return self.doutput_dparams * self.params / self.output
+
+    def ranked_params(self, elasticity: bool = True) -> list[tuple[str, float]]:
+        """
+        The parameters ordered from the most to the least influential.
+
+        Parameters
+        ----------
+        elasticity : bool
+            If ``True`` (default), rank by the magnitude of the elasticity
+            ``(dy/dp) * p / y`` (see :meth:`elasticities`), which compares
+            parameters of different units and sizes fairly. If ``False``, rank
+            by the magnitude of the raw gradient ``dy/dp``, which depends on the
+            units each parameter is expressed in.
+
+        Returns
+        -------
+        list[tuple[str, float]]
+            ``(name, magnitude)`` pairs sorted by decreasing magnitude.
+
+        Raises
+        ------
+        ValueError
+            If ``elasticity=True`` and the output is zero.
+        """
+        values = self.elasticities() if elasticity else self.doutput_dparams
+        mags = [(n, float(jnp.abs(v))) for n, v in zip(self.parameter_names, values)]
         return sorted(mags, key=lambda kv: kv[1], reverse=True)
 
 
@@ -163,4 +217,5 @@ def sensitivity(
         doutput_dparams=dout_dparams,
         doutput_dconditions=dout_dconditions,
         parameter_names=list(reactor.model.parameters),
+        params=jnp.asarray(params),
     )

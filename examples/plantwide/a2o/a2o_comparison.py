@@ -1,7 +1,8 @@
 """The plant-wide bio-P level (``plantwide_bio_p``) and ASM2d on the same A2O.
 
 Both run on ``build_a2o`` (anaerobic, anoxic and aerobic zones, internal and
-sludge recycles) with the same municipal influent: ASM2d's default
+sludge recycles), with the ideal clarifier since the plant-wide model has no
+TSS state yet, and with the same municipal influent: ASM2d's default
 (``a2o_influent``), carried over species by species. ASM2d has one VFA; the
 plant-wide model splits it into acetate and propionate, 75% / 25% by default
 (sewage VFA carries a propionate share). Alkalinity becomes inorganic carbon
@@ -78,7 +79,7 @@ def plantwide_influent(model, acetate_fraction=0.75):
 
 def plantwide_plant(model, acetate_fraction=0.75):
     """The A2O on the plant-wide model, its influent added, and the warm start."""
-    plant = build_a2o(model)
+    plant = build_a2o(model, use_takacs=False)
     plant.add_influent(
         "feed", model.influent(plantwide_influent(model, acetate_fraction), Q=A2O_Q_AVG)
     )
@@ -147,7 +148,7 @@ def run_plantwide(model=None, acetate_fraction=0.75, params=None):
 def run_asm2d():
     """ASM2d's A2O at its steady state (``a2o_influent``, ``a2o_warm_start``)."""
     model = aquakin.load_model("asm2d")
-    plant = build_a2o(model)
+    plant = build_a2o(model, use_takacs=False)
     plant.add_influent("feed", a2o_influent(model))
     steady = plant.steady_state(y0=a2o_warm_start(plant))
     return dict(plant=plant, model=model, steady=steady)

@@ -221,6 +221,11 @@ class _ObjectiveBundle:
     # The problem's data mean square for loss="mse" (None: never scaled), from
     # which each start's scale is set (see :func:`_scale_objective`).
     data_mean_square: float | None = None
+    # The compiled program of the *unscaled* objective,
+    # ``objective_value_and_grad(theta, *problem.data) -> (loss, gradient)``,
+    # which the finite-difference Laplace Hessian reuses rather than compiling
+    # a second gradient of the same loss.
+    objective_value_and_grad: object = None
 
     @property
     def loss_scale(self) -> float:
@@ -361,6 +366,7 @@ def _build_objective(
         set_sigma_hat,
         scale_box,
         data_mean_square=problem.data_mean_square,
+        objective_value_and_grad=_obj_vg_jit,
     )
 
 

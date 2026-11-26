@@ -9,11 +9,18 @@
 #
 # To refresh after a deliberate dependency upgrade: update the relevant pins to
 # the new known-good versions and re-run the suite before committing. Keep this
-# in sync with the (raised) floors in pyproject.toml.
+# in sync with the (raised) floors in pyproject.toml. Every pin must install on
+# each Python version pyproject.toml's classifiers list (CI tests them all):
+# `python scripts/check_constraints.py` checks that, and the pre-push hook runs
+# it when the pins change.
 
 # --- JAX numerical stack (fast-moving; the main reason this lock exists) ------
-jax==0.10.2
-jaxlib==0.10.2
+# JAX 0.11 dropped Python 3.11, which requires-python still admits: the 3.11
+# jobs keep testing the newest JAX that release can install.
+jax==0.12.1; python_version >= "3.12"
+jaxlib==0.12.1; python_version >= "3.12"
+jax==0.10.2; python_version < "3.12"
+jaxlib==0.10.2; python_version < "3.12"
 diffrax==0.7.2
 optimistix==0.1.0
 equinox==0.13.8
@@ -35,6 +42,9 @@ pytest-xdist==3.8.0
 pytest-timeout==2.4.0
 pytest-split==0.11.0
 sybil==10.1.0
+
+# --- lint tooling (the `lint` extra): uv resolves this file per Python version
+uv==0.13.7
 
 # --- optional postprocessing extras (installed in the test env) ---------------
 pandas==3.0.3

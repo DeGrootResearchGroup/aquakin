@@ -1,16 +1,23 @@
 """Sphinx configuration for the aquakin documentation.
 
 The docs are Markdown (MyST). The API reference is generated from
-``aquakin.__all__`` at build time (see ``_write_api_page`` below), so it stays
-in lock-step with the curated public surface without a hand-maintained list.
+the ``__all__`` of ``aquakin``, ``aquakin.plant`` and ``aquakin.study`` at build
+time (see ``_write_api_page`` below), so it stays in lock-step with the curated
+public surface without a hand-maintained list.
 """
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import os
+import sys
 from importlib.metadata import version as _dist_version
 from pathlib import Path
+
+from sphinx.errors import PycodeError
+from sphinx.pycode import ModuleAnalyzer
+from sphinx.util.docstrings import prepare_docstring
 
 # -- Project information ------------------------------------------------------
 
@@ -49,7 +56,6 @@ exclude_patterns = [
     "ci.md",
     "package_structure.md",
     "plant_performance.md",
-    "khalil_reproduction_log.md",
     "spec_forward_sensitivity_solver.md",
     "project_reference.md",
 ]
@@ -125,55 +131,186 @@ html_theme_options = {
 # -- Auto-generated API reference ---------------------------------------------
 
 
-def _write_api_page(app):
-    """Generate ``api.md`` from ``aquakin.__all__`` before the read phase.
+# The packages the reference covers, in page order, each with its introduction.
+# A name a later package shares with an earlier one is documented only under
+# the earlier (shorter) one.
+_API_PACKAGES = {
+    "aquakin": (
+        "The top-level API: models, reactors, conditions, the plant assembly "
+        "and its common units, calibration and sensitivity."
+    ),
+    "aquakin.plant": (
+        "The rest of the plant-wide API: the unit operations not exported from "
+        "`aquakin`, flowsheet files, influents, steady state, plant calibration "
+        "and measured channels."
+    ),
+    "aquakin.study": "Studies: a folder holding a flowsheet, its runs and their results.",
+}
 
-    Classes, functions, and the remaining exported symbols (warnings, enums)
-    are split into three ``autosummary`` tables; ``autosummary_generate`` then
-    emits a stub page per object under ``generated/``.
+
+def _documented_name(obj):
+    """The qualified name the reference documents ``obj`` under, or ``None``.
+
+    That is the first covered package exporting ``obj`` under its own
+    ``__name__``.
     """
-    import aquakin
+    own = getattr(obj, "__name__", None)
+    for package in _API_PACKAGES:
+        module = importlib.import_module(package)
+        if own in module.__all__ and getattr(module, own) is obj:
+            return f"{package}.{own}"
+    return None
 
-    classes, functions, other = [], [], []
-    for name in sorted(aquakin.__all__):
-        obj = getattr(aquakin, name)
-        if inspect.isclass(obj):
-            classes.append(name)
-        elif inspect.isroutine(obj):
-            functions.append(name)
+
+def _split_by_kind(module, names):
+    """Sort ``names`` exported by ``module`` by the kind of object each names.
+
+    Returns the classes, the functions, the remaining symbols (warnings,
+    enums, constants), and the aliases: ``(name, target)`` pairs for a class or
+    function exported under a second name, whose page is its own name's.
+    """
+    classes, functions, other, aliases = [], [], [], []
+    for name in sorted(names):
+        obj = getattr(module, name)
+        if inspect.isclass(obj) or inspect.isroutine(obj):
+            target = _documented_name(obj)
+            if obj.__name__ != name and target is not None:
+                aliases.append((name, target))
+            elif inspect.isclass(obj):
+                classes.append(name)
+            else:
+                functions.append(name)
         else:
             other.append(name)
+    return classes, functions, other, aliases
 
-    def table(heading, names):
-        if not names:
-            return []
-        body = "\n".join(f"   aquakin.{n}" for n in names)
-        return [
-            f"## {heading}",
+
+def _autosummary_table(package, heading, entries):
+    """An ``autosummary`` table of ``package``'s ``entries`` under ``heading``."""
+    if not entries:
+        return []
+    body = "\n".join(f"   {package}.{n}" for n in entries)
+    return [
+        f"### {heading}",
+        "",
+        "```{eval-rst}",
+        ".. autosummary::",
+        "   :toctree: generated",
+        "   :nosignatures:",
+        "",
+        body,
+        "```",
+        "",
+    ]
+
+
+def _alias_entries(package, aliases):
+    """A described object for each alias, linking the name it stands for."""
+    if not aliases:
+        return []
+    lines = ["### Aliases", "", "```{eval-rst}"]
+    for name, target in aliases:
+        is_class = inspect.isclass(_resolve(target))
+        directive, role = ("class", "class") if is_class else ("function", "func")
+        lines += [
+            f".. py:{directive}:: {name}",
+            f"   :module: {package}",
             "",
-            "```{eval-rst}",
-            ".. autosummary::",
-            "   :toctree: generated",
-            "   :nosignatures:",
-            "",
-            body,
-            "```",
+            f"   Another name for :{role}:`{target}`, documented there.",
             "",
         ]
+    return [*lines, "```", ""]
 
+
+def _resolve(qualified):
+    """The object a qualified ``package.name`` refers to."""
+    package, _, name = qualified.rpartition(".")
+    return getattr(importlib.import_module(package), name)
+
+
+def _package_section(package, names):
+    """The Markdown for one package: a heading, its introduction, its tables."""
+    module = importlib.import_module(package)
+    classes, functions, other, aliases = _split_by_kind(module, names)
+    return [
+        f"## {package}",
+        "",
+        _API_PACKAGES[package],
+        "",
+        *_autosummary_table(package, "Classes", classes),
+        *_autosummary_table(package, "Functions", functions),
+        *_autosummary_table(package, "Warnings & other", other),
+        *_alias_entries(package, aliases),
+    ]
+
+
+def _write_api_page(app):
+    """Generate ``api.md`` from the packages' ``__all__`` before the read phase.
+
+    The page has one section per package in ``_API_PACKAGES``, each listing
+    the names of that package's ``__all__`` no earlier package exports, so
+    each object is documented once, under the shortest name it is importable
+    by. Each section splits its names into classes, functions, the remaining
+    exported symbols and the aliases (see ``_split_by_kind``);
+    ``autosummary_generate`` then emits a stub page per object under
+    ``generated/``.
+    """
+    seen = set()
+    sections = []
+    for package in _API_PACKAGES:
+        exported = importlib.import_module(package).__all__
+        sections += _package_section(package, [n for n in exported if n not in seen])
+        seen.update(exported)
     lines = [
         "# API reference",
         "",
-        "The complete curated top-level public API, generated from "
-        "`aquakin.__all__`. Each domain also exposes its full surface as a "
-        "subpackage (`aquakin.plant`, `aquakin.integrate`, `aquakin.utils`).",
+        "The full signature and docstring of every public name, generated from "
+        "the packages' `__all__`. A name `aquakin` re-exports is listed once, "
+        "under `aquakin`.",
         "",
-        *table("Classes", classes),
-        *table("Functions", functions),
-        *table("Warnings & other", other),
+        *sections,
     ]
     (Path(app.srcdir) / "api.md").write_text("\n".join(lines) + "\n")
 
 
+def _trimmed(lines):
+    """``lines`` without its trailing blank lines."""
+    end = len(lines)
+    while end and not lines[end - 1].strip():
+        end -= 1
+    return lines[:end]
+
+
+def _constant_comment(app, what, name, obj, options, lines):
+    """Document a re-exported constant by its ``#:`` comment where it is defined.
+
+    autodoc reads a module-level constant's ``#:`` doc-comment only in the
+    module the constant is documented under, which for a name a package
+    re-exports is the package's ``__init__``, not the module defining it. A
+    value without a docstring of its own (a ``dict``, a ``float``) then shows
+    its type's docstring, which describes the type rather than the constant.
+    This replaces that docstring with the defining module's doc-comment, or
+    with nothing when there is none.
+    """
+    doc = type(obj).__doc__
+    if what != "data" or not doc or _trimmed(lines) != _trimmed(prepare_docstring(doc)):
+        return
+    package, _, attr = name.rpartition(".")
+    lines[:] = []
+    for modname, module in sorted(sys.modules.items()):
+        if not modname.startswith(f"{package}.") or getattr(module, attr, None) is not obj:
+            continue
+        try:
+            analyzer = ModuleAnalyzer.for_module(modname)
+            analyzer.analyze()
+        except PycodeError:
+            continue
+        comment = analyzer.attr_docs.get(("", attr))
+        if comment:
+            lines[:] = list(comment)
+            return
+
+
 def setup(app):
     app.connect("config-inited", lambda app, config: _write_api_page(app))
+    app.connect("autodoc-process-docstring", _constant_comment)

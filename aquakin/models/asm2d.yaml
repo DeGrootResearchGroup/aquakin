@@ -10,26 +10,29 @@ model:
   references:
     - "Henze, Gujer, Mino, Matsuo, Wentzel, Marais & van Loosdrecht (1999). Activated Sludge Model No. 2d, ASM2d. Water Sci. Technol. 39(1), 165-182. doi:10.1016/S0273-1223(98)00829-4"
 
+# Default concentrations: an established bio-P (EBPR) mixed liquor
+# (alkalinity 7 mol/m3, written in kmol/m3). XTSS is the TSS of those
+# particulates through the iTSS_* factors below.
 species:
-  - {name: SO2, default_concentration: 1.0, units: "g_O2/m3", description: "Dissolved oxygen (O2)"}
-  - {name: SF, default_concentration: 1.0, units: "g_COD/m3", description: "Fermentable organic matter"}
-  - {name: SA, default_concentration: 1.0, units: "g_COD/m3", description: "Fermentation product (Volatile Fatty Acids)"}
-  - {name: SNH4, default_concentration: 1.0, units: "g_N/m3", description: "Ammonia (NH4+ + NH3)"}
-  - {name: SNO3, default_concentration: 1.0, units: "g_N/m3", description: "Nitrate and nitrite (NO3 + NO2)"}
-  - {name: SPO4, default_concentration: 1.0, units: "g_P/m3", description: "Soluble inorganic phosphorus"}
-  - {name: SI, default_concentration: 1.0, units: "g_COD/m3", description: "Soluble undegradable organics"}
-  - {name: SALK, default_concentration: 1.0, units: "kmol/m3", description: "Alkalinity (HCO3-)"}
-  - {name: SN2, default_concentration: 1.0, units: "g_N/m3", description: "Dissolved nitrogen (N2)"}
-  - {name: XI, default_concentration: 1.0, units: "g_COD/m3", description: "Particulate unbiodegradable organics"}
-  - {name: XS, default_concentration: 1.0, units: "g_COD/m3", description: "Particulate biodegradable organics"}
-  - {name: XH, default_concentration: 1.0, units: "g_COD/m3", description: "Ordinary heterotrophic organisms (OHO)"}
-  - {name: XPAO, default_concentration: 1.0, units: "g_COD/m3", description: "Phosphorus accumulating organisms (PAO)"}
-  - {name: XPP, default_concentration: 1.0, units: "g_P/m3", description: "Stored polyphosphate (PP)"}
-  - {name: XPHA, default_concentration: 1.0, units: "g_COD/m3", description: "Stored polyhydroxyalkanoates (PHA)"}
-  - {name: XAUT, default_concentration: 1.0, units: "g_COD/m3", description: "Autotrophic nitrifying organisms (NH4+ to NO3-)"}
-  - {name: XTSS, default_concentration: 1.0, units: "g_TSS/m3", description: "Total suspended solids (TSS)"}
-  - {name: XMeOH, default_concentration: 1.0, units: "g_TSS/m3", description: "Metal hydroxide compounds"}
-  - {name: XMeP, default_concentration: 1.0, units: "g_TSS/m3", description: "Metal phosphate compounds"}
+  - {name: SO2, default_concentration: 2.0, units: "g_O2/m3", description: "Dissolved oxygen (O2)"}
+  - {name: SF, default_concentration: 2.0, units: "g_COD/m3", description: "Fermentable organic matter"}
+  - {name: SA, default_concentration: 2.0, units: "g_COD/m3", description: "Fermentation product (Volatile Fatty Acids)"}
+  - {name: SNH4, default_concentration: 8.0, units: "g_N/m3", description: "Ammonia (NH4+ + NH3)"}
+  - {name: SNO3, default_concentration: 2.0, units: "g_N/m3", description: "Nitrate and nitrite (NO3 + NO2)"}
+  - {name: SPO4, default_concentration: 4.0, units: "g_P/m3", description: "Soluble inorganic phosphorus"}
+  - {name: SI, default_concentration: 30.0, units: "g_COD/m3", description: "Soluble undegradable organics"}
+  - {name: SALK, default_concentration: 0.007, units: "kmol/m3", description: "Alkalinity (HCO3-)"}
+  - {name: SN2, default_concentration: 5.0, units: "g_N/m3", description: "Dissolved nitrogen (N2)"}
+  - {name: XI, default_concentration: 1500.0, units: "g_COD/m3", description: "Particulate unbiodegradable organics"}
+  - {name: XS, default_concentration: 80.0, units: "g_COD/m3", description: "Particulate biodegradable organics"}
+  - {name: XH, default_concentration: 1500.0, units: "g_COD/m3", description: "Ordinary heterotrophic organisms (OHO)"}
+  - {name: XPAO, default_concentration: 900.0, units: "g_COD/m3", description: "Phosphorus accumulating organisms (PAO)"}
+  - {name: XPP, default_concentration: 250.0, units: "g_P/m3", description: "Stored polyphosphate (PP)"}
+  - {name: XPHA, default_concentration: 20.0, units: "g_COD/m3", description: "Stored polyhydroxyalkanoates (PHA)"}
+  - {name: XAUT, default_concentration: 150.0, units: "g_COD/m3", description: "Autotrophic nitrifying organisms (NH4+ to NO3-)"}
+  - {name: XTSS, default_concentration: 4299.5, units: "g_TSS/m3", description: "Total suspended solids (TSS)"}
+  - {name: XMeOH, default_concentration: 0.0, units: "g_TSS/m3", description: "Metal hydroxide compounds"}
+  - {name: XMeP, default_concentration: 0.0, units: "g_TSS/m3", description: "Metal phosphate compounds"}
 
 conditions:
   - {name: T, default: 293.15, description: "Temperature (K)."}

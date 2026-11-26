@@ -66,15 +66,12 @@ A model is a YAML file. Here is first-order chlorine decay:
 ```yaml
 # decay.yaml
 model:
-  name: chlorine_decay
+  name: first_order_chlorine
   version: "1.0"
   description: "First-order chlorine decay"
 
 species:
   - {name: HOCl, units: mg/L, default_concentration: 2.0}
-
-conditions:
-  - {name: T, default: 293.15}
 
 reactions:
   - name: decay
@@ -141,12 +138,12 @@ plant.add_influent("feed", model.influent(
 
 ss = plant.run_to_steady_state()     # integrate until the plant settles
 eff = plant.stream(ss.solution, "effluent")
-eff.final_named(["SNH", "SNO"])      # {'SNH': 0.46, 'SNO': 11.6} g N/m³
+eff.final_named(["SNH", "SNO"])      # {'SNH': 0.47, 'SNO': 11.6} g N/m³
 ```
 
 <!-- invisible-code-block: python
 effluent = eff.final_named(["SNH", "SNO"])
-assert round(effluent["SNH"], 2) == 0.46 and round(effluent["SNO"], 1) == 11.6
+assert round(effluent["SNH"], 2) == 0.47 and round(effluent["SNO"], 1) == 11.6
 -->
 
 From there you can:
@@ -181,7 +178,7 @@ To draw and edit flowsheets in your browser:
 
 ```bash
 pip install "aquakin[ui]"
-aquakin-ui examples/projects/bsm2/flowsheet.yaml
+aquakin-ui            # or: aquakin-ui flowsheet.yaml to open a saved plant
 ```
 
 The editor lets you drag units from a palette, wire their ports, edit each unit

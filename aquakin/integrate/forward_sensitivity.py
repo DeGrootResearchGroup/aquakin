@@ -1,10 +1,14 @@
 """Forward (variational) sensitivity solve: integrate ``S = dy/dtheta`` with ``y``.
 
 Computing ``d(output)/d(params)`` through a stiff reactor solve by ordinary AD
-breaks down: above an integrator-step threshold the differentiated solve returns
-non-finite values (in both forward and reverse mode), and the workaround is a
-global ``dtmax`` cap that forces tiny steps over the *whole* solve even though
-the tight step is only needed in small, local stiff regions.
+breaks down. Reverse mode (``jax.grad`` through the solve) returns non-finite
+values above an integrator-step threshold, an overflow in the backward
+accumulation. Forward mode (``jax.jvp`` / ``jax.jacfwd`` through the solve)
+stays finite at any step, but once the step outgrows the fastest reaction
+timescale it differentiates a solve that damps the unresolved fast modes, and so
+loses accuracy. The workaround for both is a global ``dtmax`` cap that forces
+tiny steps over the *whole* solve even though the tight step is only needed in
+small, local stiff regions.
 
 Classical forward sensitivity analysis removes the cap. The sensitivity
 ``S = dy/dtheta`` obeys the variational equation
@@ -63,6 +67,10 @@ from aquakin.integrate._common import (
     build_step_controller,
     validate_C0_params,
 )
+from aquakin.integrate._solver import check_solve_result
+
+# The label a failed reactor sensitivity solve is reported under.
+_SENS_WHAT = "forward-sensitivity solve"
 
 # Floor on the per-parameter error-control scale ``|theta_k|`` so a parameter
 # that happens to pass through zero does not blow the sensitivity tolerance up
@@ -267,6 +275,9 @@ def augmented_forward_sensitivity(
         State trajectory, shape ``(n_t, ndof)``.
     S_traj : jnp.ndarray
         Sensitivity trajectory ``dy/dtheta``, shape ``(n_t, ndof, k)``.
+    result : diffrax.RESULTS
+        The solve's result. A failed solve is returned, not raised; the caller
+        checks it with :func:`~aquakin.integrate._solver.check_solve_result`.
     """
     ndof = int(y0_flat.shape[0])
     k = int(free_idx.shape[0])
@@ -331,12 +342,15 @@ def augmented_forward_sensitivity(
         saveat=saveat,
         stepsize_controller=controller,
         max_steps=max_steps,
+        # A failed solve is returned with its result, which the caller checks
+        # with check_solve_result (raising in the program logs Equinox's banner).
+        throw=False,
     )
     ts = sol.ts
     y_traj = sol.ys[:, :ndof]
     # Column-major -> (n_t, ndof, k).
     S_traj = sol.ys[:, ndof:].reshape(sol.ys.shape[0], k, ndof).transpose(0, 2, 1)
-    return ts, y_traj, S_traj
+    return ts, y_traj, S_traj, sol.result
 
 
 def build_jitted_sensitivity_solve(
@@ -472,9 +486,14 @@ def run_forward_sensitivity(
     -------
     (ts, y_traj, S_traj)
         Raw solver output; the caller reshapes / wraps it into its solution type.
+
+    Raises
+    ------
+    RuntimeError
+        If the solve fails (:func:`~aquakin.integrate._solver.check_solve_result`).
     """
     if sens_atol is not None or param_scale is not None:
-        return augmented_forward_sensitivity(
+        *outputs, result = augmented_forward_sensitivity(
             make_f_flat(cond),
             y0_flat,
             params,
@@ -491,6 +510,7 @@ def run_forward_sensitivity(
             max_steps=max_steps,
             shared_factor=shared_factor,
         )
+        return check_solve_result(result, tuple(outputs), max_steps=max_steps, what=_SENS_WHAT)
     jitted = cache.get(cache_key)
     if jitted is None:
         jitted = build_jitted_sensitivity_solve(
@@ -508,8 +528,10 @@ def run_forward_sensitivity(
         )
         cache[cache_key] = jitted
     if t_eval is None:
-        return jitted(y0_flat, params, cond)
-    return jitted(y0_flat, params, cond, t_eval)
+        *outputs, result = jitted(y0_flat, params, cond)
+    else:
+        *outputs, result = jitted(y0_flat, params, cond, t_eval)
+    return check_solve_result(result, tuple(outputs), max_steps=max_steps, what=_SENS_WHAT)
 
 
 @dataclass

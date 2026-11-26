@@ -30,8 +30,6 @@ _CASES = [
     ("asm2d_tud", ["SF", "SA"]),
     ("asm2d_tud", ["XPP", "XPAO"]),
     ("wats_sewer", ["S_B", "S_VFA"]),
-    ("wats_sewer_extended", ["S_B", "S_VFA"]),
-    ("wats_sewer_khalil_thesis", ["S_B", "S_VFA"]),
 ]
 
 
@@ -158,17 +156,24 @@ def test_rates_at_a_slightly_negative_state_equal_the_depleted_rates(name):
     assert not moved, f"{name}: rates move at -1e-9 (species -> reactions): {moved}"
 
 
+def _aerobic_state(net):
+    """Every species at 1.0: oxygen and substrate balanced against a small
+    biomass, so the aerobic storage processes still run after a day. The
+    model's default mixed liquor uses its oxygen up within minutes."""
+    return jnp.ones(len(net.species))
+
+
 def test_asm2d_tud_glycogen_formation_is_finite_with_no_stored_glycogen():
     """``asm2d_tud`` glycogen formation takes its finite limit at XGLY = 0.
 
     The published drive ``XPHA / XGLY * (f_GLY / (KfGLY + f_GLY)) * XPAO``,
     f_GLY = XGLY / XPAO, tends to ``XPHA / KfGLY`` as XGLY -> 0; written as that
-    product it is ``inf * 0 = NaN`` there. Every other pool stays at its default.
+    product it is ``inf * 0 = NaN`` there. Every other pool is at 1.0.
     """
     net = aquakin.load_model("asm2d_tud")
     p = net.default_parameters()
     cf = net.default_conditions().fields
-    c = net.default_concentrations().at[net.species_index["XGLY"]].set(0.0)
+    c = _aerobic_state(net).at[net.species_index["XGLY"]].set(0.0)
 
     rates = np.asarray(net.rates(c, p, cf, 0))
     assert np.all(np.isfinite(rates))
@@ -330,7 +335,7 @@ def test_asm2d_tud_batch_solve_from_no_stored_polyp_stays_finite():
     from 0 under the aerobic storage rate, which the floor keeps finite."""
     net = aquakin.load_model("asm2d_tud")
     p = net.default_parameters()
-    c = net.default_concentrations().at[net.species_index["XPP"]].set(0.0)
+    c = _aerobic_state(net).at[net.species_index["XPP"]].set(0.0)
     reactor = aquakin.BatchReactor(net, aquakin.SpatialConditions.uniform(1, T=293.15))
     sol = reactor.solve(c, params=p, t_span=(0.0, 1.0), t_eval=jnp.linspace(0.0, 1.0, 5))
     assert np.all(np.isfinite(np.asarray(sol.C)))

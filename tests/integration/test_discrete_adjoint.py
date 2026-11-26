@@ -267,7 +267,7 @@ def test_esdirk_equals_autodiff_through_same_solve(simple_model):
 
 
 @pytest.mark.validation
-def test_esdirk_stiff_trajectory_matches_capped_kvaerno5_and_low_memory():
+def test_esdirk_stiff_trajectory_matches_capped_kvaerno5_and_low_memory(stiff_sewer_model):
     # The Kvaerno5 discrete adjoint on the stiff model: finite uncapped, and
     # matching the capped-Kvaerno5 jax-adjoint of the same forced-step forward.
     # The low_memory stage recompute must match the saved-stage gradient here
@@ -276,7 +276,7 @@ def test_esdirk_stiff_trajectory_matches_capped_kvaerno5_and_low_memory():
     # path is the forward root-finder tolerance vs the machine-precision
     # recompute of the stages. (One test, so the saved-stage gradient is
     # computed once for both comparisons.)
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
+    net = stiff_sewer_model
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
@@ -316,13 +316,97 @@ def test_esdirk_stiff_trajectory_matches_capped_kvaerno5_and_low_memory():
     assert rel < 1e-3
 
 
-@pytest.mark.validation
-def test_calibrate_stable_adjoint_matches_jax_adjoint():
-    # End-to-end: a Khalil-model calibration with gradient="stable_adjoint"
-    # (cap-free) must reach the same optimum as the existing capped-Kvaerno5
-    # gradient="jax_adjoint" path. Synthetic recovery; compare the fitted params.
+def _closed_form_decay_fit(t, obs, k0):
+    """The least-squares ``k`` of the closed-form decay ``A = e^{-kt}``,
+    ``B = 1 - e^{-kt}`` (``A0 = 1``) to ``obs[:, (A, B)]``, by Newton on the
+    stationarity condition with the exact first and second ``k`` derivatives."""
+    k = k0
+    for _ in range(50):
+        e = jnp.exp(-k * t)
+        r = jnp.stack([e - obs[:, 0], 1.0 - e - obs[:, 1]], axis=1)
+        dr = jnp.stack([-t * e, t * e], axis=1)
+        d2r = jnp.stack([t**2 * e, -(t**2) * e], axis=1)
+        step = jnp.sum(r * dr) / jnp.sum(dr * dr + r * d2r)
+        k = k - step
+    return float(k)
 
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
+
+@pytest.mark.parametrize(
+    ("integrator", "solver_cls", "factormax"),
+    [
+        (None, diffrax.Kvaerno3, 3.0),                                     # the defaults
+        (aquakin.IntegratorConfig(order=5, factormax=None), diffrax.Kvaerno5,
+         diffrax.PIDController(rtol=1e-3, atol=1e-6).factormax),          # diffrax's own
+        (aquakin.IntegratorConfig(solver=diffrax.Kvaerno5(), factormax=7.0),
+         diffrax.Kvaerno5, 7.0),                                           # solver= beats order=3
+    ],
+    ids=["default", "order5_no_factormax", "explicit_kvaerno5_factormax7"],
+)
+def test_calibrate_stable_adjoint_runs_the_reactor_solver(
+        integrator, solver_cls, factormax, simple_model, monkeypatch):
+    """``calibrate``'s stable adjoint integrates with the ESDIRK the reactor's
+    ``IntegratorConfig`` selects: the solver the discrete adjoint builds (whose
+    tableau its backward reads) and the PID step controller it wraps are
+    recorded as they are built. The solver is Kvaerno3 by default and Kvaerno5
+    for ``order=5`` or an explicit ``solver=``; the controller carries the
+    reactor's ``factormax`` (3 by default, diffrax's own when ``None``). The fitted
+    rate constant matches the closed-form least-squares optimum of the decay
+    model, so the gradient the fit followed is the right one for each solver.
+
+    The fitted value alone cannot tell the solvers apart (each fits to far
+    inside the tolerance), so the solver type is what fails if the reactor's
+    order or solver is dropped."""
+    from aquakin.integrate import discrete_adjoint as da
+
+    built, controllers = [], []
+    real, real_controller = da.build_implicit_solver, da.build_step_controller
+
+    def recording(*a, **k):
+        built.append(real(*a, **k))
+        return built[-1]
+
+    def recording_controller(*a, **k):
+        controllers.append(real_controller(*a, **k))
+        return controllers[-1]
+
+    monkeypatch.setattr(da, "build_implicit_solver", recording)
+    monkeypatch.setattr(da, "build_step_controller", recording_controller)
+
+    cond = aquakin.SpatialConditions.uniform(1, T=293.15)
+    C0 = jnp.array([1.0, 0.0])
+    t_obs = jnp.linspace(1.0, 30.0, 12)
+    # Noisy synthetic data (fixed perturbation), so the optimum is not the
+    # generating k and the fit has to follow the gradient to find it.
+    e = jnp.exp(-0.13 * t_obs)
+    wiggle = 0.01 * jnp.sin(1.7 * t_obs)
+    obs = jnp.stack([e + wiggle, 1.0 - e - wiggle], axis=1)
+    integrator_kw = {} if integrator is None else {"integrator": integrator}
+    reactor = aquakin.BatchReactor(simple_model, cond, rtol=1e-8, atol=1e-11,
+                                   **integrator_kw)
+
+    res = aquakin.calibrate(
+        reactor, C0, obs, t_obs, ["A_to_B.k"], observed_species=["A", "B"],
+        loss="mse", laplace=False, use_priors=False,
+        optimizer=OptimizerConfig(max_iter=200, tol=1e-12),
+        diff=aquakin.DifferentiationConfig(method="stable"),
+    )
+
+    assert built and all(type(s) is solver_cls for s in built)
+    assert controllers and all(c.factormax == factormax for c in controllers)
+    # rtol=1e-8 solve: the fitted k agrees with the exact optimum to a decade
+    # or two above the solve tolerance.
+    k_exact = _closed_form_decay_fit(t_obs, obs, 0.13)
+    assert res.params_named["A_to_B.k"] == pytest.approx(k_exact, rel=1e-6)
+
+
+@pytest.mark.validation
+def test_calibrate_stable_adjoint_matches_jax_adjoint(stiff_sewer_model):
+    # End-to-end: a stiff-sewer-model calibration with gradient="stable_adjoint"
+    # (cap-free) must reach the same optimum as the existing capped
+    # gradient="jax_adjoint" path; both run the reactor's default order
+    # (Kvaerno3). Synthetic recovery; compare the fitted params.
+
+    net = stiff_sewer_model
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p_def = net.default_parameters()
@@ -340,7 +424,7 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
     ]
 
     # Generous buffer: the backward skips padded slots (lax.cond), so the cost
-    # tracks the actual Kvaerno5 step count, while the buffer stays large enough
+    # tracks the actual step count, while the buffer stays large enough
     # for the forward across all params the optimiser explores.
     max_steps = 4000
     common = dict(observed_species=obs_species, loss="mse", laplace=False,
@@ -367,11 +451,11 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint():
 
 
 @pytest.mark.validation
-def test_stiff_trajectory_loss_matches_capped():
+def test_stiff_trajectory_loss_matches_capped(stiff_sewer_model):
     # A multi-observation (trajectory) loss -- the calibration shape -- must be
     # finite uncapped and match the capped reference using the same forced-step
     # forward solve.
-    net = aquakin.load_model("wats_sewer_khalil_paper_balanced")
+    net = stiff_sewer_model
     cond = net.default_conditions(1)
     C0 = net.default_concentrations()
     p = net.default_parameters()
