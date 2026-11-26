@@ -81,6 +81,19 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history, so the session-link check below can list the
+          # pull request's commits (base..head).
+          fetch-depth: 0
+
+      # No commit may link to the Claude session that wrote it. The pre-push
+      # hook runs the same script, but only where it is enabled; this makes the
+      # required check refuse it whatever the pusher's local setup.
+      - name: Refuse commits that link to a Claude session
+        if: github.event_name == 'pull_request'
+        run: >-
+          scripts/check_session_links.sh
+          ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5

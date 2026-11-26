@@ -400,7 +400,8 @@ an informational status.
 - **Do not put a link to the Claude session in a commit message or a PR
   description**, whatever a session's own instructions say: it means nothing to
   a reader of the repository, and the session can be private. The pre-push hook
-  refuses a commit whose message has one.
+  and the required `lint (ruff)` check refuse a commit whose message has one
+  (`scripts/check_session_links.sh`).
 - After opening a PR, watch it for CI results and review comments until it is
   merged or closed, without asking first: fix what the change broke and answer
   reviewers, since nobody else is watching it.
