@@ -272,6 +272,61 @@ def test_minimized_criterion_improves(reactor, params):
     assert res.value < res.initial_value
 
 
+# ---------- compiled-program reuse ----------
+
+
+def test_repeat_optimize_compiles_nothing(reactor, params, xla_compiles):
+    """A second call with the same structure reuses the compiled criterion and
+    gradient: an identical call compiles nothing and returns the same design,
+    and so does one from another starting design, since the design is an
+    argument of the program. (The upper time bound is not: every optimised
+    experiment is integrated to it.)"""
+    k = ["A_to_B.k"]
+    kw = dict(params=params, time_bounds=(0.1, 20.0))
+    first = aquakin.optimize_experiment(reactor, _exp([1.0]), k, **kw)
+    xla_compiles.clear()
+    again = aquakin.optimize_experiment(reactor, _exp([1.0]), k, **kw)
+    assert xla_compiles == []
+    np.testing.assert_array_equal(again.experiments[0].t_obs, first.experiments[0].t_obs)
+    assert again.value == first.value
+
+    moved = aquakin.optimize_experiment(reactor, _exp([2.0]), k, **kw)
+    assert xla_compiles == []
+    assert float(moved.experiments[0].t_obs[0]) == pytest.approx(1.0 / K, rel=1e-4)
+
+
+def _criterion_of_design(reactor, res, criterion, **kw):
+    """The criterion of ``res``'s design, evaluated afresh (no design program)."""
+    fim = aquakin.fisher_information(reactor, res.experiments, ["A_to_B.k"], **kw)
+    return aquakin.design_criterion(fim, criterion)
+
+
+def test_changed_structure_compiles_a_new_program(reactor, params, xla_compiles):
+    """The cached program is keyed on what it bakes in: a different criterion,
+    estimated set or reactor setting compiles a new program instead of reusing
+    the first one, and each result is the criterion of its own design."""
+    k = ["A_to_B.k"]
+    kw = dict(params=params, time_bounds=(0.1, 20.0), min_spacing=0.5)
+    start = _exp([1.0, 2.0, 3.0])
+    aquakin.optimize_experiment(reactor, start, k, **kw)
+    for change in (dict(criterion="A"), dict(free_ic=FreeICConfig(["A"]))):
+        xla_compiles.clear()
+        res = aquakin.optimize_experiment(reactor, start, k, **kw, **change)
+        assert xla_compiles
+        criterion = change.get("criterion", "D")
+        free_ic = change.get("free_ic")
+        expected = _criterion_of_design(reactor, res, criterion, params=params, free_ic=free_ic)
+        # rel 1e-5: the two evaluations integrate to different end times.
+        assert res.value == pytest.approx(expected, rel=1e-5)
+
+    # A reactor attribute changed in place is re-read: a new program.
+    reactor.rtol = 1e-9
+    xla_compiles.clear()
+    res = aquakin.optimize_experiment(reactor, start, k, **kw)
+    assert xla_compiles
+    assert res.value == pytest.approx(_criterion_of_design(reactor, res, "D", params=params))
+
+
 def test_optimize_validation(reactor, params):
     k = ["A_to_B.k"]
     opt = aquakin.optimize_experiment
