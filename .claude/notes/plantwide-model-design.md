@@ -360,11 +360,23 @@ and is indicative only):
 | BNRM1-type: fermentation off by O2 only, Ruel kinetics, 10 g/m3 acidogens in the influent | 5.4 | 806 | 0 | 5.82 |
 | the same without influent acidogens | 13.9 | 0 | 552 | 9.69 |
 
-The last row also shows the PAO/GAO outcome depending on the starting state:
-it differs from the current-kinetics row mainly in the acidogens seeded in the
-warm start (50 against 0), and ends GAO- instead of PAO-dominated. Whether the
-A2O has two stable states here, or the pseudo-transient solve stops in a slow
-transient, is to be checked by a long forward solve.
+**The PAO / GAO columns above are not steady states.** Two 400-day forward
+solves of the current model, from warm starts differing only in the seeded
+acidogens (50 and 0 g/m3), follow the same path within 2 g/m3: PAOs fall from
+500 to 465 g COD/m3 between days 100 and 400 while Competibacter grows from 29
+to 67 (about 0.3% per day). A PTC solve from the day-400 state converges
+(residual 8e-7) to PAOs 0, Competibacter 560, effluent phosphate 9.7 g P/m3,
+and every eigenvalue of the plant Jacobian there is negative (largest -0.049
+1/d): Competibacter excludes the PAOs. The PAO-only states the earlier PTC
+solves stopped at are equilibria (zero GAOs is invariant) that GAOs invade too
+slowly for the convergence test to see. So on this level a PTC steady state
+needs a stability check (the Jacobian's eigenvalues, or a long forward solve)
+before its PAO / GAO split is read, and the acidogen variants above need the
+same check. A full GAO takeover at 20 C on acetate at pH 7 is not what the
+source predicts for its SBR (coexistence, 53% PAO and 46% Competibacter, the
+validation case), so the cause in the A2O (the anoxic zone and the GAOs'
+anoxic processes, carbon limitation, the recycles) is to be found before the
+fermentation structure is chosen.
 
 ## Structure: a linear `extends:` chain
 
