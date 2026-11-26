@@ -10,19 +10,22 @@ optimization.
 A plain forward simulation never needs any of this. Reach for it when you want
 to know *how* an output depends on its inputs, or to fit a model to data. This
 page covers gradients, sensitivity analysis and uncertainty propagation; the
-other questions have pages of their own.
+other questions have pages of their own, and the statistical ideas they use
+are explained in [Key ideas](analysis_concepts.md). The plant-only functions
+`plant_fisher_information`, `plant_profile_likelihood` and
+`plant_rank_sensor_sets` are imported from `aquakin.plant`.
 
 ## Which tool do I need?
 
 | Question | Reactor | Plant | Page |
 |---|---|---|---|
-| How does an output change with each parameter, here? | `aquakin.sensitivity`, `reactor.solve_sensitivity` | `plant.steady_state_sensitivity`, `plant.dynamic_sensitivity`, `plant.solve_sensitivity` | [Sensitivity analysis](#sensitivity-analysis) |
+| How does an output change with each parameter, here? | `aquakin.sensitivity`, `reactor.solve_sensitivity` | `plant.steady_state_sensitivity`, `plant.dynamic_sensitivity`, `plant.solve_sensitivity` | [Local sensitivity](#local-sensitivity) |
 | Which inputs matter over a whole range? | `aquakin.dgsm`; `aquakin.sobol_indices` for first-order and interaction shares | `plant.steady_state_dgsm`, `plant.dynamic_dgsm` | [Global sensitivity](#global-sensitivity-dgsm) |
-| How uncertain is a prediction? Which design is best? | `aquakin.monte_carlo`, `compare_scenarios`, `optimize_design` | the same | [Uncertainty propagation](#uncertainty-propagation-and-design) |
+| How uncertain is a prediction? Which process design (a dose, a size) is best under constraints? | `aquakin.monte_carlo`, `compare_scenarios`, `optimize_design` | the same | [Uncertainty propagation](#uncertainty-propagation-and-design) |
 | Which parameter values fit my data? | `aquakin.calibrate` (`aquakin.fit` for a point estimate only) | `plant.calibrate` | [Calibration](calibration.md), [Calibrating a plant](plant_calibration.md) |
-| How well do the data determine them? | the Laplace posterior, `aquakin.sample_posterior`, `aquakin.profile_likelihood`, `aquakin.identifiability` | the same, with `plant.sample_posterior` and `plant_profile_likelihood` | [How certain is the fit?](calibration.md#how-certain-is-the-fit) |
-| Which model structure do the data support? | `aquakin.aic`, `aicc`, `bic`, `compare_models` | the same | [Comparing model structures](calibration.md#comparing-model-structures) |
-| What should I measure next? | `aquakin.fisher_information`, `rank_experiments`, `optimize_experiment`, `design_from_candidates` | `plant_fisher_information`, `plant_rank_sensor_sets` | [Experiment design](experiment_design.md), [Identifiability of plant parameters](plant_calibration.md#identifiability-of-plant-parameters) |
+| How well do the data determine them? | the Laplace posterior, `aquakin.sample_posterior`, `aquakin.profile_likelihood`, `aquakin.identifiability` | the same, with `plant.sample_posterior` and `aquakin.plant.plant_profile_likelihood` | [Uncertainty and model comparison](fit_uncertainty.md) |
+| Which model structure do the data support? | `aquakin.aic`, `aicc`, `bic`, `compare_models` | the same | [Comparing model structures](fit_uncertainty.md#comparing-model-structures) |
+| What should I measure next? | `aquakin.fisher_information`, `rank_experiments`, `optimize_experiment`, `design_from_candidates` | `aquakin.plant.plant_fisher_information`, `aquakin.plant.plant_rank_sensor_sets` | [Experiment design](experiment_design.md), [Identifiability of plant parameters](plant_calibration.md#identifiability-of-plant-parameters) |
 
 For a complete study that uses most of these tools in turn, see
 [Worked example: designing an experiment](worked_example_design.md).
@@ -78,7 +81,8 @@ in forward mode build a forward-capable solve for you.
 
 ```{warning}
 **Silent non-finite reverse gradients on stiff models.** A reverse-mode
-gradient taken *directly* through the solve of a stiff model (ASM, ADM, WATS)
+gradient taken *directly* through the solve of a stiff model (the activated
+sludge models ASM, the anaerobic digestion model ADM, the WATS sewer models)
 can come back as `NaN` or `Inf` when the integrator step is uncapped. No
 exception is raised, so the bad gradient flows into your optimizer.
 
@@ -92,40 +96,13 @@ make it finite by themselves. To get a finite gradient through a stiff reactor:
 - in `calibrate`, use the cap-free adjoint,
   `diff=aquakin.DifferentiationConfig(method="stable")` (batch reactors).
 
+[Differentiation options](#differentiation-options) lists every setting.
+
 In your own loss, `aquakin.check_finite_gradient(g, what="my loss gradient",
 remedy="...")` raises that kind of error for you.
 ```
 
-### How a gradient is formed
-
-`aquakin.DifferentiationConfig`, passed as `diff=`, says how a gradient flows
-through a solve. Its fields are:
-
-- `mode`: `"reverse"` (default; `jax.grad`, one pass for many parameters) or
-  `"forward"` (`jax.jacfwd`, or the variational solve; finite through stiff
-  models and suited to few parameters).
-- `method`: `"stable"` (default) or `"through_solve"`. `"stable"` replaces
-  differentiation through the integrator with a cap-free discrete adjoint
-  (reverse) or the variational solve (forward); `"through_solve"`
-  differentiates the integrator's own steps, which on a stiff model needs a
-  `dtmax` cap in reverse mode.
-- `check_finite` (default `True`): raise an error instead of returning a
-  non-finite gradient.
-- `adjoint_max_steps` (default 100 000) and `adjoint_low_memory` (default
-  `False`): the step buffer of the stable reverse adjoint, and whether it
-  recomputes each step in the backward pass instead of storing it, trading
-  compute for memory on a long, large plant solve.
-
-What each entry point does with it:
-
-| Entry point | Default | Notes |
-|---|---|---|
-| `reactor.solve` under `jax.grad` | through the solve | a reactor has no cap-free adjoint for a bare solve; cap `dtmax` for a stiff model |
-| `aquakin.calibrate` | `method="through_solve"` | `method="stable"` is the cap-free adjoint (batch reactors); `mode="forward"` needs `method="through_solve"` and suits `OptimizerConfig(method="gauss_newton")` |
-| `aquakin.sensitivity`, `aquakin.dgsm` | reverse | `mode="forward"` builds a forward-capable solve, finite through a stiff model |
-| `plant.solve`, `plant.calibrate` | `method="stable"` | the plant's cap-free discrete adjoint: `jax.grad` through a stiff plant is finite with nothing to tune |
-
-## Sensitivity analysis
+## Local and global sensitivity
 
 ### Local sensitivity
 
@@ -378,3 +355,33 @@ opt = aquakin.optimize_design(
     x0=[50.0])
 opt.x_named, opt.feasible     # about 42.7 µmol/L, True
 ```
+
+## Differentiation options
+
+The tools above choose how to differentiate a solve for you. To change it,
+pass an `aquakin.DifferentiationConfig` as `diff=`; it says how a gradient
+flows through a solve. Its fields are:
+
+- `mode`: `"reverse"` (default; `jax.grad`, one pass for many parameters) or
+  `"forward"` (`jax.jacfwd`, or the variational solve; finite through stiff
+  models and suited to few parameters).
+- `method`: `"stable"` (default) or `"through_solve"`. `"stable"` replaces
+  differentiation through the integrator with a cap-free discrete adjoint
+  (reverse) or the variational solve (forward); `"through_solve"`
+  differentiates the integrator's own steps, which on a stiff model needs a
+  `dtmax` cap in reverse mode.
+- `check_finite` (default `True`): raise an error instead of returning a
+  non-finite gradient.
+- `adjoint_max_steps` (default 100 000) and `adjoint_low_memory` (default
+  `False`): the step buffer of the stable reverse adjoint, and whether it
+  recomputes each step in the backward pass instead of storing it, trading
+  compute for memory on a long, large plant solve.
+
+What each entry point does with it:
+
+| Entry point | Default | Notes |
+|---|---|---|
+| `reactor.solve` under `jax.grad` | through the solve | a reactor has no cap-free adjoint for a bare solve; cap `dtmax` for a stiff model |
+| `aquakin.calibrate` | `method="through_solve"` | `method="stable"` is the cap-free adjoint (batch reactors); `mode="forward"` needs `method="through_solve"`, and suits the least-squares optimizer, `OptimizerConfig(method="gauss_newton")`, which needs the Jacobian of every residual |
+| `aquakin.sensitivity`, `aquakin.dgsm` | reverse | `mode="forward"` builds a forward-capable solve, finite through a stiff model |
+| `plant.solve`, `plant.calibrate` | `method="stable"` | the plant's cap-free discrete adjoint: `jax.grad` through a stiff plant is finite with nothing to tune |
