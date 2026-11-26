@@ -43,7 +43,7 @@ from aquakin.plant.identifiability import (
     plant_profile_likelihood,
     plant_rank_sensor_sets,
 )
-from aquakin.plant.control import PIController
+from aquakin.plant.control import ExpressionController, PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit, oxygen_saturation
 from aquakin.plant.disinfection import (
     ChlorineContactUnit,
@@ -194,6 +194,7 @@ __all__ = [
     "Connection",
     "CostFactors",
     "DosingUnit",
+    "ExpressionController",
     "FerricDose",
     "FlowContext",
     "FlowParameterized",

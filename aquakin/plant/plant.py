@@ -59,6 +59,7 @@ from aquakin.plant.results import (
 
 # Re-exported, as ``aquakin.plant.plant.<name>`` is an import path for them.
 from aquakin.plant.results import SteadyStateResult as SteadyStateResult
+from aquakin.plant.signal_bus import order_signal_producers, validate_control_signals
 from aquakin.plant.solve_cache import SolveCache, structure_changed
 from aquakin.plant.steady_solve import NORM_RESIDUAL_WARN_FACTOR as NORM_RESIDUAL_WARN_FACTOR
 from aquakin.plant.streams import Stream, StreamSeries, make_scalars
@@ -75,7 +76,6 @@ from aquakin.plant.units import (
     LiquidVolumeUnit,
     PHOperating,
     PlantTimeUnitAware,
-    SignalProducer,
     TemperatureSettable,
     Unit,
 )
@@ -1171,7 +1171,8 @@ class Plant:
         cursor += temp_size
         self._total_state_size = cursor
         self._build_connection_index()
-        self._validate_control_signals()
+        validate_control_signals(self.units)
+        self._signal_order = order_signal_producers(self.units, self._unit_order)
 
     def _resolve_time_unit(self) -> None:
         """Put every part of the plant on its clock (:attr:`time_unit`).
@@ -1226,61 +1227,6 @@ class Plant:
             self.influents[name] = series.in_time_unit(time_unit)
         self._solve_cache.invalidate(keep_shared=True)  # the same for every plant of a spec
         self._time_unit_key = key
-
-    def _validate_control_signals(self) -> None:
-        """Cross-check the control-signal bus: every published signal name is
-        unique, and every signal a unit *consumes* is *published* by some unit.
-
-        A unit under closed-loop control (a ``CSTRUnit`` whose ``aeration`` has a
-        DO setpoint) reads ``signals[name]`` in its ``rhs``; if no controller publishes
-        ``name`` -- a forgotten or mistyped wiring -- that read is a bare
-        ``KeyError`` from deep inside the first jitted solve. This runs at
-        topology setup (before the RHS is traced) and raises a clear error
-        naming the unit, the missing signal, and the available signals instead.
-
-        Two controllers publishing the *same* signal name are also rejected here:
-        the bus is gathered with ``dict.update`` (see :meth:`_compute_signals`),
-        so a duplicate would silently overwrite -- whichever unit runs later wins
-        and the other's output is discarded while its integral state keeps
-        winding. That is caught up front as a clear error rather than a silent
-        wrong closed loop.
-
-        Conservative by design: a unit that publishes signals declares their
-        names via ``signal_names``; if any signal *producer* (one exposing
-        ``signal_outputs``) does not declare ``signal_names``, the published set
-        is unknown, so validation is skipped rather than risk rejecting a valid
-        plant.
-        """
-        unknown_publisher = any(
-            hasattr(u, "signal_outputs") and not hasattr(u, "signal_names")
-            for u in self.units.values()
-        )
-        if unknown_publisher:
-            return
-        published: set[str] = set()
-        publisher_of: dict[str, str] = {}
-        for name, unit in self.units.items():
-            for sig in getattr(unit, "signal_names", ()) or ():
-                if sig in publisher_of:
-                    raise ValueError(
-                        f"Control signal '{sig}' is published by both "
-                        f"'{publisher_of[sig]}' and '{name}'. Signal names must be "
-                        f"unique -- the bus gathers them by name, so a duplicate "
-                        f"would silently overwrite. Give the controllers distinct "
-                        f"signal names."
-                    )
-                publisher_of[sig] = name
-                published.add(sig)
-        for name, unit in self.units.items():
-            for sig in getattr(unit, "required_signals", ()) or ():
-                if sig not in published:
-                    raise ValueError(
-                        f"Unit '{name}' consumes control signal '{sig}', which "
-                        f"no unit in this plant publishes. Published signals: "
-                        f"{sorted(published) or '(none)'}. Add a controller "
-                        f"(e.g. a PIController) that publishes '{sig}', or fix "
-                        f"the signal name."
-                    )
 
     def _build_connection_index(self) -> None:
         """Group connections by destination unit for the RHS hot paths.
@@ -2560,14 +2506,13 @@ class Plant:
         sweep, so the signal must already exist. Each controller's sensed
         ``inputs`` stream is reconstructed from the sensor unit's state
         (``C = state``); the sensor must therefore be a reactor whose output
-        concentration is its state (a :class:`CSTRUnit`). Whether a unit produces
-        signals is a class-level property, so the branch is static (jit-safe).
+        concentration is its state (a :class:`CSTRUnit`). Producers run in
+        ``_signal_order`` (each after those it reads) and each is given the bus
+        built so far.
         """
         signals: dict = {}
-        for name in self._unit_order:
+        for name in self._signal_order:
             unit = self.units[name]
-            if not isinstance(unit, SignalProducer):
-                continue
             # Reconstruct each sensed source's stream from its state (a reactor's
             # output concentration is its state), so no swept stream is needed.
             sensed_outputs: dict[tuple[str, str], Stream] = {}
@@ -2580,11 +2525,8 @@ class Plant:
                     model=self.units[conn.from_unit].model,
                 )
             inputs = self._collect_inputs(name, sensed_outputs, {})
-            signals.update(
-                unit.signal_outputs(
-                    t, states[name], inputs, self._params_for_unit(name, params_full)
-                )
-            )
+            params = self._params_for_unit(name, params_full)
+            signals.update(unit.signal_outputs(t, states[name], inputs, params, dict(signals)))
         return signals
 
     def signals_at(

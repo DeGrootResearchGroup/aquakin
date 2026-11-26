@@ -172,6 +172,9 @@ aquakin/
 │   │   ├── colored.py               # ColoredJacobianManager: sparse plant Jacobians
 │   │   ├── solve_cache.py           # SolveCache: the compiled-solve caches
 │   │   ├── internals.py             # the private Plant members other modules may use
+│   │   ├── control.py               # PIController, ExpressionController (signal producers)
+│   │   ├── control_law.py           # control laws as expressions, compiled to JAX
+│   │   ├── signal_bus.py            # signal checks and the cascade order of producers
 │   │   └── steady.py                # re-exports integrate/steady.py's PTC kernels
 │   │
 │   ├── transport/

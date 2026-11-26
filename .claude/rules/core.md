@@ -152,7 +152,8 @@ nonzero denominator — the only change is exactly at the singularity.
 
 aquakin reads **three** small expression languages — rate expressions
 (`core/parser.py`), expressions of time (`plant/time_expr.py`) and measure
-expressions (`plant/measures.py`). Their grammars and their leaf rules differ on
+expressions (`plant/measures.py`); control laws (`plant/control_law.py`) are the time
+language's parser (`ClosureParser`) with other leaves. Their grammars and leaf rules differ on
 purpose; **how text becomes tokens does not**. `core/lexer.py` holds the only
 tokenizer: `tokenize(text, error=, offset=)` → `Token(kind, value, pos)`, with
 `SYMBOLS` for the symbol kinds and `spell(kind)` for how a kind is written in a

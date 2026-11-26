@@ -33,6 +33,7 @@ ICONS = {
     "uv": "uv",
     "chlorine_contact": "chlorine-contact",
     "pi_controller": "controller",
+    "expression_controller": "controller",
 }
 
 #: The accent colour for each catalogue category.

@@ -112,6 +112,12 @@ class DosingUnit:
         DosingUnit("carbon", reagent, setpoint=1.0, measured_species="SNO",
                    sensor="anoxic", flow_max=5.0)
 
+    **From a signal** -- the dose flow is a control signal another unit
+    publishes (an :class:`~aquakin.plant.control.ExpressionController`, or any
+    signal producer), times ``gain``; nothing is auto-wired::
+
+        DosingUnit("carbon", reagent, flow_signal="carbon_flow")
+
     The unit is stateless: a fixed dose needs no state, and a feedback dose's PI
     integral lives in the auto-wired controller. The controller senses the
     sensor's reactor state (so the dose-flow signal is available during the stream
@@ -125,10 +131,15 @@ class DosingUnit:
     reagent : Reagent
         The dosed reagent. Its ``model`` is the unit's model.
     flow : float, optional
-        Fixed dose flow (m³/d). Mutually exclusive with ``setpoint``.
+        Fixed dose flow (m³/d). Give exactly one of ``flow``, ``setpoint`` and
+        ``flow_signal``.
     setpoint : float, optional
-        Feedback target value for ``measured_species`` at ``sensor``. Mutually
-        exclusive with ``flow``.
+        Feedback target value for ``measured_species`` at ``sensor``.
+    flow_signal : str, optional
+        Name of the control signal that sets the dose flow (m³/d, times
+        ``gain``). A unit of the plant must publish it; the dose is used as
+        published, so a law that could go negative should bound itself with
+        ``clip``.
     measured_species : str, optional
         Species the feedback controller senses (required for feedback).
     sensor : str, optional
@@ -139,8 +150,9 @@ class DosingUnit:
         controller (and the controller unit takes this name). ``None`` gives this
         unit its own controller.
     gain : float
-        This unit's share of the controller's flow output (default 1.0), so one
-        controller can drive several dose points.
+        This unit's share of the controller's flow output, or of the signal's
+        with ``flow_signal`` (default 1.0), so one controller can drive several
+        dose points.
     Kp : float
         Proportional gain of the feedback PI controller (dose flow per unit of
         the measured species).
@@ -162,6 +174,7 @@ class DosingUnit:
     reagent: Reagent
     flow: float | None = None
     setpoint: float | None = None
+    flow_signal: str | None = None
     measured_species: str | None = None
     sensor: str | None = None
     controller: str | None = None
@@ -176,11 +189,16 @@ class DosingUnit:
     output_port: str = "out"
 
     def __post_init__(self) -> None:
-        n_modes = (self.flow is not None) + (self.setpoint is not None)
-        if n_modes != 1:
+        given = [m for m in ("flow", "setpoint", "flow_signal") if getattr(self, m) is not None]
+        if not given:
             raise ValueError(
-                f"DosingUnit '{self.name}' requires exactly one of flow= (fixed) "
-                f"or setpoint= (feedback)."
+                f"DosingUnit '{self.name}' requires exactly one of flow= (fixed), "
+                f"setpoint= (feedback) or flow_signal= (a control signal); none was given."
+            )
+        if len(given) > 1:
+            raise ValueError(
+                f"DosingUnit '{self.name}' requires exactly one of flow=, setpoint= or "
+                f"flow_signal=; got {' and '.join(given)}."
             )
         if self.flow is not None and self.flow < 0.0:
             raise ValueError(f"DosingUnit '{self.name}' flow must be >= 0, got {self.flow}.")
@@ -229,7 +247,11 @@ class DosingUnit:
 
     @property
     def required_signals(self) -> tuple[str, ...]:
-        """The dose-flow signal this unit reads from the bus (feedback only)."""
+        """The dose-flow signal this unit reads from the bus: its
+        ``flow_signal``, or the auto-wired controller's under feedback; none for
+        a fixed dose."""
+        if self.flow_signal is not None:
+            return (self.flow_signal,)
         if not self.is_closed_loop:
             return ()
         return (dose_signal_name(self.controller_id()),)
@@ -239,13 +261,13 @@ class DosingUnit:
 
     # ----- behaviour ------------------------------------------------------
     def _dose_flow(self, signals: dict | None) -> jnp.ndarray:
-        """The dose flow this step: the fixed setpoint, or the controller's
-        (gain-scaled) signal for a feedback dose."""
+        """The dose flow this step: the fixed setpoint, or the (gain-scaled)
+        signal for a feedback or signal-driven dose."""
         if self.flow is not None:
             return jnp.asarray(float(self.flow))
         if signals is None:
             raise ValueError(
-                f"DosingUnit '{self.name}' is feedback-controlled but no "
+                f"DosingUnit '{self.name}' reads its dose flow from a signal but no "
                 f"control-signal bus was supplied; a controlled dose must be "
                 f"solved inside its plant (which supplies the dose-flow signal "
                 f"'{self.required_signals[0]}')."
@@ -271,8 +293,8 @@ class DosingUnit:
         return {self.output_port: Stream(Q=q_out, C=c_out, model=self.model, scalars=s_in.scalars)}
 
     def flow_outputs(self, input_flows: dict, params: jnp.ndarray, ctx=None) -> dict:
-        """Output flow = inflow + dose flow. For a feedback dose the actual flow
-        is signal- (and thus concentration-) dependent, so the linear flow solve
+        """Output flow = inflow + dose flow. For a feedback or signal-driven dose
+        the actual flow is signal- (and so state-) dependent, so the linear flow solve
         uses the nominal ``flow_offset`` here and the exact value is applied in
         :meth:`compute_outputs` -- the same convention the concentration-dependent
         separator flows use. Dosing is feed-forward and the dose is small relative
