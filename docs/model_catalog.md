@@ -15,14 +15,14 @@ print(model.references)         # the literature the model is built from
 Every model carries its own literature `references`, per-species units and
 descriptions, and default parameter and concentration vectors — see
 [Getting started](getting_started.md) for the loading and inspection API, and
-the [Model file format](model_format.md) if you want to write your own.
+the [YAML model format](model_format.md) if you want to write your own.
 
 Each entry below lists the model's size as *(species, reactions)*, as reported
 by the compiled model itself; `model.references` lists the full citations.
 
 A model's rate constants set the unit its time axis is read in: the
-oxidation-chemistry models integrate in **seconds**, and the biological models
-in **days**. `model.time_unit` reports it, and `model.summary()` prints it.
+oxidation-chemistry models integrate in **seconds**, and the biological and
+mineral-precipitation models in **days**. `model.time_unit` reports it, and `model.summary()` prints it.
 
 ## Oxidation chemistry
 
@@ -44,8 +44,11 @@ in **days**. `model.time_unit` reports it, and `model.summary()` prints it.
 The IWA Activated Sludge Models are the standard framework for biological
 carbon and nutrient removal in wastewater treatment. `aquakin` ships the
 reference models and several literature extensions. Concentrations are in
-`g/m³` of COD, N or P (alkalinity in mol/m³ or kmol/m³, and suspended solids in
-g TSS/m³), and they integrate in **days**.
+`g/m³` of COD, N or P, suspended solids in g TSS/m³, and alkalinity in mol/m³
+for `asm1` (and `asm1_ammonia_limitation`) but kmol/m³ for the ASM2d and ASM3
+models. They integrate in **days**. Each model's default concentrations are a
+typical aerated mixed liquor (an established bio-P sludge for the models with
+phosphorus-accumulating organisms), a starting point for trying the model.
 
 `asm1`
 : Activated Sludge Model No. 1, the reference model for carbon oxidation,
@@ -178,7 +181,10 @@ extensions. These integrate in **days**.
   also tracks iron/FeS precipitation and nitrogen. *(20 species, 28 reactions.)*
 
 `wats_sewer_khalil_thesis`
-: The nitrate-dosing model as specified with half-order biofilm kinetics.
+: The nitrate-dosing model with the reaction structure of
+  `wats_sewer_extended`, including WATS's half-order biofilm terms (which
+  `wats_sewer_khalil_paper` writes in Monod form), without nitrification or FeS
+  precipitation.
   *(18 species, 44 reactions.)*
 
 ### Structural variants

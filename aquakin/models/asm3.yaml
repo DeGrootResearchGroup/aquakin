@@ -9,20 +9,24 @@ model:
   references:
     - "Gujer, Henze, Mino & van Loosdrecht (1999). Activated Sludge Model No. 3. Water Sci. Technol. 39(1), 183-193. doi:10.1016/S0273-1223(98)00785-9"
 
+# Default concentrations: the aerobic mixed liquor that `asm1` declares, in
+# ASM3's states (ASM1's XP joins XI, there is no stored substrate at the start,
+# and the alkalinity of 4 mol/m3 is written in kmol/m3). XSS is the TSS of
+# those particulates through the iSS_* factors below.
 species:
-  - {name: SO2, default_concentration: 1.0, units: "g_O2/m3", description: "Dissolved oxygen (O2)"}
-  - {name: SS, default_concentration: 1.0, units: "g_COD/m3", description: "Soluble biodegradable organics"}
-  - {name: SNH4, default_concentration: 1.0, units: "g_N/m3", description: "Ammonia (NH4+ + NH3)"}
-  - {name: SNOX, default_concentration: 1.0, units: "g_N/m3", description: "Nitrate and nitrite (NO3 + NO2)"}
-  - {name: SN2, default_concentration: 1.0, units: "g_N/m3", description: "Dissolved nitrogen (N2)"}
-  - {name: SALK, default_concentration: 1.0, units: "kmol/m3", description: "Alkalinity (HCO3-)"}
-  - {name: SI, default_concentration: 1.0, units: "g_COD/m3", description: "Soluble undegradable organics"}
-  - {name: XI, default_concentration: 1.0, units: "g_COD/m3", description: "Particulate unbiodegradable organics"}
-  - {name: XS, default_concentration: 1.0, units: "g_COD/m3", description: "Particulate biodegradable organics"}
-  - {name: XH, default_concentration: 1.0, units: "g_COD/m3", description: "Ordinary heterotrophic organisms (OHO)"}
-  - {name: XSTO, default_concentration: 1.0, units: "g_COD/m3", description: "Storage compound in OHOs"}
-  - {name: XA, default_concentration: 1.0, units: "g_COD/m3", description: "Autotrophic nitrifying organisms (NH4+ to NO3-)"}
-  - {name: XSS, default_concentration: 1.0, units: "g_TSS/m3", description: "Total suspended solids (TSS)"}
+  - {name: SO2, default_concentration: 2.0, units: "g_O2/m3", description: "Dissolved oxygen (O2)"}
+  - {name: SS, default_concentration: 60.0, units: "g_COD/m3", description: "Soluble biodegradable organics"}
+  - {name: SNH4, default_concentration: 10.0, units: "g_N/m3", description: "Ammonia (NH4+ + NH3)"}
+  - {name: SNOX, default_concentration: 5.0, units: "g_N/m3", description: "Nitrate and nitrite (NO3 + NO2)"}
+  - {name: SN2, default_concentration: 0.0, units: "g_N/m3", description: "Dissolved nitrogen (N2)"}
+  - {name: SALK, default_concentration: 0.004, units: "kmol/m3", description: "Alkalinity (HCO3-)"}
+  - {name: SI, default_concentration: 30.0, units: "g_COD/m3", description: "Soluble undegradable organics"}
+  - {name: XI, default_concentration: 75.0, units: "g_COD/m3", description: "Particulate unbiodegradable organics"}
+  - {name: XS, default_concentration: 200.0, units: "g_COD/m3", description: "Particulate biodegradable organics"}
+  - {name: XH, default_concentration: 500.0, units: "g_COD/m3", description: "Ordinary heterotrophic organisms (OHO)"}
+  - {name: XSTO, default_concentration: 0.0, units: "g_COD/m3", description: "Storage compound in OHOs"}
+  - {name: XA, default_concentration: 100.0, units: "g_COD/m3", description: "Autotrophic nitrifying organisms (NH4+ to NO3-)"}
+  - {name: XSS, default_concentration: 746.2, units: "g_TSS/m3", description: "Total suspended solids (TSS)"}
 
 conditions:
   - {name: T, default: 293.15, description: "Temperature (K)."}
