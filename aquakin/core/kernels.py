@@ -112,7 +112,7 @@ def safe_pow(base, exp):
     exponent traced, ``x ** p`` at ``x == 0`` and ``p == 0.5`` gives a NaN
     tangent unguarded and 0 here. Above one it is finite either way, since JAX's
     own ``pow`` JVP already guards the ``log(base)`` term (measured on JAX
-    0.10.2; ``core/vector_kernel.py``'s ``powc``, which keeps a constant
+    0.10.2 and 0.12.1; ``core/vector_kernel.py``'s ``powc``, which keeps a constant
     exponent static, was written against a version that did not).
     """
     base = jnp.asarray(base)

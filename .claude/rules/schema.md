@@ -120,10 +120,10 @@ shipped model is: `docs/model_catalog.md`.
   once a yield is calibrated.
 - **Shipped models keep their published rounded literals**; `auto` is opt-in.
   Do not convert a shipped model to `auto` (its numbers would change).
-- The WATS sewer family (`wats_sewer`, `wats_sewer_extended` and everything the
-  `_make_khalil_*` generators splice from them) declares `composition:` on
-  every species, and the conservation suite checks each model against its own
-  table. A generator or a new variant must carry `composition:` through.
+- The WATS sewer model (`wats_sewer`) declares `composition:` on every
+  species, and the conservation suite checks it against its own table. A new
+  sewer model must declare it too (`tests/integration/test_mass_balance.py`
+  fails on a shipped `wats_sewer*` model it does not check).
 
 ## `gases:`
 
@@ -144,8 +144,8 @@ shipped model is: `docs/model_catalog.md`.
 - **Write a variant as `extends:` rather than a copy** when it differs from a
   shipped model by overrides alone, so a fix to the base reaches it. A variant
   whose stoichiometry is computed from the base stays a full copy
-  (`models/_make_khalil_variants.py` emits the pure-override `halforder`
-  variant as an `extends` file and the rest as copies).
+  (a generator emits a pure-override variant as an `extends` file and the
+  rest as copies).
 - The merge happens **before Pydantic validation**
   (`schema/inheritance.py`, wired in `schema/loader.py`), so the merged whole
   is schema-checked; do not validate the derived fragment on its own.
@@ -175,5 +175,5 @@ shipped model is: `docs/model_catalog.md`.
   state is signed (charge and alkalinity balances are computed from
   non-negative ion pools); a model with a genuinely signed state needs a
   per-species exemption first, which is a model-format decision for the owner.
-  Set it in a generator's base YAML (`_make_khalil_*` copy top-level keys), not
+  Set it in a generator's base YAML (generators copy top-level keys), not
   only in the generated file.

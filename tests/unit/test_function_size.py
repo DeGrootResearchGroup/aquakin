@@ -49,7 +49,6 @@ RECORDED_LINES = {
     "aquakin/integrate/profile.py::profile_likelihood": 109,
     "aquakin/integrate/steady.py::arclength_continuation_solve": 111,
     "aquakin/integrate/steady.py::ptc_forward": 158,
-    "aquakin/models/_make_khalil_balanced_biofilm_biomass.py::main": 101,
     "aquakin/plant/a2o.py::build_a2o": 156,
     "aquakin/plant/bsm/bsm1.py::build_bsm1": 171,
     "aquakin/plant/bsm/bsm2.py::build_bsm2": 354,

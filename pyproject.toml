@@ -28,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 dependencies = [
@@ -151,11 +152,6 @@ testpaths = ["tests"]
 source = ["aquakin", "aquakin_ui"]
 branch = true
 relative_files = true
-# `aquakin/models/_make_*.py` are one-off, run-by-hand generator scripts that
-# emit the committed `*.yaml` models (aquakin/models is "data, not Python
-# modules"); nothing imports them at runtime. They are build tooling, not
-# library behaviour, so they are excluded rather than counted as uncovered.
-omit = ["aquakin/models/_make_*.py"]
 
 [tool.coverage.report]
 show_missing = false

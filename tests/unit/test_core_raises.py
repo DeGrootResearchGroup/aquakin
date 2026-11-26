@@ -8,8 +8,6 @@ test triggers exactly one guard via the most natural API (a small YAML load, a
 ``CompiledModel`` method, or the derived-fn builder called directly).
 """
 
-import importlib.util
-import os
 import tempfile
 
 import pytest
@@ -368,35 +366,6 @@ def test_precipitation_equilibrium_undeclared_solid_raises():
             },
             {"A": 0},
         )
-
-
-# --- model-generator name lookups (models/_make_khalil_*.py) -----------------
-
-
-def _load_generator(module_name: str):
-    """Import a (package-private, manually-run) ``_make_*`` generator module by
-    path; these are not importable as ``aquakin.models.<name>``."""
-    base = os.path.dirname(aquakin.__file__)
-    path = os.path.join(base, "models", module_name + ".py")
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_khalil_variants_rxn_unknown_name_raises():
-    module = _load_generator("_make_khalil_variants")
-    with pytest.raises(KeyError, match="nope"):
-        module.rxn({"reactions": [{"name": "a"}]}, "nope")
-
-
-def test_khalil_paper_by_name_unknown_name_raises():
-    # _make_khalil_paper imports ruamel at module scope (a manual-generator dep,
-    # not a runtime dep); skip cleanly when it is unavailable.
-    pytest.importorskip("ruamel.yaml")
-    module = _load_generator("_make_khalil_paper")
-    with pytest.raises(KeyError, match="nope"):
-        module.by_name([{"name": "a"}], "nope")
 
 
 # --- more compile-time reference validation (core/model.py) ------------------

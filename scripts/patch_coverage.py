@@ -33,7 +33,6 @@ and fails the check: commit it, or mark it intended-to-add with
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import re
 import subprocess
 import sys
@@ -43,8 +42,6 @@ from pathlib import Path
 
 #: The packages coverage is measured over (``[tool.coverage.run] source``).
 PACKAGES = ("aquakin/", "aquakin_ui/")
-#: Files left out of the measurement (``[tool.coverage.run] omit``).
-OMIT = ("aquakin/models/_make_*.py",)
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
@@ -60,11 +57,7 @@ class FileReport:
 
 def measured(path: str) -> bool:
     """Whether ``path`` is a Python file coverage is measured over."""
-    return (
-        path.endswith(".py")
-        and path.startswith(PACKAGES)
-        and not any(fnmatch.fnmatch(path, pattern) for pattern in OMIT)
-    )
+    return path.endswith(".py") and path.startswith(PACKAGES)
 
 
 def changed_lines(diff: str) -> dict[str, set[int]]:
