@@ -1006,7 +1006,7 @@ partial denitrification (effluent SNO3 ≈ 10 g N/m³ from 25 g N/m³ influent
 ammonia) and **partial biological P removal** (effluent SPO4 ≈ 4 g P/m³ from 8;
 clear anaerobic release and aerobic uptake). With `use_takacs=False` the ideal
 clarifier gives SNH4 ≈ 0.1, SNO3 ≈ 10 and SPO4 ≈ 5. A 200-day dynamic solve to
-that steady state takes ~17 min with the Takács settler against ~1.5 min with
+that steady state takes ~15 min with the Takács settler against ~1.5 min with
 the ideal clarifier; `Plant.steady_state` from `a2o_warm_start` takes ~2 min
 against ~35 s. The plant also has a second steady state, where the nitrifiers
 have washed out (SNH4 ≈ 31, SNO3 = 0): `Plant.steady_state` from a seed far
