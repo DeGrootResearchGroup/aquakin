@@ -10,8 +10,7 @@ model:
   references:
     - "Henze, Gujer, Mino, Matsuo, Wentzel, Marais & van Loosdrecht (1999). Activated Sludge Model No. 2d, ASM2d. Water Sci. Technol. 39(1), 165-182. doi:10.1016/S0273-1223(98)00829-4"
 
-# Default concentrations: an established bio-P (EBPR) mixed liquor, the one
-# `aquakin.plant.A2O_WARM_REACTOR_COMPOSITION` seeds the A2O plant with
+# Default concentrations: an established bio-P (EBPR) mixed liquor
 # (alkalinity 7 mol/m3, written in kmol/m3). XTSS is the TSS of those
 # particulates through the iTSS_* factors below.
 species:

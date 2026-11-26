@@ -9,22 +9,9 @@ import pathlib
 import pytest
 
 import aquakin
+from tests.conftest import TSS_FACTOR_PARAMS
 
 MODELS = sorted(p.stem for p in (pathlib.Path(aquakin.__file__).parent / "models").glob("*.yaml"))
-
-# Each model's TSS state and, per particulate, the parameter converting it to TSS.
-TSS_FACTORS = {
-    "asm3": ("XSS", {"XI": "iSS_XI", "XS": "iSS_XS", "XH": "iSS_BM", "XA": "iSS_BM",
-                     "XSTO": "iSS_STO"}),
-    "asm2d": ("XTSS", {"XI": "iTSS_XI", "XS": "iTSS_XS", "XH": "iTSS_BM", "XPAO": "iTSS_BM",
-                       "XAUT": "iTSS_BM", "XPP": "iTSS_XPP", "XPHA": "iTSS_XPHA"}),
-    "asm2d_tud": ("XTSS", {"XI": "iTSS_XI", "XS": "iTSS_XS", "XH": "iTSS_BM",
-                           "XPAO": "iTSS_BM", "XA": "iTSS_BM", "XPP": "iTSS_PP",
-                           "XPHA": "iTSS_PHA", "XGLY": "iTSS_GLY"}),
-    "asm3_biop": ("XTSS", {"XI": "iTSS_XI", "XS": "iTSS_XS", "XH": "iTSS_BM",
-                           "XPAO": "iTSS_BM", "XA": "iTSS_BM", "XPP": "iTSS_XPP",
-                           "XPHA": "iTSS_XSTO", "XSTO": "iTSS_XSTO"}),
-}
 
 
 @pytest.mark.parametrize("name", MODELS)
@@ -36,12 +23,12 @@ def test_defaults_are_not_placeholders(name):
     assert int((c == 1.0).sum()) <= len(c) // 3
 
 
-@pytest.mark.parametrize("name", sorted(TSS_FACTORS))
+@pytest.mark.parametrize("name", sorted(TSS_FACTOR_PARAMS))
 def test_default_tss_matches_the_default_particulates(name):
     """The default suspended solids are the TSS of the default particulates,
     through the model's own COD- and P-to-TSS factors."""
     model = aquakin.load_model(name)
-    tss, factors = TSS_FACTORS[name]
+    tss, factors = TSS_FACTOR_PARAMS[name]
     c = dict(zip(model.species, map(float, model.default_concentrations())))
     p = dict(zip(model.parameters, map(float, model.default_parameters())))
     expected = sum(c[s] * p[f] for s, f in factors.items())

@@ -16,6 +16,7 @@ from aquakin import SludgeMetrics, size_activated_sludge, sludge_metrics
 from aquakin.plant.bsm import bsm1_warm_start, build_bsm1
 from aquakin.plant.bsm.bsm1 import BSM1_Q_AVG
 from aquakin.plant.influent import InfluentSeries
+from tests.conftest import TSS_FACTOR_PARAMS
 
 # ----- Forward sizing (fast, no solve) ------------------------------------
 
@@ -454,6 +455,56 @@ def test_takacs_clarifier_blanket_counts_in_srt(asm1):
     assert m.solids_inventory == pytest.approx(inventory * 1e-3, rel=1e-9)
     reactor_only = m.mlss * m.reactor_volume / (wasted + effluent)
     assert 1.05 * reactor_only < m.SRT
+
+
+def test_a2o_srt_weighs_the_solids_by_their_itss_factors():
+    """On the ASM2d A²O plant every solids term of the SRT is TSS through the
+    model's iTSS factors -- the reactors, the per-species Takács blanket, the
+    overflow and the wastage -- so the reactor MLSS is the mixed liquor's TSS,
+    not 0.75·(XI + XS), the only ASM1-named particulates asm2d has. (The F:M
+    load is not checked: the BOD and COD measures are ASM1's; the COD one is
+    asked for only because the BOD one needs ASM1 species.)"""
+    from aquakin.plant import a2o_influent, a2o_warm_start, build_a2o
+    from aquakin.plant.results import PlantSolution
+
+    asm2d = aquakin.load_model("asm2d")
+    p = dict(zip(asm2d.parameters, map(float, asm2d.default_parameters()), strict=True))
+    weights = {s: p[f] for s, f in TSS_FACTOR_PARAMS["asm2d"][1].items()}
+    weights |= {"XMeOH": 1.0, "XMeP": 1.0}
+    w = np.array([weights.get(s, 0.0) for s in asm2d.species])
+
+    plant = build_a2o(asm2d)
+    plant.add_influent("feed", a2o_influent(asm2d))
+    y0 = jnp.asarray(a2o_warm_start(plant))
+    reactors = plant.activated_sludge_reactors()
+    by_unit = plant.states_by_unit(y0)
+    y1 = plant.initial_state(overrides={n: 1.2 * by_unit[n] for n in reactors})
+    sol = PlantSolution(t=jnp.asarray([0.0, 1.0]), state=jnp.stack([y0, y1]), plant=plant)
+    m = sludge_metrics(plant, sol, substrate="COD")
+
+    t = np.asarray(sol.t)
+
+    def mean(x):
+        return float(np.trapezoid(x, t) / (t[-1] - t[0]))
+
+    reactor = sum(
+        float(plant.units[n].volume) * (np.asarray(sol.unit_state(n)) @ w) for n in reactors
+    )
+    clar = plant.units["clarifier"]
+    n_part = len(clar.particulate_species)
+    layers = np.asarray(sol.unit_state("clarifier"))[:, : clar.n_layers * n_part]
+    layers = layers.reshape(len(t), clar.n_layers, n_part)
+    w_part = np.array([weights.get(s, 0.0) for s in clar.particulate_species])
+    blanket = (layers @ w_part).sum(axis=1) * clar.area * clar.height / clar.n_layers
+    eff = plant.stream(sol, "clarifier.overflow")
+    waste = plant.stream(sol, "underflow_split.waste")
+    loss = mean(np.asarray(eff.Q) * (np.asarray(eff.C) @ w))
+    loss += mean(np.asarray(waste.Q) * (np.asarray(waste.C) @ w))
+    V = sum(float(plant.units[n].volume) for n in reactors)
+
+    assert m.mlss == pytest.approx(mean(reactor) / V, rel=1e-9)
+    assert m.solids_inventory == pytest.approx((mean(reactor) + mean(blanket)) * 1e-3, rel=1e-9)
+    assert pytest.approx((mean(reactor) + mean(blanket)) / loss, rel=1e-9) == m.SRT
 
 
 @pytest.mark.slow

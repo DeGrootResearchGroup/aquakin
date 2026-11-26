@@ -10,6 +10,21 @@ from . import mem_watchdog
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# Each shipped model with a TSS state: that state's name and, per particulate,
+# the parameter converting it to TSS (iTSS_* in ASM2d, iSS_* in ASM3).
+TSS_FACTOR_PARAMS = {
+    "asm3": ("XSS", {"XI": "iSS_XI", "XS": "iSS_XS", "XH": "iSS_BM", "XA": "iSS_BM",
+                     "XSTO": "iSS_STO"}),
+    "asm2d": ("XTSS", {"XI": "iTSS_XI", "XS": "iTSS_XS", "XH": "iTSS_BM", "XPAO": "iTSS_BM",
+                       "XAUT": "iTSS_BM", "XPP": "iTSS_XPP", "XPHA": "iTSS_XPHA"}),
+    "asm2d_tud": ("XTSS", {"XI": "iTSS_XI", "XS": "iTSS_XS", "XH": "iTSS_BM",
+                           "XPAO": "iTSS_BM", "XA": "iTSS_BM", "XPP": "iTSS_PP",
+                           "XPHA": "iTSS_PHA", "XGLY": "iTSS_GLY"}),
+    "asm3_biop": ("XTSS", {"XI": "iTSS_XI", "XS": "iTSS_XS", "XH": "iTSS_BM",
+                           "XPAO": "iTSS_BM", "XA": "iTSS_BM", "XPP": "iTSS_XPP",
+                           "XPHA": "iTSS_XSTO", "XSTO": "iTSS_XSTO"}),
+}
+
 # Fire the memory watchdog at most once per worker process, so an over-limit
 # shard reports a single clear failure at the crossing point rather than
 # flooding the log with one failure per remaining test.
