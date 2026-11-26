@@ -357,6 +357,14 @@ is a model-format change, so it is **not** proposed yet: write
 `plantwide_bio_p` by hand first, count how many of its edits are this
 bookkeeping alone, and decide from that.
 
+*Counted (2026-11-26):* `plantwide_bio_p` overrides all 16 core reactions
+only to add `SPO4: auto` (10 of them also extend `conserved_for`) and 10 core
+species only to add a P content; its 67 new reactions carry 201 `auto`
+entries. A generator writes all of it from the core file, so the bookkeeping
+costs nothing at this level. Recommendation: keep deferring the closure
+declaration until a hand-written level (`plantwide_nitrite`, which adds
+`SNO2` to every N-carrying reaction) shows the cost, and decide then.
+
 ## Proposed state set
 
 Names follow ASM2d where ASM2d has the concept, so the models read naturally to
