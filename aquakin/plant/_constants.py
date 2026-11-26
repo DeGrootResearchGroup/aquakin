@@ -56,6 +56,111 @@ ASM1_TSS_SPECIES: tuple[str, ...] = ("XS", "XI", "XB_H", "XB_A", "XP")
 ASM1_TSS_FACTOR: float = 0.75
 
 
+#: Names a model gives the state that carries its total suspended solids
+#: (``XTSS`` in ASM2d, ``XSS`` in ASM3), which the reactions change through the
+#: model's own particulate-to-TSS factors.
+LUMPED_TSS_SPECIES: tuple[str, ...] = ("XTSS", "XSS")
+
+
+def lumped_tss_weights(model: CompiledModel, params=None) -> dict[str, float]:
+    """TSS per unit of each particulate of a model that tracks its TSS as a state.
+
+    ASM2d and ASM3 carry the suspended solids as a state (``XTSS`` / ``XSS``):
+    each reaction changes it by the TSS of the particulates it makes or
+    consumes, through factors such as ``iTSS_XI`` (g TSS/g COD) or ``iTSS_XPP``
+    (g TSS/g P). The weights returned are the ones under which the reactions
+    change the TSS state by exactly the weighted change of the other
+    particulates, solved from the stoichiometry, so they follow the model
+    however its parameters are named. A particulate declared in the TSS state's
+    own unit (a metal precipitate in g TSS/m³) is suspended solids already and
+    weighs 1. The TSS state itself weighs 0, so a weighted sum over every
+    particulate counts each solid once.
+
+    The particulates are the species whose name starts with ``X``, as in
+    :func:`solids_species`.
+
+    Parameters
+    ----------
+    model : CompiledModel
+        A model with a ``XTSS`` or ``XSS`` state.
+    params : jnp.ndarray, optional
+        Parameter vector whose stoichiometry is read; the model defaults if
+        omitted.
+
+    Returns
+    -------
+    dict of str to float
+        Weight per particulate, in model order, the TSS state included at 0.
+
+    Raises
+    ------
+    ValueError
+        If the model has no TSS state, if its stoichiometry does not determine
+        every weight (a particulate that changes in no reaction, or two that
+        only ever change together), or if no weights reproduce the TSS
+        state's stoichiometry.
+    """
+    import numpy as np
+
+    from aquakin.utils.units import units_match
+
+    tss = next((s for s in LUMPED_TSS_SPECIES if s in model.species_index), None)
+    if tss is None:
+        raise ValueError(
+            f"model '{model.name}' has no TSS state ({', '.join(LUMPED_TSS_SPECIES)}); "
+            "give the settler's TSS factors explicitly."
+        )
+    tss_unit = model.species_units.get(tss, "")
+    parts = [s for s in model.species if s.startswith("X") and s != tss]
+    fixed = [s for s in parts if units_match(model.species_units.get(s, ""), tss_unit) is True]
+    free = [s for s in parts if s not in fixed]
+    S = np.asarray(model.compute_stoich(model.default_parameters() if params is None else params))
+    col = model.species_index
+    A = S[:, [col[s] for s in free]]
+    b = S[:, col[tss]] - S[:, [col[s] for s in fixed]].sum(axis=1)
+    w, _, rank, _ = np.linalg.lstsq(A, b, rcond=None)
+    if rank < len(free):
+        raise ValueError(
+            f"model '{model.name}': the stoichiometry does not determine the TSS weight of "
+            f"every particulate in {free}; give the settler's TSS factors explicitly."
+        )
+    if np.max(np.abs(A @ w - b), initial=0.0) > 1e-9 * max(np.max(np.abs(b), initial=0.0), 1.0):
+        raise ValueError(
+            f"model '{model.name}': no particulate TSS weights reproduce the stoichiometry "
+            f"of {tss}; give the settler's TSS factors explicitly."
+        )
+    weights = dict(zip(free, map(float, w), strict=True)) | dict.fromkeys(fixed, 1.0)
+    weights[tss] = 0.0
+    return {s: weights[s] for s in model.species if s in weights}
+
+
+def with_lumped_tss(model: CompiledModel, composition: dict[str, float]) -> dict[str, float]:
+    """A composition with its TSS state set from its particulates.
+
+    The TSS state (``XTSS`` / ``XSS``) is the :func:`lumped_tss_weights`-weighted
+    sum of the composition's particulates, the value the model's reactions
+    keep it at, unless ``composition`` gives it.
+
+    Parameters
+    ----------
+    model : CompiledModel
+        A model with a TSS state.
+    composition : dict of str to float
+        Concentrations by species name, in the model's units (unlisted species
+        are 0).
+
+    Returns
+    -------
+    dict of str to float
+        A copy of ``composition`` with the TSS state added.
+    """
+    weights = lumped_tss_weights(model)
+    tss = next(s for s in LUMPED_TSS_SPECIES if s in weights)
+    out = dict(composition)
+    out.setdefault(tss, sum(w * composition.get(s, 0.0) for s, w in weights.items()))
+    return out
+
+
 def solids_species(model: CompiledModel) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The ``(settling_species, tss_species)`` of an activated-sludge model.
 
