@@ -642,7 +642,7 @@ class BiofilmReactor(GradientCheckMixin):
                 jitted = self._build_jitted_solve(t0, t1, t_eval_arr is not None)
                 self._jit_cache[cache_key] = jitted
 
-        with friendly_solve_errors(self.max_steps, what="biofilm reactor solve"):
+        with friendly_solve_errors(what="biofilm reactor solve"):
             if t_eval_arr is None:
                 ts, ys, result = jitted(y0, params, condition_arrays)
             else:

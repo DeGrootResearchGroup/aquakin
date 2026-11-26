@@ -121,8 +121,7 @@ def is_forward_mode_ad_error(exc: BaseException) -> bool:
 
 def step_budget_message(max_steps, what: str) -> str:
     """The error raised when a solve runs out of integrator steps, naming the
-    remedies; shared by :func:`check_solve_result` and
-    :func:`friendly_solve_errors`."""
+    remedies (raised by :func:`check_solve_result`)."""
     return (
         f"The {what} hit its integrator step budget (max_steps={max_steps}) "
         "before completing. This is almost always a stiff transient, not a "
@@ -187,33 +186,26 @@ def check_solve_result(result, outputs, *, max_steps, what: str):
 
 
 @contextlib.contextmanager
-def friendly_solve_errors(max_steps, *, what: str = "solve"):
-    """Re-raise two opaque solve-time failures as domain-level errors.
+def friendly_solve_errors(*, what: str = "solve"):
+    """Re-raise an opaque forward-mode AD failure as a domain-level error.
 
-    Both failures surface from JAX/Diffrax/Equinox internals with messages a
-    process engineer cannot map to a fix. Wrap the *execution* of a solve in
+    The failure surfaces from JAX internals with a message a process engineer
+    cannot map to a fix. Wrap the *execution* of a solve in
     this context manager -- the call to the jitted solve / ``diffeqsolve``, where
-    each failure actually surfaces -- to re-raise it as a plain ``RuntimeError``
+    the failure actually surfaces -- to re-raise it as a plain ``RuntimeError``
     naming the remedy, with the noisy traceback suppressed (``from None``). Any
     other exception propagates unchanged.
 
-    1. **Step-budget exhaustion.** An adaptive solve that exhausts ``max_steps``
-       raises a verbose ``EquinoxRuntimeError`` ("The maximum number of solver
-       steps was reached") wrapped in JAX/Equinox debugging chatter
-       (``EQX_ON_ERROR``, ``kidger.site``, ...). Re-raised naming the
-       warm-start / loosen-rtol / raise-max_steps remedies.
-    2. **Forward-mode AD through the reverse-only adjoint.** The default
-       ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp``, so a
-       ``jax.jacfwd`` / ``jax.jvp`` through the solve fails with JAX's
-       "can't apply forward-mode autodiff (jvp) to a custom_vjp function" --
-       which never mentions the cure. Re-raised naming the forward-mode
-       ``diff=aquakin.DifferentiationConfig(...)`` the reactor should be built
-       with.
+    The default ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp``, so
+    a ``jax.jacfwd`` / ``jax.jvp`` through the solve fails with JAX's "can't
+    apply forward-mode autodiff (jvp) to a custom_vjp function" -- which never
+    mentions the cure. It is re-raised naming the forward-mode
+    ``diff=aquakin.DifferentiationConfig(...)`` the reactor should be built
+    with. (A solve that runs out of steps is reported by
+    :func:`check_solve_result`, not here.)
 
     Parameters
     ----------
-    max_steps : int
-        The step budget that was hit (quoted back in the step-budget message).
     what : str
         A short label for the failing solve (e.g. ``"plant solve"``), used in
         the message.
@@ -221,9 +213,6 @@ def friendly_solve_errors(max_steps, *, what: str = "solve"):
     try:
         yield
     except Exception as exc:
-        msg = str(exc).lower()
-        if "maximum number of solver steps" in msg:
-            raise RuntimeError(step_budget_message(max_steps, what)) from None
         if is_forward_mode_ad_error(exc):
             raise RuntimeError(
                 f"Forward-mode autodiff (jax.jacfwd / jax.jvp) cannot flow through "

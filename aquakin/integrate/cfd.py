@@ -225,7 +225,7 @@ class CFDReactor:
             inner = self._build_step()
             self._jit_cache[n_cells] = inner
 
-        with friendly_solve_errors(self.max_steps, what="CFD reactor step"):
+        with friendly_solve_errors(what="CFD reactor step"):
             C_new, result = inner(jnp.asarray(C_np), cond_jax, jnp.asarray(dt_f), params_jax)
             C_new = check_solve_result(
                 result, C_new, max_steps=self.max_steps, what="CFD reactor step"

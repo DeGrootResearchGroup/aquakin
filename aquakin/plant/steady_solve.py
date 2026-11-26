@@ -648,7 +648,7 @@ def _steady_forward_design(
         tol=tol,
         scale_floor=scale_floor,
     )
-    with friendly_solve_errors(max_steps, what="plant steady-state fallback"):
+    with friendly_solve_errors(what="plant steady-state fallback"):
         # The shared forward-solve wrapper builds the canonical implicit
         # solver and step controller.
         sol = _run_diffeqsolve(

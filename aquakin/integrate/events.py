@@ -498,7 +498,7 @@ def run_segmented(
     # re-raises the friendly remedy message instead of the raw equinox
     # MaxStepsReached chatter.
     t0, t1 = float(t_span[0]), float(t_span[1])
-    with friendly_solve_errors(settings.max_steps, what="event solve"):
+    with friendly_solve_errors(what="event solve"):
         return _drive(solve_segment, ctx, y0, args, t0, t1, t_eval, events, settings)
 
 

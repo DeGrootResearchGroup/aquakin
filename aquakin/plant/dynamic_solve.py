@@ -689,7 +689,7 @@ def _solve_stable_adjoint(
     # forward solve must also fit in that buffer, so this single budget serves
     # both roles here.
     adj_steps = adjoint_max_steps
-    with friendly_solve_errors(adj_steps, what="plant solve"):
+    with friendly_solve_errors(what="plant solve"):
         ys = self._esdirk_stable_adjoint(
             y0,
             params,
@@ -756,7 +756,7 @@ def _solve_forward_fast(
                 rf, t0, t1, rtol=rtol, atol=atol, max_steps=max_steps
             )
             self._solve_cache.put("jit", fkey, jitted)
-        with friendly_solve_errors(max_steps, what="plant forward_fast solve"):
+        with friendly_solve_errors(what="plant forward_fast solve"):
             ts, ys, result = jitted(y0, params, te)
             ts, ys = check_solve_result(
                 result, (ts, ys), max_steps=max_steps, what="plant forward_fast solve"
@@ -870,7 +870,7 @@ def _solve_jax_adjoint(
             # An adjoint keyed by identity (see _adjoint_key) is kept alive with it.
             self._solve_cache.put("jit", cache_key, jitted, adjoint)
 
-    with friendly_solve_errors(max_steps, what="plant solve"):
+    with friendly_solve_errors(what="plant solve"):
         if t_eval is None:
             ts, ys, result = jitted(y0, params)
         else:
@@ -931,7 +931,7 @@ def _solve_with_events(
     )
     solve_segment = self._event_segment_solver(settings, events, has_t_eval=t_eval is not None)
 
-    with friendly_solve_errors(max_steps, what="plant solve"):
+    with friendly_solve_errors(what="plant solve"):
         res = run_segmented(
             solve_segment,
             maps,

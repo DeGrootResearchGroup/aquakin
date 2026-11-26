@@ -280,7 +280,7 @@ class BatchReactor(GradientCheckMixin):
             self.adjoint,
         )
 
-        with friendly_solve_errors(self.max_steps, what="batch reactor solve"):
+        with friendly_solve_errors(what="batch reactor solve"):
             if t_eval_arr is None:
                 ts, ys, result = jitted(C0, params, condition_arrays)
             else:
@@ -347,7 +347,7 @@ class BatchReactor(GradientCheckMixin):
             self.model,
             self.adjoint,
         )
-        with friendly_solve_errors(self.max_steps, what="batch reactor solve"):
+        with friendly_solve_errors(what="batch reactor solve"):
             res = run_segmented(
                 solve_segment,
                 (params, condition_arrays),

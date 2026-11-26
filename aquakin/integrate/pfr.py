@@ -195,7 +195,7 @@ class PlugFlowReactor(GradientCheckMixin):
             )
         )
         jitted = cached_jitted_solver(cache_key, self._build_jitted_solve, self.model, self.adjoint)
-        with friendly_solve_errors(self.max_steps, what="plug-flow reactor solve"):
+        with friendly_solve_errors(what="plug-flow reactor solve"):
             ts, ys, result = jitted(C0, params, fields)
             ts, ys = check_solve_result(
                 result, (ts, ys), max_steps=self.max_steps, what="plug-flow reactor solve"

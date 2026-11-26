@@ -940,12 +940,12 @@ integrator step budget -- `Plant.solve` **and every reactor**
 re-raises the Diffrax/Equinox failure as a domain `RuntimeError` naming the
 remedies (warm-start via `run_to_steady_state`, loosen `rtol`, raise
 `max_steps`), with the noisy equinox exception chain suppressed (`from None`).
-This is the shared `integrate/_common.friendly_solve_errors(max_steps, what=...)`
-context manager wrapped around each solve's *execution* (the call to the jitted
-solve / `diffeqsolve`, where the runtime error surfaces -- not the traced
-`_run_diffeqsolve`). The jitted reactors emit one extra equinox *stderr* line
-about `filter_jit` that the exception machinery cannot suppress; the raised
-exception itself is clean. The **same** context manager also catches the other
+Each compiled solve runs with `throw=False` and returns its diffrax `result`,
+which the caller checks on the host with `integrate/_solver.check_solve_result`,
+so no Equinox banner is printed before the error; under an outer trace the check
+is put back into the program, so a gradient still fails on a failed solve.
+The `integrate/_common.friendly_solve_errors(what=...)` context manager, wrapped
+around each solve's execution, catches the other
 opaque solve-time failure — a `jax.jacfwd`/`jax.jvp` (forward-mode AD) through
 the default reverse-only adjoint, which JAX rejects with "can't apply
 forward-mode autodiff (jvp) to a custom_vjp function". That is re-raised as a
