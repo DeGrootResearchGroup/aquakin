@@ -233,12 +233,12 @@ corrects oxygen only; `required_signals` must de-duplicate. **`rhs` and
   tap consumes `tank.out`, so it is not a dangling output: pass it to
   `plant.mass_balance` as `effluent_ports`.
 
-**BSM1 with non-ASM1 models.** `build_bsm1(model, aeration=, settling_species=,
-tss_species=)` takes its clarifier solids from `_constants.solids_species`, which
-must return the ASM1 constants unchanged for a model whose particulates are
-exactly the ASM1 settling species (so ASM1 stays bit-identical). The BSM1
-metrics (`derived_TSS`, `evaluate_bsm1`'s EQI) still use the ASM1 species and do
-not yet support such models.
+**Builders on other models.** `build_bsm1(model, aeration=, settling_species=,
+tss_species=)` and `build_a2o` take clarifier solids from `_constants.solids_species`
+(never a fixed list), which must return the ASM1 constants unchanged for a model whose
+particulates are exactly the ASM1 settling species (so ASM1 stays bit-identical);
+`build_a2o` refuses a model without the `asm2d` names. The BSM1 metrics
+(`derived_TSS`, `evaluate_bsm1`'s EQI) still use the ASM1 species only.
 
 **Shared numeric constants (`plant/_constants.py`).** Use `EPS_Q` for every
 flow-, volume- or mass-weighted division guard and `SECONDS_PER_DAY` /

@@ -1,4 +1,4 @@
-"""A²O biological-nutrient-removal plant builder (ASM2d).
+"""A²O biological-nutrient-removal plant builder (ASM2d family).
 
 The **A²O** (Anaerobic–Anoxic–Oxic) process is the canonical biological
 nutrient-removal flowsheet: an anaerobic selector at the front (where
@@ -16,12 +16,14 @@ close the loop:
 The secondary clarifier is the ten-layer Takács settler by default;
 ``use_takacs=False`` swaps in the fast stateless ``IdealClarifier``.
 
-It runs the shipped ``asm2d`` model, which already carries the biological
-phosphorus model (PAO / poly-P / PHA) and ASM2d's own simple metal-phosphate
-precipitation (``XMeOH`` / ``XMeP``), so the plant simultaneously removes carbon,
-nitrogen and phosphorus. It is the home for the chemical-phosphorus (metal-salt
-dosing) demonstration that the BSM plants — built on the phosphorus-free ASM1 —
-cannot host.
+It runs the shipped ``asm2d`` model by default, which already carries the
+biological phosphorus model (PAO / poly-P / PHA) and ASM2d's own simple
+metal-phosphate precipitation (``XMeOH`` / ``XMeP``), so the plant simultaneously
+removes carbon, nitrogen and phosphorus. It is the home for the
+chemical-phosphorus (metal-salt dosing) demonstration that the BSM plants — built
+on the phosphorus-free ASM1 — cannot host. Any model with the ``asm2d`` species
+names its influent, warm start and aeration use runs too, such as
+``asm2d_chemp``; the settler's solids are the model's own particulates.
 
 Unlike BSM1/BSM2 this is **not** a standardised benchmark; the default sizing is
 a defensible municipal A²O design, not a published reference set, so use it as a
@@ -40,7 +42,7 @@ from aquakin.plant._builder_support import (
     recycle_pump_flows,
     register_recycle_streams,
 )
-from aquakin.plant._constants import lumped_tss_weights, with_lumped_tss
+from aquakin.plant._constants import lumped_tss_weights, solids_species, with_lumped_tss
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.dosing import DosingUnit, Reagent
 from aquakin.plant.mixer import MixerUnit, SetpointSplitter
@@ -52,22 +54,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
     from aquakin.plant.influent import InfluentSeries
 
-
-# ASM2d particulate species — settle in the clarifier (everything that is not a
-# soluble S* component). XTSS is the lumped solids tracer; XMeOH / XMeP are the
-# metal-hydroxide / metal-phosphate precipitate solids.
-ASM2D_PARTICULATES = (
-    "XI",
-    "XS",
-    "XH",
-    "XPAO",
-    "XPP",
-    "XPHA",
-    "XAUT",
-    "XTSS",
-    "XMeOH",
-    "XMeP",
-)
 
 # Default A²O design (a defensible municipal layout, not a published benchmark).
 A2O_Q_AVG = 18446.0  # m³/d, dry-weather average (BSM scale, for a familiar size)
@@ -142,7 +128,8 @@ def a2o_influent(
     Parameters
     ----------
     model : CompiledModel
-        The ASM2d model (must match the one passed to :func:`build_a2o`).
+        The ASM2d-family model, with the ``asm2d`` species names (must match the
+        one passed to :func:`build_a2o`).
     Q : float
         Influent flow (m³/d). Default the dry-weather average ``A2O_Q_AVG``.
     T : float
@@ -157,7 +144,13 @@ def a2o_influent(
         A constant-in-time, zero-based influent (unlisted species are 0). Its
         suspended solids ``XTSS`` are the TSS of its particulates through the
         model's ``iTSS`` factors, unless ``overrides`` gives them.
+
+    Raises
+    ------
+    ValueError
+        If the model lacks a species the influent names.
     """
+    _check_a2o_model(model)
     comp = dict(A2O_INFLUENT)
     if overrides:
         comp.update(overrides)
@@ -193,9 +186,40 @@ A2O_WARM_REACTOR_COMPOSITION = {
     "XPP": 210.0,
     "XPHA": 1.0,
     "XAUT": 89.0,
-    "XMeOH": 0.0,
-    "XMeP": 0.0,
 }
+
+# The species the A²O influent, warm start and aeration name (the ``asm2d``
+# names, the oxygen ``SO2`` and the TSS state ``XTSS`` included): a model that
+# lacks any of them cannot run on ``build_a2o``.
+_A2O_MODEL_SPECIES = frozenset(A2O_INFLUENT) | frozenset(A2O_WARM_REACTOR_COMPOSITION) | {"XTSS"}
+
+
+def _check_a2o_model(model: CompiledModel) -> None:
+    """Refuse a model the A²O builder, influent and warm start cannot run.
+
+    The builder's influent, warm start and aeration are written in the
+    ``asm2d`` species names, so the model must have every one of
+    ``_A2O_MODEL_SPECIES``: ``asm2d`` and the models extending it that keep
+    those names (``asm2d_chemp``) do; ``asm2d_tud`` and ``asm3_biop``, which
+    name their states differently, do not.
+
+    Parameters
+    ----------
+    model : CompiledModel
+        The candidate model.
+
+    Raises
+    ------
+    ValueError
+        If the model lacks any of ``_A2O_MODEL_SPECIES``; the message names
+        the missing species.
+    """
+    missing = sorted(_A2O_MODEL_SPECIES - set(model.species))
+    if missing:
+        raise ValueError(
+            f"the A²O plant runs on a model with the asm2d species names (such as "
+            f"'asm2d' or 'asm2d_chemp'); model '{model.name}' has no {missing}."
+        )
 
 
 def a2o_warm_start(plant: Plant) -> jnp.ndarray:
@@ -235,7 +259,7 @@ def build_a2o(
     conditions: dict[str, float] | None = None,
     use_takacs: bool = True,
 ) -> Plant:
-    """Assemble an A²O biological-nutrient-removal plant on ASM2d.
+    """Assemble an A²O biological-nutrient-removal plant on an ASM2d-family model.
 
     Flowsheet (7 reactors): an anaerobic selector (2 tanks) → anoxic zone
     (2 tanks) → aerobic zone (3 tanks) → secondary clarifier, with the
@@ -245,7 +269,11 @@ def build_a2o(
     Parameters
     ----------
     model : CompiledModel, optional
-        ASM2d model. Defaults to ``aquakin.load_model("asm2d")``.
+        An ASM2d-family model with the ``asm2d`` species names, such as
+        ``asm2d`` or ``asm2d_chemp`` (not ``asm2d_tud`` or ``asm3_biop``, which
+        name their states differently).
+        Defaults to ``aquakin.load_model("asm2d")``. The clarifier settles the
+        model's particulates (its ``X``-prefixed species).
     Q_avg : float
         Design inlet flow used to size the recycle pumps (m³/d).
     wastage_flow : float
@@ -273,6 +301,13 @@ def build_a2o(
         ``plant.add_influent("feed", a2o_influent(model))`` and read the
         effluent off ``plant.effluent_endpoint``.
 
+    Raises
+    ------
+    ValueError
+        If the model lacks a species the plant's influent, warm start or
+        aeration names, or ``ferric`` is given for a model without ASM2d's metal hydroxide
+        ``XMeOH``.
+
     Notes
     -----
     Not a standardised benchmark — the sizing is a representative municipal A²O
@@ -282,6 +317,13 @@ def build_a2o(
         import aquakin
 
         model = aquakin.load_model("asm2d")
+    _check_a2o_model(model)
+    if ferric is not None and "XMeOH" not in model.species:
+        raise ValueError(
+            f"ferric= doses ASM2d's metal hydroxide XMeOH, which model '{model.name}' "
+            "does not have."
+        )
+    particulates = list(solids_species(model)[0])
 
     if conditions is None:
         conditions = reactor_conditions(model)
@@ -377,13 +419,13 @@ def build_a2o(
             area=A2O_CLARIFIER_AREA,
             height=A2O_CLARIFIER_HEIGHT,
             init_underflow_Q=Q_underflow,
-            particulate_species=list(ASM2D_PARTICULATES),
+            particulate_species=particulates,
             # The settling velocity reads the solids as TSS: each particulate
             # through the model's iTSS factor, and XTSS itself (which already
             # sums them) at 0, so no solid is counted twice.
             tss_factors=lumped_tss_weights(model),
         ),
-        ideal_kwargs=dict(particulate_species=list(ASM2D_PARTICULATES)),
+        ideal_kwargs=dict(particulate_species=particulates),
     )
 
     # ----- Underflow splitter: RAS Qr + wastage Qw -----
