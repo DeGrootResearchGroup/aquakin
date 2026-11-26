@@ -352,7 +352,7 @@ compiled, here `-(1 - Y_H) / Y_H`. Because it follows `Y_H`, the reaction stays
 balanced for every value calibration tries. There must be one conserved
 quantity per `auto` coefficient when any other coefficient is an expression,
 and every species in the reaction needs the relevant `composition:` entries.
-The shipped WATS sewer models declare `composition:` on every species.
+The shipped WATS sewer model declares `composition:` on every species.
 
 ## Built-in functions
 

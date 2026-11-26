@@ -225,7 +225,7 @@ nor concentrating it in a few files makes the whole suite fast.
   3.12) and **`validation`** job (`pytest -m "validation and not heavy"`,
   3.12) run **only on push to `main`** (`if: github.event_name == 'push'`). They carry the multi-minute
   stiff/plant solves (the `slow` marker on `test_bsm2_dynamic`, `test_bsm1`,
-  `test_biofilm`, `test_forward_sensitivity`, the two `test_wats_sewer_*` files)
+  `test_biofilm`, `test_forward_sensitivity`)
   and the published-data checks. A regression a PR's fast gate cannot catch
   therefore surfaces within minutes of merging — revert from there. **The
   validation job selects by marker, and no job collects `tests/validation/` by

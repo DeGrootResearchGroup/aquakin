@@ -133,12 +133,10 @@ def test_a_changed_package_file_absent_from_the_report_is_flagged(pc, tree):
     assert unmeasured == ["aquakin/never_imported.py"]
 
 
-def test_generator_scripts_and_non_python_files_are_not_measured(pc):
-    """The omitted model generators, files outside the two packages and
-    non-Python files are never counted."""
+def test_files_outside_the_packages_and_non_python_files_are_not_measured(pc):
+    """Files outside the two packages and non-Python files are never counted."""
     assert pc.measured("aquakin/plant/plant.py")
     assert pc.measured("aquakin_ui/app.py")
-    assert not pc.measured("aquakin/models/_make_khalil_paper.py")
     assert not pc.measured("aquakin/models/asm1.yaml")
     assert not pc.measured("tests/unit/test_model.py")
     assert not pc.measured("scripts/patch_coverage.py")

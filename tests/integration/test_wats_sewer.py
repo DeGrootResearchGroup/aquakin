@@ -3,8 +3,8 @@
 This is the base WATS process matrix (Hvitved-Jacobsen, Vollertsen & Nielsen
 2013, Tables 9.1-9.4): aerobic/anoxic/anaerobic heterotrophic carbon turnover
 plus the sulfur cycle (sulfate reduction + chemical/biological sulfide oxidation
-to sulfate), with state-derived (charge-balance) pH. It carries none of the
-nitrate-dosing / methane / elemental-sulfur extensions of wats_sewer_extended.
+to sulfate), with state-derived (charge-balance) pH. It carries no
+nitrate-dosing, methane or elemental-sulfur extensions.
 These tests check it compiles with the expected shape, solves pH from the state,
 and is finite and differentiable end-to-end.
 """
@@ -88,27 +88,12 @@ def test_ph_is_solved_from_state(net, cond):
     assert float(derived["pH"]) == pytest.approx(float(expected), rel=1e-12)
 
 
-@pytest.mark.parametrize(
-    "name,conditions",
-    [
-        ("wats_sewer", {"T": 20.0, "A_V": 56.7, "X_BF": 10.0}),
-        pytest.param(
-            "wats_sewer_extended", {"T": 20.0, "A_V": 56.7, "X_BF": 10.0},
-            marks=pytest.mark.slow,
-        ),
-        pytest.param(
-            "wats_sewer_khalil_paper", {"A_V": 56.7, "X_BF": 10.0, "pH": 7.5},
-            marks=pytest.mark.slow,
-        ),
-    ],
-)
-def test_rhs_parameter_derivative_matches_fd(name, conditions):
+def test_rhs_parameter_derivative_matches_fd(net, cond):
     """The chemistry RHS's derivative w.r.t. the parameters (a JVP along one
     random direction, scaled by the parameters so every component moves)
     matches a central difference of it (step 1e-5, error ~1e-10 relative).
     A non-finite column would poison the JVP, so this also covers finiteness."""
-    model = aquakin.load_model(name)
-    conds = aquakin.SpatialConditions.uniform(**conditions)
+    model, conds = net, cond
     C0 = model.default_concentrations()
     p = model.default_parameters()
 
