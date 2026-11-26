@@ -35,7 +35,8 @@ STABILITY_DAYS = 150.0
 
 # ASM2d species the plant-wide model has under another name or not at all.
 _RENAMED = {"SALK": "SIC"}
-_SALK_TO_SIC = 12.0  # g C per mol of alkalinity (bicarbonate)
+# g C per kmol of alkalinity (bicarbonate): ASM2d's SALK is in kmol/m3.
+_SALK_TO_SIC = 12_000.0
 # A healthy mixed liquor seeds the plant-wide reactors: ASM2d's warm start, with
 # its PHA as acetate-derived PAO PHA, PAO glycogen at a mid storage fraction,
 # and GAOs at a few percent of the PAOs so the competition starts from both.
