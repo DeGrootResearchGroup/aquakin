@@ -213,6 +213,19 @@ kept equal by putting the organic-N difference in ammonium.
     for a substrate of 4 e-/C-mol (glycogen); for PHA (4.5 to 5) it is short
     by `redox_PHA / 4 - 1` O2 per C-mmol, 0.5 to 0.9 e-/C-mmol of
     maintenance. Use the balanced `Y_SX / Y_OX - redox_PHA / 4`.
+- **GAO anaerobic maintenance**, undefined in López-Vázquez's appendices
+  (its matrix names `Y_PHA,mANA`, `Y_GLY,mANA` without values), comes from
+  Zeng et al. (2003a), Eq. 21: 1 C-mol glycogen -> 1/6 PHB + 5/12 PHV +
+  1/4 PH2MV + 1/6 CO2 (carbon and electrons close), at a glycogen
+  consumption of 4.7e-3 C-mol/(C-mol h) measured = 2 m_ATP with 0.5 ATP per
+  C-mol glycogen and m_ATP = 2.35e-3. López-Vázquez writes the rate as
+  `0.5 m_ATP`, a quarter of that; use the measured value.
+- Zeng, R.J., van Loosdrecht, M.C.M., Yuan, Z. & Keller, J. (2003a).
+  Metabolic model for glycogen-accumulating organisms in anaerobic/aerobic
+  activated sludge systems. *Biotechnol. Bioeng.* 81(1), 92–105.
+  https://doi.org/10.1002/bit.10455 : confirms the aerobic yield expressions
+  (its Eqs. 8-10, as López-Vázquez's Appendix 3), maintenance consuming PHA
+  directly (Eq. 7), and the GAO acetate stoichiometry at pH 7 (Eq. I).
 - Smolders, G.J.F., van der Meij, J., van Loosdrecht, M.C.M. & Heijnen, J.J.
   (1994a). Model of the anaerobic metabolism of the biological phosphorus
   removal process: stoichiometry and pH influence. *Biotechnol. Bioeng.*
