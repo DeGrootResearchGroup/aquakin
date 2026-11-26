@@ -68,8 +68,11 @@ dataframe = ["pandas>=2.0"]
 plot = ["matplotlib>=3.5"]
 # `lint` pins the linter so a new ruff release cannot introduce rules that turn
 # the gate red without a deliberate bump. Capped to the 0.15 series for the same
-# reason; raise the cap intentionally.
-lint = ["ruff>=0.15,<0.16"]
+# reason; raise the cap intentionally. uv runs scripts/check_constraints.py,
+# which resolves constraints.txt for every supported Python (pip resolves only
+# for the interpreter it runs under); capped to its 0.13 series for the same
+# reason as ruff.
+lint = ["ruff>=0.15,<0.16", "uv>=0.13,<0.14"]
 # `release` is the changelog tool a maintainer runs when cutting a release:
 # `towncrier build --version X.Y.Z` turns the fragments in changelog.d/ into the
 # release's CHANGELOG.md section (see RELEASING.md). Nothing else imports it.
