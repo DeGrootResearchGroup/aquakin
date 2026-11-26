@@ -64,7 +64,10 @@ def test_ad_grad_through_solve(name):
     most influential parameter (largest ``|g_i p_i|``)."""
     net = aquakin.load_model(name)
     reactor = aquakin.BatchReactor(net, net.default_conditions())
-    C0 = net.default_concentrations()
+    # The ASM2d / ASM3 models start from every species at 1.0: their first
+    # species is oxygen, which their default mixed liquor uses up within
+    # minutes, leaving a loss of round-off that no finite difference can check.
+    C0 = jnp.ones(len(net.species)) if name != "adm1" else net.default_concentrations()
     t_eval = jnp.linspace(0.0, 0.05, 6)
 
     # Pick any species that's likely to be sensitive — first one will do.
