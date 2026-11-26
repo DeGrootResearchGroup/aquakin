@@ -47,13 +47,14 @@ GUIDE_PAGES = [
     "docs/calibration.md",
     "docs/experiment_design.md",
     "docs/plant_calibration.md",
+    "docs/worked_example_design.md",
     "docs/model_format.md",
     "docs/adding_models.md",
     "docs/model_catalog.md",
     "docs/public_api.md",
 ]
 
-# Pages whose examples run whole-plant solves for minutes.
+# Pages whose examples take minutes (whole-plant solves, multistart fits).
 SLOW_PAGES = {
     "plants.md",
     "custom_flowsheets.md",

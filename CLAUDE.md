@@ -34,7 +34,7 @@ Claude-facing files** at the end.
 
 | Rule | Loads for | Covers |
 |---|---|---|
-| `.claude/rules/docs-examples.md` | `README.md`, the user-guide pages, the root `conftest.py` | the README and user-guide code examples are tests (Sybil): pages run top to bottom, stated values are checked, skips need a reason |
+| `.claude/rules/docs.md` | `README.md`, the published docs pages, `docs/conf.py`, the root `conftest.py` | the user documentation: the five sections and their landing pages, one topic in one place, the page-length budget and how to split a page, and the code examples as tests (Sybil) |
 | `.claude/rules/tests.md` | `tests/**` | what makes a test able to fail, gradient tests, shared fixtures, the tiers and what CI actually runs |
 | `.claude/rules/core.md` | `aquakin/core/**`, `aquakin/utils/**` | AST rate evaluation, parser, **the one expression tokenizer (`core/lexer.py`) every expression language shares**, `SpatialConditions`, parameter namespacing |
 | `.claude/rules/core-rate-functions.md` | `core/nodes.py`, `core/registry.py`, `core/parser.py`, `core/vector_kernel.py` | registering a rate function, authoring a node (one `op`, everything else derived), the vectorized rate kernel |
@@ -89,10 +89,7 @@ them:
 |---|---|
 | `docs/index.md` | landing page + the hidden root toctree; its five entries are the site's top navigation bar |
 | `docs/models.md`, `docs/simulation.md`, `docs/analysis.md`, `docs/reference.md` | section landing pages: a "which page do I need" table and the section's toctree (a new page goes in one of them, not in `index.md`) |
-| `docs/getting_started.md`, `docs/reactors.md`, `docs/plants.md`, `docs/custom_flowsheets.md`, `docs/influents.md`, `docs/plant_files.md`, `docs/sensitivity_and_calibration.md`, `docs/calibration.md`, `docs/experiment_design.md`, `docs/plant_calibration.md` | the task-oriented user guide |
-| `docs/model_format.md`, `docs/adding_models.md` | YAML model-authoring reference |
-| `docs/model_catalog.md` | user-facing catalog of every shipped model (what it is, provenance, size, how to load) |
-| `docs/public_api.md` | task-grouped map of the public API, linking into the generated `api.md` |
+| the pages in each landing page's toctree | the guide (by task) and the reference (`model_format.md`, `public_api.md`, the generated `api.md`); how they stay organized is in `.claude/rules/docs.md` |
 
 ---
 
