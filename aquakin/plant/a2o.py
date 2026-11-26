@@ -168,8 +168,9 @@ def a2o_influent(
 #: sludge with a large PAO population carrying stored poly-P. Seeding from a
 #: healthy sludge (as a real plant is) avoids the slow, seed-sensitive cold-start
 #: establishment of the PAO population. The particulates are the default plant's
-#: steady-state mixed liquor, rounded (a 200-day solve of ``build_a2o`` on
-#: :func:`a2o_influent`), and the solubles a generic aerated liquor. A dynamic
+#: steady-state mixed liquor in the last aerated tank, to two significant figures
+#: (a 200-day solve of ``build_a2o`` on :func:`a2o_influent`), and the solubles a
+#: generic aerated liquor. A dynamic
 #: solve relaxes any healthy seed to the same operating point; the algebraic
 #: ``Plant.steady_state`` needs the seed near it, since from a seed far off its
 #: Newton steps can reach the other steady state, where the nitrifiers have
@@ -185,13 +186,13 @@ A2O_WARM_REACTOR_COMPOSITION = {
     "SI": 30.0,
     "SALK": 0.007,
     "SN2": 5.0,
-    "XI": 2500.0,
-    "XS": 100.0,
-    "XH": 1750.0,
-    "XPAO": 700.0,
-    "XPP": 200.0,
-    "XPHA": 25.0,
-    "XAUT": 90.0,
+    "XI": 2400.0,
+    "XS": 53.0,
+    "XH": 1800.0,
+    "XPAO": 680.0,
+    "XPP": 210.0,
+    "XPHA": 1.0,
+    "XAUT": 89.0,
     "XMeOH": 0.0,
     "XMeP": 0.0,
 }
