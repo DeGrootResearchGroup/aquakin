@@ -631,13 +631,14 @@ def _solve_stable_adjoint(
             "supported on the forward path that differentiates through the "
             f"solve ({FORWARD_THROUGH_SOLVE_DIFF} or method='through_solve')."
         )
-    # solver=/factormax= ARE supported here: the discrete adjoint builds
-    # its backward from the forward solver's Butcher tableau generically
-    # (any ESDIRK with a tableau -- e.g. the cheaper 4-stage Kvaerno3 in
-    # place of the default 7-stage Kvaerno5), and factormax caps the
-    # per-step growth of its PID controller, exactly as on the forward
-    # path. A non-ESDIRK solver raises a clear error from the tableau
-    # extraction. ``solver=None`` keeps the default Kvaerno5.
+    # solver=/order=/factormax= ARE supported here: the discrete adjoint
+    # builds its backward from the forward solver's Butcher tableau
+    # generically (any ESDIRK with a tableau -- the 4-stage Kvaerno3 of the
+    # default order=3, or the 7-stage Kvaerno5 of order=5), and factormax
+    # caps the per-step growth of its PID controller, exactly as on the
+    # forward path. A non-ESDIRK solver raises a clear error from the
+    # tableau extraction. ``solver=None`` builds the canonical solver of
+    # the integrator's ``order``.
     # colored_jacobian colors the per-step df/dy Jacobian build in the
     # BACKWARD pass (its dominant cost), exact (machine-precision) vs dense.
     # It is enabled deterministically by plant SIZE (the reliable signal --

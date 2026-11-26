@@ -35,8 +35,10 @@ so the reverse recurrence, given the cotangent ``lam`` of ``y_{n+1}``, is
 ``mu = (I - dt*J^T)^{-1} lam``; ``theta_bar += dt (df/dtheta)^T mu``; ``lam <-
 mu``. Implicit Euler is first order (accurate but many small steps).
 
-:func:`esdirk_adjoint_solve` uses a **high-order ESDIRK** forward (default
-``Kvaerno5``, the method the reactors use). The forward saves each step's stage
+:func:`esdirk_adjoint_solve` uses a **high-order ESDIRK** forward (``Kvaerno5``
+when called directly with its defaults; ``order=`` or ``solver=`` choose another,
+and :func:`~aquakin.calibrate` passes the reactor's own integrator order, so its
+stable path uses ``Kvaerno3`` by default). The forward saves each step's stage
 derivatives (diffrax dense output), so the discrete adjoint reconstructs the
 stage values exactly in the backward pass -- no Newton recompute -- and applies
 the transposed-stage recurrence (see that function). Either way every per-step
@@ -394,8 +396,8 @@ def implicit_euler_adjoint_solve(
 # --- High-order ESDIRK discrete adjoint --------------------------------------
 #
 # The implicit-Euler adjoint above is first order. For accuracy parity with the
-# reactors -- which integrate with the high-order ESDIRK ``Kvaerno5`` -- the same
-# idea (robust diffrax forward + hand-written discrete adjoint) extends to a
+# reactors -- which integrate with a high-order ESDIRK (``Kvaerno3`` or
+# ``Kvaerno5``) -- the same idea (robust diffrax forward + hand-written discrete adjoint) extends to a
 # general s-stage ESDIRK. The forward saves each step's stage derivatives (diffrax
 # dense output), so the backward reconstructs the stage values exactly by the
 # Butcher linear combination and applies the transposed-stage recurrence -- no
@@ -475,7 +477,9 @@ def esdirk_adjoint_solve(
     """Cap-free reverse-mode gradient through a high-order ESDIRK solve.
 
     Like :func:`implicit_euler_adjoint_solve` but the forward uses a high-order
-    ESDIRK method (default :class:`diffrax.Kvaerno5`, matching the reactors), and
+    ESDIRK method (:class:`diffrax.Kvaerno5` by default, or the ``order`` /
+    ``solver`` the caller passes -- :func:`~aquakin.calibrate` and
+    ``Plant.solve`` pass their integrator's, whose default is ``Kvaerno3``), and
     the backward is the transposed-stage discrete adjoint of that method. The
     forward saves each step's stage derivatives via diffrax dense output, so the
     backward reconstructs the stage values exactly by the Butcher linear
@@ -493,8 +497,16 @@ def esdirk_adjoint_solve(
     rhs, y0, params, t_span, t_eval, rtol, atol, dt0, max_steps
         As for :func:`implicit_euler_adjoint_solve`.
     solver : diffrax.AbstractSolver, optional
-        The ESDIRK forward solver; must expose a Butcher ``tableau``. Defaults to
-        :class:`diffrax.Kvaerno5`.
+        The ESDIRK forward solver; must expose a Butcher ``tableau``. Overrides
+        ``order``. ``None`` (default) builds the canonical solver of ``order``.
+    order : {3, 5}, optional
+        The ESDIRK order built when ``solver`` is ``None``: ``5`` (default)
+        -> :class:`diffrax.Kvaerno5`, ``3`` -> :class:`diffrax.Kvaerno3`. This
+        default differs from :class:`~aquakin.IntegratorConfig`'s ``order=3``; a
+        caller that follows a reactor or plant passes that order explicitly.
+    factormax : float, optional
+        Cap on the PID controller's per-step growth factor. ``None`` (default)
+        keeps the diffrax default.
     time_dependent : bool, optional
         If ``False`` (default) the right-hand side is taken to be autonomous (the
         reaction RHS is, for fixed conditions), so the backward pass evaluates it
