@@ -73,3 +73,15 @@ def test_the_guide_pages_the_skills_read_exist():
         for listed in re.findall(r"`read_doc_page`[^.]*?:((?: `[a-z_]+`,?)+)", text):
             named |= set(re.findall(r"`([a-z_]+)`", listed))
         assert named <= pages, f"{skill.parent.name} names {sorted(named - pages)}"
+
+
+def test_the_plugin_readme_installs_from_this_marketplace_and_lists_every_skill():
+    """The plugin directory wants a README of at least 40 words in the plugin
+    folder; its install line and skill table must match the plugin."""
+    readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
+    assert len(readme.split()) >= 40
+    market = _json(MARKETPLACE)
+    assert "/plugin install aquakin --marketplace DeGrootResearchGroup/aquakin" in readme
+    assert market["name"] == "aquakin"
+    skills = {p.name for p in (PLUGIN / "skills").iterdir() if p.is_dir()}
+    assert set(re.findall(r"`/aquakin:([a-z-]+)`", readme)) == skills
