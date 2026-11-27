@@ -159,3 +159,33 @@ def test_the_page_looks_at_the_disk_while_it_is_served(project_editor, monkeypat
         task.cancel()
 
     asyncio.run(go())
+
+
+def test_a_run_another_program_started_is_shown_and_can_be_cancelled(project_editor, hold_run):
+    ed, project = project_editor
+    ed.follow_disk()
+    held = hold_run(project / "studies" / "short")
+    ed.follow_disk()  # running.yaml appeared: the studies are listed again
+    (card,) = ed.state.studies
+    assert card["running"] is True and card["state"] == "not run"
+    assert card["run"]["progress"]["message"] == "step 3"
+    assert card["run"]["pid"] == held.pid
+
+    ed.cancel_run("short")  # not this editor's run: asked through the worker
+    assert ed.state.message == "short: cancelling"
+    held.stdin.write("next\n")
+    held.stdin.flush()
+    assert held.stdout.readline() == "cancelled\n"
+    assert held.wait(60) == 0
+    ed.follow_disk()
+    (card,) = ed.state.studies
+    assert card["running"] is False and card["run"] is None
+
+
+def test_cancelling_a_study_that_is_not_running_does_nothing(project_editor):
+    ed, _ = project_editor
+    ed.refresh_studies()
+    ed.state.message = ""
+    ed.cancel_run("short")
+    ed.cancel_run("no such study")
+    assert ed.state.message == ""
