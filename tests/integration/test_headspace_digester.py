@@ -149,8 +149,16 @@ def _digester_plant(core, time_unit="d"):
 
 @pytest.fixture(scope="module")
 def steady_digester(core):
+    """The digester at its steady state (pseudo-transient continuation from the
+    seeded start), then 100 days solved from it to give the tests a solution to
+    read. A forward solve of 800 days from the seed instead can stall at the
+    reached steady state, where states at zero (dissolved oxygen, nitrate) meet
+    the negative-state clip's kink: whether it does depends on where its steps
+    land (#921)."""
     plant, unit, y0 = _digester_plant(core)
-    sol = plant.solve(t_span=(0.0, 800.0), t_eval=jnp.linspace(700.0, 800.0, 11), y0=y0)
+    steady = plant.steady_state(y0=y0)
+    assert bool(steady.converged)
+    sol = plant.solve(t_span=(0.0, 100.0), t_eval=jnp.linspace(0.0, 100.0, 11), y0=steady.state)
     return plant, unit, sol
 
 
