@@ -2,7 +2,7 @@
 paths:
   - "aquakin/plant/spec.py"
   - "aquakin/plant/catalog.py"
-  - "aquakin/plant/time_expr.py"
+  - "aquakin/core/time_expr.py"
   - "aquakin/plant/influent.py"
   - "aquakin/__main__.py"
 ---
@@ -11,7 +11,7 @@ paths:
 
 Split out of `.claude/rules/plant.md`.
 
-**Expressions of time (`plant/time_expr.py`).** An operating value that varies on
+**Expressions of time (`core/time_expr.py`).** An operating value that varies on
 a schedule — an influent's flow, a setpoint — may be written as a function of the
 plant clock (`"18446 + 4000*sin(2*pi*t)"`). `compile_time_expression(value,
 time_scale=, what=)` reads one into a callable; a plain number compiles to a

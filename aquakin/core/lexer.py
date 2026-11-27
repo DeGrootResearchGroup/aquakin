@@ -5,7 +5,7 @@ its own idea of what a name means:
 
 - **rate expressions** (:mod:`aquakin.core.parser`) -- ``[species]``,
   ``{condition}``, a bare identifier as a rate constant, domain functions;
-- **expressions of time** (:mod:`aquakin.plant.time_expr`) -- ``t`` and a table
+- **expressions of time** (:mod:`aquakin.core.time_expr`) -- ``t`` and a table
   of maths functions, compiled to a callable;
 - **measure expressions** (:mod:`aquakin.plant.measures`) -- a deliberately
   affine weighted sum of a stream.

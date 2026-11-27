@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
-from aquakin.plant.time_expr import is_time_expression
+from aquakin.core.time_expr import is_time_expression
 
 
 def _min_setpoint(q) -> float:

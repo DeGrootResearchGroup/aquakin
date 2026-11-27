@@ -129,7 +129,7 @@ paths stay bit-identical by construction. Note the `powc` kernel in
 static to prune the generic `pow` JVP's `log(base)` term, which is a different
 NaN (#703).
 
-The second consumer is real: **`plant/time_expr.py` binds `sqrt` and `log` to
+The second consumer is real: **`core/time_expr.py` binds `sqrt` and `log` to
 these**, not to `jnp`. A clock is the harshest case for them — every solve
 starts at `t = 0`, exactly where their derivative is infinite — and the failure
 is quiet, because the forward solve stays correct and only the gradient breaks,
@@ -151,7 +151,7 @@ nonzero denominator — the only change is exactly at the singularity.
 ### One tokenizer, three languages (`core/lexer.py`)
 
 aquakin reads **three** small expression languages — rate expressions
-(`core/parser.py`), expressions of time (`plant/time_expr.py`) and measure
+(`core/parser.py`), expressions of time (`core/time_expr.py`) and measure
 expressions (`plant/measures.py`); control laws (`plant/control_law.py`) are the time
 language's parser (`ClosureParser`) with other leaves. Their grammars and leaf rules differ on
 purpose; **how text becomes tokens does not**. `core/lexer.py` holds the only
@@ -225,7 +225,7 @@ Recursive descent parser. No external parser dependencies. Operator precedence
 binds *looser* than a power (`-2**2` is `-(2**2)`) and an exponent may carry its
 own sign (`2**-1`). It bound a sign tighter until #699; that reading surprised
 everyone who met it, and no shipped expression relied on it (all 845 parse
-identically). `aquakin/plant/time_expr.py` shares the precedence and must stay
+identically). `aquakin/core/time_expr.py` shares the precedence and must stay
 in step. Species names are
 delimited by square brackets: `[O3]`. Rate constant names are namespaced
 automatically: `k1` in reaction `O3_Br_direct` becomes `O3_Br_direct.k1`.

@@ -103,7 +103,7 @@ def test_a_name_read_twice_is_one_read(asm1):
 
 
 def test_a_closure_language_must_say_what_a_name_is():
-    from aquakin.plant.time_expr import ClosureParser
+    from aquakin.core.time_expr import ClosureParser
 
     with pytest.raises(NotImplementedError, match="ClosureParser does not say what a name reads"):
         ClosureParser("x").parse()

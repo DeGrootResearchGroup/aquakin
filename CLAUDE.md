@@ -51,7 +51,7 @@ Claude-facing files** at the end.
 | `.claude/rules/plant-audits.md` | `plant/units_check.py`, `balance.py`, `metrics.py` | `plant.check_units()`, `plant.mass_balance()` |
 | `.claude/rules/plant-ifas.md` | `plant/ifas.py`, `integrate/biofilm*.py`, `integrate/finite_volume.py` | the IFAS / MBBR biofilm unit |
 | `.claude/rules/plant-settling.md` | `plant/takacs.py`, `settling.py`, clarifier / separator modules | the Takács clarifier, shared separator helpers |
-| `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
+| `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `core/time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
 | `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog and the schema rules |
 | `.claude/rules/study.md` | `aquakin/study/**`, `utils/result_files.py` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
 | `.claude/rules/mcp.md` | `aquakin/mcp/**`, `setup.py`, `MANIFEST.in` | `aquakin mcp`, the tools for an AI assistant: tools as thin wrappers of the editor worker's functions, errors that reach the assistant, each tool's declared effect and aquakin's refusals, study runs as detached processes, the guide bundled into the wheel |
@@ -245,7 +245,7 @@ codebase something; the examples are real.
 - **Two paths that must agree call one function**, they are not "kept in step"
   by a comment. Reactor and plant calibration, the scalar and vectorized rate
   evaluators, the rate-expression and time-expression languages, a spec reader
-  and its writer: when you change one, find the other. (`plant/time_expr.py`
+  and its writer: when you change one, find the other. (`core/time_expr.py`
   once bound `sqrt` / `log` to the bare `jnp` functions while the rate language
   used the guarded ones in `core/kernels.py`, and three tokenizers were written
   before `core/lexer.py` replaced them.)

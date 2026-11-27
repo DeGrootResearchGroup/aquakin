@@ -38,6 +38,7 @@ from typing import Any
 
 import yaml
 
+from aquakin.core.time_expr import TimeExpressionError, compile_time_expression, is_time_expression
 from aquakin.plant.clarifier import IdealClarifier
 from aquakin.plant.control import ExpressionController, PIController
 from aquakin.plant.cstr import Aeration, CSTRUnit
@@ -56,7 +57,6 @@ from aquakin.plant.separators import IdealThickener
 from aquakin.plant.settling import InterfaceSettling, LayeredSettling
 from aquakin.plant.storage import StorageTank
 from aquakin.plant.takacs import TakacsClarifier
-from aquakin.plant.time_expr import is_time_expression
 
 __all__ = [
     "CATEGORIES",
@@ -91,7 +91,7 @@ SETTING_TYPES = {
     "species_values": "a mapping of species name to a number (a composition)",
     "scheduled_number": (
         "a real number, or an expression of time as a string "
-        "(``'18446 + 4000*sin(2*pi*t)'``; see :mod:`aquakin.plant.time_expr`)"
+        "(``'18446 + 4000*sin(2*pi*t)'``; see :mod:`aquakin.core.time_expr`)"
     ),
     "scheduled_species_values": (
         "a mapping of species name to a number or an expression of time (a composition "
@@ -1204,8 +1204,6 @@ def _is_scheduled(name: str, value) -> bool:
     An expression is checked here, as the spec is read, so a typo names the
     setting that holds it rather than failing inside the first solve.
     """
-    from aquakin.plant.time_expr import TimeExpressionError, compile_time_expression
-
     if _is_number(value):
         return True
     if not isinstance(value, str):
