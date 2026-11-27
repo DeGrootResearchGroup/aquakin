@@ -171,3 +171,11 @@ def test_steady_state_sensitivity_reuses_its_compiled_kernel(cstr_plant, monkeyp
         base, state=y_star, output_fn=lambda y: jnp.array([y[0]]), wrt=wrt,
         operating=op, mode="reverse"))
     np.testing.assert_allclose(reverse[0], expected, rtol=1e-8)
+
+    # Elasticity (dg/dθ)(θ/g) at A* = 0.1 / (0.1 + k) with the feed scale at
+    # its nominal 1: -k / (0.1 + k) for the rate constant, exactly 1 for the
+    # feed scale (A* is proportional to it).
+    elastic = np.asarray(p.steady_state_sensitivity(
+        base, state=y_star, output_fn=lambda y: jnp.array([y[0]]), wrt=wrt,
+        operating=op, mode="forward", elasticity=True))
+    np.testing.assert_allclose(elastic[0], [-k / (0.1 + k), 1.0], rtol=1e-8)
