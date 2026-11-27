@@ -95,7 +95,6 @@ RECORDED_PARAMS = {
     "aquakin/integrate/forward_solve.py::_staggered_attempt": 9,
     "aquakin/integrate/forward_solve.py::forward_solve": 10,
     "aquakin/integrate/forward_solve.py::staggered_sensitivity_solve": 15,
-    "aquakin/integrate/particle.py::integrate_ensemble": 9,
     "aquakin/integrate/profile.py::profile_likelihood": 25,
     "aquakin/integrate/steady.py::arclength_continuation_solve": 20,
     "aquakin/integrate/steady.py::arclength_continuation_solve._land_on_target": 9,
