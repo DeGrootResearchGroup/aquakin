@@ -113,3 +113,61 @@ def test_anaerobic_phosphate_release_per_acetate_and_its_gradient(biop):
     grad = jax.grad(lambda q: release(q, S_A0) - release(q, 0.0))(p)[k]
     assert float(grad) == pytest.approx(31 / 32 * S_A0, rel=1e-6)
     assert jax.config.x64_enabled
+
+
+def test_a2o_clarifier_settles_every_particulate_of_the_model(biop):
+    """``build_a2o`` reads the clarifier's particulates from the model, so the
+    plant-wide model's storage pools and poly-P settle with its biomass.
+    Fed a stream at 1 g/m3 of everything, the ideal clarifier returns each
+    X species to the underflow at capture * Q_in / Q_under and each soluble
+    at its inlet concentration."""
+    from aquakin.plant import build_a2o
+    from aquakin.plant.streams import Stream
+
+    clarifier = build_a2o(biop, use_takacs=False).units["clarifier"]
+    Q_in = 30000.0
+    feed = Stream(Q=jnp.asarray(Q_in), C=jnp.ones(biop.n_species), model=biop)
+    params = jnp.zeros(0)
+    out = clarifier.compute_outputs(0.0, jnp.zeros(0), {"inlet": feed}, params)
+    under = out["underflow"]
+    thickened = clarifier.capture_efficiency * Q_in / float(under.Q)
+    for s, i in biop.species_index.items():
+        expected = thickened if s.startswith("X") else 1.0
+        assert float(under.C[i]) == pytest.approx(expected, rel=1e-9), s
+    assert {"XGLY_PAO", "XPHA_GAOC_PR", "XAC", "XPP"} <= set(clarifier.particulate_species)
+
+
+POPULATIONS = {
+    "PAO": ("XPAO", "XPP", "XGLY_PAO", "XPHA_PAO_AC", "XPHA_PAO_PR"),
+    "GAOC": ("XGAOC", "XGLY_GAOC", "XPHA_GAOC_AC", "XPHA_GAOC_PR"),
+    "GAOA": ("XGAOA", "XGLY_GAOA", "XPHA_GAOA_AC", "XPHA_GAOA_PR"),
+}
+
+
+@pytest.mark.parametrize("pop", list(POPULATIONS))
+@pytest.mark.parametrize("so2", [0.0, 2.0])
+def test_a_population_grows_at_the_same_rate_whatever_its_size(biop, pop, so2):
+    """Every rate of a PAO or GAO population is proportional to its size: its
+    storage switches act on the stored fractions of its biomass, not on
+    absolute concentrations. Scaling the population's biomass and pools by
+    1e-3, with the bulk liquid unchanged, scales each of its processes' rates
+    by 1e-3 exactly, so a rare population (an invader in a plant) grows at the
+    same specific rate as an established one. With a Monod switch on an
+    absolute pool, the small population's rates fall by up to half."""
+    bulk = dict(SA=20.0, SPRO=10.0, SPO4=10.0, SNH4=20.0, SNO3=5.0, SIC=60.0, SO2=so2)
+    sizes = dict(XPAO=1000.0, XPP=250.0, XGLY_PAO=150.0, XPHA_PAO_AC=60.0, XPHA_PAO_PR=20.0,
+                 XGAOC=800.0, XGLY_GAOC=200.0, XPHA_GAOC_AC=50.0, XPHA_GAOC_PR=10.0,
+                 XGAOA=600.0, XGLY_GAOA=150.0, XPHA_GAOA_AC=30.0, XPHA_GAOA_PR=30.0)
+    cond = {"T": jnp.asarray([T20]), "pH": jnp.asarray([PH])}
+    p = biop.default_parameters()
+
+    def rates(scale):
+        state = dict(bulk)
+        state.update({s: v * (scale if s in POPULATIONS[pop] else 1.0) for s, v in sizes.items()})
+        C = jnp.array([state.get(s, 0.0) for s in biop.species])
+        return np.asarray(biop.rates(C, p, cond, 0))
+
+    own = [i for i, name in enumerate(biop.reaction_names) if name.startswith(f"{pop}_")]
+    full, small = rates(1.0), rates(1e-3)
+    assert np.any(full[own] > 0.0)
+    np.testing.assert_allclose(small[own], 1e-3 * full[own], rtol=1e-9, atol=0)

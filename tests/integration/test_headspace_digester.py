@@ -111,9 +111,9 @@ def test_gas_transfer_and_outflow_equal_adm1s_bsm2_headspace(adm1_without_headsp
 
 FEED = dict(
     SF=300.0, SA=300.0, SI=100.0, SNH4=40.0, SIC=60.0, XI=14000.0, XS=22000.0,
-    XH=9000.0, XAUT=500.0, XFE=1.0, XPRO=1.0, XAC=1.0, XH2M=1.0,
+    XH=9000.0, XAUT=500.0, XPRO=1.0, XAC=1.0, XH2M=1.0,
 )  # fmt: skip
-SEED = {**FEED, "XFE": 500.0, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
+SEED = {**FEED, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
 
 
 def _vector(model, values):
@@ -149,8 +149,16 @@ def _digester_plant(core, time_unit="d"):
 
 @pytest.fixture(scope="module")
 def steady_digester(core):
+    """The digester at its steady state (pseudo-transient continuation from the
+    seeded start), then 100 days solved from it to give the tests a solution to
+    read. A forward solve of 800 days from the seed instead can stall at the
+    reached steady state, where states at zero (dissolved oxygen, nitrate) meet
+    the negative-state clip's kink: whether it does depends on where its steps
+    land (#921)."""
     plant, unit, y0 = _digester_plant(core)
-    sol = plant.solve(t_span=(0.0, 800.0), t_eval=jnp.linspace(700.0, 800.0, 11), y0=y0)
+    steady = plant.steady_state(y0=y0)
+    assert bool(steady.converged)
+    sol = plant.solve(t_span=(0.0, 100.0), t_eval=jnp.linspace(0.0, 100.0, 11), y0=steady.state)
     return plant, unit, sol
 
 

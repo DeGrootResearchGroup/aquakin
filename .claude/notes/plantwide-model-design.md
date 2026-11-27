@@ -175,7 +175,7 @@ kept equal by putting the organic-N difference in ammonium.
       at pH 6 and 7.5, so pH-dependent amounts go in the rates, not in fixed
       stoichiometry.
     *The generated model (`plantwide_bio_p`, 2026-11-26)* on the same grid,
-    through its own `dCdt`: worst deviation from the reference 13.9 points,
+    through its own `dCdt`: worst deviation from the reference 13.8 points,
     every condition within 5 points except propionate at pH 7.5 (14 at 30 C,
     6 at 20 C), outcome matching the reference in 34/36 and the paper in
     32/36. The pH 7.5 propionate gap is the COD-balanced PAO propionate
@@ -207,6 +207,33 @@ kept equal by putting the organic-N difference in ammonium.
     the PAO-GAO competition stays as the source calibrated it; the intercept
     is a parameter with bounds and a prior that reach the full-scale TU Delft
     value (0.36, as in `asm2d_tud`), to be calibrated per plant.
+14. **Storage switches on fractions of the biomass** (owner, 2026-11-26): the
+    depletion switches on glycogen, poly-P and PHA act on the stored fractions
+    (`K_fGLY`, `K_fPP`, `K_fPHA_store`, each the source's 0.01 C-mmol/L at its
+    30 C-mmol/L starting biomass), as ASM2d writes `XPP/XPAO`, not on absolute
+    concentrations as the source does. A population's rates then scale with
+    its size, so the PAO / GAO outcome in a plant does not depend on its
+    history (see *Why GAOs win on the A2O*). The SBR validation is unchanged
+    within its tolerance.
+15. **The A2O comparison's base influent VFA is 75% acetate, 25% propionate**
+    (owner, 2026-11-26), typical of sewage and clear of the PAO / GAO
+    boundary; all-acetate (ASM2d's default influent) is a sensitivity case.
+16. **The heterotrophs ferment** (owner, 2026-11-26; replaces decisions 3, 4
+    and 7): fermentation is heterotroph growth on `SF` without oxygen or
+    nitrate, in every unit (Barker and Dold 1997; Hauduc et al. 2013), with
+    the acetate / propionate / hydrogen split kept, uptake 3 1/d at 20 C
+    (theta 1.04), half-saturation 5 g/m3, yield 0.1 (the commercial model of
+    the Varga et al. 2018 lineage); the acidogens `XFE` and their Contois
+    hydrolysis are removed, so hydrolysis is the heterotrophs' alone; and
+    heterotroph decay without oxygen or nitrate is 0.25 of the aerobic rate
+    (the same model's), which lets them persist in a digester on fermentation
+    growth. Decision 4's reason (heterotroph fermentation starving the
+    acidogens out of the digester) does not apply without acidogens. `etafe`
+    is refitted to the BSM2 digester: 0.144 (methane +0.1%, particulate COD
+    destroyed 53.9% against ADM1's 54.2%). The digester's hydrolysis is then
+    saturated in `XS/XH` (2545 against 2038 g/m3, with `KX` 0.1), a capacity
+    proportional to `etafe`, so methane is steep in it: 0.12 gives -15.5%,
+    0.135 -4.7%, 0.155 +3.9%, 0.2 +8.0%.
 
 ## What the bio-P and acidogen sources give (read 2026-11-26)
 
@@ -308,6 +335,159 @@ kept equal by putting the organic-N difference in ammonium.
   P/d into the digester, 22% returning as soluble phosphate, effluent TP 6.4
   g/m3 open loop; model outputs, usable as a later plausibility check.
 
+## Who ferments in activated sludge (A2O comparison, 2026-11-26)
+
+**Finding.** On `build_a2o` (anaerobic zone 23% of the reactor volume, ASM2d's
+default influent with all VFA as acetate, 20 C), the bio-P level's acidogens
+wash out under every literature parameter set. The invasion rate (largest
+eigenvalue of the plant Jacobian's `XFE` block at the acidogen-free steady
+state) is negative for ADM1's sugar degraders (-0.052 1/d), ADM1 with
+`K_S_su` 50 (-0.019), Ribes et al. (2002) (-0.194), and even ADM1 with no
+decay (-0.045). Only Ribes with no decay (+0.136) or with decay scaled to the
+anaerobic share (+0.060) invades. Without fermentation the anaerobic zone
+ends at 14.9 g/m3 `SF` (ASM2d 0.93); effluent phosphate is 7.1 g P/m3 against
+ASM2d's 5.1, PAOs 522 against 784 g COD/m3.
+
+**What the literature does.**
+- Fermentation is OHO (heterotroph) activity in ASM2d (a transformation,
+  `qfe` 3/d, `KF` 4), Barker & Dold (1997; anaerobic growth, 4 1/d, `K` 2,
+  yield 0.1, off with O2 or NO3), UCTPHO+, and Ikumi (2011; activated sludge
+  only, with separate acidogens in the digester behind a model interface).
+  Hauduc et al. (2013) review seven models: "fermentation is a growth process
+  under anaerobic conditions for OHOs", and anaerobic growth "may not be
+  neglected" for large anaerobic zones.
+- The commercial plant-wide model the owner supplied (the Varga et al. 2018
+  lineage) has OHOs ferment by anaerobic growth (0.3 1/d, yield 0.1,
+  half-saturation 5 g/m3 in activated sludge and 350 in digesters, chosen by
+  unit type), hydrogen yield switching from 0.35 to 0.10 as VFA rises past
+  50 g/m3, OHO decay 0.62 1/d aerobic, x0.5 anoxic, x0.25 anaerobic; and
+  PAOs ferment too, switched by ORP (Tetrasphaera-type).
+- BNRM1 (Seco et al., 2004) is the one with separate acidogens in activated
+  sludge: fermentation inhibited by O2 only (it runs in anoxic zones),
+  lysis unswitched; and in practice the acidogens are seeded with the influent
+  (Ruano et al., 2012, p. 1011: "Because of the presence of acidogenic
+  bacteria in the sewerage system, the simulations were carried out by
+  considering these bacteria in the influent").
+- Ruel et al. (2002) fit "heterotrophic acidogenic biomass" in 13 raw
+  wastewaters at 20 C: 3 to 20 g COD/m3; growth 0.70 1/d, yield 0.10,
+  half-saturation 8.5 g/m3, decay 0.20 1/d; products 0.45 to 0.60 acetate,
+  0.27 to 0.49 propionate.
+- Nielsen et al. (2012): glucose fermenters are 39% of the biovolume in ten
+  full-scale EBPR plants, mostly Tetrasphaera (33%); "most seem to be
+  facultative fermenters", and some take up glucose aerobically as well.
+
+**Measured on the A2O** (steady states by PTC; "not conv." did not converge
+and is indicative only):
+
+| Variant | `SF` end of anaerobic zone | PAO | Competibacter | Effluent PO4 |
+|---|---|---|---|---|
+| ASM2d | 0.93 | 784 | - | 5.13 |
+| acidogens, ADM1 kinetics (current) | 14.9 | 522 | 0 | 7.08 |
+| heterotrophs ferment, 3 1/d substrate, `K` 5 (not conv.) | 0.48 | 1022 | 0 | 4.67 |
+| BNRM1-type: fermentation off by O2 only, Ruel kinetics, 10 g/m3 acidogens in the influent | 5.4 | 806 | 0 | 5.82 |
+| the same without influent acidogens | 13.9 | 0 | 552 | 9.69 |
+
+**The PAO / GAO columns above are not steady states.** Two 400-day forward
+solves of the current model, from warm starts differing only in the seeded
+acidogens (50 and 0 g/m3), follow the same path within 2 g/m3: PAOs fall from
+500 to 465 g COD/m3 between days 100 and 400 while Competibacter grows from 29
+to 67 (about 0.3% per day). A PTC solve from the day-400 state converges
+(residual 8e-7) to PAOs 0, Competibacter 560, effluent phosphate 9.7 g P/m3,
+and every eigenvalue of the plant Jacobian there is negative (largest -0.049
+1/d): Competibacter excludes the PAOs. The PAO-only states the earlier PTC
+solves stopped at are equilibria (zero GAOs is invariant) that GAOs invade too
+slowly for the convergence test to see. So on this level a PTC steady state
+needs a stability check (the Jacobian's eigenvalues, or a long forward solve)
+before its PAO / GAO split is read, and the acidogen variants above need the
+same check. A full GAO takeover at 20 C on acetate at pH 7 is not what the
+source predicts for its SBR (coexistence, 53% PAO and 46% Competibacter, the
+validation case), so the cause in the A2O (the anoxic zone and the GAOs'
+anoxic processes, carbon limitation, the recycles) is to be found before the
+fermentation structure is chosen.
+
+**Why GAOs win on the A2O (2026-11-26).** Two separate effects.
+
+1. *The source's storage switches are on absolute concentrations* (as the
+   level first had them; decision 14 replaced them): anaerobic uptake carried
+   a Monod switch on the glycogen concentration (and the PAOs' on poly-P),
+   aerobic glycogen storage one on PHA, with K = 0.31 to 0.36 g/m3 (the
+   source's 0.01 C-mmol/L,
+   the same form in `lopez_vazquez_2009/model.py`). Near 1 for a population of
+   hundreds of g/m3, they throttle a rare one, so the outcome depends on
+   history: a Competibacter seed of 1 g/m3 (glycogen 0.3) in the PAO-only
+   steady state dies out (-0.077 1/d over days 60 to 120), a seed of 30 grows
+   (+0.0023). With the three K at 1e-3 both seeds grow at +0.0045. The
+   linearized invasion rate cannot see this (the storage ratios are 0/0 at
+   zero biomass); a seeded forward solve can. In the source's SBR every
+   population starts at about 1000 g COD/m3, so there the switches are inert.
+   ASM2d writes its poly-P switch on the ratio `XPP/XPAO`, which has no such
+   effect. With the switches on fractions (decision 14) the seeds grow at
+   +0.0052 (1 g/m3) and +0.0048 (30 g/m3).
+2. *The A2O's conditions sit on the PAO / GAO boundary*, tipped to
+   Competibacter by the anoxic zone. In the source's SBR at 20 C, acetate,
+   pH 7, the PAOs win slowly (53% at day 50, 65% at day 400; the generated
+   model 54% and 67%), so the source's "coexistence" there is a 50-day
+   snapshot. On the A2O (K at 1e-3, seed 1 g/m3, Competibacter growth rate
+   days 60 to 120, 1/d): base +0.0045; no anoxic bio-P activity
+   (`etaNO3_BIOP` 1e-6) +0.0002; no internal recycle +0.0034; sludge age 8 d
+   instead of 19 +0.0030; anaerobic zone doubled +0.0030; no bio-P decay
+   +0.0046; 15 C -0.037; pH 7.5 -0.013; feed VFA 75% acetate / 25%
+   propionate -0.028. So the GAOs' edge is small and comes mostly from their
+   anoxic processes (decision 11); temperature, pH and a propionate share,
+   all as the source predicts, turn it to the PAOs.
+
+Consequences: an A2O comparison at 20 C on all-acetate VFA tests the knife
+edge, not the plant; a feed with a propionate share (typical of sewage) is
+clear of it. The absolute storage switches are a choice for the owner
+(faithful to the source and history-dependent, or written on ratios to the
+biomass, as ASM2d does, which leaves the SBR validation's large populations
+unchanged).
+
+**Fermentation variants on the decided base (decisions 14 and 15).** 75%
+acetate / 25% propionate VFA, 20 C, pH 7, storage switches on fractions.
+Steady state by PTC, then both GAO groups seeded at 1 g/m3 (glycogen 0.3) and
+150 days forward: in every variant both die out (-0.025 to -0.029 1/d over
+days 75 to 150) and nothing else moves, so these are stable steady states
+(g/m3; ASM2d, with one VFA, from its all-acetate run):
+
+| Variant | `SF` end of anaerobic zone | PAO | Acidogens | Effluent PO4 |
+|---|---|---|---|---|
+| ASM2d | 0.93 | 784 | - | 5.13 |
+| acidogens, ADM1 kinetics (current) | 14.5 | 571 | 0 (washed out) | 6.86 |
+| heterotrophs ferment (3 1/d substrate, `K` 5, yield 0.1) | 0.47 | 1061 | - | 4.52 |
+| BNRM1-type (off by O2 only, Ruel kinetics, 10 g/m3 acidogens in the influent) | 5.35 | 846 | 139 | 5.65 |
+| as adopted (decision 16: also slower anaerobic decay, `etafe` 0.144) | 0.36 | 1057 | - | 4.41 |
+
+## The core on BSM1 (2026-11-26)
+
+`examples/plantwide/bsm1` runs the core and `asm2d` on `build_bsm1` (open loop,
+ideal clarifier) with BSM1's constant influent carried into each model's
+species (`tests/validation/test_plantwide_core_bsm1.py`).
+
+- *Aligned* (the core's fermentation off and anaerobic decay as aerobic;
+  ASM2d's fermentation off and its `etafe` set to the core's): the steady
+  states agree to six figures once ASM2d's positivity limiter (threshold
+  1e-3) is off. With it on they differ by 0.2% (effluent ammonium 1.151
+  against 1.153 g N/m3): oxygen in the anoxic tanks sits below the threshold,
+  where the limiter throttles its uptake.
+- *A defect it found:* the core split ASM2d's `SA` (all fermentation products)
+  into acetate and propionate but gave the heterotrophs only acetate, so
+  1.3 g COD/m3 of propionate (and 0.9 of hydrogen, with the aeration not
+  stripping the declared gases) left the plant. The heterotrophs now grow on
+  propionate with oxygen and nitrate, on ASM2d's VFA kinetics applied to
+  acetate plus propionate (exactly ASM2d without propionate); the BSM1
+  comparison strips the core's declared gases in the aerated tanks, which is
+  how the commercial model of the Varga et al. (2018) lineage removes hydrogen
+  in activated sludge (gas transfer only, no biological uptake). Left: 0.004
+  g COD/m3 of each.
+- *As shipped*, the core leaves 11.0 g N/m3 of nitrate against ASM2d's 10.4,
+  ammonium 1.11 against 1.12: its fermentation in the anoxic tanks turns some
+  substrate into hydrogen, which is stripped rather than used for
+  denitrification; the lower `etafe` and the slower anaerobic decay add to it.
+- `build_a2o`'s aeration strips nothing, so on the A2O the core's hydrogen
+  leaves in the effluent (a small COD loss); giving `build_a2o` the
+  `aeration` argument `build_bsm1` has would fix that.
+
 ## Structure: a linear `extends:` chain
 
 ```
@@ -375,7 +555,7 @@ anyone who knows the IWA family.
 | Group | Species |
 |---|---|
 | Organics | `SF` fermentable substrate, `SA` acetate, `SPRO` propionate, `SI` soluble inert, `XS` slowly biodegradable, `XI` particulate inert |
-| Biomass | `XH` heterotrophs, `XAUT` nitrifiers, `XFE` acidogens, `XPRO` propionate oxidizers, `XAC` acetoclastic methanogens, `XH2M` hydrogenotrophic methanogens |
+| Biomass | `XH` heterotrophs (also the fermenters), `XAUT` nitrifiers, `XPRO` propionate oxidizers, `XAC` acetoclastic methanogens, `XH2M` hydrogenotrophic methanogens |
 | Dissolved | `SO2`, `SNH4`, `SNO3`, `SN2`, `SH2`, `SCH4`, `SIC` (total inorganic carbon, g C/m³) |
 | Not yet | inorganic suspended solids (for TSS) and the gas phase (see *Engine work*) |
 
@@ -396,8 +576,8 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
 | Processes | Primary source |
 |---|---|
 | Hydrolysis of `XS` by heterotrophs (aerobic, anoxic, anaerobic), heterotroph growth on `SF` and `SA` (O₂, NO₃), nitrification | ASM2d (Henze et al., 1999) |
-| Decay of every group by death-regeneration, at the same rate in every zone (heterotrophs and nitrifiers with ASM2d's `fXI` = 0.1) | ASM2d; Barker & Dold (1997) use the same form with 0.08, the value Ikumi et al. (2014) found consistent with digestion |
-| Fermentation by acidogens only, in every unit; hydrolysis by acidogens without O₂ and NO₃ | BNRM1 structure (Seco et al., 2004; Barat et al., 2013); Contois hydrolysis constants of Sötemann et al. (2005) |
+| Decay of every group by death-regeneration (heterotrophs and nitrifiers with ASM2d's `fXI` = 0.1); heterotrophs at 0.25 of the rate without O₂ and NO₃ | ASM2d; Barker & Dold (1997) use the same form with 0.08, the value Ikumi et al. (2014) found consistent with digestion |
+| Fermentation as heterotroph growth without O₂ and NO₃, in every unit (decision 16) | Barker & Dold (1997); Hauduc et al. (2013); kinetics of the Varga et al. (2018) model |
 | Fermentation products: acetate, propionate, hydrogen | split of Siegrist et al. (2002), Table 2 |
 | Propionate oxidation, acetoclastic and hydrogenotrophic methanogenesis, their H₂ and NH₃ inhibition | ADM1 (Batstone et al., 2002; BSM2 values), temperature dependence of Siegrist et al. (2002) |
 | Carbon contents of the organic components | Siegrist et al. (2002), Table 2 |
@@ -413,9 +593,6 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
 - Without ASM2d's heterotrophic fermentation, anaerobic zones differ from
   `asm2d`; the equivalence with `asm2d` holds under aerobic and anoxic
   conditions (and against `asm2d` with its fermentation switched off).
-- The acidogen kinetics are ADM1's sugar degraders (half-saturation 500 g/m³)
-  for now, provisional until a source tested in activated sludge is found;
-  the digester cannot tell the candidates apart (decision 7).
 - Particulate organics the activated-sludge models treat as unbiodegradable
   stay largely unbiodegradable in a digester (Ikumi et al., 2014), so `XI` is
   inert in every unit and the first version has no anaerobic conversion of
@@ -484,17 +661,11 @@ gas phase has its own balance in the unit).
 
 ## Engine and plant work the model needs
 
-1. **Gas-phase species.** The digester unit defaults to ADM1's headspace
-   species (`ADM1_GAS_SPECIES` in `plant/digester.py`) but takes them as its
-   `gas_species` argument, so a model with its own headspace states can run in
-   it. Whether a model should declare its gas-phase species itself is a
-   model-format question (owner's decision). The core level has no gas phase:
-   methane, hydrogen and CO₂ stay dissolved.
-2. **Gas transfer in aerated units** for species other than O₂ (CO₂ and N₂
-   stripping, NH₃ at the chemistry level): to check what the aeration units
-   support today.
-3. **The digester unit's assumptions about units and species names** (ADM1's
-   kg/m³ basis): to check, so a g/m³ model runs in it unchanged.
+1. **Gas-phase species** (done): a model declares its dissolved gases in a
+   `gases:` block and the unit owns the gas phase (*Gas phase* above).
+2. **Gas transfer in aerated units** (done): `Aeration(stripped="model")`
+   strips every gas the model declares.
+3. **The digester unit** (done): `HeadspaceDigesterUnit` runs the g/m³ core.
 4. **Performance.** The unified model is larger in every unit than the model it
    replaces there. Measure the right-hand side, the coloured Jacobian and a
    BSM2-sized dynamic and steady solve at each level before optimizing
@@ -506,10 +677,14 @@ gas phase has its own balance in the unit).
   chemistry level) passes on every reaction, as a unit test.
 - **Per level, against its sources:**
   - core aerobic / anoxic reaction terms against `asm2d` with fermentation
-    switched off (done: equal to 1e-6), then on a BSM1-type flowsheet;
+    switched off (done: equal to 1e-6), then on a BSM1-type flowsheet (done,
+    2026-11-26: the steady states agree to six figures with the processes the
+    models do not share switched off and ASM2d's positivity limiter off; see
+    *The core on BSM1*);
   - core digestion against `adm1` on the BSM2 digester feed: methane
     production, VS destruction, effluent ammonium;
-  - bio-P against `asm2d` / `asm2d_tud` on an A2O flowsheet;
+  - bio-P against `asm2d` / `asm2d_tud` on an A2O flowsheet (`asm2d` done,
+    `examples/plantwide/a2o`; `asm2d_tud` not yet);
   - nitrite and anammox against `asm3_2step` / `asm3_2step_anammox` batch
     cases;
   - pH and precipitation against the existing speciation and precipitation
@@ -524,19 +699,14 @@ gas phase has its own balance in the unit).
 
 1. **Bio-P populations.** Settled: metabolic PAOs and separate GAOs
    (decision 8).
-2. **Acidogen kinetics** (deferred to `plantwide_bio_p`, decision 7). BNRM2's parameter sources (Barat et al., 2013,
-   appendix p. x) name none for the anaerobic groups; Ribes et al. (2002, primary
-   settler fermentation) is the likeliest source for acidogens tested in
-   activated sludge. Candidates meanwhile: ADM1's sugar degraders (in use) or
-   Siegrist et al.'s fermenters (half-saturation 50 g/m³). Both sustain the
-   continuous digester; they differ in the VFA an anaerobic zone produces,
-   which matters at the bio-P level.
-3. **Heterotroph anaerobic hydrolysis factor.** Settled: 0.15 (decision 6).
+2. **Who ferments.** Settled: the heterotrophs (decision 16).
+3. **Heterotroph anaerobic hydrolysis factor.** Settled: 0.144 (decision 16,
+   refitting decision 6's 0.15).
 4. **Iron chemistry.** Saturation-index precipitation (already in the
    repository) or surface complexation. Recommendation: start with the
    existing approach; add surface complexation as its own level if aged-iron
    and P-desorption behaviour is needed.
-5. **Gas-phase species in the model format** (*Engine work* item 1).
+5. **Gas-phase species in the model format.** Settled: the `gases:` block.
 6. **The closure declaration**, after `plantwide_bio_p` is written.
 7. **Shipped or example.** Recommendation: keep the levels out of the shipped
    catalogue until the plant-wide study is done, then ship them with a catalogue
