@@ -235,14 +235,17 @@ kept equal by putting the organic-N difference in ammonium.
     proportional to `etafe`, so methane is steep in it: 0.12 gives -15.5%,
     0.135 -4.7%, 0.155 +3.9%, 0.2 +8.0%.
 
-17. **`plantwide_nitrite`'s nitrifier kinetics are Hiatt & Grady's (2008)
-    ASMN, its anammox kinetics Hao et al.'s (2002) with the stoichiometry of
-    Strous et al. (1998)** (owner, 2026-11-27): AOB on free ammonia and NOB on
-    free nitrous acid (Anthonisen et al. 1976), each with Haldane
-    self-inhibition and the other's inhibition; temperature as ASM2d's
-    autotrophs for AOB and NOB, Arrhenius at 70 kJ/mol (Strous et al. 1999)
-    for anammox; no NOB mixotrophy (ASMN's R11 left out). Replaces the
-    earlier workbook-sourced values.
+17. **`plantwide_nitrite`'s nitrifier and anammox kinetics come from papers**
+    (owner, 2026-11-27, revised the same day after the NOB literature):
+    AOB and NOB grow on total ammonium and total nitrite, with free ammonia
+    and free nitrous acid as inhibitors only (Hiatt & Grady 2008's constants,
+    Anthonisen et al. 1976's equilibria); oxygen half-saturations are apparent
+    floc values, AOB 0.65 and NOB 0.23 (Daebel et al. 2007), since a model
+    without diffusion takes apparent values (Picioreanu et al. 2016); growth
+    theta 1.11 (Mehrani et al. 2021). AOB growth, decay and ammonium
+    half-saturation are provisional until a source is found. Anammox: Hao et
+    al. (2002) with Arrhenius at 70 kJ/mol (Strous et al. 1999) and Strous et
+    al.'s (1998) stoichiometry. No NOB mixotrophy.
 18. **Heterotrophs denitrify in two steps at ASMN's step capacities** (owner,
     2026-11-27): NO3 to NO2 and NO2 to N2 run side by side, neither inhibiting
     the other, each on its own acceptor. ASMN's anoxic growth factors are 0.28
@@ -512,8 +515,9 @@ species (`tests/validation/test_plantwide_core_bsm1.py`).
 ## The nitrite level (`plantwide_nitrite`, design 2026-11-27)
 
 Extends `plantwide_bio_p`; decisions 17 to 20. Sources: Hiatt & Grady (2008)
-for the nitrifiers and denitrification, Hao et al. (2002) and Strous et al.
-(1998) for anammox.
+for denitrification and the nitrifiers' inhibition, Daebel et al. (2007) and
+Mehrani et al. (2021) for their oxygen affinities and temperature, Hao et al.
+(2002) and Strous et al. (1998) for anammox.
 
 **States.** Adds `SNO2` (g N/m3), `XAOB`, `XNOB` and `XAMX` (biomass, the
 core's composition); removes `XAUT` and the one-step nitrification.
@@ -537,26 +541,55 @@ ASMN's 0.2. In balance (nitrite made as fast as used, `r2 = 1.5 r1`) the
 nitrate step limits, and the pair runs at 0.35 + 0.525 = 0.875 of the one
 process's rate: ASMN's chain at 0.70 against ASM1's 0.8.
 
-**Nitrifiers** (Hiatt & Grady 2008, Table 2, 20 C), rate forms R9 and R10:
+**Nitrifiers** (20 C). Growth is Monod in total ammonium (AOB) and total
+nitrite (NOB), in oxygen, and non-competitively inhibited by free ammonia and
+free nitrous acid:
 
-| | AOB | NOB |
-|---|---|---|
-| max growth (1/d), theta | 0.78, (1/0.35)^0.1 | 0.78, (1/0.35)^0.1 |
-| decay (1/d), theta | 0.096, 3^0.1 | 0.096, 3^0.1 |
-| substrate, half-saturation (g N/m3) | free ammonia 0.0075 | free nitrous acid 1e-4 |
-| self-inhibition (Haldane) | FA 1.0 | FNA 0.04 |
-| inhibition by the other | FNA 0.1 | FA 0.2 |
-| oxygen (g/m3) | 0.6 | 1.2 |
-| yield (g COD/g N) | 0.18 | 0.06 |
+| | AOB | NOB | source |
+|---|---|---|---|
+| max growth (1/d) | 0.78 (provisional) | 0.78 | Hiatt & Grady 2008 |
+| growth theta | 1.11 | 1.11 | Mehrani et al. 2021 (12 / 20 C rate ratio 0.43-0.45) |
+| decay (1/d), theta | 0.096 (provisional), 3^0.1 | 0.096, 3^0.1 | Hiatt & Grady 2008; ASM2d |
+| substrate half-saturation (g N/m3) | NH4 0.675 (provisional) | NO2 0.1 | Mehrani et al.'s model; their measured 0.06-0.14 |
+| oxygen half-saturation (g/m3), apparent | 0.65 | 0.23 | Daebel et al. 2007, conventional sludge, 20 C |
+| FA / FNA inhibition (g N/m3) | 1.0 / 0.1 | 0.2 / 0.04 | Hiatt & Grady 2008 |
+| yield (g COD/g N) | 0.18 | 0.06 | Hiatt & Grady 2008 |
 
 `FA = SNH4 10^pH / (exp(6344/T) + 10^pH)`, `FNA = SNO2 / (exp(-2300/T)
-10^pH)`, as N (ASMN eqs 2-5). At pH 7 and 20 C the AOB's half-saturation is
-about 1.9 g NH4-N/m3 of total ammonium, the NOB's about 0.4 g NO2-N/m3. The
-thetas are ASM2d's autotroph pairs (1.0 / 0.35 and 0.15 / 0.05 1/d at 20 /
-10 C): ASMN's own Ratkowsky constants are only in Hiatt's 2006 thesis. The
-NOB keep the core's ammonium nutrient term, and both the phosphate one.
-ASMN's NOB mixotrophy (R11: `bg = 6` times R10, scaled by `SS/(20 + SS)`) is
-left out.
+10^pH)`, as N. The NOB keep the core's ammonium nutrient term, and both the
+phosphate one. ASMN's NOB mixotrophy is left out.
+
+**Why these values (NOB literature, read 2026-11-27).** ASMN's NOB oxygen
+half-saturation (1.2) and Hao et al.'s (2.2) wash the NOB out of BSM1 at 15 C,
+against plant experience: Law et al. (2019) find Nitrospira and 0.3-0.7 g N/m3
+of effluent nitrite at full scale at DO 0.8-1.2 and 4-6 d sludge age (30 C);
+Liu et al. (2019) no nitrite at DO 0.3 (22 C, 20 d); Mehrani et al. (2021)
+little accumulation in batch below DO 0.7. Measured values:
+
+- intrinsic (dispersed cells): Nitrospira 0.54 (Blackburne et al. 2007), 0.33
+  (Park et al. 2017), 0.13 (Manser 2005, cited by Blackburne); Picioreanu et
+  al. use 0.03 (AOB) and 0.06 (NOB);
+- apparent, on flocs: Daebel et al. 2007, conventional sludge (d50 100-110
+  um, 20 C, 14 tests) AOB 0.65 (0.51-0.77), NOB 0.23 (0.19-0.29); MBR sludge
+  0.42 and 0.28; Mehrani et al. 2021 AOB 0.30-0.39, NOB 0.20-0.36 (12, 20 C);
+  Law et al. 2019 AOB 0.30, NOB 0.09 (30 C); Blackburne's Nitrobacter 0.43 to
+  1.69 as floc median size goes 44 to 126 um.
+
+Picioreanu et al.'s 3-D model explains the floc reversal (apparent AOB > NOB):
+AOB colonies are larger and take more oxygen per cell, so their colonies have
+steeper gradients; a 1-D homogeneous floc model never reverses. They state
+that a model without diffusion takes apparent values, AOB's above NOB's.
+Daebel et al. find K_O varies over weeks; they suggest treating it as
+time-variable, a case-specific finding.
+
+Temperature: Blackburne et al.'s Nitrospira activity 0.44 e^(0.055 (T - 15))
+(theta 1.057, 15-30 C, enriched culture, short-term) against Mehrani et al.'s
+1.11 for both groups on full-scale sludge between 12 and 20 C; the latter is
+the range that matters here. Park et al.'s growth rate (0.69 1/d) is inferred
+from respirometry through a yield (0.14) that their own SI shows is 5-7 times
+the recalculated pure-culture yields, so it is not used. Mehrani et al.'s
+calibrated growth rates (AOB 0.57, NOB 0.11, apparently at 12 C, with
+comammox in the model and decay fixed) are not used either.
 
 **Anammox** (Hao et al. 2002, Table AIII, 30 C, from Strous et al. 1998): max
 growth 0.072 1/d, decay 0.003 1/d, both with theta 1.0994 (70 kJ/mol between
@@ -590,25 +623,16 @@ check is clean. Checked (`tests/integration/test_plantwide_nitrite.py`,
 
 - without nitrite every shared process runs at the bio-P level's rate, each
   pair's first step at 0.35 of it, the second steps idle;
-- the AOB and NOB rates equal R9 and R10 written out from ASMN's Table 2, at
-  20 C / pH 7 and 25 C / pH 7.8; anammox equals Hao et al.'s at 30 and 20 C;
+- the AOB and NOB rates equal the forms above written out by hand, at 20 C /
+  pH 7 and 15 C / pH 7.8; anammox equals Hao et al.'s at 30 and 20 C;
 - anammox: 1.32 NO2 and 0.26 NO3 per NH4, N2 1.02 (Strous);
-- on BSM1 (20 C) tank 5 holds 1.77 g N/m3 ammonium, 5.40 nitrite and 2.34
-  nitrate (the core: 1.11 and 11.02), with 108 AOB and 13 NOB. The NOB only
-  just outgrow washout: tank 5 is at 0.5 g O2/m3 and their oxygen
-  half-saturation is 1.2 (Hao et al. use 2.2, against 0.6 for AOB). With it at
-  0.6, nitrite 1.14 and nitrate 9.14 (ammonium 2.74, the NOB competing for
-  oxygen); with `muNOB` x1.3, nitrite 1.47. Mixotrophy would add about 12%
-  (0.4 g COD/m3 of substrate in the aerated tanks). The owner accepted the
-  build-up as the paper kinetics' prediction (2026-11-27). N, P and COD close
-  over the plant with the stripped gases counted.
-- at BSM1's own 15 C the NOB wash out (ammonium 9.85, nitrite 5.68, no
-  nitrate) and the core leaves 3.86 ammonium and 10.65 nitrate, against the
-  published benchmark's 1.73 and 10.42 (Alex et al. 2008, ASM1 at its 15 C
-  values; `build_bsm1` reproduces it to the printed figures). The core with
-  ASM1's autotroph decay at 15 C leaves 1.25 ammonium, with ASM1's growth
-  and decay 3.58, so the autotroph rates alone do not explain the gap; the
-  nitrite level's NOB growth at 15 C is 0.46 1/d.
+- on BSM1, tank 5 (g N/m3): at 20 C ammonium 1.57, nitrite 0.10, nitrate
+  13.96; at 15 C 7.85, 0.28 and 9.34. With ASMN's NOB oxygen half-saturation
+  (1.2) instead, 1.77 / 5.40 / 2.34 at 20 C and NOB washout at 15 C. The
+  published BSM1 steady state (ASM1, 15 C) is 1.73 ammonium and 10.42 nitrate;
+  it is ASM1's output with agreed parameters, a reference between models, not
+  data. The 15 C ammonium rests on the provisional AOB growth and decay. N, P
+  and COD close over the plant with the stripped gases counted.
 
 ## Structure: a linear `extends:` chain
 
@@ -732,7 +756,8 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
 
 | Processes | Primary source |
 |---|---|
-| AOB and NOB growth on free ammonia / free nitrous acid, two-step denitrification | Hiatt & Grady (2008); Anthonisen et al. (1976) |
+| AOB and NOB growth on ammonium / nitrite, FA and FNA inhibition | Hiatt & Grady (2008); Anthonisen et al. (1976); Daebel et al. (2007); Mehrani et al. (2021) |
+| Two-step denitrification | Hiatt & Grady (2008) |
 | Anammox growth and decay | Hao et al. (2002); Strous et al. (1998, 1999) |
 
 ### `plantwide_chem`
@@ -839,6 +864,9 @@ paper itself before citing it in a model file.
 - Anthonisen, A.C., Loehr, R.C., Prakasam, T.B.S. & Srinath, E.G. (1976).
   Inhibition of nitrification by ammonia and nitrous acid. *J. Water Pollut.
   Control Fed.* 48(5), 835–852 (no DOI).
+- Blackburne, R., Vadivelu, V.M., Yuan, Z. & Keller, J. (2007). Kinetic
+  characterisation of an enriched Nitrospira culture with comparison to
+  Nitrobacter. *Water Res.* 41(14), 3033–3042. doi:10.1016/j.watres.2007.01.043
 - Barat, R. et al. (2013). Biological Nutrient Removal Model No. 2 (BNRM2): a
   general model for wastewater treatment plants. *Water Sci. Technol.* 67(7).
   https://doi.org/10.2166/wst.2013.004
@@ -852,6 +880,9 @@ paper itself before citing it in a model file.
 - Batstone, D.J. et al. (2012). Towards a generalized physicochemical framework.
   *Water Sci. Technol.* 66(6), 1147–1161.
   https://doi.org/10.2166/wst.2012.300
+- Daebel, H., Manser, R. & Gujer, W. (2007). Exploring temporal variations of
+  oxygen saturation constants of nitrifying bacteria. *Water Res.* 41(5),
+  1094–1102. doi:10.1016/j.watres.2006.11.011
 - Flores-Alsina, X. et al. (2015). A plant-wide aqueous phase chemistry module
   describing pH variations and ion speciation/pairing in wastewater treatment
   process models. *Water Res.* 85, 255–265.
@@ -889,6 +920,13 @@ paper itself before citing it in a model file.
   systematic study of multiple minerals precipitation modelling in wastewater
   treatment. *Water Res.* 85, 359–370.
   https://doi.org/10.1016/j.watres.2015.08.041
+- Law, Y. et al. (2019). High dissolved oxygen selection against Nitrospira
+  sublineage I in full-scale activated sludge. *Environ. Sci. Technol.* 53(14),
+  8157–8166. doi:10.1021/acs.est.9b00955
+- Liu, W., Chen, W., Yang, D. & Shen, Y. (2019). Functional and compositional
+  characteristics of nitrifiers reveal the failure of achieving mainstream
+  nitritation under limited oxygen or ammonia conditions. *Bioresour.
+  Technol.* 275, 272–279. doi:10.1016/j.biortech.2018.12.065
 - López-Vázquez, C.M. et al. (2009). Modeling the PAO–GAO competition: effects
   of carbon source, pH and temperature. *Water Res.* 43(2), 450–462.
   https://doi.org/10.1016/j.watres.2008.10.032
@@ -896,6 +934,10 @@ paper itself before citing it in a model file.
   physico-chemical transformations into multi-phase wastewater treatment
   process models. *Water Res.* 74, 239–256.
   https://doi.org/10.1016/j.watres.2015.01.031
+- Mehrani, M.-J., Lu, X., Kowal, P., Sobotka, D. & Makinia, J. (2021).
+  Incorporation of the complete ammonia oxidation (comammox) process for
+  modeling nitrification in suspended growth wastewater treatment systems.
+  *J. Environ. Manage.* 297, 113223. doi:10.1016/j.jenvman.2021.113223
 - Meijer, S.C.F., van Loosdrecht, M.C.M. & Heijnen, J.J. (2001). Metabolic
   modelling of full-scale biological nitrogen and phosphorus removing WWTP's.
   *Water Res.* 35(11), 2711–2723.
@@ -909,6 +951,10 @@ paper itself before citing it in a model file.
 - Sander, R. (2023). Compilation of Henry's law constants (version 5.0.0) for
   water as solvent. *Atmos. Chem. Phys.* 23, 10901–12440.
   https://doi.org/10.5194/acp-23-10901-2023
+- Picioreanu, C., Pérez, J. & van Loosdrecht, M.C.M. (2016). Impact of cell
+  cluster size on apparent half-saturation coefficients for oxygen in
+  nitrifying sludge and biofilms. *Water Res.* 106, 371–382.
+  doi:10.1016/j.watres.2016.10.017
 - Seco, A., Ribes, J., Serralta, J. & Ferrer, J. (2004). Biological nutrient
   removal model No.1 (BNRM1). *Water Sci. Technol.* 50(6), 69–78.
   https://doi.org/10.2166/wst.2004.0361
@@ -937,6 +983,10 @@ paper itself before citing it in a model file.
   78(10), 2119–2130. Separate PAO and GAO populations (see *What the bio-P
   and acidogen sources give*), not one switching population as this note
   said earlier.
+- Park, M.-R., Park, H. & Chandran, K. (2017). Molecular and kinetic
+  characterization of planktonic Nitrospira spp. selectively enriched from
+  activated sludge. *Environ. Sci. Technol.* 51(5), 2720–2728.
+  doi:10.1021/acs.est.6b05184
 - Ribes, J., Ferrer, J., Bouzas, A. & Seco, A. (2002). Modelling of an
   activated primary settling tank including the fermentation process and VFA
   elutriation. *Environ. Technol.* 23(10), 1147–1156. No DOI confirmed.

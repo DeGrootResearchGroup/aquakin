@@ -150,24 +150,32 @@ def parameters() -> dict:
     add("f_NO3_NO2", 0.35, "-", bounds=(0.05, 1.0), transform="logit")
     add("f_NO2_N2", 0.6, "-", bounds=(0.05, 1.0), transform="logit")
     add("KNO2_H", 0.2, "g_N/m3", bounds=(0.02, 2.0))
-    # Nitrifiers (decision 17): Hiatt & Grady (2008) at 20 C. The substrates
-    # are free ammonia and free nitrous acid (as N), with self-inhibition and
-    # cross-inhibition. Temperature as ASM2d's autotrophs (Henze et al. 1999):
-    # growth 1.0 / 0.35 1/d and decay 0.15 / 0.05 1/d at 20 / 10 C.
-    mu_theta, b_theta = num((1.0 / 0.35) ** 0.1), num(3.0**0.1)
+    # Nitrifiers (decision 17), at 20 C, on total ammonium and total nitrite,
+    # with free ammonia and free nitrous acid as inhibitors (Hiatt & Grady
+    # 2008's inhibition constants, as N). Oxygen half-saturations are apparent
+    # floc values, measured together on conventional activated sludge at 20 C
+    # (Daebel et al. 2007): a model without diffusion takes apparent values,
+    # for which AOB's exceeds NOB's (Picioreanu et al. 2016). Growth follows
+    # theta = 1.11 (Mehrani et al. 2021, full-scale sludge at 12 and 20 C);
+    # decay ASM2d's autotroph theta (0.15 / 0.05 1/d at 20 / 10 C).
+    # Provisional, pending an activated-sludge source that fits them together:
+    # the AOB growth and decay (Hiatt & Grady 2008) and ammonium half-saturation
+    # (as used by Mehrani et al. 2021). The NOB nitrite half-saturation is the
+    # middle of Mehrani et al.'s 0.06-0.14 g N/m3, measured on full-scale sludge.
+    mu_theta, b_theta = 1.11, num(3.0**0.1)
     add("muAOB", 0.78, "1/d", bounds=(0.2, 3.0), theta=mu_theta)
     add("bAOB", 0.096, "1/d", bounds=(0.02, 0.5), theta=b_theta)
-    add("KFA_AOB", 0.0075, "g_N/m3", bounds=(0.001, 0.05))
+    add("KNH4_AOB", 0.675, "g_N/m3", bounds=(0.05, 5.0))
     add("KI_FA_AOB", 1.0, "g_N/m3", bounds=(0.1, 10.0))
     add("KI_FNA_AOB", 0.1, "g_N/m3", bounds=(0.01, 1.0))
-    add("KO2_AOB", 0.6, "g_O2/m3", bounds=(0.05, 2.0))
+    add("KO2_AOB", 0.65, "g_O2/m3", bounds=(0.05, 2.0))
     add("YAOB", 0.18, "g_COD/g_N", bounds=(0.05, 0.4))
     add("muNOB", 0.78, "1/d", bounds=(0.1, 3.0), theta=mu_theta)
     add("bNOB", 0.096, "1/d", bounds=(0.02, 0.5), theta=b_theta)
-    add("KFNA_NOB", 1.0e-4, "g_N/m3", bounds=(1.0e-5, 1.0e-3))
+    add("KNO2_NOB", 0.1, "g_N/m3", bounds=(0.01, 2.0))
     add("KI_FNA_NOB", 0.04, "g_N/m3", bounds=(0.004, 0.4))
     add("KI_FA_NOB", 0.2, "g_N/m3", bounds=(0.02, 2.0))
-    add("KO2_NOB", 1.2, "g_O2/m3", bounds=(0.1, 3.0))
+    add("KO2_NOB", 0.23, "g_O2/m3", bounds=(0.02, 2.0))
     add("YNOB", 0.06, "g_COD/g_N", bounds=(0.02, 0.3))
     # Temperatures in the free-ammonia and free-nitrous-acid equilibria
     # (Anthonisen et al. 1976): Kb/Kw = exp(6344/T), Ka = exp(-2300/T).
@@ -234,8 +242,8 @@ def autotroph_reactions() -> list[dict]:
             name="growth_of_AOB",
             description="Nitritation: ammonium to nitrite.",
             rate=(
-                "muAOB * free_ammonia / (KFA_AOB + free_ammonia + free_ammonia ** 2 / KI_FA_AOB) "
-                "* monod([SO2], KO2_AOB) * monod_inh(free_nitrous_acid, KI_FNA_AOB) "
+                "muAOB * monod([SNH4], KNH4_AOB) * monod([SO2], KO2_AOB) "
+                "* monod_inh(free_ammonia, KI_FA_AOB) * monod_inh(free_nitrous_acid, KI_FNA_AOB) "
                 f"* {p_limit} * [XAOB]"
             ),
             stoichiometry={"XAOB": 1.0, "SNO2": "1 / YAOB", **closures},
@@ -244,8 +252,9 @@ def autotroph_reactions() -> list[dict]:
             name="growth_of_NOB",
             description="Nitratation: nitrite to nitrate.",
             rate=(
-                "muNOB * free_nitrous_acid / (KFNA_NOB + free_nitrous_acid + free_nitrous_acid ** 2 / KI_FNA_NOB) "
-                "* monod([SO2], KO2_NOB) * monod_inh(free_ammonia, KI_FA_NOB) * monod([SNH4], KNH4_H) "
+                "muNOB * monod([SNO2], KNO2_NOB) * monod([SO2], KO2_NOB) "
+                "* monod_inh(free_nitrous_acid, KI_FNA_NOB) * monod_inh(free_ammonia, KI_FA_NOB) "
+                "* monod([SNH4], KNH4_H) "
                 f"* {p_limit} * [XNOB]"
             ),
             stoichiometry={"XNOB": 1.0, "SNO2": "-1 / YNOB", "SNO3": "1 / YNOB", **closures},
@@ -288,8 +297,9 @@ def build() -> dict:
             description=(
                 "Nitrite level of the plant-wide model: plantwide_bio_p with nitrite as an "
                 "intermediate. Ammonia- and nitrite-oxidizing bacteria replace the one-step "
-                "nitrifiers, growing on free ammonia and free nitrous acid with the kinetics of "
-                "Hiatt & Grady (2008); anammox oxidizes ammonium with nitrite, with the kinetics of "
+                "nitrifiers, growing on ammonium and nitrite, inhibited by free ammonia and free "
+                "nitrous acid (Hiatt & Grady 2008), with oxygen affinities measured on activated "
+                "sludge (Daebel et al. 2007) and temperature dependence from Mehrani et al. (2021); anammox oxidizes ammonium with nitrite, with the kinetics of "
                 "Hao et al. (2002) and the stoichiometry of Strous et al. (1998); and every group "
                 "that reduces nitrate (heterotrophs, PAOs, both GAO groups) does it in two steps, "
                 "nitrate to nitrite and nitrite to N2, at the step capacities of Hiatt & Grady (2008). "
@@ -300,6 +310,9 @@ def build() -> dict:
                 "Hao, Heijnen & van Loosdrecht (2002). Sensitivity analysis of a biofilm model describing a one-stage completely autotrophic nitrogen removal (CANON) process. Biotechnol. Bioeng. 77(3), 266-277. doi:10.1002/bit.10105",
                 "Strous, Heijnen, Kuenen & Jetten (1998). The sequencing batch reactor as a powerful tool for the study of slowly growing anaerobic ammonium-oxidizing microorganisms. Appl. Microbiol. Biotechnol. 50(5), 589-596.",
                 "Strous, Kuenen & Jetten (1999). Key physiology of anaerobic ammonium oxidation. Appl. Environ. Microbiol. 65(7), 3248-3250.",
+                "Daebel, Manser & Gujer (2007). Exploring temporal variations of oxygen saturation constants of nitrifying bacteria. Water Res. 41(5), 1094-1102. doi:10.1016/j.watres.2006.11.011",
+                "Picioreanu, Perez & van Loosdrecht (2016). Impact of cell cluster size on apparent half-saturation coefficients for oxygen in nitrifying sludge and biofilms. Water Res. 106, 371-382. doi:10.1016/j.watres.2016.10.017",
+                "Mehrani, Lu, Kowal, Sobotka & Makinia (2021). Incorporation of the complete ammonia oxidation (comammox) process for modeling nitrification in suspended growth wastewater treatment systems. J. Environ. Manage. 297, 113223. doi:10.1016/j.jenvman.2021.113223",
                 "Anthonisen, Loehr, Prakasam & Srinath (1976). Inhibition of nitrification by ammonia and nitrous acid. J. Water Pollut. Control Fed. 48(5), 835-852.",
             ],
         ),

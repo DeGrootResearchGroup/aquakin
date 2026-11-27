@@ -11,9 +11,10 @@ Checked against independent references:
   (nitrite to N2) is idle;
 - the anammox stoichiometry is Strous et al.'s (1998): 1.32 mol nitrite
   consumed and 0.26 mol nitrate made per mol ammonium, 1.02 mol N2;
-- the AOB and NOB growth rates are Hiatt & Grady's R9 and R10, evaluated by
-  hand from their Table 2 on free ammonia and free nitrous acid, and the
-  anammox growth rate is Hao et al.'s (2002) at 30 C and 20 C;
+- the AOB and NOB growth rates, evaluated by hand from their sources (Monod
+  on ammonium and nitrite, free ammonia and free nitrous acid inhibition after
+  Hiatt & Grady 2008, oxygen affinities of Daebel et al. 2007), and the
+  anammox growth rate of Hao et al. (2002) at 30 C and 20 C;
 - the gradient of a nitrifier batch matches a central difference.
 """
 
@@ -106,27 +107,31 @@ def _rates_at(model, state, T, pH):
     return dict(zip(model.reaction_names, np.asarray(rates)))
 
 
-@pytest.mark.parametrize(("T", "pH"), [(293.15, 7.0), (298.15, 7.8)])
-def test_nitrifier_growth_is_hiatt_and_grady_on_free_ammonia_and_nitrous_acid(nitrite, T, pH):
-    """R9 and R10 of Hiatt & Grady (2008), written out from their Table 2 at
-    20 C, with free ammonia and free nitrous acid from their eqs 2-5 and the
-    growth rates corrected by ASM2d's autotroph theta (0.35 -> 1.0 1/d between
-    10 and 20 C, theta = (1 / 0.35) ** 0.1); the nutrient terms are the core's.
-    The model's theta is rounded to 10 figures, hence rel=1e-8."""
+@pytest.mark.parametrize(("T", "pH"), [(293.15, 7.0), (288.15, 7.8)])
+def test_nitrifier_growth_is_monod_on_ammonium_and_nitrite_inhibited_by_fa_and_fna(nitrite, T, pH):
+    """AOB and NOB growth written out by hand: Monod on total ammonium (0.675)
+    and total nitrite (0.1); apparent floc oxygen half-saturations 0.65 and
+    0.23 (Daebel et al. 2007); free ammonia and free nitrous acid from Hiatt &
+    Grady's (2008) eqs 2-5, inhibiting with their constants (AOB: FA 1.0, FNA
+    0.1; NOB: FA 0.2, FNA 0.04); growth theta 1.11 (Mehrani et al. 2021). The
+    nutrient terms are the core's. All in closed form, hence rel=1e-10."""
     state = dict(SO2=1.5, SNH4=30.0, SNO2=8.0, SPO4=5.0, XAOB=100.0, XNOB=50.0)
     rates = _rates_at(nitrite, state, T, pH)
     p = {k: float(nitrite.default_parameters()[i]) for k, i in nitrite.param_index.items()}
     fa = 30.0 * 10**pH / (np.exp(6344.0 / T) + 10**pH)
     fna = 8.0 / (np.exp(-2300.0 / T) * 10**pH)
-    mu = 0.78 * (1.0 / 0.35) ** ((T - 293.15) / 10.0)
+    mu = 0.78 * 1.11 ** (T - 293.15)
     p_limit = 5.0 / (p["KP_H"] + 5.0)
-    aob = mu * fa / (0.0075 + fa + fa**2 / 1.0) * 1.5 / (0.6 + 1.5) * 0.1 / (0.1 + fna) * p_limit * 100.0
+    aob = (
+        mu * 30.0 / (0.675 + 30.0) * 1.5 / (0.65 + 1.5) * 1.0 / (1.0 + fa) * 0.1 / (0.1 + fna)
+        * p_limit * 100.0
+    )  # fmt: skip
     nob = (
-        mu * fna / (1e-4 + fna + fna**2 / 0.04) * 1.5 / (1.2 + 1.5) * 0.2 / (0.2 + fa)
+        mu * 8.0 / (0.1 + 8.0) * 1.5 / (0.23 + 1.5) * 0.04 / (0.04 + fna) * 0.2 / (0.2 + fa)
         * 30.0 / (p["KNH4_H"] + 30.0) * p_limit * 50.0
     )  # fmt: skip
-    assert rates["growth_of_AOB"] == pytest.approx(aob, rel=1e-8)
-    assert rates["growth_of_NOB"] == pytest.approx(nob, rel=1e-8)
+    assert rates["growth_of_AOB"] == pytest.approx(aob, rel=1e-10)
+    assert rates["growth_of_NOB"] == pytest.approx(nob, rel=1e-10)
 
 
 def test_anammox_growth_is_hao_at_30_and_20_c(nitrite):

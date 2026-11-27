@@ -10,7 +10,10 @@ prints tank 5 at each steady state.
 BSM1's published open-loop steady state (Alex et al. 2008), ASM1 at 15 C,
 tank 5, g/m3: NH4-N 1.733, NO3-N 10.415, O2 0.491, heterotrophs 2559.3,
 autotrophs 149.8, SS 0.889. `build_bsm1` with ASM1 at BSM1's parameter values
-reproduces all of them to the printed figures. The plant-wide models are
+reproduces all of them to the printed figures. These are ASM1's results with
+BSM1's agreed parameters, a reference point between models, not measurements:
+a difference from them says the models differ, not which is right. The
+plant-wide models are
 compared at 15 C (the benchmark) and at 20 C, their parameters' reference
 temperature:
 
@@ -18,33 +21,20 @@ temperature:
 |---|---|---|---|---|---|
 | BSM1 benchmark (ASM1), 15 C | 1.73 | - | 10.42 | 0.49 | 149.8 |
 | core, 15 C | 3.86 | - | 10.65 | 0.38 | 125.6 |
-| nitrite level, 15 C | 9.85 | 5.68 | 0.00 | 0.82 | 98.7 AOB, NOB washed out |
+| nitrite level, 15 C | 7.85 | 0.28 | 9.34 | 0.42 | 104.7 AOB + 37.3 NOB |
 | core, 20 C | 1.11 | - | 11.02 | | 107.7 |
-| nitrite level, 20 C | 1.77 | 5.40 | 2.34 | 0.50 | 108.4 AOB + 13.3 NOB |
+| nitrite level, 20 C | 1.57 | 0.10 | 13.96 | 0.22 | 109.8 AOB + 42.8 NOB |
 
 The core's autotrophs are ASM2d's (growth 1.0 1/d and decay 0.15 1/d at
 20 C, 0.59 and 0.087 at 15 C), against BSM1's ASM1 values at 15 C (0.5 and
 0.05). At 15 C, with ASM1's decay alone the core leaves 1.25 g N/m3 of
 ammonium; with ASM1's growth and decay together, 3.58: the autotrophs' rates
 do not account for the gap on their own (the core's tank 5 also holds less
-oxygen, 0.38 against 0.49). The nitrite level's NOB
-(Hiatt & Grady 2008: growth 0.78 1/d at 20 C, 0.46 at 15 C, oxygen
-half-saturation 1.2) cannot hold on at BSM1's sludge age and aeration at
-15 C.
- Run it as a script
-(about 2 minutes). `tests/validation/test_plantwide_core_bsm1.py` checks the
-results.
+oxygen, 0.38 against 0.49).
 
-## The influent
-
-BSM1's ASM1 influent (Copp 2002) in each model's species: `SS` as fermentable
-`SF`, inert products with the particulate inerts, total nitrogen kept by putting
-what the model's organic N contents leave in ammonium, alkalinity as inorganic
-carbon for the core (12 g C per mol). ASM2d gets phosphate and alkalinity in
-excess, since its growth is limited by both and the core's by neither.
-
-The aerated tanks strip the gases the core declares (its hydrogen, methane,
-nitrogen and CO2); ASM2d declares none.
+The nitrite level keeps its NOB and holds nitrite below 0.3 g N/m3 at both
+temperatures, as plants at low DO do. Its ammonium at 15 C reflects AOB growth
+and decay values that are still provisional.
 
 ## Against ASM2d (20 C, tank 5, g/m3)
 
@@ -73,21 +63,10 @@ ASM2d's 0.4 to 10.81; all three together to 10.35.
 
 `plantwide_nitrite` runs on the same plant, with ASM1's nitrifiers carried over
 as AOB and NOB in the ratio of their yields and phosphate at a non-limiting
-10 g P/m3 (BSM1's influent has none). Its nitrifiers have the kinetics of Hiatt
-& Grady (2008). Tank 5 at its steady state (g/m3):
-
-| | NH4-N | NO2-N | NO3-N | nitrifiers |
-|---|---|---|---|---|
-| core (one-step) | 1.11 | - | 11.02 | 107.7 |
-| nitrite level | 1.77 | 5.40 | 2.34 | 108.4 AOB + 13.3 NOB |
-| nitrite level, NOB oxygen half-saturation 0.6 | 2.74 | 1.14 | 9.14 | 33.3 NOB |
-
-Its AOB grow more slowly than the core's nitrifiers (0.78 against 1.0 1/d, and
-on free ammonia, whose half-saturation is about 1.9 g NH4-N/m3 at pH 7 and
-20 C), so more ammonium is left. Nitrite builds up because tank 5 runs at
-0.5 g O2/m3 and the NOB's oxygen half-saturation (1.2) is twice the AOB's: the
-NOB only just outgrow their washout. At the AOB's 0.6 most of the nitrite is
-oxidized, and the NOB, competing for oxygen, leave more ammonium. From the
-steady state the plant's N, P and COD balances close over 10 days, the stripped
-N2 and the oxygen taken up counted
-(`tests/validation/test_plantwide_nitrite_bsm1.py`).
+10 g P/m3 (BSM1's influent has none). Its results at 15 and 20 C are in the
+benchmark table above. The NOB's oxygen half-saturation decides whether nitrite
+accumulates: with Hiatt & Grady's (2008) 1.2 g O2/m3 the NOB wash out at 15 C
+and nitrite reaches 5.4 g N/m3 at 20 C; with the apparent floc value measured on
+activated sludge, 0.23 (Daebel et al. 2007), they persist. From the steady state
+the plant's N, P and COD balances close over 10 days, the stripped N2 and the
+oxygen taken up counted (`tests/validation/test_plantwide_nitrite_bsm1.py`).
