@@ -127,13 +127,14 @@ On a release-prep branch:
 - [ ] The PyPI page shows the version, the README as the description, and the
       provenance attestations.
 
-### 6. Zenodo DOI (post-release, once minted)
+### 6. Zenodo DOI (nothing to update)
 
-The Zenodo webhook mints a DOI when the GitHub Release is published. Once it
-exists:
+The Zenodo webhook mints a DOI for each release when its GitHub Release is
+published. `CITATION.cff` and the `README.md` badge and citation carry the
+**concept DOI** (`10.5281/zenodo.21268513`, "cite all versions"), which always
+resolves to the latest release, so a release needs no DOI follow-up.
 
-- [ ] Add it to `CITATION.cff` (`doi: 10.5281/zenodo.XXXXXXX`) and add a DOI
-      badge to `README.md`. This is a small follow-up PR after the release.
+- [ ] Check the new version appears on Zenodo under that concept DOI.
 
 ---
 

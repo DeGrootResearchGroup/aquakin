@@ -1,7 +1,7 @@
 {
   "name": "aquakin",
   "displayName": "aquakin",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Work with aquakin from Claude Code: look up models and unit kinds, build and check flowsheets, set up and run studies, and read the user guide and API reference, with skills for the common tasks.",
   "author": {
     "name": "DeGroot Research Group"
