@@ -24,15 +24,19 @@ def sample_posterior_plant(
     result: CalibrationResult,
     *,
     config: SamplerConfig = SamplerConfig(),
+    prior_space: str = "transformed",
 ) -> PosteriorSamples:
     """Draw from the posterior of a plant calibration by Markov chain Monte Carlo.
 
     The plant counterpart of :func:`aquakin.sample_posterior`, with the same
     sampler, density and diagnostics: a random-walk Metropolis over the
     coordinates the fit ran in, started near the MAP with the Laplace
-    covariance as its proposal, on the posterior the fit maximized plus the
-    Jacobian of the parameter transforms. Fitted initial pools are sampled
-    jointly with the parameters. Each step costs one plant solve per chain.
+    covariance as its proposal, on the posterior the fit maximized. As there,
+    ``prior_space`` sets whether the prior of a transformed parameter is flat
+    in its transformed coordinate (the default, the density the fit and its
+    Laplace approximation use) or in its physical value. Fitted initial pools
+    are sampled jointly with the parameters. Each step costs one plant solve
+    per chain.
 
     Parameters
     ----------
@@ -46,6 +50,9 @@ def sample_posterior_plant(
         ``y0``, observed streams, integrator and time unit).
     config : SamplerConfig, optional
         Chains, draws, warm-up and seed. Default ``SamplerConfig()``.
+    prior_space : {"transformed", "physical"}, optional
+        The space in which the posterior is a density, as for
+        :func:`aquakin.sample_posterior`. Default ``"transformed"``.
 
     Returns
     -------
@@ -58,7 +65,8 @@ def sample_posterior_plant(
     ------
     ValueError
         If ``result`` did not come from :meth:`Plant.calibrate` on this plant
-        with ``loss="nll"`` and a Laplace posterior.
+        with ``loss="nll"`` and a Laplace posterior, or ``prior_space`` is not
+        ``"transformed"`` or ``"physical"``.
     """
     _check_sampling_result(result)
     fm = result._fit_record.forward_model
@@ -69,4 +77,4 @@ def sample_posterior_plant(
         )
     if fm.plant is not plant:
         raise ValueError("This result was calibrated on a different plant.")
-    return _run_sampler(result, fm, config)
+    return _run_sampler(result, fm, config, prior_space)

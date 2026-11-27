@@ -296,7 +296,13 @@ shows a parameter the data do not bound on that side.
 |---|---|---|
 | Laplace (estimate ± 1.96 sd, in the fit's coordinates) | free with the fit | the parameters are well determined and the profile, where checked, is close to a parabola |
 | Profile likelihood | one refit per grid point, per parameter | a key parameter, one near a bound, or one whose Laplace interval is wide or reaches zero |
-| MCMC (percentiles of the draws) | thousands of solves | the posterior is curved or skewed, or you need intervals of predictions or of functions of several parameters |
+| MCMC (percentiles of the draws; with the default `prior_space`, on the same prior as the other two) | thousands of solves | the posterior is curved or skewed, or you need intervals of predictions or of functions of several parameters |
 
 State which one you report, with the noise model (known σ or estimated) and
-any priors, since all three depend on them.
+any priors, since all three depend on them. For a rate fitted in log space
+that includes the space its flat prior is taken in: `sample_posterior` by
+default (`prior_space="transformed"`) takes it flat in `log k`, as the fit and
+its Laplace interval do, so the three intervals are comparable and differ only
+where the posterior is not Gaussian in `log k`. With
+`prior_space="physical"` the prior is flat in `k`, and the MCMC interval sits
+higher than the other two by about the variance of `log k`, on the log scale.
