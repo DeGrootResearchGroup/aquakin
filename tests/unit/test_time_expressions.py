@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from aquakin.plant.time_expr import (
+from aquakin.core.time_expr import (
     CONSTANTS,
     FUNCTIONS,
     TimeExpressionError,

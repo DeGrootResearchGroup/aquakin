@@ -780,7 +780,7 @@ class InfluentExpression:
 
     The counterpart of :class:`InfluentSeries` for a feed that follows a
     *pattern* rather than a measured record: a diurnal flow, a weekly load, a
-    step test. Each value is read by :mod:`aquakin.plant.time_expr`, so it is a
+    step test. Each value is read by :mod:`aquakin.core.time_expr`, so it is a
     plain string in a flowsheet spec -- it fingerprints, diffs and round-trips,
     and needs no table file beside it::
 
@@ -822,7 +822,7 @@ class InfluentExpression:
     See Also
     --------
     InfluentSeries : the same feed as a measured record of samples.
-    aquakin.plant.time_expr : the expression language, and what it can call.
+    aquakin.core.time_expr : the expression language, and what it can call.
     """
 
     model: CompiledModel
@@ -903,7 +903,7 @@ class InfluentExpression:
         :class:`InfluentSeries` scales its arrays -- the value is a string -- so
         it is applied to the result instead, which is the same number.
         """
-        from aquakin.plant.time_expr import compile_time_expression
+        from aquakin.core.time_expr import compile_time_expression
 
         expr_clock = self._expression_clock
         caller_clock = self.clock or expr_clock

@@ -23,7 +23,7 @@ it on demand when a change elsewhere touches the topic):
 | `plant-audits.md` | `units_check.py`, `balance.py`, `metrics.py` | `plant.check_units()` and `plant.mass_balance()` |
 | `plant-ifas.md` | `ifas.py`, `integrate/biofilm*.py`, `integrate/finite_volume.py` | the IFAS / MBBR biofilm unit |
 | `plant-settling.md` | `takacs.py`, `settling.py`, the clarifier / separator modules | the Takács clarifier (soluble holdup, composition mode, interface flux), shared separator helpers |
-| `plant-spec.md` | `spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | time expressions, influent records / patterns, the unit catalogue, the flowsheet spec |
+| `plant-spec.md` | `spec.py`, `catalog.py`, `core/time_expr.py`, `influent.py`, `aquakin/__main__.py` | time expressions, influent records / patterns, the unit catalogue, the flowsheet spec |
 
 ## Private names shared across modules
 
@@ -178,7 +178,7 @@ them); the topic rules above cover IFAS / MBBR and the settlers. Deliberate:
   `core/gases.py`); what a unit vents reaches the mass balance via `GasExportUnit`
   and `plant.digester_gas` via `BiogasHeadspaceUnit`.
 
-**Parsing anything here goes through `core/lexer.py`.** `plant/time_expr.py` and `plant/measures.py`
+**Parsing anything here goes through `core/lexer.py`.** `core/time_expr.py` and `plant/measures.py`
 call `aquakin.core.lexer.tokenize`; do not write another tokenizer (`core.md`, not auto-loaded).
 A language that compiles to a callable subclasses `time_expr.ClosureParser` (the control law does).
 

@@ -19,7 +19,7 @@ The law reads
 
 The grammar and the functions (``clip``, ``step``, ``min``, ``max``, the guarded
 ``sqrt`` and ``log``, ...) are those of an expression of time
-(:mod:`aquakin.plant.time_expr`), read by the same parser. The law compiles once
+(:mod:`aquakin.core.time_expr`), read by the same parser. The law compiles once
 to plain JAX arithmetic with no Python control flow, so it runs inside the
 jitted, differentiated right-hand side.
 
@@ -38,8 +38,8 @@ import numpy as np
 
 from aquakin.core.hints import did_you_mean
 from aquakin.core.lexer import Token
+from aquakin.core.time_expr import CONSTANTS, FUNCTIONS, ClosureParser
 from aquakin.plant.measures import KEYWORDS, measure_map, weights_at
-from aquakin.plant.time_expr import CONSTANTS, FUNCTIONS, ClosureParser
 
 __all__ = ["CHANNELS", "ControlLaw", "ControlLawError", "compile_law"]
 

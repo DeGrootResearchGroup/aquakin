@@ -2,7 +2,7 @@
 
 Three languages read arithmetic — rate expressions
 (:mod:`aquakin.core.parser`), expressions of time
-(:mod:`aquakin.plant.time_expr`) and measure expressions
+(:mod:`aquakin.core.time_expr`) and measure expressions
 (:mod:`aquakin.plant.measures`). They differ in what a *leaf* is (a species, the
 clock, a measurement keyword) and in what they *build* (an AST, a callable, an
 affine weighted sum). They do not differ in how ``+ - * / **`` and a sign relate

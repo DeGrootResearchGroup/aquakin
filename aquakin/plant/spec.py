@@ -84,8 +84,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from aquakin.core.time_expr import is_time_expression
 from aquakin.plant.errors import NAME_PATTERN, error_reply
-from aquakin.plant.time_expr import is_time_expression
 
 __all__ = [
     "SPEC_FORMAT",

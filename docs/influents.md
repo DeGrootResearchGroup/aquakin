@@ -96,7 +96,7 @@ diurnal.add_influent("feed", InfluentExpression(
 Each value may equally be a plain number, so only the parts that vary need an
 expression; a species that is not named is absent from the feed. The expressions
 are ordinary arithmetic with `t`, the constants `pi` and `e`, and the functions
-in `aquakin.plant.time_expr.FUNCTIONS` (`sin`, `cos`, `tan`, `exp`, `log`,
+in `aquakin.core.time_expr.FUNCTIONS` (`sin`, `cos`, `tan`, `exp`, `log`,
 `log10`, `sqrt`, `abs`, `floor`, `min`, `max`, `mod`, `clip`, `step`). They are
 evaluated inside the solve, so a run driven by one still differentiates.
 

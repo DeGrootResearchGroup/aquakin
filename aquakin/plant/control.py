@@ -25,10 +25,10 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 
 from aquakin.core.hints import did_you_mean
+from aquakin.core.time_expr import CONSTANTS
 from aquakin.plant.control_law import CHANNELS, ControlLawError, compile_law
 from aquakin.plant.errors import WiringError
 from aquakin.plant.streams import Stream
-from aquakin.plant.time_expr import CONSTANTS
 from aquakin.plant.units import StatelessUnit
 
 if TYPE_CHECKING:  # pragma: no cover
