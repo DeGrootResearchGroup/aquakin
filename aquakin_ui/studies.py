@@ -172,6 +172,8 @@ def _run_simulation(self: Editor, spec: Path) -> None:
                 name=name,
                 study={**settings, "flowsheet": str(spec)},
             )
+        elif study.get("reactor"):
+            raise ValueError(f"study {name} studies a reactor, not the flowsheet")
         elif study["flowsheet"] is None:  # its study.yaml cannot be read
             raise ValueError("; ".join(study["reasons"]))
         elif not study["frozen"] and Path(study["flowsheet"]).resolve() != spec.resolve():
@@ -331,6 +333,10 @@ def edit_study(self: Editor, name: str) -> None:
     """Open the dialog on a study's settings."""
     study = self._study(name)
     if study is None:
+        return
+    if study.get("reactor"):
+        # The dialog shows a flowsheet study's fields; saving would drop the reactor's.
+        self.say(f"{name} studies a reactor: edit its study.yaml to change it")
         return
 
     def opened(settings):

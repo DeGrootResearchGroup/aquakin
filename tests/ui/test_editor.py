@@ -390,6 +390,39 @@ def test_studies_follow_the_spec_that_is_open(tmp_path, in_process_runs):
         ed.worker.stop()
 
 
+def test_a_reactor_study_is_listed_but_not_edited_or_simulated(tmp_path):
+    """The dialog shows a flowsheet study's fields, so it does not open on a study
+    of a batch reactor (saving would drop the reactor); nor does Simulate run one
+    that has the simulation's name."""
+    project = _study_project(tmp_path)
+    reactor = (
+        "study:\n  kind: fisher\n  reactor: {model: asm1}\n"
+        "  experiments: [{initial: {SNH: 20.0}}]\n  observed: [SNH]\n"
+        "  free: [asm1.muA]\n  t_obs: [0.5]\n  sigma: 0.1\n"
+    )
+    for name in ("batch", "simulation"):
+        (project / "studies" / name).mkdir()
+        (project / "studies" / name / "study.yaml").write_text(reactor)
+    server = get_server(name="aquakin-ui-reactor-test", client_type="vue3")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
+    try:
+        ed.refresh_studies()
+        batch = ed._study("batch")
+        assert batch["reactor"] == "asm1" and batch["flowsheet"] is None
+        ed.edit_study("batch")
+        assert ed.state.message == "batch studies a reactor: edit its study.yaml to change it"
+        assert not ed.state.study_dialog_open
+        ed.simulate()
+        assert ed.state.message == (
+            "could not set up the simulation: study simulation studies a reactor, not the "
+            "flowsheet"
+        )
+        assert not ed._runs
+    finally:
+        ed.stop_runs()
+        ed.worker.stop()
+
+
 def test_save_refuses_a_file_changed_on_disk(tmp_path):
     project = _study_project(tmp_path)
     server = get_server(name="aquakin-ui-guard-test", client_type="vue3")
