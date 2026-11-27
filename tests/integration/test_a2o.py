@@ -311,6 +311,85 @@ def test_a2o_settler_weighs_the_solids_by_their_itss_factors(asm2d):
         assert got[s] == pytest.approx(w, rel=1e-12, abs=1e-12), s
 
 
+@pytest.fixture(scope="module")
+def asm2d_chemp():
+    return aquakin.load_model("asm2d_chemp")
+
+
+@pytest.mark.parametrize("use_takacs", [True, False])
+@pytest.mark.parametrize("name", ["asm2d", "asm2d_chemp"])
+def test_a2o_clarifier_settles_the_models_particulates(name, use_takacs):
+    """The clarifier settles the model's own particulates, its X-prefixed
+    species, rather than a fixed ASM2d list (``asm2d_chemp`` has X_FePO4 /
+    X_FeOH3 where ``asm2d`` has XMeOH / XMeP); for ``asm2d`` they are the ten
+    solids the builder always settled, in that order."""
+    model = aquakin.load_model(name)
+    clar = build_a2o(model, use_takacs=use_takacs).units["clarifier"]
+    expected = [s for s in model.species if s.startswith("X")]
+    assert list(clar.particulate_species) == expected
+    if name == "asm2d":
+        assert expected == [
+            "XI", "XS", "XH", "XPAO", "XPP", "XPHA", "XAUT", "XTSS", "XMeOH", "XMeP",
+        ]  # fmt: skip
+
+
+def test_a2o_on_asm2d_chemp_has_the_asm2d_dynamics_without_metal(asm2d, asm2d_chemp):
+    """With no metal dosed, ``asm2d_chemp`` is ``asm2d`` with its (idle)
+    precipitation swapped, so the A²O plant's right-hand side on the warm start
+    agrees, state by state, with the ``asm2d`` plant's: the influent, warm start,
+    aeration and settler all carry over to the extending model."""
+    rates = {}
+    for model in (asm2d, asm2d_chemp):
+        plant = build_a2o(model)
+        plant.add_influent("feed", a2o_influent(model))
+        rates[model.name] = plant.named_state(plant.derivative(a2o_warm_start(plant)))
+    base, chemp = rates["asm2d"], rates["asm2d_chemp"]
+    assert set(base) == set(chemp)
+    compared = 0
+    for unit, by_name in base.items():
+        for state, value in by_name.items():
+            if state in chemp[unit]:
+                assert chemp[unit][state] == pytest.approx(value, rel=1e-9, abs=1e-9), (unit, state)
+                compared += 1
+    # Every shared state: the 17 species of the seven tanks other than XMeOH /
+    # XMeP, and the 8 shared particulates of each of the ten settler layers.
+    assert compared == 7 * 17 + 10 * 8
+
+
+@pytest.mark.parametrize("name", ["asm2d_tud", "asm3_biop"])
+def test_a2o_refuses_a_model_without_the_asm2d_species_names(name):
+    model = aquakin.load_model(name)
+    # Both name oxygen SO, not SO2 (and more besides).
+    msg = rf"asm2d species names.*model '{name}' has no \[.*'SO2'"
+    with pytest.raises(ValueError, match=msg):
+        build_a2o(model)
+    with pytest.raises(ValueError, match=msg):
+        a2o_influent(model)
+
+
+def test_a2o_ferric_refused_on_a_model_without_xmeoh(asm2d_chemp):
+    with pytest.raises(ValueError, match="XMeOH, which model 'asm2d_chemp' does not have"):
+        build_a2o(asm2d_chemp, ferric=FerricDose(flow=5.0))
+
+
+@pytest.mark.slow
+def test_a2o_on_asm2d_chemp_reaches_the_asm2d_steady_state(asm2d, asm2d_chemp):
+    """``build_a2o(asm2d_chemp)`` without metal reaches the same nutrient-removal
+    steady state as the ``asm2d`` plant (its precipitation is idle)."""
+    effluent = {}
+    for model in (asm2d, asm2d_chemp):
+        plant = build_a2o(model)
+        plant.add_influent("feed", a2o_influent(model))
+        root = plant.steady_state(y0=a2o_warm_start(plant))
+        assert bool(root.converged), model.name
+        aer3 = plant.named_state(root.state)["aer3"]
+        effluent[model.name] = {s: aer3[s] for s in ("SNH4", "SNO3", "SPO4", "XPAO", "XTSS")}
+    for s, value in effluent["asm2d"].items():
+        assert effluent["asm2d_chemp"][s] == pytest.approx(value, rel=1e-6), s
+    assert effluent["asm2d_chemp"]["SNH4"] < 1.0  # nitrifying
+    assert effluent["asm2d_chemp"]["SPO4"] < 8.0  # below the influent phosphate
+
+
 def test_ferric_dose_defaults_and_frozen():
     import dataclasses
 
