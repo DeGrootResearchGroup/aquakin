@@ -106,7 +106,7 @@ def test_a_cancelled_run_stops_at_its_next_checkpoint(study):
         if len(seen) == 1:
             st.cancel_study(study)
 
-    with pytest.raises(Cancelled):
+    with pytest.raises(Cancelled, match="^$"):  # Cancelled carries no message
         st.run_study(study, progress=progress)
     assert seen[0][0] == seen[0][1] and len(seen) == 1
     status = st.check_study(study)

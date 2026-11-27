@@ -210,7 +210,7 @@ aquakin/
 │   ├── mcp/                         # `aquakin mcp`: tools for an AI assistant (`mcp` extra)
 │   │   ├── server.py                # the reading tools (thin wrappers) and the MCPServer serving all
 │   │   ├── projects.py              # tools that write a flowsheet and create / edit / run studies
-│   │   ├── runs.py                  # study runs on background threads, with progress and cancel
+│   │   ├── runs.py                  # starts a study run as a detached `aquakin study run` process
 │   │   ├── docs.py                  # the published guide pages: list / read / search (stdlib only,
 │   │   │                            #   loaded by setup.py, which bundles them into guide/)
 │   │   └── api.py                   # the public API's names, signatures and docstrings
@@ -230,6 +230,8 @@ aquakin/
 │       ├── common.py                # file names, kinds, states, StudyError, time grids
 │       ├── study.py                 # study.yaml schema, run / check / freeze /
 │       │                            #   unfreeze / copy (`aquakin study ...`)
+│       ├── running.py               # the run in progress: running.yaml under an OS lock,
+│       │                            #   its progress, cancel; one run of a study at a time
 │       ├── reactor.py               # the reactor: target (a batch reactor in place
 │       │                            #   of the flowsheet): inputs, freeze, runners
 │       ├── analysis.py              # what both targets share: fit settings, data

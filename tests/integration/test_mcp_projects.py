@@ -191,3 +191,19 @@ def test_unfreezing_a_study_with_results_needs_discard_results(project):
     assert st.check_study(short).frozen
     status = value("unfreeze_study", path=str(short), discard_results=True)
     assert not status["has_results"] and not st.check_study(short).frozen
+
+
+def test_two_studies_run_at_once_and_each_finishes(project):
+    """A run is a study's own: another study runs beside it, and ending runs
+    are forgotten (their logs removed) only once they have ended."""
+    short = project / "studies" / "short"
+    other = st.copy_study(short, "other")
+    value("run_study", path=str(short))
+    first, first_log = runs._STARTED[-1]
+    value("run_study", path=str(other))
+    for proc, _ in list(runs._STARTED):
+        assert proc.wait(RUN_TIMEOUT) is not None
+    assert st.check_study(short).state == "fresh" and st.check_study(other).state == "fresh"
+    value("run_study", path=str(short), replace=True)  # starting a run forgets ended ones
+    assert first not in [proc for proc, _ in runs._STARTED] and not first_log.exists()
+    _finished(short)
