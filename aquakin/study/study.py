@@ -36,13 +36,20 @@ import yaml
 from pydantic import BaseModel, ValidationError, field_validator
 
 from aquakin.integrate.calibration.saved import fit_summary, write_fit_files
-from aquakin.study.analysis import _fit_sigma, _flattened
+from aquakin.study.analysis import (
+    _fit_options,
+    _flattened,
+    _read_observations,
+    _write_fisher_files,
+    _write_profile_files,
+)
+
+# Re-exported: the tests and the worker take them from here.
+from aquakin.study.analysis import _fit_sigma as _fit_sigma
 from aquakin.study.common import (
     _STRICT,
     ATTEMPT_FILE,
     FINAL_STATE_FILE,
-    FISHER_FILE,
-    FISHER_SUMMARY_FILE,
     FITTED_FILE,
     FROZEN_FILE,
     KINDS,
@@ -50,8 +57,6 @@ from aquakin.study.common import (
     MEASURED_STEADY_FILE,
     PARAMETERS_FILE,
     PARTIAL,
-    PROFILE_FILE,
-    PROFILE_SUMMARY_FILE,
     RANKING_FILE,
     RESULT_STATES,
     RESULTS,
@@ -66,15 +71,16 @@ from aquakin.study.common import (
     _times,
     _to_float,
 )
-
-# Re-exported: the stored-names test, the readers and the worker take them from here.
 from aquakin.study.common import COVARIANCE_FILE as COVARIANCE_FILE
+from aquakin.study.common import FISHER_FILE as FISHER_FILE
+from aquakin.study.common import FISHER_SUMMARY_FILE as FISHER_SUMMARY_FILE
 from aquakin.study.common import FIT_FILE as FIT_FILE
+from aquakin.study.common import PROFILE_FILE as PROFILE_FILE
+from aquakin.study.common import PROFILE_SUMMARY_FILE as PROFILE_SUMMARY_FILE
 from aquakin.study.common import STATES as STATES
 from aquakin.study.common import STUDIES_DIR as STUDIES_DIR
 from aquakin.utils.result_files import (
     read_named_values,
-    write_matrix,
     write_named_values,
     write_trajectory,
     write_yaml,
@@ -613,7 +619,6 @@ def _run_simulate(
 def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path, progress) -> list[Path]:
     import numpy as np
 
-    from aquakin import design_criterion
     from aquakin.plant import plant_fisher_information
 
     observables = [_channels(o) for o in study.observables]
@@ -632,69 +637,27 @@ def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path, progr
         time_unit=study.time_unit,
         progress=progress,
     )
-    criteria = {}
-    for c in ("D", "A", "E", "modified_E"):
-        try:
-            criteria[c] = float(design_criterion(fim, c))
-        except (np.linalg.LinAlgError, ValueError):
-            criteria[c] = None
-    try:
-        std = fim.std()
-    except np.linalg.LinAlgError:
-        std = None
-    summary = {
-        "values": dict(fim.values),
-        "transforms": dict(zip(fim.names, fim.transforms)),
-        "std": std,
-        "criteria": criteria,
-    }
-    return [
-        write_matrix(out / FISHER_FILE, fim.matrix, fim.names),
-        write_yaml(out / FISHER_SUMMARY_FILE, summary),
-        write_named_values(out / PARAMETERS_FILE, _named_parameters(plant, params)),
-    ]
+    return _write_fisher_files(out, fim, _named_parameters(plant, params))
 
 
 def _observations(folder: Path, study: _Study):
     """``(t, observations (n_t, n_channels), channel names)`` from the study's data table."""
-    import numpy as np
-
-    from aquakin.utils.result_files import read_trajectory
-
-    path = folder / study.data
-    if not path.is_file():
-        raise StudyError(f"data: {path} does not exist")
-    try:
-        t, columns = read_trajectory(path)
-    except ValueError as exc:
-        raise StudyError(f"data: {exc}") from None
     names = [
         f"{o.stream}.{name}" for o in study.observables for name in _channel_names(_channels(o))
     ]
-    missing = [n for n in names if n not in columns]
-    if missing:
-        raise StudyError(
-            f"data: {path.name} has no column {', '.join(missing)} (its columns: "
-            f"{', '.join(columns) or 'none'})"
-        )
-    return t, np.stack([columns[n] for n in names], axis=1), names
+    t, observations = _read_observations(folder / study.data, names, "data")
+    return t, observations, names
 
 
 def _fit_arguments(plant, study: _Study, params, y0, progress) -> dict:
-    from aquakin import OptimizerConfig
-
     return dict(
         observables=[_channels(o) for o in study.observables],
         t_span=study.t_span,
         y0=y0,
         params=params,
-        transforms=dict(study.transforms) or None,
-        loss="nll",
-        sigma=_fit_sigma(study),
-        use_priors=study.use_priors,
-        optimizer=OptimizerConfig(n_starts=study.n_starts, max_iter=study.max_iter),
         time_unit=study.time_unit,
         progress=progress,
+        **_fit_options(study),
     )
 
 
@@ -734,7 +697,6 @@ def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, prog
     import numpy as np
 
     from aquakin.plant import plant_profile_likelihood
-    from aquakin.utils.result_files import write_table
 
     t, observations, _ = _observations(folder, study)
     arguments = _fit_arguments(plant, study, params, y0, progress)
@@ -748,25 +710,7 @@ def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, prog
         delta=study.delta,
         **arguments,
     )
-    written = [
-        write_table(
-            out / PROFILE_FILE,
-            {
-                study.profile: list(prof.grid),
-                "loss": [None if not np.isfinite(v) else v for v in prof.loss],
-                "delta_loss": [None if not np.isfinite(v) else v for v in prof.delta_loss],
-            },
-        )
-    ]
-    lo, hi = prof.ci
-    summary = {
-        "parameter": study.profile,
-        "mle": None if not np.isfinite(prof.mle) else float(prof.mle),
-        "ci": [None if lo is None else float(lo), None if hi is None else float(hi)],
-        "delta": study.delta,
-    }
-    written.append(write_yaml(out / PROFILE_SUMMARY_FILE, summary))
-    return written
+    return _write_profile_files(out, study, prof)
 
 
 def _sensor_set(candidate: _Candidate):

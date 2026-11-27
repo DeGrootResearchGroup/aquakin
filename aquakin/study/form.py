@@ -19,8 +19,7 @@ from pathlib import Path
 
 import yaml
 
-from aquakin.study.study import (
-    _REQUIRED,
+from aquakin.study.common import (
     FISHER_FILE,
     FISHER_SUMMARY_FILE,
     FIT_FILE,
@@ -36,6 +35,9 @@ from aquakin.study.study import (
     STUDIES_DIR,
     STUDY_FILE,
     StudyError,
+)
+from aquakin.study.study import (
+    _REQUIRED,
     _channel_names,
     _channels,
     _check_kind,
