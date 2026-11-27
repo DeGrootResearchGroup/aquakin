@@ -35,11 +35,19 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-from aquakin.study.files import (
+from aquakin.integrate.calibration.saved import COVARIANCE_FILE as COVARIANCE_FILE
+from aquakin.integrate.calibration.saved import FIT_FILE as FIT_FILE
+from aquakin.integrate.calibration.saved import (
+    PARAMETERS_FILE,
+    fit_summary,
+    write_fit_files,
+)
+from aquakin.utils.result_files import (
     read_named_values,
     write_matrix,
     write_named_values,
     write_trajectory,
+    write_yaml,
 )
 
 __all__ = [
@@ -69,8 +77,10 @@ ATTEMPT_FILE = "last_attempt.yaml"
 SNAPSHOT = "snapshot"
 
 # Result files, inside ``results/``. Their names are part of the stored format:
-# a project written by an earlier aquakin must still read.
-PARAMETERS_FILE = "parameters.yaml"
+# a project written by an earlier aquakin must still read. A calibrate study's
+# fit files (PARAMETERS_FILE, FIT_FILE, COVARIANCE_FILE) are those of a saved
+# fit, imported above from aquakin.integrate.calibration.saved and re-exported
+# here, where the reader and the stored-names test take them.
 FINAL_STATE_FILE = "final_state.yaml"
 # simulate at steady state
 STREAMS_STEADY_FILE = "streams.yaml"
@@ -82,9 +92,7 @@ MEASURED_FILE = "measured.csv"
 FISHER_FILE = "fisher.csv"
 FISHER_SUMMARY_FILE = "summary.yaml"
 # calibrate
-FIT_FILE = "fit.yaml"
 FITTED_FILE = "fitted.csv"
-COVARIANCE_FILE = "covariance.csv"
 # profile
 PROFILE_FILE = "profile.csv"
 PROFILE_SUMMARY_FILE = "profile.yaml"
@@ -392,10 +400,6 @@ def _read_yaml(path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _write_yaml(path: Path, data: dict) -> None:
-    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
-
-
 def _flowsheet(folder: Path, study: _Study) -> Path:
     """The spec the study builds its plant from: the snapshot when frozen."""
     if (folder / FROZEN_FILE).is_file():
@@ -690,12 +694,9 @@ def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path, progr
         "std": std,
         "criteria": criteria,
     }
-    path = out / FISHER_SUMMARY_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _write_yaml(path, summary)
     return [
         write_matrix(out / FISHER_FILE, fim.matrix, fim.names),
-        path,
+        write_yaml(out / FISHER_SUMMARY_FILE, summary),
         write_named_values(out / PARAMETERS_FILE, _named_parameters(plant, params)),
     ]
 
@@ -704,7 +705,7 @@ def _observations(folder: Path, study: _Study):
     """``(t, observations (n_t, n_channels), channel names)`` from the study's data table."""
     import numpy as np
 
-    from aquakin.study.files import read_trajectory
+    from aquakin.utils.result_files import read_trajectory
 
     path = folder / study.data
     if not path.is_file():
@@ -773,31 +774,9 @@ def _run_calibrate(
         **_fit_arguments(plant, study, params, y0, progress),
     )
     fitted = np.asarray(result.params)
-    summary = {
-        "fitted": {n: float(result.params_named[n]) for n in study.free},
-        "std": None
-        if result.params_named_std is None
-        else {n: float(v) for n, v in result.params_named_std.items()},
-        "loss": float(result.loss),
-        "converged": bool(result.converged),
-        "message": str(result.message),
-        "iterations": int(result.n_iter),
-        "at_bound": dict(result.at_bound),
-        "sigma_estimate": None
-        if result.sigma_estimate is None
-        else dict(zip(names, (float(v) for v in np.ravel(result.sigma_estimate)))),
-    }
-    written = [write_named_values(out / PARAMETERS_FILE, _named_parameters(plant, fitted))]
-    path = out / FIT_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _write_yaml(path, summary)
-    written.append(path)
-    if result.posterior_cov is not None:
-        written.append(
-            write_matrix(
-                out / COVARIANCE_FILE, np.asarray(result.posterior_cov), result.parameter_names
-            )
-        )
+    written = write_fit_files(
+        out, result, fit_summary(result, names), _named_parameters(plant, fitted)
+    )
     # The fitted plant's channels at the observation times, beside the data.
     span = study.t_span or (0.0, float(t[-1]))
     sol = plant.solve(span, t_eval=t, params=fitted, y0=y0, time_unit=study.time_unit)
@@ -814,7 +793,7 @@ def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, prog
     import numpy as np
 
     from aquakin.plant import plant_profile_likelihood
-    from aquakin.study.files import write_table
+    from aquakin.utils.result_files import write_table
 
     t, observations, _ = _observations(folder, study)
     arguments = _fit_arguments(plant, study, params, y0, progress)
@@ -845,9 +824,7 @@ def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, prog
         "ci": [None if lo is None else float(lo), None if hi is None else float(hi)],
         "delta": study.delta,
     }
-    path = out / PROFILE_SUMMARY_FILE
-    _write_yaml(path, summary)
-    written.append(path)
+    written.append(write_yaml(out / PROFILE_SUMMARY_FILE, summary))
     return written
 
 
@@ -867,7 +844,7 @@ def _run_rank(plant, folder: Path, study: _Study, params, y0, out: Path, progres
     import numpy as np
 
     from aquakin.plant import plant_rank_sensor_sets
-    from aquakin.study.files import write_table
+    from aquakin.utils.result_files import write_table
 
     ranked = plant_rank_sensor_sets(
         plant,
@@ -992,11 +969,11 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
         }
         shutil.rmtree(partial, ignore_errors=True)
         if has_results:
-            _write_yaml(folder / ATTEMPT_FILE, record)  # the results stand
+            write_yaml(folder / ATTEMPT_FILE, record)  # the results stand
         else:
             if out.exists():
                 shutil.rmtree(out)  # files no finished run recorded
-            _write_yaml(folder / RUN_FILE, record)
+            write_yaml(folder / RUN_FILE, record)
         raise
     digests = {
         (Path(RESULTS) / p.relative_to(partial)).as_posix(): hashlib.sha256(
@@ -1009,7 +986,7 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     partial.rename(out)
     (folder / ATTEMPT_FILE).unlink(missing_ok=True)
     record |= {"finished": _now(), "outcome": "finished", "results": digests}
-    _write_yaml(folder / RUN_FILE, record)
+    write_yaml(folder / RUN_FILE, record)
     return check_study(folder)
 
 
@@ -1099,7 +1076,7 @@ def freeze_study(path) -> dict:
     except BaseException:
         shutil.rmtree(snapshot, ignore_errors=True)
         raise
-    _write_yaml(folder / FROZEN_FILE, record)
+    write_yaml(folder / FROZEN_FILE, record)
     return record
 
 

@@ -2,13 +2,13 @@
 
 A study (:mod:`aquakin.study.study`) is a folder under ``<project>/studies/``
 holding what to run, the record of the last run and its results
-(:mod:`aquakin.study.files`, every value keyed by name). It is either live
-(following the project's flowsheet, stale when that changes) or frozen on a
-snapshot of its plant. ``aquakin study run|check|freeze|unfreeze|copy`` is the
+(:mod:`aquakin.utils.result_files`, every value keyed by name). It is either
+live (following the project's flowsheet, stale when that changes) or frozen on
+a snapshot of its plant. ``aquakin study run|check|freeze|unfreeze|copy`` is the
 command line.
 """
 
-from aquakin.study.files import (
+from aquakin.utils.result_files import (
     read_matrix,
     read_named_values,
     read_table,
