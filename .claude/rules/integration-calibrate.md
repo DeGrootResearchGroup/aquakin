@@ -10,6 +10,7 @@ paths:
   - "aquakin/integrate/identifiability.py"
   - "aquakin/integrate/experiment_design.py"
   - "aquakin/integrate/candidate_design.py"
+  - "aquakin/integrate/discrimination.py"
   - "aquakin/integrate/_transforms.py"
   - "aquakin/plant/calibrate.py"
   - "aquakin/plant/identifiability.py"
@@ -35,14 +36,10 @@ paths:
   `calibration/__init__.py` stays a docstring with no imports, so `fisher.py`
   can import the pieces without a cycle. Cross-module references that are only
   type annotations go under `TYPE_CHECKING`.
-- `calibrate()` reads `_ReactorForwardModel` from `calibrate.py`'s namespace,
-  where `test_calibrate.py` monkeypatches it; `_IRLS_MAX_ITER` lives with
-  `_run_multistart`, where a unit test patches it. Keep both where the patch
-  lands when moving code.
-- `aquakin.plant` takes the calibration family's private names, like every
-  private `integrate` name, from `integrate/seam.py` (the rule is in
-  `plant.md`); the names are unchanged, so the plant tests' stubs on
-  `aquakin.plant.calibrate` still apply.
+- Keep `_ReactorForwardModel` in `calibrate.py`'s namespace and `_IRLS_MAX_ITER`
+  with `_run_multistart`: tests monkeypatch them there.
+- `aquakin.plant` takes the calibration family's private names from
+  `integrate/seam.py` (rule in `plant.md`).
 - **A saved fit** (`saved`): `CalibrationResult.save`, `load_calibration` and
   the study's calibrate runner write `parameters.yaml` / `fit.yaml` /
   `covariance.csv` through the one `write_fit_files` (a study's `fit.yaml` is
@@ -193,6 +190,9 @@ SLSQP on `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector
 (`param_draws` `vmap`ped). That program is held in `cached_jitted_solver` under
 `_FisherSetup.structure_key()`: anything new `_FisherSetup.information` bakes
 in must join that key, or a repeat call reuses a stale program.
+`discrimination.py` shares that driver, builds one `_FisherSetup` per model in
+its fit's coordinates under one common noise (`sigma_estimate`, else `fit_sigma`,
+kept out of `struct_key`), and keys its programs on both setups' `structure_key()`.
 `fisher_information_from_fn` (in `fisher.py`) is the matrix-only path for a
 forward model that is not a reactor: AD Jacobian of `fn(theta)`, the same
 transforms and `FisherInformation` result, and `groups=` returning

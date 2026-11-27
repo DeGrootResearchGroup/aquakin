@@ -142,6 +142,9 @@ aquakin/
 │   │   ├── candidate_design.py      # design_from_candidates(): budgeted choice from a
 │   │   │                            #   pool of per-candidate Fisher matrices (relaxed,
 │   │   │                            #   greedy, exchange, exhaustive)
+│   │   ├── discrimination.py        # optimize_discrimination(), rank_discrimination(),
+│   │   │                            #   DesignConfig: design to tell two fitted models
+│   │   │                            #   apart (Buzzi-Ferraris / Hunter-Reiner)
 │   │   ├── events.py                # Event + solve_with_events: located events
 │   │   │                            #   (time / state root-crossing) + AD-safe state
 │   │   │                            #   resets / mode switches, via a segmented solve

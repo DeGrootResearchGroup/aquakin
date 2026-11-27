@@ -58,6 +58,11 @@ from aquakin.integrate.calibration.criteria import (
     compare_models,
 )
 from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
+from aquakin.integrate.discrimination import (
+    DesignConfig,
+    optimize_discrimination,
+    rank_discrimination,
+)
 from aquakin.integrate.experiment_design import (
     CandidateScore,
     ExperimentDesignResult,
@@ -102,6 +107,7 @@ __all__ = [
     "CandidateScore",
     "Constraint",
     "DGSMResult",
+    "DesignConfig",
     "DifferentiationConfig",
     "EigenDirection",
     "Event",
@@ -155,8 +161,10 @@ __all__ = [
     "load_calibration",
     "monte_carlo",
     "optimize_design",
+    "optimize_discrimination",
     "optimize_experiment",
     "profile_likelihood",
+    "rank_discrimination",
     "rank_experiments",
     "sample_posterior",
     "sensitivity",
