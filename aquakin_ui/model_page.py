@@ -206,14 +206,24 @@ def _parameters(send: str) -> None:
 
 def _model_dialog(self: Editor) -> None:
     with v3.VDialog(v_model=("model_dialog_open",), max_width=520, persistent=True):
-        with v3.VCard(title="Save as a new model"):
+        with v3.VCard(title=("model_dialog_new ? 'Save as a new model' : 'Save the model'",)):
             with v3.VCardText():
                 html.Div(
                     "{{ model_name }} is shipped with aquakin and is not changed. The edits "
                     "are saved as a new model of the project, which extends it.",
+                    v_if="model_dialog_new",
                     classes="mb-3",
                 )
+                v3.VAlert(
+                    "{{ model_dialog_warning }}",
+                    v_if="model_dialog_warning",
+                    type="warning",
+                    variant="tonal",
+                    density="compact",
+                    classes="mb-3 ak-dialog-warning",
+                )
                 v3.VTextField(
+                    v_if="model_dialog_new",
                     v_model=("model_new_name",),
                     label="name of the new model",
                     density="compact",
@@ -228,7 +238,11 @@ def _model_dialog(self: Editor) -> None:
                 )
                 html.Div(
                     "These units use {{ model_name }} and will use the new model:",
-                    v_if="model_dialog_units.length",
+                    v_if="model_dialog_new && model_dialog_units.length",
+                )
+                html.Div(
+                    "These units use {{ model_name }}:",
+                    v_if="!model_dialog_new && model_dialog_units.length",
                 )
                 html.Div(
                     "{{ u }}",
@@ -245,9 +259,9 @@ def _model_dialog(self: Editor) -> None:
                     classes="text-none",
                 )
                 v3.VBtn(
-                    "Save new model",
+                    "{{ model_dialog_new ? 'Save new model' : 'Save' }}",
                     click=(self.answer_model_dialog, "['save', model_new_name]"),
-                    disabled=("busy || !model_new_name",),
+                    disabled=("busy || (model_dialog_new && !model_new_name)",),
                     color="primary",
                     variant="flat",
                     classes="text-none",

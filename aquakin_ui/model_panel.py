@@ -75,6 +75,8 @@ def init_model_state(self: Editor) -> None:
     s.model_new_name = ""
     s.model_dialog_units = []
     s.model_dialog_error = ""
+    s.model_dialog_warning = ""
+    s.model_dialog_new = True  # naming a model made from a shipped one
 
     @s.change("panel")
     def _model_tab(panel, **_):
@@ -277,7 +279,9 @@ def _show_checks(self: Editor, document: dict, draft: dict) -> None:
 
 def apply_model(self: Editor, draft: dict, pending: list[dict] | None = None) -> None:
     """Apply the panel's edits: check the whole edited model, then save it with
-    the flowsheet (a shipped model asks for the new model's name first)."""
+    the flowsheet. A shipped model asks for the new model's name first, and a
+    project model asks first when rewriting its file loses something (its
+    comments)."""
     m = self._model
     if m.document is None or not self._apply_pending(pending):
         return
@@ -318,7 +322,10 @@ def apply_model(self: Editor, draft: dict, pending: list[dict] | None = None) ->
         )
         if not checked["ok"]:
             return {"checked": checked}
-        return {"checked": checked, "saved": _save(self, request, dry_run=shipped)}
+        planned = _save(self, request, dry_run=True)
+        if shipped or isinstance(planned, str) or planned["warning"]:
+            return {"checked": checked, "planned": planned}
+        return {"checked": checked, "saved": _save(self, request, dry_run=False)}
 
     def done(result):
         if isinstance(result, Exception):
@@ -328,12 +335,15 @@ def apply_model(self: Editor, draft: dict, pending: list[dict] | None = None) ->
         _show_checks(self, document, draft)
         if not result["checked"]["ok"]:
             self.say("the edits do not make a valid model; the panel shows why")
-        elif shipped:
+        elif "saved" in result:
+            _saved(self, path, request["spec"], result["saved"])
+        elif shipped or not isinstance(result["planned"], str):
             m.plan = request
-            _show_plan(self, request["name"], result["saved"])
+            self.state.model_dialog_new = shipped
+            _show_plan(self, request.get("name", ""), result["planned"])
             self.state.model_dialog_open = True
         else:
-            _saved(self, path, request["spec"], result["saved"])
+            _saved(self, path, request["spec"], result["planned"])
 
     self._off_page(work, done)
 
@@ -347,15 +357,17 @@ def _save(self: Editor, request: dict, dry_run: bool) -> dict | str:
 
 
 def _show_plan(self: Editor, name: str, planned: dict | str) -> None:
-    """The dialog's name, and the units the new model replaces the shipped one
-    in (or why it cannot be saved under that name)."""
+    """The dialog's name, the units that will use the saved model, and what
+    saving loses (or why it cannot be saved under that name)."""
     self.state.model_new_name = name
     if isinstance(planned, str):
         self.state.model_dialog_error = planned
         self.state.model_dialog_units = []
+        self.state.model_dialog_warning = ""
     else:
         self.state.model_dialog_error = ""
         self.state.model_dialog_units = planned["units"]
+        self.state.model_dialog_warning = planned["warning"] or ""
 
 
 def plan_model_name(self: Editor, name: str) -> None:
@@ -371,12 +383,13 @@ def plan_model_name(self: Editor, name: str) -> None:
 
 
 def answer_model_dialog(self: Editor, choice: str, name: str = "") -> None:
-    """The new-model dialog's answer: ``"save"`` under ``name``, or ``"cancel"``."""
+    """The save dialog's answer: ``"save"`` (a model made from a shipped one
+    under ``name``), or ``"cancel"``."""
     plan, self._model.plan = self._model.plan, None
     if choice != "save" or plan is None:
         self.state.model_dialog_open = False
         return
-    request = {**plan, "name": str(name).strip()}
+    request = {**plan, "name": str(name).strip()} if "name" in plan else plan
 
     def done(saved):
         if isinstance(saved, str):

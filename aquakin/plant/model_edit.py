@@ -49,6 +49,7 @@ from aquakin.plant.spec import (
     _located,
     _plan_model,
     _shipped_names,
+    _within,
     write_spec,
 )
 from aquakin.schema.inheritance import pop_inheritance_keys
@@ -538,6 +539,33 @@ def check_model_edits(model: str, path=None, edits=None) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def has_comments(text: str) -> bool:
+    """Whether YAML ``text`` holds a comment, which writing it back loses.
+
+    A ``#`` is a comment where YAML reads one: outside every scalar (a quoted
+    or plain value, or a key) and at the start of a line or after a space.
+
+    Parameters
+    ----------
+    text : str
+        The YAML.
+
+    Returns
+    -------
+    bool
+    """
+    scalars = [
+        (t.start_mark.index, t.end_mark.index)
+        for t in yaml.scan(text)
+        if isinstance(t, yaml.ScalarToken)
+    ]
+    return any(
+        (i == 0 or text[i - 1] in " \t\n") and not any(a <= i < b for a, b in scalars)
+        for i, c in enumerate(text)
+        if c == "#"
+    )
+
+
 def _switched(spec: dict, old: str, new: str) -> tuple[dict, list[str]]:
     """``spec`` with every unit's model (and reagent model) ``old`` named ``new``
     and ``old`` no longer listed, and the units that use it."""
@@ -602,8 +630,9 @@ def save_model_edits(
     -------
     dict
         ``model`` (the edited model's name), ``model_file`` (its file),
-        ``units`` (the units that use it) and ``spec`` (the flowsheet as
-        written; ``None`` on a dry run).
+        ``units`` (the units that use it), ``warning`` (what rewriting a
+        project model's file loses: its comments; ``None`` when nothing is)
+        and ``spec`` (the flowsheet as written; ``None`` on a dry run).
 
     Raises
     ------
@@ -653,7 +682,17 @@ def save_model_edits(
     _check_writes(writes)
     new_spec, units = _switched(spec, model, name)
     new_spec.setdefault("models", {})[name] = {"source": str(dest)}
-    out = {"model": name, "model_file": str(dest), "units": units, "spec": None}
+    warning = None
+    if original is not None and has_comments(original.read_text(encoding="utf-8")):
+        shown = _within(original, folder) or original
+        warning = f"Comments in {shown.as_posix()} will not be kept when it is saved."
+    out = {
+        "model": name,
+        "model_file": str(dest),
+        "units": units,
+        "warning": warning,
+        "spec": None,
+    }
     if dry_run:
         return out
     previous = dest.read_bytes() if dest.exists() else None

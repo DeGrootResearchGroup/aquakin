@@ -437,3 +437,44 @@ def test_a_model_the_flowsheet_stops_using_leaves_the_panel(bsm1):
     assert ed.state.model_choices == ["adm1"]
     assert ed.state.model_name is None and ed.state.model_draft["reactions"] == []
     assert ed._model.document is None
+
+
+def test_a_commented_project_model_asks_before_its_comments_go(tmp_path):
+    """BSM2's ``asm1_bsm2.yaml`` is commented: Apply shows the save dialog with
+    the warning (no name to choose), and saves only when told to."""
+    import shutil
+
+    project = tmp_path / "bsm2"
+    shutil.copytree(PROJECTS / "bsm2", project)
+    server = get_server(name=f"aquakin-ui-model-{next(_names)}", client_type="vue3")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
+    model_file = project / "models" / "asm1_bsm2.yaml"
+    before = model_file.read_text()
+    ed.open_model("asm1_bsm2")
+    draft = _draft(ed)
+    draft["parameters"][0]["value"] = "4.5"
+    ed.apply_model(draft)
+    assert ed.state.model_dialog_open and not ed.state.model_dialog_new
+    assert ed.state.model_dialog_warning == (
+        "Comments in models/asm1_bsm2.yaml will not be kept when it is saved."
+    )
+    assert model_file.read_text() == before  # nothing written while it asks
+    ed.answer_model_dialog("save")
+    assert not ed.state.model_dialog_open
+    assert yaml.safe_load(model_file.read_text())["parameters"]["muH"]["value"] == 4.5
+    assert "#" not in model_file.read_text()
+
+
+def test_a_model_without_comments_or_made_from_a_shipped_one_has_no_warning(bsm1):
+    ed, _, _ = bsm1
+    ed.open_model("asm1")
+    draft = _draft(ed)
+    draft["parameters"][0]["value"] = "5.0"
+    ed.apply_model(draft)
+    assert ed.state.model_dialog_new and ed.state.model_dialog_warning == ""
+    ed.answer_model_dialog("save", "asm1_bsm1")
+    draft = _draft(ed)  # now asm1_bsm1, a file written without comments
+    draft["parameters"][0]["value"] = "4.0"
+    ed.apply_model(draft)
+    assert not ed.state.model_dialog_open and ed.state.model_dialog_warning == ""
+    assert ed.state.message.startswith("saved model asm1_bsm1")

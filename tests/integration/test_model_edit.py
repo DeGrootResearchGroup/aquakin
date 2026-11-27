@@ -348,7 +348,7 @@ def test_a_shipped_model_is_saved_as_a_project_model_that_extends_it(bsm1_projec
     target = bsm1_project.parent / "models" / "asm1_bsm1.yaml"
     units = [u for u, e in spec["units"].items() if e.get("model") == "asm1"]
     assert planned == {"model": "asm1_bsm1", "model_file": str(target), "units": units,
-                       "spec": None}
+                       "warning": None, "spec": None}
     assert not target.exists() and bsm1_project.read_bytes() == before
 
     saved = save_model_edits(spec, bsm1_project, model="asm1", edits=edits, name="asm1_bsm1")
@@ -398,6 +398,7 @@ def test_a_project_model_is_edited_in_place_and_a_solve_follows_it(decay_project
                                       "parameters": {"k": {"description": "first order"}}}}}
     out = save_model_edits(spec, decay_project, model="simple_decay", edits=edits, sha256=digest)
     assert out["model"] == "simple_decay" and out["units"] == ["feed", "tank"]
+    assert out["warning"] is None  # a file without comments loses nothing
     data = yaml.safe_load(model_file.read_text())
     (reaction,) = data["reactions"]
     assert reaction["rate"] == "2 * k * [A]"
@@ -575,3 +576,32 @@ def test_the_worker_answers_the_model_panel_commands(bsm1_project):
     assert planned["result"]["model_file"] == str(bsm1_project.parent / "models" / "asm1_bsm1.yaml")
     assert refused == {"id": 5, "ok": False, "type": "SpecError",
                        "error": "'asm3' is the name of a shipped model; choose another name"}
+
+
+@pytest.mark.parametrize(
+    "text, found",
+    [
+        ("a: 1\n", False),
+        ("# heading\na: 1\n", True),
+        ("a: 1  # trailing\n", True),
+        ("a: 'x # y'\nb: \"x # y\"\n", False),
+        ("a: x#y\nk#: 1\n", False),
+        ("a: |\n  x # y\n", False),
+    ],
+)
+def test_a_comment_is_found_where_yaml_reads_one(text, found):
+    from aquakin.plant.model_edit import has_comments
+
+    assert has_comments(text) is found
+
+
+def test_rewriting_a_commented_project_model_warns_that_its_comments_go(decay_project):
+    model_file = decay_project.parent / "models" / "simple_decay.yaml"
+    model_file.write_text("# The A -> B model.\n" + model_file.read_text())
+    planned = save_model_edits(
+        load_spec_file(decay_project), decay_project, model="simple_decay",
+        edits={"reactions": {"A_to_B": {"rate": "2 * k * [A]"}}}, dry_run=True,
+    )
+    assert planned["warning"] == (
+        "Comments in models/simple_decay.yaml will not be kept when it is saved."
+    )
