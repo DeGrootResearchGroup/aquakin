@@ -19,7 +19,7 @@ results. The design and the owner's decisions are in
 |---|---|---|
 | `study.yaml` | the user / the editor, **never rewritten by the runner** | `study:` inputs, validated strictly (`_Study`, Pydantic, `allow_inf_nan=False`) |
 | `run.yaml` | `run_study` | the run record: times, aquakin version, `spec_fingerprint`, `spec_inputs`, the study's own fingerprint (`_study_fingerprint`: settings + any file they read), outcome / error, `results: {path: sha256}` |
-| `results/` | `run_study` | result files (`files.py`), every value keyed by name |
+| `results/` | `run_study` | result files (`aquakin/utils/result_files.py`), every value keyed by name |
 | `results.partial/` | `run_study` | where a run writes; renamed to `results/` only on success (a killed run leaves it; the next run deletes it, copies leave it out) |
 | `last_attempt.yaml` | `run_study` | the record of a run that failed or was cancelled while earlier results stood (they are kept; `check_study` notes it; a success removes it) |
 | `frozen.yaml` | `freeze_study` | its presence means frozen; the snapshot's fingerprint and `spec_inputs` at freeze time (never recomputed: a spec from an older aquakin may not read through the current catalogue) |

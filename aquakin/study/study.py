@@ -35,7 +35,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-from aquakin.study.files import (
+from aquakin.utils.result_files import (
     read_named_values,
     write_matrix,
     write_named_values,
@@ -704,7 +704,7 @@ def _observations(folder: Path, study: _Study):
     """``(t, observations (n_t, n_channels), channel names)`` from the study's data table."""
     import numpy as np
 
-    from aquakin.study.files import read_trajectory
+    from aquakin.utils.result_files import read_trajectory
 
     path = folder / study.data
     if not path.is_file():
@@ -814,7 +814,7 @@ def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, prog
     import numpy as np
 
     from aquakin.plant import plant_profile_likelihood
-    from aquakin.study.files import write_table
+    from aquakin.utils.result_files import write_table
 
     t, observations, _ = _observations(folder, study)
     arguments = _fit_arguments(plant, study, params, y0, progress)
@@ -867,7 +867,7 @@ def _run_rank(plant, folder: Path, study: _Study, params, y0, out: Path, progres
     import numpy as np
 
     from aquakin.plant import plant_rank_sensor_sets
-    from aquakin.study.files import write_table
+    from aquakin.utils.result_files import write_table
 
     ranked = plant_rank_sensor_sets(
         plant,
