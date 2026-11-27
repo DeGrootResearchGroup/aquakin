@@ -182,6 +182,14 @@ a copy first. The new results take the old ones' place only when the run
 succeeds: a run that fails or is cancelled leaves the earlier results as they
 were, and `check` notes the attempt.
 
+A study runs once at a time. While it runs, its folder holds `running.yaml`
+with when the run started and how far it has got, so every program sees it:
+`check` and the editor show the run's progress, a second run of the study
+(from the editor, the command line, an AI assistant or a script) is refused,
+and so are freezing, unfreezing and editing it. `aquakin study cancel` stops
+the run at its next checkpoint, whatever started it. A run that crashes or is
+killed leaves no lock behind; the next run starts as usual.
+
 `aquakin study freeze` instead pins a study to a snapshot of its plant, taken
 inside the study folder with every model flattened (shipped models too) and
 every influent table copied, so neither an edit to the project nor an aquakin
@@ -313,7 +321,7 @@ runs in time shows a chart per channel of the stream you pick. From Python,
 
 The **Studies** tab lists the project's studies and their status (fresh, stale
 and why, not run, failed, cancelled). From it you can run a study and watch its
-progress or cancel it; freeze, unfreeze or copy it; and open **Results**: a
+progress or cancel it, including a run another program started; freeze, unfreeze or copy it; and open **Results**: a
 simulation's streams, a Fisher study's standard deviations, design criteria and
 information matrix, a ranking of sensor sets, a calibration's fitted parameters
 with the data against the fit, or a profile's curve and interval. Running a
@@ -339,7 +347,8 @@ Installing aquakin installs two commands:
 |---|---|
 | `aquakin study run <study> [--replace]` | runs a study and writes its results; a study that has results is run again only with `--replace` |
 | `aquakin study run <study> --json` | the same, reporting progress as JSON lines for a program that drives it; a line `cancel` on standard input, or closing it, stops the run at its next checkpoint |
-| `aquakin study check <study>` | prints whether the results are fresh, stale (and why), not run, failed or cancelled; exits with 0 when fresh or not run, 1 otherwise |
+| `aquakin study check <study>` | prints whether the results are fresh, stale (and why), not run, failed or cancelled, and the run in progress; exits with 0 when fresh or not run, 1 otherwise |
+| `aquakin study cancel <study>` | stops the study's run at its next checkpoint, whichever program started it |
 | `aquakin study freeze <study>` | pins the study to a snapshot of its plant |
 | `aquakin study unfreeze <study> --discard-results` | makes it follow the flowsheet again and deletes its results |
 | `aquakin study copy <study> <name>` | copies the study, results included, beside it under `<name>`, and prints the new folder |

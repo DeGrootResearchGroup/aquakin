@@ -74,6 +74,7 @@ class Editor:
         self._check_task: asyncio.Task | None = None
         self._pending_rows = None
         self._runs: dict[str, StudyRun] = {}
+        self._listed: list[dict] = []  # the worker's list_studies, as last asked
         self._loop: asyncio.AbstractEventLoop | None = None
         # The file opened, and its sha256 (None when it had gone by the time it was read).
         self._opened: tuple[Path, str | None] | None = None
@@ -587,5 +588,6 @@ class Editor:
     cancel_run = studies.cancel_run
     _on_run_event = studies._on_run_event
     _apply_run_event = studies._apply_run_event
+    _list = studies._list
     _mark_running = studies._mark_running
     stop_runs = studies.stop_runs

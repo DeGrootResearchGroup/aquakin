@@ -43,11 +43,13 @@ following the project folder (`aquakin_ui/disk.py`, `.claude/rules/ui.md`).
   replaced only with `replace`, a frozen study with results unfrozen only with
   `discard_results`, and an existing flowsheet file written over only with
   `replace` (the editor's Save refuses it outright).
-- **A study run is `aquakin.study.run_study` on a thread** (`runs.py`), never a
-  subprocess: process management lives in `aquakin_ui`, which aquakin may not
-  import, and a copy would be a second implementation. Cancel through the
-  progress callback (`Cancelled`), as `aquakin study run --json` does.
-  `run_study` returns at once; the assistant polls `study_status`.
+- **A study run is a detached `aquakin study run` process** (`runs.py`,
+  `start_run`), never a thread of the server: it must outlive the assistant's
+  app. Follow and cancel it through the study folder (`aquakin.study.running`:
+  `check_study`'s `running`, `cancel_study`), never through the process, so
+  the editor and the command line see the same run. `run_study` returns once
+  the run holds its study (its own pid in `running.yaml`); the assistant polls
+  `study_status`.
 
 ## Imports and packaging
 

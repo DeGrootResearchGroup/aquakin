@@ -71,6 +71,7 @@ from aquakin.integrate._common import (
     validate_t_eval,
 )
 from aquakin.integrate._solver import check_solve_result
+from aquakin.integrate.finite_volume import diffusive_flux, divergence
 from aquakin.integrate.steady import solve_steady_state
 
 
@@ -167,19 +168,20 @@ def _diffusion_transport(C, D, kL, dz, area_per_volume, n_species):
     Pure function (no reactor ``self``) so it can be closed over by a jit-compiled
     solve without leaking trace-created state. ``C[0]`` is the bulk; ``C[1:]`` the
     layers (surface..wall). Particulate columns are zero where ``D == 0``. Uses
-    the conservative finite-volume (face-flux) form: only first-order face
-    differences, so the volume-weighted total is conserved exactly.
+    the conservative finite-volume (face-flux) form of
+    :mod:`aquakin.integrate.finite_volume`, so the volume-weighted total is
+    conserved exactly. The boundary faces are this operator's own: a Robin
+    mass-transfer flux from the bulk at the surface, no flux at the wall.
     """
     bulk = C[0]  # (n_species,)
     layers = C[1:]  # (n_layers, n_species)
     # Internal interface fluxes between layer j and j+1 (positive toward the wall).
-    f_internal = D[None, :] * (layers[:-1] - layers[1:]) / dz  # (n_layers-1, n_species)
+    f_internal = diffusive_flux(layers, D, dz)  # (n_layers-1, n_species)
     # Bulk <-> surface flux across the boundary layer (positive into the film).
     f_bs = kL * (bulk - layers[0])  # (n_species,)
-    flux_in = jnp.concatenate([f_bs[None, :], f_internal], axis=0)
-    zero = jnp.zeros((1, n_species))
-    flux_out = jnp.concatenate([f_internal, zero], axis=0)  # wall: no flux out
-    d_layers = (flux_in - flux_out) / dz  # (n_layers, n_species)
+    zero = jnp.zeros((1, n_species))  # wall: no flux out
+    faces = jnp.concatenate([f_bs[None, :], f_internal, zero], axis=0)
+    d_layers = divergence(faces, dz)  # (n_layers, n_species)
     d_bulk = -area_per_volume * f_bs  # bulk loses surface flux
     return jnp.concatenate([d_bulk[None, :], d_layers], axis=0)
 

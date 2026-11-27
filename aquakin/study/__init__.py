@@ -30,6 +30,7 @@ from aquakin.study.form import (
     study_results,
     update_study,
 )
+from aquakin.study.running import cancel_study
 from aquakin.study.study import (
     StudyError,
     StudyStatus,
@@ -45,6 +46,7 @@ __all__ = [
     "UNREADABLE",
     "StudyError",
     "StudyStatus",
+    "cancel_study",
     "check_study",
     "copy_study",
     "create_study",

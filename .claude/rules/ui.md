@@ -161,9 +161,10 @@ that imports both. Keep it that way rather than copying knowledge across:
   the file, not the newly typed path); Run and Simulate save before a live study
   runs the file.
 - **Studies:** a run is a `StudyRun` process, never a worker request (the worker
-  kills a request after `TIMEOUT`, and a run must not hold up checks or Save).
-  Apply run events on the page's loop (`call_soon_threadsafe`). A cancelled run
-  is reported cancelled even when killed before a checkpoint.
+  kills a request after `TIMEOUT`; a run must not hold up checks or Save). Apply
+  its events on the page's loop (`call_soon_threadsafe`); one killed before a
+  checkpoint is reported cancelled. Another program's run shows from
+  `list_studies`' `running` (`_list`); cancel it with the worker's `cancel_study`.
   **Replacing results and unfreezing ask first** (`_ask` / `answer_study`), only
   for a study with results, and offer "Copy first" (owner's decision). Unfreezing
   always asks; replacing may be turned off ("Don't ask again", the Studies tab's
@@ -195,8 +196,7 @@ that imports both. Keep it that way rather than copying knowledge across:
   before) and anything else as typed. Never parse an expression here; the
   background check or Save reports it. A mapping field is split into entries by
   `forms._entries` at commas outside brackets only (`clip(t, 0, 1)` is one value).
-- **NaN is never a value:** `forms._finite` refuses `nan` and overflowing text;
-  `inf` / `-inf` remain for "no limit" number settings.
+- **NaN is never a value** (`forms._finite`); `inf` / `-inf` mean "no limit".
 - **A stored aeration species the model lacks** is replaced by the model's
   oxygen (`forms._oxygen`), and `reshape_form` applies such suggestions at once.
 - **The model panel's draft** (`model_draft`, `client_only`, pushed with a new
