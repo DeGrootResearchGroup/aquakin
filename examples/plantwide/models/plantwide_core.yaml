@@ -114,15 +114,15 @@ parameters:
 
   # Fermentation: heterotroph growth on SF without oxygen or nitrate (Barker
   # and Dold 1997; Hauduc et al. 2013). Substrate uptake rate at 20 C (the
-  # anaerobic growth rate 0.3 1/d over the yield 0.1, the value of the
-  # commercial plant-wide model of Varga et al. 2018, with its temperature
-  # coefficient), half-saturation (its activated-sludge value; ASM2d's 4,
-  # Barker and Dold's 2), and the anaerobic yield (Ekama and Wentzel).
+  # anaerobic growth rate 0.3 1/d over the yield 0.1) and its temperature
+  # coefficient, and the half-saturation (ASM2d's is 4, Barker and Dold's 2),
+  # are provisional until a literature source is found; the anaerobic yield
+  # is Ekama and Wentzel's.
   q_FE:       {value: 3.0,   units: "1/d", bounds: [0.5, 20.0], transform: positive_log, prior: {mean: 3.0, std: 1.5}, temperature: {theta: 1.04, ref_T: 293.15}}
   K_FE:       {value: 5.0,   units: "g_COD/m3", bounds: [0.5, 500.0], transform: positive_log, prior: {mean: 5.0, std: 2.5}}
   Y_FE:       {value: 0.10,  units: "g_COD/g_COD", bounds: [0.02, 0.2], transform: logit, prior: {mean: 0.1, std: 0.02}}
-  # Heterotroph decay without oxygen or nitrate, relative to aerobic (the same
-  # model's 0.25): what lets the heterotrophs persist in a digester on
+  # Heterotroph decay without oxygen or nitrate, relative to aerobic
+  # (provisional, as above): what lets the heterotrophs persist in a digester on
   # fermentation growth.
   eta_b_AN:   {value: 0.25,  units: "-", bounds: [0.05, 1.0], transform: logit}
 

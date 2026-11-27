@@ -53,8 +53,9 @@ EXCESS = 1.0e6  # ASM2d's phosphate and alkalinity, far above their half-saturat
 # Phosphate for the plant-wide levels that carry it: BSM1's influent has none,
 # and 10 g P/m3 keeps growth unlimited by it (half-saturation 0.01 g P/m3).
 PLANTWIDE_PO4 = 10.0
-# AOB share of ASM1's nitrifiers, by the two groups' yields (0.15 and 0.09).
-AOB_SHARE = 0.15 / (0.15 + 0.09)
+# AOB share of ASM1's nitrifiers, by the two groups' yields in the nitrite
+# level (Hiatt & Grady 2008: 0.18 and 0.06 g COD/g N).
+AOB_SHARE = 0.18 / (0.18 + 0.06)
 
 
 def asm1_total_n(values):

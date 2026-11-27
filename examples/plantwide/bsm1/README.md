@@ -45,15 +45,21 @@ ASM2d's 0.4 to 10.81; all three together to 10.35.
 
 `plantwide_nitrite` runs on the same plant, with ASM1's nitrifiers carried over
 as AOB and NOB in the ratio of their yields and phosphate at a non-limiting
-10 g P/m3 (BSM1's influent has none). Tank 5 at its steady state (g/m3):
+10 g P/m3 (BSM1's influent has none). Its nitrifiers have the kinetics of Hiatt
+& Grady (2008). Tank 5 at its steady state (g/m3):
 
 | | NH4-N | NO2-N | NO3-N | nitrifiers |
 |---|---|---|---|---|
 | core (one-step) | 1.11 | - | 11.02 | 107.7 |
-| nitrite level | 0.22 | 0.15 | 9.35 | 73.7 AOB + 38.8 NOB |
+| nitrite level | 1.77 | 5.40 | 2.34 | 108.4 AOB + 13.3 NOB |
+| nitrite level, NOB oxygen half-saturation 0.6 | 2.74 | 1.14 | 9.14 | 33.3 NOB |
 
-Its AOB grow faster at low ammonium (half-saturation 0.7 against the core
-nitrifiers' 1.0), and its heterotrophs denitrify nitrite as well as nitrate.
-From the steady state the plant's N, P and COD balances close to 1e-13 over
-10 days, the stripped N2 and the oxygen taken up counted
+Its AOB grow more slowly than the core's nitrifiers (0.78 against 1.0 1/d, and
+on free ammonia, whose half-saturation is about 1.9 g NH4-N/m3 at pH 7 and
+20 C), so more ammonium is left. Nitrite builds up because tank 5 runs at
+0.5 g O2/m3 and the NOB's oxygen half-saturation (1.2) is twice the AOB's: the
+NOB only just outgrow their washout. At the AOB's 0.6 most of the nitrite is
+oxidized, and the NOB, competing for oxygen, leave more ammonium. From the
+steady state the plant's N, P and COD balances close over 10 days, the stripped
+N2 and the oxygen taken up counted
 (`tests/validation/test_plantwide_nitrite_bsm1.py`).

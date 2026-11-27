@@ -18,6 +18,7 @@ merges them.
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
@@ -84,7 +85,7 @@ def two_step(reaction: dict) -> list[dict]:
     conserved = reaction.get("conserved_for", CONSERVED)
     first = dict(
         name=f"{reaction['name']}_NO3_NO2",
-        rate=ANOXIC.sub("anoxic_NO3", rate),
+        rate=ANOXIC.sub("f_NO3_NO2 * anoxic_NO3", rate),
         stoichiometry={**stoich, "SNO3": _scaled(c, TO_NO2), "SNO2": _scaled(c, -TO_NO2)},
         # The nitrate and nitrite coefficients carry the electrons, so COD
         # closes by construction; the rest close on their auto species.
@@ -92,7 +93,7 @@ def two_step(reaction: dict) -> list[dict]:
     )
     second = dict(
         name=f"{reaction['name']}_NO2_N2",
-        rate=ANOXIC.sub("anoxic_NO2", rate),
+        rate=ANOXIC.sub("f_NO2_N2 * anoxic_NO2", rate),
         stoichiometry={**stoich, "SNO2": _scaled(c, FROM_NO2), "SN2": "auto"},
         conserved_for=list(conserved),
     )
@@ -130,52 +131,85 @@ def species(base: dict) -> list[dict]:
 def parameters() -> dict:
     p = {}
 
-    def add(name, value, units, bounds=None, theta=None, transform="positive_log"):
+    def add(name, value, units, bounds=None, theta=None, transform="positive_log", ref_T=293.15):
         entry = dict(value=value, units=units)
         if bounds is not None:
             entry.update(bounds=list(bounds), transform=transform)
         if theta is not None:
-            entry["temperature"] = dict(theta=theta, ref_T=293.15)
+            entry["temperature"] = dict(theta=theta, ref_T=ref_T)
         p[name] = entry
 
-    # Heterotroph nitrite half-saturation (decision 18).
-    add("KNO2_H", 0.05, "g_N/m3", bounds=(0.005, 0.5))
-    # Nitrifiers and anammox (decision 17), at 20 C.
-    add("muAOB", 0.9, "1/d", bounds=(0.2, 3.0), theta=1.072)
-    add("bAOB", 0.17, "1/d", bounds=(0.02, 1.0), theta=1.03)
-    add("KNH4_AOB", 0.7, "g_N/m3", bounds=(0.05, 5.0))
-    add("KO2_AOB", 0.25, "g_O2/m3", bounds=(0.05, 2.0))
-    add("YAOB", 0.15, "g_COD/g_N", bounds=(0.05, 0.4))
-    add("muNOB", 0.65, "1/d", bounds=(0.1, 2.0), theta=1.06)
-    add("bNOB", 0.15, "1/d", bounds=(0.02, 1.0), theta=1.03)
-    add("KNO2_NOB", 0.1, "g_N/m3", bounds=(0.01, 2.0))
-    add("KO2_NOB", 0.25, "g_O2/m3", bounds=(0.05, 2.0))
-    add("YNOB", 0.09, "g_COD/g_N", bounds=(0.02, 0.3))
-    add("muAMX", 0.1, "1/d", bounds=(0.02, 0.5), theta=1.01)
-    add("bAMX", 0.019, "1/d", bounds=(0.002, 0.1), theta=1.03)
-    add("KNH4_AMX", 2.0, "g_N/m3", bounds=(0.05, 10.0))
-    add("KNO2_AMX", 1.0, "g_N/m3", bounds=(0.05, 10.0))
-    add("KI_O2_AMX", 0.4, "g_O2/m3", bounds=(0.01, 2.0))
+    # Two-step denitrification (decision 18). Hiatt & Grady (2008) give each
+    # heterotroph reduction step its own anoxic growth factor, relative to the
+    # aerobic maximum: 0.28 for nitrate to nitrite and 0.16 for nitrite to NO,
+    # the slowest of the three steps to N2 (0.16, 0.35, 0.35, one electron
+    # each). Nitrite to N2 here is those three steps lumped at the slowest
+    # one's capacity, 3 * 0.16 = 0.48. Every inherited process keeps its own
+    # anoxic factor (the heterotrophs' ASM2d 0.8) and takes these as fractions
+    # of it: 0.28 / 0.8 and 0.48 / 0.8.
+    add("f_NO3_NO2", 0.35, "-", bounds=(0.05, 1.0), transform="logit")
+    add("f_NO2_N2", 0.6, "-", bounds=(0.05, 1.0), transform="logit")
+    add("KNO2_H", 0.2, "g_N/m3", bounds=(0.02, 2.0))
+    # Nitrifiers (decision 17): Hiatt & Grady (2008) at 20 C. The substrates
+    # are free ammonia and free nitrous acid (as N), with self-inhibition and
+    # cross-inhibition. Temperature as ASM2d's autotrophs (Henze et al. 1999):
+    # growth 1.0 / 0.35 1/d and decay 0.15 / 0.05 1/d at 20 / 10 C.
+    mu_theta, b_theta = num((1.0 / 0.35) ** 0.1), num(3.0**0.1)
+    add("muAOB", 0.78, "1/d", bounds=(0.2, 3.0), theta=mu_theta)
+    add("bAOB", 0.096, "1/d", bounds=(0.02, 0.5), theta=b_theta)
+    add("KFA_AOB", 0.0075, "g_N/m3", bounds=(0.001, 0.05))
+    add("KI_FA_AOB", 1.0, "g_N/m3", bounds=(0.1, 10.0))
+    add("KI_FNA_AOB", 0.1, "g_N/m3", bounds=(0.01, 1.0))
+    add("KO2_AOB", 0.6, "g_O2/m3", bounds=(0.05, 2.0))
+    add("YAOB", 0.18, "g_COD/g_N", bounds=(0.05, 0.4))
+    add("muNOB", 0.78, "1/d", bounds=(0.1, 3.0), theta=mu_theta)
+    add("bNOB", 0.096, "1/d", bounds=(0.02, 0.5), theta=b_theta)
+    add("KFNA_NOB", 1.0e-4, "g_N/m3", bounds=(1.0e-5, 1.0e-3))
+    add("KI_FNA_NOB", 0.04, "g_N/m3", bounds=(0.004, 0.4))
+    add("KI_FA_NOB", 0.2, "g_N/m3", bounds=(0.02, 2.0))
+    add("KO2_NOB", 1.2, "g_O2/m3", bounds=(0.1, 3.0))
+    add("YNOB", 0.06, "g_COD/g_N", bounds=(0.02, 0.3))
+    # Temperatures in the free-ammonia and free-nitrous-acid equilibria
+    # (Anthonisen et al. 1976): Kb/Kw = exp(6344/T), Ka = exp(-2300/T).
+    add("T_FA", 6344.0, "K")
+    add("T_FNA", 2300.0, "K")
+    # Anammox: Hao et al. (2002) at 30 C, from Strous et al. (1998); the
+    # activation energy of 70 kJ/mol (Strous et al. 1999) gives
+    # theta = exp(70000 / 8.314 * (1/293.15 - 1/303.15) / 10) between 20 and 30 C.
+    amx_theta = num(math.exp(70000.0 / 8.314 * (1.0 / 293.15 - 1.0 / 303.15) / 10.0))
+    add("muAMX", 0.072, "1/d", bounds=(0.01, 0.3), theta=amx_theta, ref_T=303.15)
+    add("bAMX", 0.003, "1/d", bounds=(0.0003, 0.03), theta=amx_theta, ref_T=303.15)
+    add("KNH4_AMX", 0.07, "g_N/m3", bounds=(0.01, 1.0))
+    add("KNO2_AMX", 0.05, "g_N/m3", bounds=(0.01, 1.0))
+    add("KI_O2_AMX", 0.01, "g_O2/m3", bounds=(0.001, 0.2))
     # Strous et al. (1998): mol NO2 consumed and NO3 made per mol NH4 oxidized.
     add("Y_AMX_NO2", 1.32, "-", bounds=(1.1, 1.6))
     add("Y_AMX_NO3", 0.26, "-", bounds=(0.1, 0.4))
-    # Decay of the autotrophs with nitrite or nitrate, relative to aerobic (the
-    # same model's 0.5); without either they use the core's eta_b_AN.
+    # Decay of the autotrophs with nitrite or nitrate, relative to aerobic:
+    # Hao et al. (2002), after Koch et al. (2000). Without either they use the
+    # core's eta_b_AN.
     add("eta_b_NOX_AUT", 0.5, "-", bounds=(0.05, 1.0), transform="logit")
     return p
 
 
 def expressions() -> dict:
     return {
-        # Nitrate is reduced while nitrite is scarce, nitrite whenever present;
-        # aerobic + anoxic + anaerobic stays 1, and without nitrite every switch
-        # is the core's.
-        "anoxic_NO3": "monod_inh([SO2], KO2_H) * monod([SNO3], KNO3_H) * monod_inh([SNO2], KNO2_H)",
+        # Each reduction step on its own acceptor, as Hiatt & Grady (2008):
+        # the steps run side by side, neither inhibits the other.
+        "anoxic_NO3": "monod_inh([SO2], KO2_H) * monod([SNO3], KNO3_H)",
         "anoxic_NO2": "monod_inh([SO2], KO2_H) * monod([SNO2], KNO2_H)",
-        "anoxic": "anoxic_NO3 + anoxic_NO2",
-        "anaerobic": "monod_inh([SO2], KO2_H) * monod_inh([SNO3], KNO3_H) * monod_inh([SNO2], KNO2_H)",
+        # The switches of the processes that do not reduce nitrogen (hydrolysis,
+        # decay, fermentation, anaerobic storage) see nitrate and nitrite
+        # together; aerobic + anoxic + anaerobic stays 1, and without nitrite
+        # every switch is the core's.
+        "anoxic": "monod_inh([SO2], KO2_H) * monod([SNO3] + [SNO2], KNO3_H)",
+        "anaerobic": "monod_inh([SO2], KO2_H) * monod_inh([SNO3] + [SNO2], KNO3_H)",
         "anaerobic_only": "monod_inh([SO2], KI_O2_AN) * monod_inh([SNO3] + [SNO2], KI_NO3_AN)",
         "decay_switch_AUT": "aerobic + eta_b_NOX_AUT * anoxic + eta_b_AN * anaerobic",
+        # Free ammonia and free nitrous acid, as N (Anthonisen et al. 1976, in
+        # the form of Hiatt & Grady 2008).
+        "free_ammonia": "[SNH4] * 10 ** {pH} / (exp(T_FA / {T}) + 10 ** {pH})",
+        "free_nitrous_acid": "[SNO2] / (exp(-T_FNA / {T}) * 10 ** {pH})",
     }
 
 
@@ -199,14 +233,19 @@ def autotroph_reactions() -> list[dict]:
         dict(
             name="growth_of_AOB",
             description="Nitritation: ammonium to nitrite.",
-            rate=f"muAOB * monod([SO2], KO2_AOB) * monod([SNH4], KNH4_AOB) * {p_limit} * [XAOB]",
+            rate=(
+                "muAOB * free_ammonia / (KFA_AOB + free_ammonia + free_ammonia ** 2 / KI_FA_AOB) "
+                "* monod([SO2], KO2_AOB) * monod_inh(free_nitrous_acid, KI_FNA_AOB) "
+                f"* {p_limit} * [XAOB]"
+            ),
             stoichiometry={"XAOB": 1.0, "SNO2": "1 / YAOB", **closures},
         ),
         dict(
             name="growth_of_NOB",
             description="Nitratation: nitrite to nitrate.",
             rate=(
-                "muNOB * monod([SO2], KO2_NOB) * monod([SNO2], KNO2_NOB) * monod([SNH4], KNH4_H) "
+                "muNOB * free_nitrous_acid / (KFNA_NOB + free_nitrous_acid + free_nitrous_acid ** 2 / KI_FNA_NOB) "
+                "* monod([SO2], KO2_NOB) * monod_inh(free_ammonia, KI_FA_NOB) * monod([SNH4], KNH4_H) "
                 f"* {p_limit} * [XNOB]"
             ),
             stoichiometry={"XNOB": 1.0, "SNO2": "-1 / YNOB", "SNO3": "1 / YNOB", **closures},
@@ -249,17 +288,19 @@ def build() -> dict:
             description=(
                 "Nitrite level of the plant-wide model: plantwide_bio_p with nitrite as an "
                 "intermediate. Ammonia- and nitrite-oxidizing bacteria replace the one-step "
-                "nitrifiers, anammox oxidizes ammonium with nitrite, and every group that reduces "
-                "nitrate (heterotrophs, PAOs, both GAO groups) does it in two steps, nitrate to "
-                "nitrite and nitrite to N2, the first slowed while nitrite is present. Nitrifier "
-                "and anammox kinetics and the two-step form are those of the plant-wide model of "
-                "Varga et al. (2018), with the anammox stoichiometry of Strous et al. (1998). "
+                "nitrifiers, growing on free ammonia and free nitrous acid with the kinetics of "
+                "Hiatt & Grady (2008); anammox oxidizes ammonium with nitrite, with the kinetics of "
+                "Hao et al. (2002) and the stoichiometry of Strous et al. (1998); and every group "
+                "that reduces nitrate (heterotrophs, PAOs, both GAO groups) does it in two steps, "
+                "nitrate to nitrite and nitrite to N2, at the step capacities of Hiatt & Grady (2008). "
                 "Generated by _make_plantwide_nitrite.py."
             ),
             references=[
-                "Varga, Hauduc, Barnard, Dunlap, Jimenez, Menniti, Schauer, Lopez Vazquez, Gu, Sharp & Takacs (2018). Recent advances in bio-P modelling - a new approach verified by full-scale observations. Water Sci. Technol. 78(10), 2119-2130. doi:10.2166/wst.2018.490",
-                "Kaelin, Manser, Rieger, Eugster, Rottermann & Siegrist (2009). Extension of ASM3 for two-step nitrification and denitrification and its calibration and validation with batch tests and pilot scale data. Water Res. 43(6), 1680-1692.",
+                "Hiatt & Grady (2008). An updated process model for carbon oxidation, nitrification, and denitrification. Water Environ. Res. 80(11), 2145-2156. doi:10.2175/106143008X304776",
+                "Hao, Heijnen & van Loosdrecht (2002). Sensitivity analysis of a biofilm model describing a one-stage completely autotrophic nitrogen removal (CANON) process. Biotechnol. Bioeng. 77(3), 266-277. doi:10.1002/bit.10105",
                 "Strous, Heijnen, Kuenen & Jetten (1998). The sequencing batch reactor as a powerful tool for the study of slowly growing anaerobic ammonium-oxidizing microorganisms. Appl. Microbiol. Biotechnol. 50(5), 589-596.",
+                "Strous, Kuenen & Jetten (1999). Key physiology of anaerobic ammonium oxidation. Appl. Environ. Microbiol. 65(7), 3248-3250.",
+                "Anthonisen, Loehr, Prakasam & Srinath (1976). Inhibition of nitrification by ammonia and nitrous acid. J. Water Pollut. Control Fed. 48(5), 835-852.",
             ],
         ),
         species=species(base),

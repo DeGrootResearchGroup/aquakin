@@ -7,12 +7,14 @@ Checked against independent references:
   is clean;
 - without nitrite the level is the bio-P level: every inherited process runs
   at the same rate, each nitrate-reducing process now as its first step (to
-  nitrite) while its second step (nitrite to N2) is idle;
+  nitrite) at Hiatt & Grady's (2008) share of it, while its second step
+  (nitrite to N2) is idle;
 - the anammox stoichiometry is Strous et al.'s (1998): 1.32 mol nitrite
   consumed and 0.26 mol nitrate made per mol ammonium, 1.02 mol N2;
-- with the kinetics aligned, an AOB and NOB batch follows the shipped
-  ``asm3_2step`` (Kaelin et al. 2009) while ammonium lasts, and its gradient
-  matches a central difference.
+- the AOB and NOB growth rates are Hiatt & Grady's R9 and R10, evaluated by
+  hand from their Table 2 on free ammonia and free nitrous acid, and the
+  anammox growth rate is Hao et al.'s (2002) at 30 C and 20 C;
+- the gradient of a nitrifier batch matches a central difference.
 """
 
 from __future__ import annotations
@@ -59,8 +61,9 @@ def test_without_nitrite_every_process_runs_as_in_the_bio_p_level(nitrite, bio_p
     """A mixed liquor with heterotrophs, PAOs and GAOs (with their storage),
     nitrate and a little oxygen, no nitrite and no nitrifiers: each process the
     two levels share runs at the same rate, each nitrate-reducing process of the
-    bio-P level runs at the same rate as its first step here, and its second
-    step does not run. The tolerance is the switches' nitrite term at zero."""
+    bio-P level runs here as its first step at 0.28 / 0.8 of the rate (Hiatt &
+    Grady's nitrate step against ASM2d's anoxic factor), and its second step
+    does not run. The tolerance is the switches' nitrite term at zero."""
     state = dict(
         SO2=0.05, SF=20.0, SA=10.0, SPRO=5.0, SNH4=15.0, SNO3=5.0, SPO4=10.0, SIC=60.0,
         SI=30.0, XI=500.0, XS=200.0, XH=1500.0,
@@ -76,7 +79,7 @@ def test_without_nitrite_every_process_runs_as_in_the_bio_p_level(nitrite, bio_p
     assert len(split) == 23  # 3 heterotroph and 20 PAO / GAO anoxic processes
     for name, rate in r_b.items():
         if name in split:
-            assert r_n[f"{name}_NO3_NO2"] == pytest.approx(rate, rel=1e-10, abs=1e-12), name
+            assert r_n[f"{name}_NO3_NO2"] == pytest.approx(0.28 / 0.8 * rate, rel=1e-10, abs=1e-12), name
             assert r_n[f"{name}_NO2_N2"] == 0.0, name
         elif name in r_n:
             assert r_n[name] == pytest.approx(rate, rel=1e-10, abs=1e-12), name
@@ -97,43 +100,59 @@ def test_anammox_stoichiometry_is_strous(nitrite):
     assert row[col["SN2"]] / 2.0 / nh4 == pytest.approx(1.02, abs=0.005)
 
 
-def _aligned_batch(nitrite):
-    """An aerated nitrifier batch (oxygen in excess, no heterotrophs) in both
-    models, with asm3_2step given this level's AOB and NOB constants and both
-    decays off (asm3_2step's is endogenous respiration, this level's
-    death-regeneration). This level's NOB also needs ammonium for its biomass
-    and phosphate, and asm3_2step's alkalinity; each is made non-limiting."""
-    asm3 = aquakin.load_model("asm3_2step")
-    p_asm3 = asm3.default_parameters()
-    for name, value in dict(
-        KAOBNH4=0.7, KAOBO2=0.25, KNOBNO2=0.1, KNOBO2=0.25, YAOB=0.15, YNOB=0.09,
-        bAOB=0.0, bNOB=0.0, KNALK=1e-12,
-    ).items():  # fmt: skip
-        p_asm3 = p_asm3.at[asm3.param_index[name]].set(value)
-    p_n = nitrite.default_parameters()
-    for name, value in dict(bAOB=0.0, bNOB=0.0, KNH4_H=1e-9, KP_H=1e-9, muAMX=0.0).items():
-        p_n = p_n.at[nitrite.param_index[name]].set(value)
-    start = dict(SO2=200.0, SNH4=40.0, SNO3=1.0, XAOB=30.0, XNOB=20.0)
-    c_n = _vector(nitrite, {**start, "SIC": 500.0, "SPO4": 50.0})
-    c_asm3 = _vector(asm3, {**start, "SALK": 0.05})
-    tol = dict(rtol=1e-10, atol=1e-10)
-    r_n = aquakin.BatchReactor(nitrite, aquakin.SpatialConditions.uniform(T=T20, pH=PH), **tol)
-    r_asm3 = aquakin.BatchReactor(asm3, aquakin.SpatialConditions.uniform(T=T20), **tol)
-    return (r_n, c_n, p_n), (r_asm3, c_asm3, p_asm3)
+def _rates_at(model, state, T, pH):
+    conditions = {"T": jnp.asarray([T]), "pH": jnp.asarray([pH])}
+    rates = model.rates(_vector(model, state), model.default_parameters(), conditions, 0)
+    return dict(zip(model.reaction_names, np.asarray(rates)))
 
 
-def test_aligned_nitrifier_batch_follows_asm3_2step(nitrite):
-    """To 0.2 d, while ammonium lasts (after it, asm3_2step's NOB keeps growing
-    and drives ammonium negative, this level's stops): ammonium, nitrite,
-    nitrate, oxygen and both biomasses to rtol 1e-7, a decade above the solves'
-    rtol. About 12 s, compiling both solves."""
-    (r_n, c_n, p_n), (r_asm3, c_asm3, p_asm3) = _aligned_batch(nitrite)
-    t = jnp.linspace(0.0, 0.2, 5)
-    s_n = r_n.solve(c_n, t_span=(0.0, 0.2), t_eval=t, params=p_n)
-    s_asm3 = r_asm3.solve(c_asm3, t_span=(0.0, 0.2), t_eval=t, params=p_asm3)
-    for s in ("SNH4", "SNO2", "SNO3", "SO2", "XAOB", "XNOB"):
-        np.testing.assert_allclose(s_n.C_named(s), s_asm3.C_named(s), rtol=1e-7, atol=1e-8)
-    assert float(s_n.C_named("SNO2")[-1]) > 5.0  # nitrite accumulates between the steps
+@pytest.mark.parametrize(("T", "pH"), [(293.15, 7.0), (298.15, 7.8)])
+def test_nitrifier_growth_is_hiatt_and_grady_on_free_ammonia_and_nitrous_acid(nitrite, T, pH):
+    """R9 and R10 of Hiatt & Grady (2008), written out from their Table 2 at
+    20 C, with free ammonia and free nitrous acid from their eqs 2-5 and the
+    growth rates corrected by ASM2d's autotroph theta (0.35 -> 1.0 1/d between
+    10 and 20 C, theta = (1 / 0.35) ** 0.1); the nutrient terms are the core's.
+    The model's theta is rounded to 10 figures, hence rel=1e-8."""
+    state = dict(SO2=1.5, SNH4=30.0, SNO2=8.0, SPO4=5.0, XAOB=100.0, XNOB=50.0)
+    rates = _rates_at(nitrite, state, T, pH)
+    p = {k: float(nitrite.default_parameters()[i]) for k, i in nitrite.param_index.items()}
+    fa = 30.0 * 10**pH / (np.exp(6344.0 / T) + 10**pH)
+    fna = 8.0 / (np.exp(-2300.0 / T) * 10**pH)
+    mu = 0.78 * (1.0 / 0.35) ** ((T - 293.15) / 10.0)
+    p_limit = 5.0 / (p["KP_H"] + 5.0)
+    aob = mu * fa / (0.0075 + fa + fa**2 / 1.0) * 1.5 / (0.6 + 1.5) * 0.1 / (0.1 + fna) * p_limit * 100.0
+    nob = (
+        mu * fna / (1e-4 + fna + fna**2 / 0.04) * 1.5 / (1.2 + 1.5) * 0.2 / (0.2 + fa)
+        * 30.0 / (p["KNH4_H"] + 30.0) * p_limit * 50.0
+    )  # fmt: skip
+    assert rates["growth_of_AOB"] == pytest.approx(aob, rel=1e-8)
+    assert rates["growth_of_NOB"] == pytest.approx(nob, rel=1e-8)
+
+
+def test_anammox_growth_is_hao_at_30_and_20_c(nitrite):
+    """Hao et al. (2002), from Strous et al. (1998): 0.072 1/d at 30 C, with
+    oxygen inhibition 0.01 and affinities 0.07 (ammonium) and 0.05 (nitrite);
+    at 20 C the activation energy of 70 kJ/mol gives 0.028 1/d (Hao et al.
+    quote 0.03). theta is rounded to 10 figures, hence rel=1e-8."""
+    state = dict(SO2=0.02, SNH4=0.1, SNO2=0.2, SPO4=5.0, XAMX=100.0)
+    p = {k: float(nitrite.default_parameters()[i]) for k, i in nitrite.param_index.items()}
+    terms = 0.1 / (0.07 + 0.1) * 0.2 / (0.05 + 0.2) * 0.01 / (0.01 + 0.02) * 5.0 / (p["KP_H"] + 5.0) * 100.0
+    arrhenius = np.exp(-70000.0 / 8.314 * (1.0 / 293.15 - 1.0 / 303.15))
+    assert 0.072 * arrhenius == pytest.approx(0.028, abs=5e-4)
+    assert _rates_at(nitrite, state, 303.15, 7.0)["growth_of_anammox"] == pytest.approx(0.072 * terms, rel=1e-8)
+    assert _rates_at(nitrite, state, 293.15, 7.0)["growth_of_anammox"] == pytest.approx(
+        0.072 * arrhenius * terms, rel=1e-8
+    )
+
+
+def _nitrifier_batch(nitrite):
+    """An aerated AOB and NOB batch, without heterotrophs or anammox."""
+    p = nitrite.default_parameters().at[nitrite.param_index["muAMX"]].set(0.0)
+    c = _vector(nitrite, dict(SO2=8.0, SNH4=40.0, SNO3=1.0, SIC=500.0, SPO4=50.0, XAOB=30.0, XNOB=20.0))
+    reactor = aquakin.BatchReactor(
+        nitrite, aquakin.SpatialConditions.uniform(T=T20, pH=PH), rtol=1e-10, atol=1e-10
+    )
+    return reactor, c, p
 
 
 @pytest.mark.slow
@@ -145,7 +164,7 @@ def test_gradient_of_batch_nitrite_matches_a_central_difference(nitrite):
     111-reaction model, so it runs in the slow tier; the fast tier checks a
     reverse-mode gradient through the same solve path on the bio-P level
     (``test_plantwide_bio_p.py``)."""
-    (r_n, c_n, p_n), _ = _aligned_batch(nitrite)
+    r_n, c_n, p_n = _nitrifier_batch(nitrite)
     k = nitrite.param_index["muAOB"]
 
     def nitrite_at(params):

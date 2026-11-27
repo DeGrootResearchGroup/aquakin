@@ -222,11 +222,11 @@ kept equal by putting the organic-N difference in ammonium.
     and 7): fermentation is heterotroph growth on `SF` without oxygen or
     nitrate, in every unit (Barker and Dold 1997; Hauduc et al. 2013), with
     the acetate / propionate / hydrogen split kept, uptake 3 1/d at 20 C
-    (theta 1.04), half-saturation 5 g/m3, yield 0.1 (the commercial model of
-    the Varga et al. 2018 lineage); the acidogens `XFE` and their Contois
+    (theta 1.04), half-saturation 5 g/m3, yield 0.1 (provisional: the owner
+    keeps these values until a paper source is found, 2026-11-27); the acidogens `XFE` and their Contois
     hydrolysis are removed, so hydrolysis is the heterotrophs' alone; and
     heterotroph decay without oxygen or nitrate is 0.25 of the aerobic rate
-    (the same model's), which lets them persist in a digester on fermentation
+    (provisional likewise), which lets them persist in a digester on fermentation
     growth. Decision 4's reason (heterotroph fermentation starving the
     acidogens out of the digester) does not apply without acidogens. `etafe`
     is refitted to the BSM2 digester: 0.144 (methane +0.1%, particulate COD
@@ -235,17 +235,24 @@ kept equal by putting the organic-N difference in ammonium.
     proportional to `etafe`, so methane is steep in it: 0.12 gives -15.5%,
     0.135 -4.7%, 0.155 +3.9%, 0.2 +8.0%.
 
-17. **`plantwide_nitrite`'s AOB, NOB and anammox kinetics come from the
-    commercial plant-wide model of the Varga et al. (2018) lineage**
-    (owner, 2026-11-27): death-regeneration decay like the core, its
-    activated-sludge half-saturations, Arrhenius about 20 C (see
-    *The nitrite level*).
-18. **Heterotrophs denitrify in two steps in the same model's form** (owner,
-    2026-11-27): NO3 to NO2 and NO2 to N2, each on SF, acetate and
-    propionate, one anoxic factor for both (ASM2d's `etaNO3_H`), the first
-    step slowed while nitrite is present.
+17. **`plantwide_nitrite`'s nitrifier kinetics are Hiatt & Grady's (2008)
+    ASMN, its anammox kinetics Hao et al.'s (2002) with the stoichiometry of
+    Strous et al. (1998)** (owner, 2026-11-27): AOB on free ammonia and NOB on
+    free nitrous acid (Anthonisen et al. 1976), each with Haldane
+    self-inhibition and the other's inhibition; temperature as ASM2d's
+    autotrophs for AOB and NOB, Arrhenius at 70 kJ/mol (Strous et al. 1999)
+    for anammox; no NOB mixotrophy (ASMN's R11 left out). Replaces the
+    earlier workbook-sourced values.
+18. **Heterotrophs denitrify in two steps at ASMN's step capacities** (owner,
+    2026-11-27): NO3 to NO2 and NO2 to N2 run side by side, neither inhibiting
+    the other, each on its own acceptor. ASMN's anoxic growth factors are 0.28
+    (NO3 to NO2) and 0.16, 0.35, 0.35 (NO2 to NO to N2O to N2, one electron
+    each); NO2 to N2 is lumped at the slowest step's capacity, 3 x 0.16 =
+    0.48. Each inherited process keeps its own anoxic factor (ASM2d's 0.8 for
+    the heterotrophs) and takes 0.28 / 0.8 and 0.48 / 0.8 of it. The
+    four-step form is recorded in *The nitrite level* for the N2O level.
 19. **PAOs and both GAO groups denitrify in two steps too** (owner,
-    2026-11-27), with the same rule as the heterotrophs.
+    2026-11-27), with the same fractions of their own anoxic factors.
 20. **The level is generated** (owner, 2026-11-27):
     `_make_plantwide_nitrite.py` merges the core and the bio-P level and
     writes `plantwide_nitrite.yaml`; the closure declaration stays deferred.
@@ -491,9 +498,8 @@ species (`tests/validation/test_plantwide_core_bsm1.py`).
   stripping the declared gases) left the plant. The heterotrophs now grow on
   propionate with oxygen and nitrate, on ASM2d's VFA kinetics applied to
   acetate plus propionate (exactly ASM2d without propionate); the BSM1
-  comparison strips the core's declared gases in the aerated tanks, which is
-  how the commercial model of the Varga et al. (2018) lineage removes hydrogen
-  in activated sludge (gas transfer only, no biological uptake). Left: 0.004
+  comparison strips the core's declared gases in the aerated tanks (gas
+  transfer only, no biological uptake of hydrogen). Left: 0.004
   g COD/m3 of each.
 - *As shipped*, the core leaves 11.0 g N/m3 of nitrate against ASM2d's 10.4,
   ammonium 1.11 against 1.12: its fermentation in the anoxic tanks turns some
@@ -505,71 +511,97 @@ species (`tests/validation/test_plantwide_core_bsm1.py`).
 
 ## The nitrite level (`plantwide_nitrite`, design 2026-11-27)
 
-Extends `plantwide_bio_p`; decisions 17 to 20.
+Extends `plantwide_bio_p`; decisions 17 to 20. Sources: Hiatt & Grady (2008)
+for the nitrifiers and denitrification, Hao et al. (2002) and Strous et al.
+(1998) for anammox.
 
 **States.** Adds `SNO2` (g N/m3), `XAOB`, `XNOB` and `XAMX` (biomass, the
 core's composition); removes `XAUT` and the one-step nitrification.
 
-**Switches.** With `I(x) = monod_inh(x, K)` and `M = 1 - I`:
-`anoxic_NO3 = I(O2) M(NO3) I(NO2)`, `anoxic_NO2 = I(O2) M(NO2)`,
-`anoxic = anoxic_NO3 + anoxic_NO2`, `anaerobic = I(O2) I(NO3) I(NO2)`,
-so `aerobic + anoxic + anaerobic = 1` still, and without nitrite every switch
-is the core's. The methanogens' `anaerobic_only` takes NO3 + NO2. Hydrolysis
-and decay keep their form on the widened switches.
+**Switches.** With `I(x) = monod_inh(x, K)` and `M = 1 - I`: the reduction
+steps use `anoxic_NO3 = I(O2) M(NO3; KNO3_H)` and `anoxic_NO2 = I(O2) M(NO2;
+KNO2_H)`, each on its own acceptor as in ASMN. The processes that do not
+reduce nitrogen (hydrolysis, decay, fermentation, anaerobic storage) use
+`anoxic = I(O2) M(NO3 + NO2)` and `anaerobic = I(O2) I(NO3 + NO2)`, so
+`aerobic + anoxic + anaerobic = 1` and without nitrite every switch is the
+core's. The methanogens' `anaerobic_only` takes NO3 + NO2.
 
 **Two-step reduction.** Every inherited process that consumes nitrate under
 `anoxic` (heterotroph growth on SF, acetate, propionate; every PAO and GAO
-anoxic process) becomes two: on `anoxic_NO3` with its electrons going NO3 to
-NO2 (2 e per N: the nitrate coefficient times 5/2, the same nitrite made), and
-on `anoxic_NO2` going NO2 to N2 (3 e per N: the nitrate coefficient times 5/3,
-as nitrite). Rates, yields and the other coefficients are unchanged, so each
-pair does what the one process did, through nitrite.
+anoxic process) becomes two: `f_NO3_NO2 * anoxic_NO3` with its electrons going
+NO3 to NO2 (2 e per N: the nitrate coefficient times 5/2), and `f_NO2_N2 *
+anoxic_NO2` going NO2 to N2 (3 e per N: the nitrate coefficient times 5/3, as
+nitrite). Yields and the other coefficients are unchanged. `f_NO3_NO2` 0.35
+and `f_NO2_N2` 0.6 are ASMN's 0.28 and 3 x 0.16 over ASM2d's 0.8; `KNO2_H` is
+ASMN's 0.2. In balance (nitrite made as fast as used, `r2 = 1.5 r1`) the
+nitrate step limits, and the pair runs at 0.35 + 0.525 = 0.875 of the one
+process's rate: ASMN's chain at 0.70 against ASM1's 0.8.
 
-**Nitrifiers and anammox** (the same model's values, 20 C):
+**Nitrifiers** (Hiatt & Grady 2008, Table 2, 20 C), rate forms R9 and R10:
 
-| | AOB | NOB | anammox |
+| | AOB | NOB |
+|---|---|---|
+| max growth (1/d), theta | 0.78, (1/0.35)^0.1 | 0.78, (1/0.35)^0.1 |
+| decay (1/d), theta | 0.096, 3^0.1 | 0.096, 3^0.1 |
+| substrate, half-saturation (g N/m3) | free ammonia 0.0075 | free nitrous acid 1e-4 |
+| self-inhibition (Haldane) | FA 1.0 | FNA 0.04 |
+| inhibition by the other | FNA 0.1 | FA 0.2 |
+| oxygen (g/m3) | 0.6 | 1.2 |
+| yield (g COD/g N) | 0.18 | 0.06 |
+
+`FA = SNH4 10^pH / (exp(6344/T) + 10^pH)`, `FNA = SNO2 / (exp(-2300/T)
+10^pH)`, as N (ASMN eqs 2-5). At pH 7 and 20 C the AOB's half-saturation is
+about 1.9 g NH4-N/m3 of total ammonium, the NOB's about 0.4 g NO2-N/m3. The
+thetas are ASM2d's autotroph pairs (1.0 / 0.35 and 0.15 / 0.05 1/d at 20 /
+10 C): ASMN's own Ratkowsky constants are only in Hiatt's 2006 thesis. The
+NOB keep the core's ammonium nutrient term, and both the phosphate one.
+ASMN's NOB mixotrophy (R11: `bg = 6` times R10, scaled by `SS/(20 + SS)`) is
+left out.
+
+**Anammox** (Hao et al. 2002, Table AIII, 30 C, from Strous et al. 1998): max
+growth 0.072 1/d, decay 0.003 1/d, both with theta 1.0994 (70 kJ/mol between
+20 and 30 C; 0.028 1/d at 20 C, Hao et al. quote 0.03), ammonium 0.07 and
+nitrite 0.05 g N/m3, oxygen inhibition 0.01 g/m3. Stoichiometry: Strous et
+al.'s 1.32 NO2 and 0.26 NO3 per NH4, the ammonium and N2 from the COD and N
+balances. Autotroph decay is x0.5 with nitrite or nitrate (Hao et al., after
+Koch et al. 2000), x`eta_b_AN` without either.
+
+**ASMN's four-step denitrification**, for the N2O level. Each step is
+heterotroph growth `muH etag_i S/(KS_i + S) KOH/(KOH + SO) ...` (KOH 0.1,
+KS 20, KS5 40 g COD/m3), all at anoxic yield `etaY YH` (0.9 x 0.6):
+
+| step | etag | acceptor term | NO inhibition |
 |---|---|---|---|
-| max growth (1/d), theta | 0.9, 1.072 | 0.65, 1.06 | 0.1, 1.01 |
-| decay (1/d), theta | 0.17, 1.03 | 0.15, 1.03 | 0.019, 1.03 |
-| substrate half-saturation (g N/m3) | NH4 0.7 | NO2 0.1 | NH4 2, NO2 1 |
-| oxygen (g/m3) | 0.25 | 0.25 | inhibited, 0.4 |
-| yield | 0.15 g COD/g N | 0.09 g COD/g N | Strous: 1.32 NO2, 0.26 NO3 per NH4 |
+| R2 NO3 to NO2 | 0.28 | `SNO3/(0.2 + SNO3)` | none |
+| R3 NO2 to NO | 0.16 | `SNO2/(0.2 + SNO2)` | `0.5/(0.5 + SNO)` |
+| R4 NO to N2O | 0.35 | `SNO/(0.05 + SNO + SNO^2/0.3)` | self (Haldane, 0.3) |
+| R5 N2O to N2 | 0.35 | `SN2O/(0.05 + SN2O)` | `0.075/(0.075 + SNO)` |
 
-Their decay is aerobic, x0.5 with nitrite or nitrate, x0.25 without either
-(the same model's anoxic and anaerobic reduction factors). The heterotrophs'
-nitrite half-saturation is the same model's 0.05 g N/m3.
-
-**Left out**, to later levels: N2O and NO (`asm3_2step_n2o` covers them),
-free-ammonia and free-nitrous-acid inhibition and CO2 limitation of the
-nitrifiers (they need the speciated pH of the chemistry level; the same model
-switches the first two off in activated sludge).
-
-**Validation.** Conservation and units; without nitrite (no AOB, NOB or
-anammox) the level's reaction terms equal the bio-P level's; the nitrifiers and
-anammox against `asm3_2step` / `asm3_2step_anammox` in autotroph batches with
-the kinetics aligned; on BSM1, nitrification and denitrification against the
-core's one-step form.
+Nitrite does not inhibit any step (ASMN departs from von Schulthess et al.
+here); NO inhibits its own and the neighbouring reductions. Alkalinity is
+made in the nitrite-to-NO step. ASMN also has assimilative nitrate reduction
+(R6, R7), not needed while ammonium is present.
 
 **Built (2026-11-27).** `_make_plantwide_nitrite.py` writes 35 species, 111
-reactions, 106 parameters: 23 inherited nitrate-reducing processes (3
-heterotroph, 20 PAO / GAO) each become a pair; COD, N, C and P close in every
-reaction and the units check is clean. Measured
-(`tests/integration/test_plantwide_nitrite.py`,
+reactions: 23 inherited nitrate-reducing processes (3 heterotroph, 20 PAO /
+GAO) each become a pair; COD, N, C and P close in every reaction and the units
+check is clean. Checked (`tests/integration/test_plantwide_nitrite.py`,
 `tests/validation/test_plantwide_nitrite_bsm1.py`):
 
-- without nitrite every shared process, and each pair's first step, runs at
-  the bio-P level's rate to 1e-10, the second steps idle;
-- anammox: 1.320 NO2 and 0.260 NO3 per NH4 (Strous's 1.32 and 0.26, from the
-  `auto` closure of the given nitrite and nitrate coefficients), N2 1.024
-  (1.02); the shipped `asm3_2step_anammox` gives 1.331 NO2, from its own
-  yield parameterization;
-- with this level's AOB and NOB constants given to `asm3_2step` and both
-  decays off, an aerated nitrifier batch agrees to 1e-7 while ammonium lasts;
-  after it, `asm3_2step`'s NOB keep growing on no nitrogen source and drive
-  ammonium negative, this level's stop;
-- on BSM1 the level leaves 0.22 g N/m3 ammonium, 0.15 nitrite and 9.35
-  nitrate (the core: 1.11 and 11.02), and its N, P and COD balances close to
-  1e-13 with the stripped gases counted.
+- without nitrite every shared process runs at the bio-P level's rate, each
+  pair's first step at 0.35 of it, the second steps idle;
+- the AOB and NOB rates equal R9 and R10 written out from ASMN's Table 2, at
+  20 C / pH 7 and 25 C / pH 7.8; anammox equals Hao et al.'s at 30 and 20 C;
+- anammox: 1.32 NO2 and 0.26 NO3 per NH4, N2 1.02 (Strous);
+- on BSM1 (20 C) tank 5 holds 1.77 g N/m3 ammonium, 5.40 nitrite and 2.34
+  nitrate (the core: 1.11 and 11.02), with 108 AOB and 13 NOB. The NOB only
+  just outgrow washout: tank 5 is at 0.5 g O2/m3 and their oxygen
+  half-saturation is 1.2 (Hao et al. use 2.2, against 0.6 for AOB). With it at
+  0.6, nitrite 1.14 and nitrate 9.14 (ammonium 2.74, the NOB competing for
+  oxygen); with `muNOB` x1.3, nitrite 1.47. Mixotrophy would add about 12%
+  (0.4 g COD/m3 of substrate in the aerated tanks). The owner accepted the
+  build-up as the paper kinetics' prediction (2026-11-27). N, P and COD close
+  over the plant with the stripped gases counted.
 
 ## Structure: a linear `extends:` chain
 
@@ -693,12 +725,8 @@ phosphate, iron phosphate / hydroxide), plus `G_NH3`.
 
 | Processes | Primary source |
 |---|---|
-| AOB and NOB growth, two-step denitrification on NO₂ and NO₃ | Kaelin et al. (2009); Hiatt & Grady (2008) |
-| Anammox growth and decay | Strous et al. (1998, 1999) |
-
-The repository's `asm3_2step` and `asm3_2step_anammox` models already carry
-these sources and kinetics; the level reuses their parameter values where the
-process is the same.
+| AOB and NOB growth on free ammonia / free nitrous acid, two-step denitrification | Hiatt & Grady (2008); Anthonisen et al. (1976) |
+| Anammox growth and decay | Hao et al. (2002); Strous et al. (1998, 1999) |
 
 ### `plantwide_chem`
 
@@ -801,6 +829,9 @@ DOIs were found from publisher, PubMed and repository records; three entries
 have no DOI that could be confirmed and are marked. Check each against the
 paper itself before citing it in a model file.
 
+- Anthonisen, A.C., Loehr, R.C., Prakasam, T.B.S. & Srinath, E.G. (1976).
+  Inhibition of nitrification by ammonia and nitrous acid. *J. Water Pollut.
+  Control Fed.* 48(5), 835–852 (no DOI).
 - Barat, R. et al. (2013). Biological Nutrient Removal Model No. 2 (BNRM2): a
   general model for wastewater treatment plants. *Water Sci. Technol.* 67(7).
   https://doi.org/10.2166/wst.2013.004
@@ -818,6 +849,10 @@ paper itself before citing it in a model file.
   describing pH variations and ion speciation/pairing in wastewater treatment
   process models. *Water Res.* 85, 255–265.
   https://doi.org/10.1016/j.watres.2015.07.014
+- Hao, X., Heijnen, J.J. & van Loosdrecht, M.C.M. (2002). Sensitivity analysis
+  of a biofilm model describing a one-stage completely autotrophic nitrogen
+  removal (CANON) process. *Biotechnol. Bioeng.* 77(3), 266–277.
+  doi:10.1002/bit.10105
 - Hauduc, H. et al. (2015). A dynamic physicochemical model for chemical
   phosphorus removal. *Water Res.* 73, 157–170.
   https://doi.org/10.1016/j.watres.2014.12.053
