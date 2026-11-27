@@ -578,7 +578,12 @@ is what production simulators use to snap to steady state on any topology.
   follow; efficient when parameters outnumber outputs), or `"auto"` (forward iff
   `k ≤ m`). Both give the same exact sensitivity; `elasticity=True` returns the
   dimensionless `(dg/dθ)(θ/g)`. This is the general form of the plant-scale
-  sensitivity screen.
+  sensitivity screen. The IFT step (the `∂F/∂y` Jacobian, the solve and the
+  VJP / JVP) is one jitted kernel kept in `plant._solve_cache`; the output enters
+  only as its value and Jacobian at the steady state, so a new `output_fn` reuses
+  it. Measured on BSM2 (112 parameters, one output, reverse mode, 4 cores): first
+  call 21 s (it was 47 s run eagerly), repeat call 0.025 s (it was 15 s, every
+  call recompiling), against 0.1 s for the compiled steady-state solve.
 - **`plant.steady_state_dgsm(ranges, *, output_fn=, wrt=, mode=, n_samples=, seed=, cond_factor=)`**
   — **global** sensitivity (DGSM) of the steady state: samples the screened
   parameters over their ranges (scrambled-Sobol QMC), solves the steady state at

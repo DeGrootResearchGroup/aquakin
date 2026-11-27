@@ -128,3 +128,46 @@ def test_steady_and_dynamic_operating_sensitivity_agree(cstr_plant):
         t_span=(0.0, T), t_eval=jnp.array([T]), wrt=wrt, operating=op,
         mode="forward", y0=y_star, rtol=1e-8, atol=1e-10))
     np.testing.assert_allclose(Sd[0], expected, rtol=1e-7)
+
+
+def test_steady_state_sensitivity_reuses_its_compiled_kernel(cstr_plant, monkeypatch):
+    """A repeat ``steady_state_sensitivity`` call reuses the compiled IFT kernel
+    instead of re-tracing the plant RHS (#920), even with a new ``output_fn``
+    object, and still returns the closed form of the single CSTR
+    (dA*/dk = -0.1 / (0.1 + k)^2, dA*/ds = 0.1 / (0.1 + k)). Re-tracing calls
+    ``plant.derivative``; a cache hit runs the compiled program and calls it
+    zero times."""
+    p = cstr_plant
+    base = p.default_parameters()
+    k = float(base[p.parameter_index("simple_decay.A_to_B.k")])
+    expected = np.array([-0.1 / (0.1 + k) ** 2, 0.1 / (0.1 + k)])
+    wrt = ["simple_decay.A_to_B.k"]
+    op = [{"kind": "influent_concentration", "port": "feed", "species": "A"}]
+    y_star = p.steady_state(base, tol=1e-12).state
+
+    first = np.asarray(p.steady_state_sensitivity(
+        base, state=y_star, output_fn=lambda y: jnp.array([y[0]]), wrt=wrt,
+        operating=op, mode="forward"))
+    np.testing.assert_allclose(first[0], expected, rtol=1e-8)
+
+    traced = []
+    derivative = p.derivative
+
+    def counting_derivative(*args, **kwargs):
+        traced.append(1)
+        return derivative(*args, **kwargs)
+
+    monkeypatch.setattr(p, "derivative", counting_derivative)
+    again = np.asarray(p.steady_state_sensitivity(
+        base, state=y_star, output_fn=lambda y: jnp.array([y[0]]), wrt=wrt,
+        operating=op, mode="forward"))
+    assert traced == []
+    np.testing.assert_allclose(again[0], expected, rtol=1e-8)
+
+    # The reverse kernel is a separate compiled program and gives the same
+    # closed form, operating column included.
+    monkeypatch.undo()
+    reverse = np.asarray(p.steady_state_sensitivity(
+        base, state=y_star, output_fn=lambda y: jnp.array([y[0]]), wrt=wrt,
+        operating=op, mode="reverse"))
+    np.testing.assert_allclose(reverse[0], expected, rtol=1e-8)
