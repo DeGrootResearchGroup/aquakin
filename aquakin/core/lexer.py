@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["SYMBOLS", "Token", "spell", "tokenize"]
+__all__ = ["SYMBOLS", "Token", "located", "spell", "tokenize"]
 
 #: Single-character symbols, by the token kind they produce. ``**`` is read as
 #: ``POW`` before ``*`` is considered.
@@ -61,6 +61,32 @@ _SPELLING = {kind: f"'{char}'" for char, kind in SYMBOLS.items()} | {
 def spell(kind: str) -> str:
     """``kind`` as a message should name it (``RPAREN`` -> ``')'``)."""
     return _SPELLING.get(kind, repr(kind))
+
+
+def located(error: type[Exception], message: str, position: int) -> Exception:
+    """An ``error`` saying ``message``, carrying the character ``position`` it is about.
+
+    The position is also in the message, for a reader; the ``position``
+    attribute is for a program that marks it against the text (the flowsheet
+    editor), so nothing has to read it back out of the words.
+
+    Parameters
+    ----------
+    error : type
+        The language's exception class.
+    message : str
+        What is wrong.
+    position : int
+        The offset of the character in the expression's text.
+
+    Returns
+    -------
+    Exception
+        The exception to raise.
+    """
+    exc = error(message)
+    exc.position = position
+    return exc
 
 
 @dataclass(frozen=True)
@@ -124,7 +150,9 @@ def tokenize(text: str, *, error: type[Exception] = ValueError, offset: int = 0)
             try:
                 float(text[i:j])
             except ValueError:
-                raise error(f"'{text[i:j]}' at position {i + offset} is not a number") from None
+                raise located(
+                    error, f"'{text[i:j]}' at position {i + offset} is not a number", i + offset
+                ) from None
             tokens.append(Token("NUMBER", text[i:j], i + offset))
             i = j
         elif c.isalpha() or c == "_":
@@ -134,7 +162,7 @@ def tokenize(text: str, *, error: type[Exception] = ValueError, offset: int = 0)
             tokens.append(Token("IDENT", text[i:j], i + offset))
             i = j
         else:
-            raise error(f"Unexpected character {c!r} at position {i + offset}")
+            raise located(error, f"Unexpected character {c!r} at position {i + offset}", i + offset)
     tokens.append(Token("EOF", "", n + offset))
     return tokens
 

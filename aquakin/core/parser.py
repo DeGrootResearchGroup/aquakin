@@ -26,7 +26,7 @@ from collections.abc import Iterable
 from dataclasses import fields
 from functools import reduce
 
-from aquakin.core.lexer import Token
+from aquakin.core.lexer import Token, located
 from aquakin.core.nodes import (
     AddNode,
     ASTNode,
@@ -107,7 +107,16 @@ def refresh_function_registry() -> None:
 
 
 class ParseError(ValueError):
-    """Raised when a rate expression cannot be parsed."""
+    """Raised when a rate expression cannot be parsed.
+
+    Attributes
+    ----------
+    position : int or None
+        The offset in the expression's text of the character the error is
+        about, when there is one (the message says it too).
+    """
+
+    position: int | None = None
 
 
 # --- Tokenizer ---------------------------------------------------------
@@ -133,9 +142,11 @@ class _Parser(PrecedenceParser):
         tok = self.peek()
         kinds = (kind,) if isinstance(kind, str) else tuple(kind)
         if tok.kind not in kinds:
-            raise ParseError(
+            raise located(
+                ParseError,
                 f"Expected {kinds} at position {tok.pos}, got {tok.kind} ({tok.value!r}) "
-                f"in expression {self.text!r}"
+                f"in expression {self.text!r}",
+                tok.pos,
             )
         self.i += 1
         return tok
@@ -189,9 +200,11 @@ class _Parser(PrecedenceParser):
                 # A species name must START with an identifier token; its charge
                 # suffixes ('Br-', 'BrO3-', 'Ca2+') are read by _read_species_name
                 # below. A '[' followed by a non-identifier is malformed.
-                raise ParseError(
+                raise located(
+                    ParseError,
                     f"Expected species name after '[' at position {tok.pos}, "
-                    f"got {name_tok.kind} {name_tok.value!r}"
+                    f"got {name_tok.kind} {name_tok.value!r}",
+                    name_tok.pos,
                 )
             name = self._read_species_name()
             self._eat("RBRACK")
@@ -203,10 +216,12 @@ class _Parser(PrecedenceParser):
                 self._eat("LPAREN")
                 args = self.arglist()
                 self._eat("RPAREN")
-                return self._make_function_call(name, args)
+                return self._make_function_call(name, args, tok.pos)
             return ParamNode(name)
-        raise ParseError(
-            f"Unexpected token {tok.value!r} at position {tok.pos} in expression {self.text!r}"
+        raise located(
+            ParseError,
+            f"Unexpected token {tok.value!r} at position {tok.pos} in expression {self.text!r}",
+            tok.pos,
         )
 
     def _read_species_name(self) -> str:
@@ -249,21 +264,25 @@ class _Parser(PrecedenceParser):
             prev_end = tok.pos + len(tok.value)
         return "".join(parts)
 
-    def _make_function_call(self, name: str, args: list[ASTNode]) -> ASTNode:
+    def _make_function_call(self, name: str, args: list[ASTNode], pos: int) -> ASTNode:
         spec = _FUNCTIONS.get(name)
         if spec is None:
             available = ", ".join(sorted(_FUNCTIONS))
-            raise ParseError(
+            raise located(
+                ParseError,
                 f"Unknown function '{name}'. Available functions are: {available}. "
                 "A function defined outside aquakin has to be registered with "
-                "aquakin.register_rate_function() before the model is loaded."
+                "aquakin.register_rate_function() before the model is loaded.",
+                pos,
             )
         node_cls, arg_names = spec
         arities = (len(arg_names),)
         if not accepts(name, arities, len(args)):
-            raise ParseError(
+            raise located(
+                ParseError,
                 f"{name}() takes {spell_arity(name, arities)} argument(s) "
-                f"({', '.join(arg_names)}), got {len(args)}"
+                f"({', '.join(arg_names)}), got {len(args)}",
+                pos,
             )
         if len(args) > len(arg_names):
             # An associative built-in called on more than it is defined for:

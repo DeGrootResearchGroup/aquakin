@@ -43,7 +43,8 @@ tested, not asserted away.
 | `settings.py` | the user's preferences file (`AQUAKIN_UI_CONFIG` overrides); `tests/ui/conftest.py` points it at a temporary file, so a test never touches the user's |
 | `process.py`, `jobs.py` | starting / discarding child processes (below); `StudyRun`, one `aquakin study run --json` process per run |
 | `app.py` | `Editor`: state, drawing, undo, canvas events, the unit form, and the binding of every function below; do not grow it |
-| `checks.py`, `files.py`, `studies.py`, `disk.py`, `page.py`, `study_page.py`, `unit_form.py` | bound `Editor` concerns: checks; Open / Save; studies; following the project folder as other programs change it; the page; the Studies tab; the unit form's redrawing choices and resending its rows |
+| `checks.py`, `files.py`, `studies.py`, `disk.py`, `page.py`, `study_page.py`, `unit_form.py`, `model_panel.py`, `model_page.py` | bound `Editor` concerns: checks; Open / Save; studies; following the project folder as other programs change it; the page; the Studies tab; the unit form's redrawing choices and resending its rows; the Model tab and its page |
+| `model_form.py` | **pure**; the model panel's draft and the edit set it makes (only what changed, every value as typed: nothing here reads an expression or a number) |
 | `repeated.py` | the one implementation of lists of records edited on the page (`bound`, `redraw`, `add_button`, `move_button`, `remove_button`), shared by the study dialog and the unit form (composition, named numbers, phase table) |
 | `widget/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
 
@@ -67,12 +68,10 @@ New icons (`icons/*.svg`) keep to `icons/README.md`: 24-unit viewBox,
   `Popen`: piped text stdin / stdout, stdout on a reader thread it keeps, stderr
   to its own `mkstemp` log (two processes never share one), a new session.
 - **Discard every child through `Piped.close`, on every path that lets go of it**
-  (stop, replacement, timeout, exit, a finished run). It kills, reaps, and only
-  then joins the reader and closes stdout, because closing a pipe another thread
-  is reading can block or raise. Do not reap a child or close its pipes by hand;
-  a `kill` that only makes a run end (`StudyRun.cancel`'s) is fine, as the reader
-  then discards it. `tests/ui/test_processes.py` makes `ResourceWarning` an error
-  so a leak fails.
+  (stop, replacement, timeout, exit, a finished run): it kills, reaps, then joins
+  the reader and closes stdout (closing a pipe another thread reads can block).
+  Never reap or close pipes by hand; a `kill` that only ends a run
+  (`StudyRun.cancel`) is fine. `tests/ui/test_processes.py` fails on a leak.
 
 ## The worker protocol (pinned by `tests/ui/test_protocol.py`)
 
@@ -111,11 +110,9 @@ that imports both. Keep it that way rather than copying knowledge across:
   `ui-widget/src/FlowsheetCanvas.vue`): replacing Vue Flow's lists rebuilds every
   node (losing its measured size) and re-validates every edge, dropping some.
 - **Wire validation sits on the handles** (`UnitNode.vue`), never on Vue Flow's
-  canvas-wide validator (the `<VueFlow>` prop, `useVueFlow` options or store).
-  The canvas-wide one runs on every edge `addEdges` adds and refuses a used
-  handle, so it would drop a wire Python holds (a file with two wires into one
-  input). Python is the authority on loaded wires; `tests/ui/test_widget_source.py`
-  pins the placement.
+  canvas-wide validator (prop, `useVueFlow` options or store), which runs on every
+  edge `addEdges` adds and refuses a used handle, dropping a wire Python holds.
+  `tests/ui/test_widget_source.py` pins the placement.
 - **No echoes:** removals and selection changes the canvas makes while applying
   Python's update are not reported back. When Python keeps a selection the canvas
   did not make (unreadable form edits), `_show_kept_selection` sends it back.
@@ -202,6 +199,12 @@ that imports both. Keep it that way rather than copying knowledge across:
 - **NaN is never a value** (`forms._finite`); `inf` / `-inf` mean "no limit".
 - **A stored aeration species the model lacks** is replaced by the model's
   oxygen (`forms._oxygen`), and `reshape_form` applies such suggestions at once.
+- **The model panel's draft** (`model_draft`, `client_only`, pushed with a new
+  `revision`) is sent whole when a field loses focus, checked in `_run_checks`
+  (`run_model_checks`, cached) and answered in state of its own (`model_errors`
+  ...), so a check never redraws typing. Apply checks the whole model, then
+  `save_model_edits` writes it and the flowsheet; never write model YAML here,
+  nor decide which units switch or what a rewrite loses (its dry run says).
 - Icons are sent once; the spec text only while the Spec tab is open.
 
 ## The widget build
@@ -230,21 +233,18 @@ editor needs at run time goes in its `REQUIRED`.
   when a change touches the canvas or the form, after rebuilding the bundle, and
   add a page's files beyond BSM1 to the job's path filter.
 - In `tests/browser`, the `page` fixture waits for the start-up checks
-  (`checks_finished`, `tests/browser/conftest.py`), since every worker request
-  queues behind a round of checks. A test that starts a round and needs it over
-  waits for it (`checks_finished`, or `checks_done` for the Checks tab), never
-  with a longer timeout; read Python's document from the header chip ("N units
-  · M connections · K recycles") and messages through a recorder (the snackbar
-  closes after four seconds); never a negative check with no sync point after it.
+  (`checks_finished`), since every worker request queues behind a round. A test
+  that starts a round waits for it (`checks_finished`, or `checks_done` for the
+  Checks tab), never with a longer timeout; read Python's document from the
+  header chip and messages through a recorder (the snackbar closes after four
+  seconds); never a negative check with no sync point after it.
 
 ## The installers (`installers/`)
 
 `install-aquakin.sh` (macOS, Linux) and `install-aquakin.bat` (Windows) install
-the editor with uv for people who do not use Python. **The two must install the
-same thing**: the same `PYTHON_VERSION`, the same uv options, and, once
-`scripts/stamp_installers.py` fills in `AQUAKIN_VERSION` at release, that
-release's `constraints.txt`, so a colleague gets the versions CI tested.
+the editor with uv. **The two must install the same thing**: the same
+`PYTHON_VERSION`, uv options and, once `scripts/stamp_installers.py` fills in
+`AQUAKIN_VERSION` at release, that release's `constraints.txt`.
 `tests/unit/test_installers.py` compares them and runs the shell one against a
-stand-in uv; the batch file cannot run in CI, so test a change to it on Windows
-and say so. The batch file is checked out with CRLF (`.gitattributes`); cmd
-misreads one with bare LF.
+stand-in uv; test a change to the batch file on Windows and say so. It is
+checked out with CRLF (`.gitattributes`); cmd misreads bare LF.

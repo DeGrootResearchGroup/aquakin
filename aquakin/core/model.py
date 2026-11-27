@@ -39,7 +39,7 @@ _LEAF_TYPES = (ConstantNode, SpeciesNode, ConditionNode, ParamNode)
 _ALLOWED_STOICH_NODES = (ConstantNode, ParamNode, NegateNode, _BinaryNode)
 
 
-def _validate_stoich_ast(ast: ASTNode, rxn_name: str, species: str) -> None:
+def validate_stoich_ast(ast: ASTNode, rxn_name: str, species: str) -> None:
     """Reject stoich ASTs that reference state, conditions, or functions.
 
     Generic over the AST via ``children()``: an allowed node's children are
@@ -55,7 +55,7 @@ def _validate_stoich_ast(ast: ASTNode, rxn_name: str, species: str) -> None:
             f"(arrhenius, pH_switch, monod, ...) are not allowed."
         )
     for child in ast.children():
-        _validate_stoich_ast(child, rxn_name, species)
+        validate_stoich_ast(child, rxn_name, species)
 
 
 def _collect_param_refs(node: ASTNode) -> set[str]:
@@ -1471,7 +1471,7 @@ def _compile_reaction(rxn, species_index, param_index, condition_fields, express
             raise ValueError(
                 f"Failed to parse stoichiometric coefficient '{rxn.name}'/{sp_name!r}: {exc}"
             ) from exc
-        _validate_stoich_ast(raw_stoich_ast, rxn.name, sp_name)
+        validate_stoich_ast(raw_stoich_ast, rxn.name, sp_name)
         bad = _unresolved_params(raw_stoich_ast, rxn.name, param_index)
         if bad:
             raise KeyError(

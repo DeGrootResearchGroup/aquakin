@@ -293,6 +293,23 @@ you edit and lists any errors.
   move it up or down, or remove it. Its settling model is a choice of kind,
   after which that model's arguments appear.
 
+The **Model** tab shows a model the flowsheet uses: each reaction's rate and
+stoichiometric coefficients, and each parameter's value, units and description,
+all editable, and **Add a parameter**. As you leave a field aquakin reads the
+edit: an error appears under it with a caret at the character it is about, and
+an edited expression lists the species, parameters and conditions it uses. A
+rate naming a parameter the model lacks offers to add it. Reactions, species,
+conditions and the model's other blocks are edited in its YAML file.
+
+**Apply** first loads and compiles the whole edited model, and writes nothing
+unless it is valid. A model of the project is edited in its own file (written
+again without its comments), holding only the changed fields when it
+`extends:` another. A model shipped with aquakin is never changed: Apply asks
+for a name (`asm1_bsm1` for `asm1` in a flowsheet named BSM1, say) and saves
+the edits as `models/<name>.yaml`, which `extends:` the shipped model, and
+every unit that used it switches to the new model. The flowsheet file is saved
+in the same step, so it always names the model as saved.
+
 **Simulate** saves the flowsheet, creates a study called `simulation` the first
 time (`simulation_<file name>` for a file not named `flowsheet.yaml`, so each
 flowsheet in a folder has its own), runs the plant to steady state, and shows a

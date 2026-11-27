@@ -172,6 +172,7 @@ class ParameterSpec(BaseModel):
 
     value: float
     units: str = ""
+    description: str = ""
     bounds: tuple[float, float] | None = None
     transform: str = "none"
     prior: PriorSpec | None = None

@@ -126,6 +126,38 @@ def _resolve_inheritance(data: dict, source: str, base_dir, seen: tuple) -> dict
     return merged
 
 
+def resolve_model_data(text: str, source: str, base_dir=None) -> dict:
+    """A model YAML's mapping with its ``extends`` chain merged in, not yet validated.
+
+    Parameters
+    ----------
+    text : str
+        The model YAML.
+    source : str
+        A name for messages.
+    base_dir : str or Path, optional
+        The directory a relative ``extends:`` path is read from.
+
+    Returns
+    -------
+    dict
+        The whole model as one mapping, as :class:`ModelSpec` validates it.
+
+    Raises
+    ------
+    ValueError
+        If the text is not a YAML mapping, or its ``extends`` chain cannot be
+        resolved.
+    """
+    try:
+        data = parse_model_yaml(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Failed to parse YAML from {source}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Top-level YAML in {source} must be a mapping, got {type(data).__name__}")
+    return _resolve_inheritance(data, source, base_dir, seen=())
+
+
 def model_fingerprint(text: str, source: str, base_dir=None) -> str:
     """sha256 of a model YAML's content with its ``extends`` chain merged in.
 
@@ -156,13 +188,7 @@ def model_fingerprint(text: str, source: str, base_dir=None) -> str:
 
 
 def _yaml_to_spec(text: str, source: str, *, base_dir=None) -> ModelSpec:
-    try:
-        data = parse_model_yaml(text)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Failed to parse YAML from {source}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError(f"Top-level YAML in {source} must be a mapping, got {type(data).__name__}")
-    data = _resolve_inheritance(data, source, base_dir, seen=())
+    data = resolve_model_data(text, source, base_dir)
     try:
         return ModelSpec.model_validate(data)
     except ValidationError as exc:

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from aquakin.core.lexer import Token, spell, tokenize
+from aquakin.core.lexer import Token, located, spell, tokenize
 
 __all__ = ["ASSOCIATIVE_CALLS", "PrecedenceParser", "accepts", "spell_arity"]
 
@@ -97,7 +97,7 @@ class PrecedenceParser:
         """Read the next token, which must be ``kind``."""
         token = self.peek()
         if token.kind != kind:
-            raise self.error(self.expected_message(kind, token))
+            raise located(self.error, self.expected_message(kind, token), token.pos)
         self.i += 1
         return token
 
@@ -119,7 +119,7 @@ class PrecedenceParser:
         """Read the whole text, which must be one expression and nothing more."""
         node = self.expression()
         if self.peek().kind != "EOF":
-            raise self.error(self.trailing_message(self.peek()))
+            raise located(self.error, self.trailing_message(self.peek()), self.peek().pos)
         return node
 
     def expression(self):
@@ -201,4 +201,4 @@ class PrecedenceParser:
 
     def power(self, base, exponent, token: Token):
         """A language without powers refuses them here, in its own words."""
-        raise self.error(f"'**' is not allowed here (at position {token.pos})")
+        raise located(self.error, f"'**' is not allowed here (at position {token.pos})", token.pos)

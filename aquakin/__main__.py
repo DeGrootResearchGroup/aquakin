@@ -10,7 +10,16 @@ per line on standard input, one reply per line on standard output::
 
 Commands: ``ping``, ``catalog``, ``models`` (the shipped kinetic models),
 ``model`` (``name``, optional ``path`` of a model file: one model's species
-and conditions), ``check_unit`` (``kind``, ``name``, ``settings``, optional
+and conditions), ``model_document`` (``name``, optional ``path``: its reactions
+and parameters as text, for editing), ``check_expression`` (``expression``,
+``model``, optional ``path``, ``kind`` ``rate`` or ``stoichiometry``,
+``reaction``, ``parameters`` the edit adds: ``ok``, ``error`` and its
+``position``, the names it ``references`` and the ``unknown`` ones),
+``check_model_edits`` (``model``, optional ``path``, ``edits``: ``ok`` and the
+``errors`` by field), ``save_model_edits`` (``spec``, ``path`` of the
+flowsheet, ``model``, ``edits``, optional ``name`` for a model made from a
+shipped one, ``sha256``, ``base_dir``, ``dry_run``; see
+:mod:`aquakin.plant.model_edit`), ``check_unit`` (``kind``, ``name``, ``settings``, optional
 ``model_files`` and ``base_dir``: build a unit and report its real ports or
 the constructor's error), ``check_spec`` (``spec``, optional ``base_dir`` for
 model file paths: build the whole plant from a flowsheet spec and report
@@ -70,6 +79,12 @@ def _study_call(function: str, req: dict, **kwargs):
     )
 
 
+def _model_edit():
+    from aquakin.plant import model_edit
+
+    return model_edit
+
+
 def _handlers():
     from aquakin import __version__
     from aquakin.plant import catalog as cat
@@ -80,6 +95,28 @@ def _handlers():
         "catalog": lambda req: cat.catalog(),
         "models": lambda req: cat.shipped_models(),
         "model": lambda req: cat.model_info(req["name"], req.get("path")),
+        "model_document": lambda req: _model_edit().model_document(req["name"], req.get("path")),
+        "check_expression": lambda req: _model_edit().check_expression(
+            req["expression"],
+            model=req["model"],
+            path=req.get("path"),
+            kind=req.get("kind", "rate"),
+            reaction=req.get("reaction"),
+            parameters=req.get("parameters", ()),
+        ),
+        "check_model_edits": lambda req: _model_edit().check_model_edits(
+            req["model"], req.get("path"), req["edits"]
+        ),
+        "save_model_edits": lambda req: _model_edit().save_model_edits(
+            req["spec"],
+            req["path"],
+            model=req["model"],
+            edits=req["edits"],
+            name=req.get("name"),
+            sha256=req.get("sha256"),
+            base_dir=req.get("base_dir"),
+            dry_run=bool(req.get("dry_run")),
+        ),
         "check_spec": lambda req: check_spec(req["spec"], base_dir=req.get("base_dir")),
         "read_spec": lambda req: load_spec_file(req["path"]),
         "list_studies": lambda req: _study_module().list_studies(req["project"]),

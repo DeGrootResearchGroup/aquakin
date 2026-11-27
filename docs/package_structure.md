@@ -174,6 +174,8 @@ aquakin/
 │   │   ├── calibrate.py             # Plant.calibrate
 │   │   ├── posterior.py             # Plant.sample_posterior
 │   │   ├── spec.py                  # Plant.from_spec / to_spec: the flowsheet spec
+│   │   ├── model_edit.py            # a model's reactions / parameters edited from the
+│   │   │                            #   editor: read, check, save (with the flowsheet)
 │   │   ├── recycle.py               # RecycleResolver: recycle flows / concentrations
 │   │   ├── colored.py               # ColoredJacobianManager: sparse plant Jacobians
 │   │   ├── solve_cache.py           # SolveCache: the compiled-solve caches
@@ -250,6 +252,8 @@ aquakin/
 │   ├── files.py                        # open / save the spec, unsaved-edit questions
 │   ├── disk.py                         # follows the project folder: reload a changed spec, relist studies
 │   ├── unit_form.py                    # unit-form choices that redraw it; resending its rows
+│   ├── model_panel.py / model_page.py  # the Model tab: edits checked and saved; its page
+│   ├── model_form.py                   # the model panel's draft and its edits (pure)
 │   ├── studies.py                      # list / run / freeze studies, Simulate, results
 │   ├── document.py                     # the flowsheet document (pure)
 │   ├── forms.py                        # unit form from the catalogue (pure)
