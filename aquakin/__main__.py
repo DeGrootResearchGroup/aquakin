@@ -46,7 +46,8 @@ worker keeps serving. Each study listed carries its ``state`` (one of
 :data:`aquakin.study.study.STATES`, or ``"unreadable"``), ``has_results``, its
 folder (``path``) and the spec it builds its plant from (``flowsheet``: the
 snapshot's for a frozen study; ``None`` for a study of a batch reactor, whose
-``reactor`` is then its model), so a front end never rebuilds study paths or
+``reactor`` is then its model, and for a posterior study, which runs on its
+calibrate study's), so a front end never rebuilds study paths or
 decides from a state's name what it implies.
 Standard output carries replies only; anything else goes to standard error.
 """

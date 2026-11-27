@@ -34,7 +34,7 @@ def test_the_form_describes_every_setting_and_kind():
     form = study_form()
     json.dumps(form, allow_nan=False)
     kinds = {k["kind"]: k for k in form["kinds"]}
-    assert set(kinds) == {"simulate", "fisher", "calibrate", "profile", "rank"}
+    assert set(kinds) == {"simulate", "fisher", "calibrate", "profile", "rank", "posterior"}
     # Every setting of study.yaml (but where the flowsheet sits) is in the form,
     # and every field a kind shows is described.
     settings = set(_Study.model_fields) - {"kind", "flowsheet"}
@@ -51,6 +51,12 @@ def test_the_form_describes_every_setting_and_kind():
         assert set(kind["reactor_fields"]) <= set(form["fields"])
         assert set(kind["reactor_required"]) <= set(kind["reactor_fields"])
     assert kinds["simulate"]["reactor_fields"] == kinds["rank"]["reactor_fields"] == []
+    # A posterior study samples its calibrate study's plant or reactor: no target of its own.
+    assert kinds["posterior"]["reactor_fields"] == []
+    assert not kinds["posterior"]["flowsheet"]
+    assert all(kinds[k]["flowsheet"] for k in kinds if k != "posterior")
+    assert kinds["posterior"]["required"] == ["fit"]
+    assert form["fields"]["prior_space"]["choices"] == ["transformed", "physical"]
     assert kinds["calibrate"]["reactor_required"] == ["free", "experiments", "observed"]
     for kind in ("calibrate", "profile", "fisher"):
         shown = kinds[kind]["reactor_fields"]

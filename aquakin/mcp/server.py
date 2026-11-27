@@ -36,8 +36,9 @@ list_models and list_unit_kinds.
 
 A project is a folder holding a flowsheet file and its studies (studies/<name>/).
 write_flowsheet writes a flowsheet; a study is one analysis of it (simulate,
-fisher, calibrate, profile, rank: study_settings lists each kind's settings,
-study_choices what a study may name). run_study starts a run in the background
+fisher, calibrate, profile, rank, posterior: study_settings lists each kind's
+settings, study_choices what a study may name). A posterior study samples a
+calibrate study's fit, named by fit:. run_study starts a run in the background
 and returns at once: poll study_status until it is no longer running, then read
 study_results. A user may have the project open in the aquakin editor, which
 shows each change as it is written. Never replace a file or results

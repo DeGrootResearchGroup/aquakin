@@ -866,3 +866,24 @@ def test_errors_reach_the_page_without_class_names_and_simulate_reports_a_broken
     finally:
         ed.stop_runs()
         ed.worker.stop()
+
+
+def test_a_posterior_study_from_the_dialog_names_no_flowsheet(tmp_path):
+    """A posterior study runs on its calibrate study's plant: the dialog does not
+    give it the open spec, which aquakin would refuse, while other kinds get it."""
+    project = _study_project(tmp_path)
+    (project / "second.yaml").write_text((project / "flowsheet.yaml").read_text())
+    server = get_server(name="aquakin-ui-posterior-dialog-test", client_type="vue3")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "second.yaml")
+    try:
+        ed.new_study()
+        ed.save_study_dialog("post", "posterior", {"fit": "short", "n_draws": "200"})
+        assert ed.state.study_error == ""
+        settings = yaml.safe_load((project / "studies" / "post" / "study.yaml").read_text())
+        assert settings["study"] == {"kind": "posterior", "fit": "short", "n_draws": 200}
+        ed.new_study()
+        ed.save_study_dialog("sim", "simulate", {"streams": ["tank.out"]})
+        sim = yaml.safe_load((project / "studies" / "sim" / "study.yaml").read_text())
+        assert sim["study"]["flowsheet"] == "../../second.yaml"
+    finally:
+        ed.worker.stop()

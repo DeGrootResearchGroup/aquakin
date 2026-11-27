@@ -27,6 +27,7 @@ from aquakin.study import (
     freeze_study,
     read_matrix,
     read_named_values,
+    read_table,
     read_trajectory,
     run_study,
     unfreeze_study,
@@ -283,9 +284,12 @@ FIT = {
 }
 
 
-def test_a_calibration_study_recovers_a_parameter(project):
+def test_a_calibration_study_recovers_a_parameter_and_is_sampled(project):
     """The fit recovers the value the data were made with; without ``laplace``
-    there is no posterior, so no std and no covariance file."""
+    there is no posterior, so no std and no covariance file. A posterior study
+    samples it all the same (re-entering the fit computes the Laplace posterior
+    the sampler starts from), briefly here: this is the plant path, whose fit
+    has no cheaper analogue than this one-tank plant."""
     folder = project / "studies" / "fit"
     _synthetic_data(project, folder, 5.0)
     (folder / "study.yaml").write_text(
@@ -306,9 +310,18 @@ def test_a_calibration_study_recovers_a_parameter(project):
     _, fitted = read_trajectory(folder / "results" / "fitted.csv")
     _, data = read_trajectory(folder / "data.csv")
     np.testing.assert_allclose(fitted["effluent.SNH"], data["effluent.SNH"], rtol=1e-4)
-    # The data table is one of the study's inputs.
+    post = _study(project, "post", {**POSTERIOR, "n_draws": 4, "n_warmup": 0})
+    assert run_study(post).state == "fresh"
+    summary = yaml.safe_load((post / "results" / "posterior.yaml").read_text())
+    # Re-entered at the saved optimum: the optimizer starts there and stays.
+    assert summary["parameters"]["asm1_local.muH"]["optimum"] == pytest.approx(
+        fit["fitted"]["asm1_local.muH"], rel=1e-6
+    )
+    assert summary["n_draws"] == 4 and len(summary["acceptance_rate"]) == 2
+    # The data table is one of the study's inputs, and so of its posterior's.
     (folder / "data.csv").write_text((folder / "data.csv").read_text().replace("0.1,", "0.15,"))
     assert "the study's settings have changed" in check_study(folder).reasons
+    assert check_study(post).reasons == ["the setup of the calibrate study it samples has changed"]
 
 
 def test_a_run_replaces_results_only_when_it_succeeds(project):
@@ -1283,3 +1296,183 @@ def test_experiments_sampled_at_other_times_share_one_table():
     assert list(columns) == ["run1.A", "run2.A", "run2.B"]
     np.testing.assert_array_equal(columns["run1.A"], [10.0, np.nan, 30.0])
     np.testing.assert_array_equal(columns["run2.B"], [np.nan, 2.0, 3.1])
+
+
+# ---------------------------------------------------------------------------
+# posterior: sampling a calibrate study's fit
+# ---------------------------------------------------------------------------
+
+POSTERIOR = {"kind": "posterior", "fit": "fit", "n_chains": 2, "n_draws": 400, "n_warmup": 200}
+SHORT_POSTERIOR = {**POSTERIOR, "n_draws": 20, "n_warmup": 20}
+
+
+@pytest.fixture(scope="module")
+def sampled_reactor(fitted_reactor, tmp_path_factory):
+    """A copy of the fitted reactor project with a posterior study of its fit,
+    run once; a test that changes it works on a copy (:func:`_copy_project`)."""
+    project, _ = _copy_project(fitted_reactor, tmp_path_factory.mktemp("sampled"))
+    folder = _study(project, "post", POSTERIOR)
+    seen = []
+    status = run_study(folder, progress=seen.append)
+    return project, status, seen
+
+
+def test_a_posterior_study_samples_its_calibration(sampled_reactor):
+    """The draws of the reactor fit's two rates centre on the fit's optimum, with
+    the spread of its Laplace posterior: for a well-determined fit both agree,
+    within the Monte Carlo error of the draws (the error of a mean is about
+    std / sqrt(ESS), of a standard deviation about 1 / sqrt(2 ESS) of it)."""
+    project, status, seen = sampled_reactor
+    assert status.state == "fresh" and status.running is None
+    stages = [p.stage for p in seen]
+    assert stages[:2] == ["setup", "fit"] and set(stages[2:]) == {"sample"}
+    assert seen[-1].done == seen[-1].total == 600  # warm-up and draws
+    fit = yaml.safe_load((project / "studies" / "fit" / "results" / "fit.yaml").read_text())
+    summary = yaml.safe_load((project / "studies" / "post" / "results" / "posterior.yaml").read_text())
+    assert summary["fit"] == "fit" and summary["prior_space"] == "transformed"
+    assert (summary["n_chains"], summary["n_draws"], summary["n_warmup"]) == (2, 400, 200)
+    for name in TRUE:
+        p = summary["parameters"][name]
+        # Re-entered at the saved optimum: the optimizer starts there and stays.
+        assert p["optimum"] == pytest.approx(fit["fitted"][name], rel=1e-6)
+        assert abs(p["mean"] - p["optimum"]) < 4 * p["std"] / np.sqrt(p["ess_bulk"]), name
+        assert p["std"] / fit["std"][name] == pytest.approx(
+            1.0, abs=4 / np.sqrt(2 * p["ess_bulk"])
+        ), name
+        assert p["q05"] < p["q50"] < p["q95"]
+    draws = read_table(project / "studies" / "post" / "results" / "draws.csv")
+    assert list(draws) == ["chain", "draw", *TRUE]
+    assert len(draws["chain"]) == 800 and sorted(set(draws["chain"])) == [0, 1]
+
+
+def test_posterior_results_read_back_for_the_editor(sampled_reactor):
+    from aquakin.study import study_results
+
+    project, _, _ = sampled_reactor
+    results = study_results(project / "studies" / "post")
+    assert results["kind"] == "posterior" and results["has_results"]
+    from aquakin.study import list_studies
+
+    listed = {s["name"]: s for s in list_studies(project)}
+    assert listed["post"]["flowsheet"] is None and listed["post"]["state"] == "fresh"
+    assert results["files"] == ["draws.csv", "posterior.yaml"]
+    for name in TRUE:
+        histogram = results["histograms"][name]
+        assert sum(histogram["counts"]) == 800 and len(histogram["edges"]) == 31
+    assert set(results["summary"]["parameters"]) == set(TRUE)
+
+
+def test_a_posterior_goes_stale_when_its_calibration_changes(sampled_reactor, tmp_path):
+    """About 14 s: it redoes the reactor fit, which is what it tests."""
+    from aquakin.study import read_study, update_study
+
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    post = project / "studies" / "post"
+    assert check_study(post).state == "fresh"
+    fit = project / "studies" / "fit"
+    update_study(fit, {**read_study(fit), "sigma": 2 * NOISE})
+    status = check_study(post)
+    assert status.state == "stale"
+    assert status.reasons == ["the setup of the calibrate study it samples has changed"]
+    # Run again on a fit that is not fresh: refused, saying why.
+    with pytest.raises(StudyError, match=r"fit: the calibrate study 'fit' is stale \("):
+        run_study(post, replace=True)
+    # Redone, the fit has other results (a wider error, wider uncertainties).
+    run_study(fit, replace=True)
+    assert check_study(post).reasons == [
+        "the fit of the calibrate study it samples has changed",
+        "the setup of the calibrate study it samples has changed",
+    ]
+    update_study(post, SHORT_POSTERIOR)  # a short run: only the state is checked
+    assert run_study(post, replace=True).state == "fresh"
+
+
+def test_a_frozen_posterior_keeps_the_fit_it_sampled(sampled_reactor, tmp_path):
+    """Freezing copies the calibrate study, frozen and with its results, into the
+    snapshot: the samples stay fresh, and run again, after the original is gone."""
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    post = project / "studies" / "post"
+    freeze_study(post)
+    kept = post / "snapshot" / "fit"
+    assert (kept / "frozen.yaml").is_file() and (kept / "results" / "fit.yaml").is_file()
+    assert not list((project / "studies").glob(".*"))  # the copy frozen beside is gone
+    shutil.rmtree(project / "studies" / "fit")
+    assert check_study(post).state == "fresh"
+    (post / "study.yaml").write_text(yaml.safe_dump({"study": SHORT_POSTERIOR}))
+    assert run_study(post, replace=True).state == "fresh"
+    unfreeze_study(post, discard_results=True)
+    assert not (post / "snapshot").exists()
+    with pytest.raises(StudyError, match="fit: this project has no study 'fit'"):
+        run_study(post)
+
+
+def test_a_posterior_of_a_frozen_fit_keeps_that_fit_s_own_snapshot(sampled_reactor, tmp_path):
+    """A calibrate study frozen already is copied as it is, not frozen again."""
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    fit = project / "studies" / "fit"
+    freeze_study(fit)
+    record = (fit / "frozen.yaml").read_text()
+    post = project / "studies" / "post"
+    freeze_study(post)
+    assert (post / "snapshot" / "fit" / "frozen.yaml").read_text() == record
+    assert check_study(post).state == "fresh"
+
+
+def test_posterior_results_without_their_draws_read_as_damaged(sampled_reactor, tmp_path):
+    """With draws.csv gone the summary still reads, without histograms."""
+    from aquakin.study import study_results
+
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    post = project / "studies" / "post"
+    (post / "results" / "draws.csv").unlink()
+    results = study_results(post)
+    assert results["state"] == "damaged" and "histograms" not in results
+    assert set(results["summary"]["parameters"]) == set(TRUE)
+
+
+@pytest.mark.parametrize(
+    "study, message",
+    [
+        ({"kind": "posterior"}, "a posterior study needs fit"),
+        (
+            {**POSTERIOR, "reactor": REACTOR},
+            "it takes no flowsheet or reactor of its own",
+        ),
+        (
+            {**POSTERIOR, "flowsheet": "../../other.yaml"},
+            "it takes no flowsheet or reactor of its own",
+        ),
+        ({**POSTERIOR, "fit": "../fit"}, r"by its name \(the folder under studies/\), not '\.\./fit'"),
+        ({**POSTERIOR, "n_chains": 1}, "n_chains must be at least 2"),
+    ],
+)
+def test_a_posterior_study_that_cannot_run_is_refused_when_read(project, study, message):
+    from aquakin.study import load_study
+
+    folder = _study(project, "post", study)
+    with pytest.raises(StudyError, match=message):
+        load_study(folder)
+
+
+def test_a_posterior_needs_a_fresh_calibrate_study(project):
+    """A fit that has not run, a study of another kind, and no study at all are
+    each refused, naming the problem."""
+    fit = _study(project, "fit", {"kind": "calibrate", **FIT})
+    post = _study(project, "post", POSTERIOR)
+    with pytest.raises(StudyError, match=r"fit: the calibrate study 'fit' is not run; run it"):
+        run_study(post)
+    other = _study(project, "other", {**POSTERIOR, "fit": "post"})
+    with pytest.raises(StudyError, match="fit: 'post' is a posterior study; a posterior study"):
+        run_study(other)
+    lost = _study(project, "lost", {**POSTERIOR, "fit": "nowhere"})
+    with pytest.raises(StudyError, match="fit: this project has no study 'nowhere'"):
+        run_study(lost)
+    assert fit.is_dir()
+
+
+def test_a_calibration_being_run_is_not_sampled(sampled_reactor, tmp_path, hold_run):
+    """Its results would be replaced while they are read: refused until it ends."""
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    hold_run(project / "studies" / "fit")
+    with pytest.raises(StudyError, match="fit: the calibrate study 'fit' is running; sample it"):
+        run_study(project / "studies" / "post", replace=True)

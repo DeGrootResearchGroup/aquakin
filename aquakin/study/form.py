@@ -20,12 +20,14 @@ from pathlib import Path
 import yaml
 
 from aquakin.study.common import (
+    DRAWS_FILE,
     FISHER_FILE,
     FISHER_SUMMARY_FILE,
     FIT_FILE,
     FITTED_FILE,
     MEASURED_FILE,
     MEASURED_STEADY_FILE,
+    POSTERIOR_FILE,
     PROFILE_FILE,
     PROFILE_SUMMARY_FILE,
     RANKING_FILE,
@@ -141,6 +143,12 @@ _KINDS = {
         "Profile likelihood",
         "Fit the other parameters at each value of one, to see how well the data fix it.",
         (*_COMMON, *_FIT, "profile", "grid", "delta", *_FIT_OPTIONS),
+    ),
+    "posterior": (
+        "Posterior sampling",
+        "Draw from the posterior of a calibration by Markov chain Monte Carlo, to see "
+        "the full uncertainty of the fitted parameters.",
+        ("description", "fit", "n_chains", "n_draws", "n_warmup", "seed", "prior_space"),
     ),
     "rank": (
         "Sensor ranking",
@@ -338,6 +346,30 @@ _FIELDS = {
         "Sensors already installed; each candidate is scored as an addition to them.",
         None,
     ),
+    "fit": (
+        "text",
+        "Calibration",
+        "The calibrate study whose fit is sampled, by its name in this project. Its "
+        "results must be fresh; the samples go stale when it is run again.",
+        None,
+    ),
+    "n_chains": ("integer", "Chains", "Independent chains (at least 2, for R-hat).", 4),
+    "n_draws": ("integer", "Draws", "Draws kept per chain, after the warm-up.", 1000),
+    "n_warmup": (
+        "integer",
+        "Warm-up",
+        "Steps per chain discarded while the proposal adapts.",
+        500,
+    ),
+    "seed": ("integer", "Seed", "The same seed gives the same draws.", 0),
+    "prior_space": (
+        "choice",
+        "Prior space",
+        "transformed: the prior is flat in the coordinates the fit ran in (log k for "
+        "a log-transformed rate), the density the fit and its uncertainty describe; "
+        "physical: flat in the parameter's own value.",
+        "transformed",
+    ),
     "criterion": (
         "choice",
         "Criterion",
@@ -349,6 +381,7 @@ _FIELDS = {
 
 _CHOICES = {
     "sensitivity": ["forward", "reverse"],
+    "prior_space": ["transformed", "physical"],
     "criterion": ["D", "A", "E", "modified_E"],
     "transforms": ["none", "positive_log", "logit"],
     "initial_state": ["default", "steady"],
@@ -362,11 +395,14 @@ def study_form() -> dict:
     -------
     dict
         ``{"kinds": [{"kind", "label", "summary", "fields", "required",
-        "reactor_fields", "reactor_required"}], "fields": {name: {"type",
-        "label", "help", "default", "choices"}}}``. ``fields`` of a kind are
-        those of a study of the flowsheet, in the order a form shows them;
-        ``reactor_fields`` those of a study of a batch reactor (empty for a
-        kind that takes no reactor).
+        "reactor_fields", "reactor_required", "flowsheet"}], "fields": {name:
+        {"type", "label", "help", "default", "choices"}}}``. ``fields`` of a
+        kind are those of a study of the flowsheet, in the order a form shows
+        them; ``reactor_fields`` those of a study of a batch reactor (empty for
+        a kind that takes no reactor); ``flowsheet`` whether a study of the
+        kind runs on a flowsheet it names (``false`` for a posterior study,
+        which runs on its calibrate study's), so a front end sends the spec it
+        has open only to a kind that takes one.
     """
 
     kinds = [
@@ -378,6 +414,7 @@ def study_form() -> dict:
             "required": list(_REQUIRED.get(kind, ())),
             "reactor_fields": list(_REACTOR_FIELDS.get(kind, ())),
             "reactor_required": list(REACTOR_REQUIRED.get(kind, ())),
+            "flowsheet": kind != "posterior",
         }
         for kind, (label, summary, fields) in _KINDS.items()
     ]
@@ -576,7 +613,7 @@ def list_studies(project) -> list[dict]:
         :data:`~aquakin.study.study.STATES`, or :data:`UNREADABLE` when the
         study cannot be read), ``"has_results"``, ``"frozen"``,
         ``"flowsheet"`` (the spec its plant is built from: the snapshot's for a
-        frozen study; ``None`` for a reactor study or when unreadable),
+        frozen study; ``None`` for a reactor or posterior study, or when unreadable),
         ``"reactor"`` (a reactor study's model, else ``None``), ``"running"``
         (the run in progress, from whichever program, as
         :class:`~aquakin.study.StudyStatus` gives it, else ``None``),
@@ -599,7 +636,7 @@ def list_studies(project) -> list[dict]:
                 "has_results": status.has_results,
                 "frozen": status.frozen,
                 "flowsheet": None
-                if spec.reactor is not None
+                if spec.reactor is not None or spec.kind == "posterior"
                 else str(_flowsheet(path.parent, spec)),
                 "reactor": None if spec.reactor is None else spec.reactor.model,
                 "running": status.running,
@@ -776,12 +813,37 @@ def _read_profile(folder: Path, study, out: Path) -> dict:
 
 #: Each kind's result reader, ``(folder, study, results folder) -> dict``; one per
 #: entry of :data:`~aquakin.study.study.KINDS`, like ``_RUNNERS``.
+#: Bins of each parameter's histogram of draws (:func:`_read_posterior`).
+HISTOGRAM_BINS = 30
+
+
+def _read_posterior(folder: Path, study, out: Path) -> dict:
+    """The posterior's summary (each parameter's optimum, mean, standard
+    deviation, quantiles, R-hat and effective sample size, and the chains'
+    acceptance rates), and each parameter's histogram of draws: ``{parameter:
+    {"edges": [...], "counts": [...]}}`` over :data:`HISTOGRAM_BINS` bins."""
+    import numpy as np
+
+    found: dict = {"summary": _yaml_file(out / POSTERIOR_FILE)}
+    if (out / DRAWS_FILE).is_file():
+        table = read_table(out / DRAWS_FILE)
+        histograms = {}
+        for name, values in table.items():
+            if name in ("chain", "draw"):
+                continue
+            counts, edges = np.histogram(np.asarray(values, dtype=float), HISTOGRAM_BINS)
+            histograms[name] = {"edges": _finite(edges.tolist()), "counts": counts.tolist()}
+        found["histograms"] = histograms
+    return found
+
+
 _READERS = {
     "simulate": _read_simulate,
     "fisher": _read_fisher,
     "calibrate": _read_calibrate,
     "profile": _read_profile,
     "rank": _read_rank,
+    "posterior": _read_posterior,
 }
 
 

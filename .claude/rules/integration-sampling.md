@@ -59,6 +59,10 @@ it builds on are in `.claude/rules/integration-calibrate.md`.
   exception propagates. A non-finite density is a rejection.
 - The sampler takes no gradient, so it works with every forward model and
   every `diff` the fit used.
+- `progress=` reaches `_metropolis` through `_run_sampler` (both entry points),
+  reported once per step of all chains, outside the jitted density. The draws
+  must not depend on it: a study run reports through it and a cancel raises
+  from it.
 
 ### Output and diagnostics
 

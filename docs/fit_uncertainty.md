@@ -147,7 +147,10 @@ covariance, adapting their size during the warm-up. Each step costs one
 forward solve per chain and no gradient, so it suits a stiff model, but a few
 thousand solves add up: a plant, or a model whose posterior is far from the
 Laplace shape, needs patience. A plant fit is sampled with
-`plant.sample_posterior(result)`, through the plant's own solves.
+`plant.sample_posterior(result)`, through the plant's own solves. Both take
+`progress=` to follow a long run, as `calibrate` does. To keep the draws with
+the project, and know when they are out of date, sample a calibrate study's
+fit with a [posterior study](plant_files.md#studies).
 
 The draws plug into what takes Laplace draws:
 
