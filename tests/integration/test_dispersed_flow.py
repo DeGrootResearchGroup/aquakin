@@ -389,6 +389,14 @@ def test_steady_state_reports_non_convergence(tanks):
         tanks.steady_state(INLET, guess=jnp.zeros(2), max_iter=1)
 
 
+def test_steady_state_traces_under_jit(tanks):
+    """Under an outer ``jax.jit`` the convergence flag is traced and not read; the
+    steady state is the same as the concrete one."""
+    concrete = tanks.steady_state(INLET).C[0, 0]
+    jitted = jax.jit(lambda p: tanks.steady_state(INLET, params=p).C[0, 0])(jnp.array([K]))
+    assert float(jitted) == pytest.approx(float(concrete), rel=1e-12)
+
+
 def test_inlet_numbers_may_be_written_as_strings(tanks):
     """``"1.0"`` is a number, not an expression, so the steady state accepts it."""
     as_text = tanks.steady_state({"A": "1.0"}).C[0, 0]

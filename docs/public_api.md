@@ -58,12 +58,15 @@ sub-expression (see
 |---|---|
 | Integrate a well-mixed batch (0-D) | `BatchReactor` |
 | Integrate a plug-flow profile (1-D) | `PlugFlowReactor` |
+| Integrate a non-ideal flow reactor in time (1-D) | `DispersedFlowReactor`, `TanksInSeries` → `AxialFlowSolution`; tolerances in `SolverSettings` |
+| Fit a dispersion number or a number of tanks to a tracer test | `fit_dispersion`, `fit_tanks_in_series` |
 | Integrate along a Lagrangian particle track | `ParticleTrackReactor`, `Track` |
 | Resolve a biofilm over depth (1-D) | `BiofilmReactor` |
 | React inside a CFD operator split | `CFDReactor` |
 | Handle pumps / dosing / phase switches | `Event`, `solve_with_events` → `EventedResult` |
 
-Solutions (`BatchSolution`, `PFRSolution`, `TrackSolution`, `BiofilmSolution`)
+Solutions (`BatchSolution`, `PFRSolution`, `TrackSolution`, `BiofilmSolution`,
+`AxialFlowSolution`)
 share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 `to_dataframe`, `to_csv`, `plot`.
 

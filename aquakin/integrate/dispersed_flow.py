@@ -458,7 +458,7 @@ class _AxialFlowReactor(GradientCheckMixin):
         try:
             converged = bool(converged)
         except jax.errors.ConcretizationTypeError:
-            converged = True  # under a trace: the forward solve was checked when run concretely
+            converged = True  # traced under an outer jit: the flag cannot be read here
         if not converged:
             raise RuntimeError(
                 f"{type(self).__name__}.steady_state did not converge in {max_iter} "

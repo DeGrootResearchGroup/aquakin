@@ -26,8 +26,9 @@ screened for sensitivity, and used to design the next experiment.
   ASM1, ASM2d and ASM3 with two-step nitrification, N₂O, anammox and comammox
   variants; ADM1 anaerobic digestion; WATS sewer processes; and pH speciation
   with mineral precipitation (struvite, calcite, chemical phosphorus removal).
-- **Reactors and whole plants.** Batch, plug-flow, biofilm and particle-track
-  reactors, and plant-wide flowsheets: the IWA benchmarks BSM1 and BSM2 build
+- **Reactors and whole plants.** Batch, plug-flow, dispersed-flow,
+  tanks-in-series, biofilm and particle-track reactors, with dispersion and
+  tanks-in-series fits to a tracer test, and plant-wide flowsheets: the IWA benchmarks BSM1 and BSM2 build
   in one line, with clarifiers, IFAS/MBBR, digestion, disinfection, events
   (pumps, dosing, SBR phases), steady-state solvers and EQI / OCI, carbon
   footprint and cost reporting.
@@ -211,7 +212,7 @@ The full documentation is at **[aquakin.readthedocs.io](https://aquakin.readthed
 | [Model catalogue](https://aquakin.readthedocs.io/en/latest/model_catalog.html) | every shipped model, its provenance and how to load it |
 | [Your first model](https://aquakin.readthedocs.io/en/latest/adding_models.html) | writing a model of your own, step by step |
 | [YAML model format](https://aquakin.readthedocs.io/en/latest/model_format.html) | every key, function and rule of a model file |
-| [Reactors](https://aquakin.readthedocs.io/en/latest/reactors.html) | batch, plug-flow, biofilm and particle-track reactors; events; integrator settings |
+| [Reactors](https://aquakin.readthedocs.io/en/latest/reactors.html) | batch, plug-flow, dispersed-flow, tanks-in-series, biofilm and particle-track reactors; fitting a tracer test; events; integrator settings |
 | [Plant-wide simulation](https://aquakin.readthedocs.io/en/latest/plants.html) | the BSM1 / BSM2 benchmarks, performance indices, reporting, unit and mass-balance checks |
 | [Building a flowsheet](https://aquakin.readthedocs.io/en/latest/custom_flowsheets.html) | a plant of your own and every unit operation |
 | [Influents](https://aquakin.readthedocs.io/en/latest/influents.html) | patterned feeds, pump schedules, laboratory and SCADA records |

@@ -52,7 +52,7 @@ aquakin/
 │   ├── integrate/
 │   │   ├── _common.py               # re-exports (via __all__) every name of the four
 │   │   │                            #   modules below; existing imports go through it
-│   │   ├── _config.py               # IntegratorConfig, DifferentiationConfig, forward_adjoint /
+│   │   ├── _config.py               # IntegratorConfig, DifferentiationConfig, SolverSettings, forward_adjoint /
 │   │   │                            #   with_adjoint, check_finite_gradient + GradientCheckMixin;
 │   │   │                            #   Reactor & ConditionedReactor Protocols (the latter adds
 │   │   │                            #   `conditions`; sensitivity requires it. CFDReactor has
@@ -72,8 +72,12 @@ aquakin/
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
 │   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)
 │   │   ├── finite_volume.py         # the shared 1-D finite-volume core:
-│   │   │                            #   diffusive_flux, upwind_flux, divergence; the
-│   │   │                            #   biofilm diffusion and growth-advection operators use it
+│   │   │                            #   Grid1D, diffusive_flux, upwind_flux, divergence,
+│   │   │                            #   green_gauss_gradient + van_albada_slope +
+│   │   │                            #   limited_upwind_flux; the biofilm operators and
+│   │   │                            #   the axial-flow reactors use it
+│   │   ├── dispersed_flow.py        # DispersedFlowReactor, TanksInSeries,
+│   │   │                            #   AxialFlowSolution (method of lines on the core)
 │   │   ├── steady.py                # pseudo-transient continuation steady solver +
 │   │   │                            #   continuation / arclength drivers, generic in the RHS
 │   │   │                            #   (Plant.steady_state, BiofilmReactor.steady_state;
@@ -227,7 +231,8 @@ aquakin/
 │   │   │                            #   expressions (model.check_units) and the
 │   │   │                            #   scale-aware units_match; distinct from
 │   │   │                            #   core/units.py, which only formats units
-│   │   ├── rtd.py                   # RTD analysis (E-curve, Morrill index)
+│   │   ├── rtd.py                   # RTD analysis (E-curve, Morrill index) and the
+│   │   │                            #   moment fits fit_dispersion / fit_tanks_in_series
 │   │   └── result_files.py          # result files keyed by name (YAML / CSV),
 │   │                                #   read back bit for bit (studies, saved fits)
 │   │
