@@ -235,21 +235,6 @@ kept equal by putting the organic-N difference in ammonium.
     proportional to `etafe`, so methane is steep in it: 0.12 gives -15.5%,
     0.135 -4.7%, 0.155 +3.9%, 0.2 +8.0%.
 
-17. **`plantwide_nitrite`'s AOB, NOB and anammox kinetics come from the
-    commercial plant-wide model of the Varga et al. (2018) lineage**
-    (owner, 2026-11-27): death-regeneration decay like the core, its
-    activated-sludge half-saturations, Arrhenius about 20 C (see
-    *The nitrite level*).
-18. **Heterotrophs denitrify in two steps in the same model's form** (owner,
-    2026-11-27): NO3 to NO2 and NO2 to N2, each on SF, acetate and
-    propionate, one anoxic factor for both (ASM2d's `etaNO3_H`), the first
-    step slowed while nitrite is present.
-19. **PAOs and both GAO groups denitrify in two steps too** (owner,
-    2026-11-27), with the same rule as the heterotrophs.
-20. **The level is generated** (owner, 2026-11-27):
-    `_make_plantwide_nitrite.py` merges the core and the bio-P level and
-    writes `plantwide_nitrite.yaml`; the closure declaration stays deferred.
-
 ## What the bio-P and acidogen sources give (read 2026-11-26)
 
 - **López-Vázquez et al. (2009)** models three populations, not two:
@@ -502,74 +487,6 @@ species (`tests/validation/test_plantwide_core_bsm1.py`).
 - `build_a2o`'s aeration strips nothing, so on the A2O the core's hydrogen
   leaves in the effluent (a small COD loss); giving `build_a2o` the
   `aeration` argument `build_bsm1` has would fix that.
-
-## The nitrite level (`plantwide_nitrite`, design 2026-11-27)
-
-Extends `plantwide_bio_p`; decisions 17 to 20.
-
-**States.** Adds `SNO2` (g N/m3), `XAOB`, `XNOB` and `XAMX` (biomass, the
-core's composition); removes `XAUT` and the one-step nitrification.
-
-**Switches.** With `I(x) = monod_inh(x, K)` and `M = 1 - I`:
-`anoxic_NO3 = I(O2) M(NO3) I(NO2)`, `anoxic_NO2 = I(O2) M(NO2)`,
-`anoxic = anoxic_NO3 + anoxic_NO2`, `anaerobic = I(O2) I(NO3) I(NO2)`,
-so `aerobic + anoxic + anaerobic = 1` still, and without nitrite every switch
-is the core's. The methanogens' `anaerobic_only` takes NO3 + NO2. Hydrolysis
-and decay keep their form on the widened switches.
-
-**Two-step reduction.** Every inherited process that consumes nitrate under
-`anoxic` (heterotroph growth on SF, acetate, propionate; every PAO and GAO
-anoxic process) becomes two: on `anoxic_NO3` with its electrons going NO3 to
-NO2 (2 e per N: the nitrate coefficient times 5/2, the same nitrite made), and
-on `anoxic_NO2` going NO2 to N2 (3 e per N: the nitrate coefficient times 5/3,
-as nitrite). Rates, yields and the other coefficients are unchanged, so each
-pair does what the one process did, through nitrite.
-
-**Nitrifiers and anammox** (the same model's values, 20 C):
-
-| | AOB | NOB | anammox |
-|---|---|---|---|
-| max growth (1/d), theta | 0.9, 1.072 | 0.65, 1.06 | 0.1, 1.01 |
-| decay (1/d), theta | 0.17, 1.03 | 0.15, 1.03 | 0.019, 1.03 |
-| substrate half-saturation (g N/m3) | NH4 0.7 | NO2 0.1 | NH4 2, NO2 1 |
-| oxygen (g/m3) | 0.25 | 0.25 | inhibited, 0.4 |
-| yield | 0.15 g COD/g N | 0.09 g COD/g N | Strous: 1.32 NO2, 0.26 NO3 per NH4 |
-
-Their decay is aerobic, x0.5 with nitrite or nitrate, x0.25 without either
-(the same model's anoxic and anaerobic reduction factors). The heterotrophs'
-nitrite half-saturation is the same model's 0.05 g N/m3.
-
-**Left out**, to later levels: N2O and NO (`asm3_2step_n2o` covers them),
-free-ammonia and free-nitrous-acid inhibition and CO2 limitation of the
-nitrifiers (they need the speciated pH of the chemistry level; the same model
-switches the first two off in activated sludge).
-
-**Validation.** Conservation and units; without nitrite (no AOB, NOB or
-anammox) the level's reaction terms equal the bio-P level's; the nitrifiers and
-anammox against `asm3_2step` / `asm3_2step_anammox` in autotroph batches with
-the kinetics aligned; on BSM1, nitrification and denitrification against the
-core's one-step form.
-
-**Built (2026-11-27).** `_make_plantwide_nitrite.py` writes 35 species, 111
-reactions, 106 parameters: 23 inherited nitrate-reducing processes (3
-heterotroph, 20 PAO / GAO) each become a pair; COD, N, C and P close in every
-reaction and the units check is clean. Measured
-(`tests/integration/test_plantwide_nitrite.py`,
-`tests/validation/test_plantwide_nitrite_bsm1.py`):
-
-- without nitrite every shared process, and each pair's first step, runs at
-  the bio-P level's rate to 1e-10, the second steps idle;
-- anammox: 1.320 NO2 and 0.260 NO3 per NH4 (Strous's 1.32 and 0.26, from the
-  `auto` closure of the given nitrite and nitrate coefficients), N2 1.024
-  (1.02); the shipped `asm3_2step_anammox` gives 1.331 NO2, from its own
-  yield parameterization;
-- with this level's AOB and NOB constants given to `asm3_2step` and both
-  decays off, an aerated nitrifier batch agrees to 1e-7 while ammonium lasts;
-  after it, `asm3_2step`'s NOB keep growing on no nitrogen source and drive
-  ammonium negative, this level's stop;
-- on BSM1 the level leaves 0.22 g N/m3 ammonium, 0.15 nitrite and 9.35
-  nitrate (the core: 1.11 and 11.02), and its N, P and COD balances close to
-  1e-13 with the stripped gases counted.
 
 ## Structure: a linear `extends:` chain
 
