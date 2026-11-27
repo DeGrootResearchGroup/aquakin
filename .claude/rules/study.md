@@ -12,8 +12,8 @@ paths:
 
 A study is one analysis of a flowsheet project, saved in the project with its
 results; a `calibrate`, `profile` or `fisher` study may instead study a batch
-reactor (`reactor:`, below), and a `posterior` study samples another study's
-fit (`fit:`, below). The design and the owner's decisions are in
+reactor (`reactor:`, below), a `design` study always does, and a `posterior`
+study samples another study's fit (`fit:`, below). The design and the owner's decisions are in
 `.claude/notes/studies-design.md`; this file is how the code realizes them.
 
 ## Modules
@@ -109,6 +109,10 @@ take from it.
   - `posterior`: `fit` (a calibrate study's name) and the sampler's settings;
     `draws.csv` (one column per fitted parameter, the chains stacked),
     `posterior.yaml` (per parameter optimum, mean, std, quantiles, R-hat, ESS).
+  - `design` (reactor only): `design.yaml`, the optimized experiments as an
+    `experiments:` list (the stored layout of `study.yaml`, owner's decision on
+    #933, so it pastes into a fisher or calibrate study), the criterion at the
+    start and at the optimum, and each parameter's std at both.
   Data and initial-state files are part of the study's fingerprint.
   A new kind adds a runner, its required fields, a form entry, a reader, a view
   in `aquakin_ui`, and a test in `tests/integration/test_study.py`.
@@ -124,6 +128,15 @@ take from it.
   required fields; any other kind is refused by message ("the simulate kind
   does not take a reactor target yet"). A flowsheet-only setting given to a
   reactor study is refused (`_FLOWSHEET_ONLY`), never silently ignored.
+- **Planned experiments** (`fisher`, `design`: `reactor._PLANNED`) read no
+  data; each takes its own `t_obs` or the study's (`_check_planned`), built by
+  the one `reactor._planned`, which passes `time_unit` to `Experiment` so times
+  and `time_bounds` stay in the study's unit. A fit's experiments take their
+  times from their data and refuse a `t_obs`. Experiments already run are
+  `base_experiments` (owner's decision; `base` is the plant rank's sensor set).
+  A design has no flowsheet form (`study_form` gives it no `fields`, so the
+  editor's dialog does not offer it), and `_RUNNERS["design"]` is
+  `run_reactor_study`.
 - **Every other setting is shared by name** with the plant kinds (`free`,
   `parameters`, `sigma`, `estimate_sigma`, `transforms`, `laplace`, `profile`,
   `grid`, `t_obs`, `time_unit`, ...). Share the analysis code: the fit options,

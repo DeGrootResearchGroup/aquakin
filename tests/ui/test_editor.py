@@ -877,6 +877,9 @@ def test_a_posterior_study_from_the_dialog_names_no_flowsheet(tmp_path):
     ed = Editor(server, worker=InProcessWorker(), path=project / "second.yaml")
     try:
         ed.new_study()
+        # A design studies only a batch reactor, which the dialog cannot set up.
+        offered = {k["value"] for k in ed.state.study_kinds}
+        assert "posterior" in offered and "simulate" in offered and "design" not in offered
         ed.save_study_dialog("post", "posterior", {"fit": "short", "n_draws": "200"})
         assert ed.state.study_error == ""
         settings = yaml.safe_load((project / "studies" / "post" / "study.yaml").read_text())

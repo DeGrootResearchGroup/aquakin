@@ -60,12 +60,14 @@ RANKING_FILE = "ranking.csv"
 # posterior: the draws of every chain, and their summary and diagnostics.
 DRAWS_FILE = "draws.csv"
 POSTERIOR_FILE = "posterior.yaml"
+# design: the optimized experiments, the criterion and the standard errors.
+DESIGN_FILE = "design.yaml"
 #: Inside a frozen posterior study's ``snapshot/``: the frozen copy of its fit.
 FIT_SNAPSHOT = "fit"
 
 #: The kinds of study. Each has a runner (``_RUNNERS``), required fields
 #: (``_REQUIRED``), a form entry and a result reader (:mod:`aquakin.study.form`).
-KINDS = ("simulate", "fisher", "calibrate", "profile", "rank", "posterior")
+KINDS = ("simulate", "fisher", "calibrate", "profile", "rank", "posterior", "design")
 #: Every state :func:`check_study` can report (see :class:`StudyStatus`).
 STATES = ("not run", "fresh", "stale", "damaged", "failed", "cancelled")
 #: The states of a study whose last run finished, so it has results to show or replace.

@@ -184,6 +184,10 @@ next_run.experiments[0].t_obs        # the new run's samples only
 % invisible-code-block: python
 %     assert len(next_run.experiments) == 1 and next_run.experiments[0].t_obs.shape == (6,)
 
+To keep a design with the project, and rerun it when the model changes, make it
+a `design` study of the reactor
+([Designing a batch experiment](plant_files.md#designing-a-batch-experiment)).
+
 The optimal design depends on the parameter values you assume, which are
 uncertain before the experiment. To make it a
 [robust design](analysis_concepts.md#scoring-a-design), pass `param_draws`,

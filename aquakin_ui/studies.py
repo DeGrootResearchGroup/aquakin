@@ -287,6 +287,7 @@ def _open_study_dialog(
         s.study_kinds = [
             {"title": k["label"], "value": k["kind"], "summary": k["summary"]}
             for k in form["kinds"]
+            if k["fields"]  # a kind with none studies only a reactor, which the form cannot
         ]
         s.study_choices = choices
         s.study_kind = kind
