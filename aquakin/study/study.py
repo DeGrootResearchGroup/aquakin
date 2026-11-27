@@ -53,6 +53,7 @@ from aquakin.study.analysis import _fit_sigma as _fit_sigma
 from aquakin.study.common import (
     _STRICT,
     ATTEMPT_FILE,
+    CANCEL_FILE,
     FINAL_STATE_FILE,
     FITTED_FILE,
     FROZEN_FILE,
@@ -65,6 +66,7 @@ from aquakin.study.common import (
     RESULT_STATES,
     RESULTS,
     RUN_FILE,
+    RUNNING_FILE,
     SNAPSHOT,
     SPEC_FILE,
     STREAMS_FILE,
@@ -91,6 +93,7 @@ from aquakin.study.reactor import (
     reactor_inputs,
     run_reactor_study,
 )
+from aquakin.study.running import RunLock, refuse_while_running, run_state
 from aquakin.utils.result_files import (
     read_named_values,
     write_named_values,
@@ -483,12 +486,18 @@ class StudyStatus:
         Why the study is stale, damaged or failed.
     notes : list of str
         What changed without making it stale (the aquakin version).
+    running : dict or None
+        ``None``, or the run in progress, whichever program started it: when it
+        started and its latest progress (see
+        :func:`aquakin.study.running.run_state`). ``state`` is meanwhile that of
+        the results the study had before the run.
     """
 
     state: str
     frozen: bool
     reasons: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    running: dict | None = None
 
     @property
     def has_results(self) -> bool:
@@ -537,9 +546,10 @@ def check_study(path) -> StudyStatus:
     study = load_study(folder)
     frozen = _read_yaml(folder / FROZEN_FILE)
     run = _read_yaml(folder / RUN_FILE)
+    running = run_state(folder)
     if run is None:
-        return StudyStatus("not run", frozen is not None)
-    status = StudyStatus("fresh", frozen is not None)
+        return StudyStatus("not run", frozen is not None, running=running)
+    status = StudyStatus("fresh", frozen is not None, running=running)
     attempt = _read_yaml(folder / ATTEMPT_FILE)
     if attempt is not None:
         what = "was cancelled" if attempt.get("outcome") == "cancelled" else "failed"
@@ -904,7 +914,10 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     progress : callable, optional
         Passed to the analysis (see :mod:`aquakin.progress`); raising
         :class:`aquakin.Cancelled` from it stops the run, which is then
-        recorded as cancelled.
+        recorded as cancelled. Whatever is passed, the run also holds
+        ``running.yaml`` in the study folder, so a second run of the study is
+        refused, any program can follow its progress (:func:`check_study`'s
+        ``running``) and cancel it (:func:`aquakin.study.cancel_study`).
 
     Returns
     -------
@@ -914,13 +927,27 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     Raises
     ------
     StudyError
-        If the study has results and ``replace`` is not set, or cannot be read.
-        A failure during the run itself is recorded in ``run.yaml`` and
+        If the study has results and ``replace`` is not set, is already
+        running, or cannot be read. A failure during the run itself is recorded in ``run.yaml`` and
         re-raised.
     """
+    folder = _folder(path)
+    load_study(folder)  # a folder that is no study is refused before anything is written
+    with RunLock(folder) as run:
+
+        def report(p):
+            run.report(p)  # records it, and stops a run cancelled from elsewhere
+            if progress is not None:
+                progress(p)
+
+        _run_held(folder, replace, report)
+    return check_study(folder)  # once released: the run is no longer in progress
+
+
+def _run_held(folder: Path, replace: bool, progress) -> None:
+    """:func:`run_study`'s run, once it holds the study's :class:`RunLock`."""
     from aquakin.plant.spec import aquakin_version
 
-    folder = _folder(path)
     study = load_study(folder)
     out = folder / RESULTS
     previous = _read_yaml(folder / RUN_FILE)
@@ -977,7 +1004,6 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     (folder / ATTEMPT_FILE).unlink(missing_ok=True)
     record |= {"finished": _now(), "outcome": "finished", "results": digests}
     write_yaml(folder / RUN_FILE, record)
-    return check_study(folder)
 
 
 # ---------------------------------------------------------------------------
@@ -1032,6 +1058,7 @@ def freeze_study(path) -> dict:
     from aquakin.plant.spec import aquakin_version, spec_fingerprint, spec_inputs
 
     folder = _folder(path)
+    refuse_while_running(folder, "freeze")
     study = load_study(folder)
     if (folder / FROZEN_FILE).exists():
         raise StudyError(f"study {folder.name} is already frozen")
@@ -1083,6 +1110,7 @@ def unfreeze_study(path, *, discard_results: bool = False) -> None:
         not set.
     """
     folder = _folder(path)
+    refuse_while_running(folder, "unfreeze")
     load_study(folder)
     if not (folder / FROZEN_FILE).exists():
         raise StudyError(f"study {folder.name} is not frozen")
@@ -1133,5 +1161,5 @@ def copy_study(path, name: str) -> Path:
     dest = folder.parent / name
     if dest.exists():
         raise StudyError(f"{dest} already exists")
-    shutil.copytree(folder, dest, ignore=shutil.ignore_patterns(PARTIAL))
+    shutil.copytree(folder, dest, ignore=shutil.ignore_patterns(PARTIAL, RUNNING_FILE, CANCEL_FILE))
     return dest

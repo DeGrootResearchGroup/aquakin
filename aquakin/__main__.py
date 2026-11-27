@@ -21,7 +21,8 @@ file read as YAML 1.2, see :func:`~aquakin.plant.spec.load_spec_file`) and
 :func:`~aquakin.plant.spec.write_spec`, returning what was written),
 ``list_studies`` (``project``: every study of a project folder with its
 status), ``freeze_study`` / ``unfreeze_study`` (``path``, ``discard_results``)
-``copy_study`` (``path``, ``name``), ``study_form`` (every study setting, for a
+``copy_study`` (``path``, ``name``), ``cancel_study`` (``path``: stop its run at
+the next checkpoint, whichever program started it), ``study_form`` (every study setting, for a
 form), ``plant_choices`` (``spec``, ``base_dir``: the streams, parameters and
 channels a study of it may name), ``read_study`` (``path``), ``create_study``
 (``project``, ``name``, ``study``), ``update_study`` (``path``, ``study``),
@@ -87,6 +88,7 @@ def _handlers():
             "unfreeze_study", req, discard_results=bool(req.get("discard_results"))
         ),
         "copy_study": lambda req: str(_study_call("copy_study", req, name=req["name"])),
+        "cancel_study": lambda req: _study_call("cancel_study", req),
         "study_form": lambda req: _study_module().study_form(),
         "plant_choices": lambda req: _study_module().plant_choices(
             req["spec"], base_dir=req.get("base_dir")
@@ -256,6 +258,10 @@ def _study_command(args) -> int:
         elif args.action == "copy":
             print(st.copy_study(args.path, args.name))
             return 0
+        elif args.action == "cancel":
+            st.cancel_study(args.path)
+            print("asked to stop at its next checkpoint")
+            return 0
         else:
             status = st.check_study(args.path)
     except st.StudyError as exc:
@@ -263,6 +269,9 @@ def _study_command(args) -> int:
         return 2
     frozen = ", frozen" if status.frozen else ""
     print(f"{status.state}{frozen}")
+    if status.running is not None:
+        progress = status.running["progress"] or {}
+        print(f"  running since {status.running['started']}: {progress.get('message', '')}")
     for line in status.reasons:
         print(f"  - {line}")
     for line in status.notes:
@@ -302,6 +311,10 @@ def main(argv=None) -> int:
     unfreeze.add_argument(
         "--discard-results", action="store_true", help="agree to delete the study's results"
     )
+    cancel = action.add_parser(
+        "cancel", help="stop a study's run at its next checkpoint, whatever started it"
+    )
+    cancel.add_argument("path", help="the study folder")
     copy = action.add_parser("copy", help="copy a study, results included")
     copy.add_argument("path", help="the study folder")
     copy.add_argument("name", help="the copy's name")

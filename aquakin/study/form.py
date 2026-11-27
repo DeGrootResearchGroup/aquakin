@@ -38,6 +38,7 @@ from aquakin.study.common import (
 )
 from aquakin.study.reactor import REQUIRED as REACTOR_REQUIRED
 from aquakin.study.reactor import experiment_names, observed_data
+from aquakin.study.running import refuse_while_running
 from aquakin.study.study import (
     _REQUIRED,
     _channel_names,
@@ -576,8 +577,10 @@ def list_studies(project) -> list[dict]:
         study cannot be read), ``"has_results"``, ``"frozen"``,
         ``"flowsheet"`` (the spec its plant is built from: the snapshot's for a
         frozen study; ``None`` for a reactor study or when unreadable),
-        ``"reactor"`` (a reactor study's model, else ``None``), ``"reasons"``
-        and ``"notes"``.
+        ``"reactor"`` (a reactor study's model, else ``None``), ``"running"``
+        (the run in progress, from whichever program, as
+        :class:`~aquakin.study.StudyStatus` gives it, else ``None``),
+        ``"reasons"`` and ``"notes"``.
         An unreadable study's ``reasons`` holds why.
     """
     from aquakin.plant.errors import error_reply
@@ -599,6 +602,7 @@ def list_studies(project) -> list[dict]:
                 if spec.reactor is not None
                 else str(_flowsheet(path.parent, spec)),
                 "reactor": None if spec.reactor is None else spec.reactor.model,
+                "running": status.running,
                 "reasons": status.reasons,
                 "notes": status.notes,
             }
@@ -611,6 +615,7 @@ def list_studies(project) -> list[dict]:
                 "frozen": False,
                 "flowsheet": None,
                 "reactor": None,
+                "running": None,
                 "reasons": [error_reply(exc)["error"]],
                 "notes": [],
             }
@@ -967,6 +972,7 @@ def update_study(path, study: dict) -> Path:
     """
     folder = _folder(path)
     load_study(folder)  # it is a study
+    refuse_while_running(folder, "edit")
     return _write(folder, study, folder.parent.parent)
 
 
