@@ -83,6 +83,11 @@ release = ["towncrier>=24.8"]
 # interface never imports aquakin or JAX (it asks an `aquakin serve` worker).
 # trame-client pins the Vue the widget is built against (Vue 3.5).
 ui = ["trame>=3.6", "trame-vuetify>=2.7", "trame-client>=3.6"]
+# `mcp` is the Model Context Protocol SDK behind `aquakin mcp`, which serves
+# aquakin's tools to an AI assistant (Claude Desktop, Claude Code, any MCP
+# client) running under the user's own account. Only `aquakin.mcp.server`
+# imports it.
+mcp = ["mcp>=2.3"]
 # `typecheck` pins pyright, which checks `aquakin_ui` (see [tool.pyright]); pinned
 # exactly, like ruff's cap, because a pyright release can add errors. It needs the
 # `ui` extra installed too, so trame's types resolve.
@@ -119,7 +124,7 @@ test = [
     "pytest-cov>=5",
     # sybil runs the code examples in README.md and the user guide (conftest.py).
     "sybil>=9",
-    "aquakin[dataframe,plot,ui]",
+    "aquakin[dataframe,plot,ui,mcp]",
 ]
 
 # Version is read statically from the ``__version__`` string literal in

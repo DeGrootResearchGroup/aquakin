@@ -1,0 +1,55 @@
+---
+paths:
+  - "aquakin/mcp/**"
+  - "setup.py"
+  - "MANIFEST.in"
+---
+
+# Rules — `aquakin/mcp/` (`aquakin mcp`)
+
+The MCP server an AI assistant starts on the user's computer. The user guide
+page is `docs/ai_assistants.md`.
+
+## A tool is a thin wrapper
+
+- **Each tool calls the function the editor's `aquakin serve` worker calls**
+  (`aquakin.plant.catalog`, `aquakin.plant.spec`, `aquakin.study`), never a
+  copy of its logic, so the assistant and the editor cannot disagree about a
+  flowsheet. If a tool needs behaviour the worker lacks, add it to the shared
+  function, not to `server.py`.
+- **A tool is a plain function in `server.py` listed in `TOOLS`**, with a NumPy
+  docstring: the whole docstring is the description the assistant reads, so its
+  Parameters section is how the model learns each argument.
+- **Every tool is registered through `_reported`**. The SDK replaces any
+  exception other than its `ToolError` with a bare "Error executing tool", so
+  without it the assistant never sees aquakin's message.
+- **Return plain data** (dicts, lists, strings of JSON-able values). The SDK
+  serializes it; a JAX array or a `Plant` does not cross the protocol.
+- **Keep tools small in what they return.** A whole catalogue or every model's
+  full description in one answer costs the user's context window: list names
+  and summaries, and describe one item on request.
+
+## Reading versus writing
+
+- **Tools here only read, and are annotated `read_only_hint=True`.** A tool
+  that writes a file, deletes results or runs a solve is a separate change:
+  it must say so in its annotations (`read_only_hint=False`, and
+  `destructive_hint=True` when it can overwrite or delete), so the user's app
+  asks before running it. Writing goes through the same functions the editor
+  uses (`write_spec`, `aquakin.study`) and keeps their refusals (never
+  overwrite results without the explicit flag).
+
+## Imports and packaging
+
+- **Only `server.py` imports `mcp`, and only inside `build_server`**, so
+  `aquakin.mcp.docs` and `aquakin.mcp.api` work and are tested without the
+  `mcp` extra.
+- **`docs.py` imports only the standard library**: `setup.py` loads it by path
+  while building, before aquakin is importable, to bundle the published pages
+  into the wheel (the `BUNDLE` folder beside `docs.py`). Which pages are
+  published is decided only by `docs/conf.py`'s `exclude_patterns`; do not
+  keep a second list.
+- **A new published page needs nothing here**; a new docs *file type* the
+  guide tools should serve needs `MANIFEST.in` (the sdist) and `setup.py`
+  (the wheel) together, because `python -m build` builds the wheel from the
+  sdist.

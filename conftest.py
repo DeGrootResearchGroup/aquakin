@@ -38,6 +38,7 @@ GUIDE_PAGES = [
     "docs/analysis.md",
     "docs/reference.md",
     "docs/installing_the_editor.md",
+    "docs/ai_assistants.md",
     "docs/reactors.md",
     "docs/plants.md",
     "docs/custom_flowsheets.md",

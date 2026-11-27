@@ -1,0 +1,4 @@
+# The source distribution carries the user guide's pages and the Sphinx
+# configuration that says which are published: building a wheel from it
+# bundles those pages for `aquakin mcp` (see setup.py).
+include docs/*.md docs/conf.py
