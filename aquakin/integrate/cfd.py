@@ -36,13 +36,12 @@ import numpy as np
 
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
-    DifferentiationConfig,
-    IntegratorConfig,
     friendly_solve_errors,
     init_solver_settings,
     resolve_state_atol,
     solve_chemistry,
 )
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate._solver import check_solve_result
 
 
@@ -58,24 +57,16 @@ class CFDReactor:
     ----------
     model : CompiledModel
         Compiled reaction model.
-    rtol : float, optional
-        Relative tolerance for the per-cell ODE solver.
-    atol : float or jnp.ndarray, optional
-        Absolute tolerance. Scalar or shape ``(n_species,)``. Defaults to
-        ``None`` -> a per-component noise floor scaled off the model reference
-        concentrations (see :class:`BatchReactor` for the per-species rationale).
-    integrator : IntegratorConfig, optional
-        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
-        ``dtmax``, ``max_steps``, an explicit ``solver``) for the per-cell solve.
-        See :class:`BatchReactor`.
-    diff : DifferentiationConfig, optional
-        Autodiff configuration (``mode``, ``method``) for the per-cell solve.
-        Note that the only public method, :meth:`step`, returns NumPy (it
-        converts at the pybind11 boundary and runs a host-side finiteness check),
-        so gradients do not flow through ``step`` and this argument is inert for
-        that path. It is retained for advanced use of the internal jitted
-        per-cell step in a differentiable context, and for symmetry with the
-        other reactors.
+    settings : SolverSettings, optional
+        Tolerances and solver configuration of the per-cell solve (``rtol``,
+        ``atol``, ``integrator``, ``diff``); see :class:`BatchReactor` for each
+        field. ``atol`` is a scalar or shape ``(n_species,)``; ``None``
+        (default) uses a per-component noise floor scaled off the model
+        reference concentrations. ``diff`` is inert for :meth:`step`, the only
+        public method: it returns NumPy (it converts at the pybind11 boundary
+        and runs a host-side finiteness check), so gradients do not flow
+        through it. ``diff`` applies only to advanced use of the internal
+        jitted per-cell step in a differentiable context.
     on_nan : {"raise", "ignore"}, optional
         Policy when any cell produces a non-finite concentration (NaN or
         Inf) after the chemistry step.
@@ -103,16 +94,13 @@ class CFDReactor:
         self,
         model: CompiledModel,
         *,
-        rtol: float = 1e-6,
-        atol=None,
-        integrator: IntegratorConfig = IntegratorConfig(),
-        diff: DifferentiationConfig = DifferentiationConfig(),
+        settings: SolverSettings = SolverSettings(),
         on_nan: str = "raise",
     ) -> None:
         if on_nan not in ("raise", "ignore"):
             raise ValueError(f"on_nan must be 'raise' or 'ignore', got {on_nan!r}")
-        init_solver_settings(self, model, rtol=rtol, integrator=integrator, diff=diff)
-        self.atol = resolve_state_atol(model, atol)
+        init_solver_settings(self, model, settings)
+        self.atol = resolve_state_atol(model, settings.atol)
         self.on_nan = on_nan
         # Cache jit-compiled vmapped step keyed on n_cells.
         self._jit_cache: dict[int, callable] = {}

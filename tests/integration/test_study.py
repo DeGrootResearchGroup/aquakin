@@ -1184,7 +1184,9 @@ def test_a_reactor_fisher_study_is_the_fisher_information(tmp_path):
     assert rows == cols == ["A_to_B.k", "B_to_C.k2"]
 
     model = aquakin.load_model_from_file(project / "models" / "chain.yaml")
-    reactor = aquakin.BatchReactor(model, model.default_conditions(), rtol=1.0e-8)
+    reactor = aquakin.BatchReactor(model, model.default_conditions(), settings=aquakin.SolverSettings(
+        rtol=1.0e-8,
+    ))
     design = [
         Experiment(
             model.concentrations({"A": a0}),

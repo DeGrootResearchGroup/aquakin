@@ -314,7 +314,13 @@ def _setting(where: str, read):
 
 
 def _set_up(folder: Path, study: _Study, frozen: bool) -> _Batch:
-    from aquakin import BatchReactor, IntegratorConfig, load_model, load_model_from_file
+    from aquakin import (
+        BatchReactor,
+        IntegratorConfig,
+        SolverSettings,
+        load_model,
+        load_model_from_file,
+    )
     from aquakin.integrate._common import native_time_factor
 
     kind, source = _model_source(folder, study, frozen)
@@ -325,8 +331,8 @@ def _set_up(folder: Path, study: _Study, frozen: bool) -> _Batch:
             f"observed: the model has no species {', '.join(unknown)} (its species: "
             f"{', '.join(model.species)})"
         )
-    settings = study.reactor.integrator.model_dump(exclude_none=True)
-    tolerances = {k: settings.pop(k) for k in ("rtol", "atol") if k in settings}
+    integrator = study.reactor.integrator.model_dump(exclude_none=True)
+    tolerances = {k: integrator.pop(k) for k in ("rtol", "atol") if k in integrator}
     conditions = _setting(
         "reactor.conditions", lambda: model.default_conditions().with_(**study.reactor.conditions)
     )
@@ -340,7 +346,8 @@ def _set_up(folder: Path, study: _Study, frozen: bool) -> _Batch:
         for i, e in enumerate(study.base_experiments)
     ]
     factor = _setting("time_unit", lambda: native_time_factor(model.time_unit, study.time_unit))
-    reactor = BatchReactor(model, conditions, integrator=IntegratorConfig(**settings), **tolerances)
+    settings = SolverSettings(integrator=IntegratorConfig(**integrator), **tolerances)
+    reactor = BatchReactor(model, conditions, settings=settings)
     return _Batch(model, reactor, params, initial, experiment_names(study), factor, base)
 
 

@@ -40,14 +40,14 @@ def test_max_steps_is_exposed_and_enforced(simple_model):
 
     r_tight = aquakin.BatchReactor(
         simple_model, conditions,
-        integrator=aquakin.IntegratorConfig(max_steps=2))
+        settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(max_steps=2)))
     assert r_tight.max_steps == 2
     with pytest.raises(RuntimeError, match=r"step budget \(max_steps=2\)"):
         r_tight.solve(C0, params=params, t_span=(0.0, 20.0), t_eval=t_eval)
 
     r_ok = aquakin.BatchReactor(
         simple_model, conditions,
-        integrator=aquakin.IntegratorConfig(max_steps=100_000))
+        settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(max_steps=100_000)))
     sol = r_ok.solve(C0, params=params, t_span=(0.0, 20.0), t_eval=t_eval)
     assert jnp.all(jnp.isfinite(sol.C))
 
@@ -191,7 +191,7 @@ def test_ozone_bromate_runs():
         1, pH=7.5, T=293.15, OH_scavenging=5.0e4
     )
     atol = model.atol({"OH": 1e-20}, default=1e-12)
-    reactor = aquakin.BatchReactor(model, conditions, atol=atol)
+    reactor = aquakin.BatchReactor(model, conditions, settings=aquakin.SolverSettings(atol=atol))
     C0 = model.concentrations({"Br-": 1e-5, "O3": 1e-4})
     sol = reactor.solve(
         C0,
@@ -242,7 +242,9 @@ def test_batch_step_ceiling_gives_friendly_error():
     net = aquakin.load_model_from_file("tests/fixtures/simple_model.yaml")
     cond = aquakin.SpatialConditions.uniform(T=293.15)
     reactor = aquakin.BatchReactor(
-        net, cond, integrator=aquakin.IntegratorConfig(max_steps=1))
+        net, cond, settings=aquakin.SolverSettings(
+            integrator=aquakin.IntegratorConfig(max_steps=1),
+        ))
     with pytest.raises(RuntimeError, match="step budget"):
         reactor.solve(net.concentrations(A=1.0), t_span=(0.0, 1000.0),
                       t_eval=jnp.linspace(0.0, 1000.0, 50))
@@ -286,7 +288,9 @@ def test_forward_adjoint_enables_forward_mode_through_batch(simple_model):
 
     fwd = aquakin.BatchReactor(
         simple_model, conditions,
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))
+        settings=aquakin.SolverSettings(
+            diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        ))
 
     def out(z):
         return fwd.solve(C0, params=p.at[0].set(z[0]), t_span=(0.0, 10.0)).C[-1, 1]
@@ -312,7 +316,9 @@ def test_dtmax_native_time_unit_warns_when_time_unit_rescales(simple_model):
     conditions = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0 = jnp.asarray([1.0, 0.0])
     reactor = aquakin.BatchReactor(
-        simple_model, conditions, integrator=aquakin.IntegratorConfig(dtmax=0.1)
+        simple_model, conditions, settings=aquakin.SolverSettings(
+            integrator=aquakin.IntegratorConfig(dtmax=0.1),
+        )
     )
     # simple_model is in seconds; requesting minutes rescales the times.
     with pytest.warns(UserWarning, match="dtmax.*native time unit"):
@@ -326,7 +332,9 @@ def test_dtmax_no_warning_without_time_unit_or_dtmax(simple_model, recwarn):
 
     # dtmax set, but native units (no time_unit): no coupling, no warning.
     capped = aquakin.BatchReactor(
-        simple_model, conditions, integrator=aquakin.IntegratorConfig(dtmax=0.1)
+        simple_model, conditions, settings=aquakin.SolverSettings(
+            integrator=aquakin.IntegratorConfig(dtmax=0.1),
+        )
     )
     capped.solve(C0, t_span=(0.0, 10.0))
     # non-native time_unit, but no dtmax: nothing to be off, no warning.

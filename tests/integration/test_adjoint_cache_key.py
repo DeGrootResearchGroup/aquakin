@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from aquakin import BatchReactor, DifferentiationConfig, SpatialConditions
+from aquakin import BatchReactor, DifferentiationConfig, SolverSettings, SpatialConditions
 from aquakin.integrate._cache import _SOLVER_CACHE, reactor_settings_key, settings_cache_key
 from aquakin.integrate._config import with_adjoint
 
@@ -73,7 +73,11 @@ def test_fresh_forward_mode_reactors_share_one_compiled_solve(simple_model, xla_
     params = simple_model.default_parameters()
 
     def solve():
-        reactor = BatchReactor(simple_model, conditions, rtol=1e-9, atol=1e-12, diff=FORWARD)
+        reactor = BatchReactor(simple_model, conditions, settings=SolverSettings(
+            rtol=1e-9,
+            atol=1e-12,
+            diff=FORWARD,
+        ))
         return reactor.solve(C0, (0.0, 3.0), T_EVAL / 10.0 * 3.0, params=params)
 
     solve()

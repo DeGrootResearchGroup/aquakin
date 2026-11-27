@@ -21,7 +21,9 @@ TIGHT = aquakin.IntegratorConfig(max_steps=2)
 
 def _batch(simple_model):
     return aquakin.BatchReactor(
-        simple_model, aquakin.SpatialConditions.uniform(T=293.15), integrator=TIGHT
+        simple_model, aquakin.SpatialConditions.uniform(T=293.15), settings=aquakin.SolverSettings(
+            integrator=TIGHT,
+        )
     )
 
 
@@ -50,7 +52,7 @@ def _pfr(simple_model, _make_plant):
         n_points=5,
         length=20.0,
         velocity=1.0,
-        integrator=TIGHT,
+        settings=aquakin.SolverSettings(integrator=TIGHT),
     )
     reactor.solve(jnp.asarray([1.0, 0.0]))
 

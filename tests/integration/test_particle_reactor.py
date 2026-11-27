@@ -105,10 +105,14 @@ def test_scavenging_step_affects_OH_path():
 
     C0 = model.concentrations({"O3": 1e-4, "Br-": 1e-5})
 
-    sol_step = aquakin.ParticleTrackReactor(model, track_step, atol=atol).solve(
+    sol_step = aquakin.ParticleTrackReactor(model, track_step, settings=aquakin.SolverSettings(
+        atol=atol,
+    )).solve(
         C0, params=model.default_parameters()
     )
-    sol_high = aquakin.ParticleTrackReactor(model, track_high, atol=atol).solve(
+    sol_high = aquakin.ParticleTrackReactor(model, track_high, settings=aquakin.SolverSettings(
+        atol=atol,
+    )).solve(
         C0, params=model.default_parameters()
     )
 
@@ -154,7 +158,9 @@ def test_particle_direct_adjoint_enables_forward_mode(simple_model):
                           fields={"T": jnp.full(11, 293.15)})
     reactor = aquakin.ParticleTrackReactor(
         simple_model, track,
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))
+        settings=aquakin.SolverSettings(
+            diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        ))
     C0 = jnp.asarray([1.0, 0.0])
 
     def out(p):

@@ -85,7 +85,7 @@ class DGSMResult:
 _DGSM_FORWARD_HINT = (
     f"dgsm with {FORWARD_DIFF} requires forward-mode autodiff through the solve: "
     f"inside fn, {FORWARD_REACTOR_REMEDY} (dgsm cannot do this for you -- your fn "
-    "constructs the reactor). A reactor built with the default diff= is "
+    "constructs the reactor). A reactor built with the default settings= is "
     "reverse-mode only: its RecursiveCheckpointAdjoint registers a custom_vjp "
     "that rejects forward mode."
 )
@@ -264,11 +264,11 @@ def dgsm(
       outputs, or when the reverse adjoint is expensive -- e.g. a stiff solve
       whose differentiated step must be capped (``dtmax``), which inflates the
       reverse pass. **The reactor inside ``fn`` must then be built with**
-      ``diff=aquakin.DifferentiationConfig(mode="forward",
-      method="through_solve")`` (``dgsm`` cannot set the adjoint for you,
-      because ``fn`` constructs the reactor): a reactor built with the default
-      ``diff`` carries ``RecursiveCheckpointAdjoint``, which registers a
-      ``custom_vjp`` that rejects forward-mode autodiff.
+      ``settings=aquakin.SolverSettings(diff=aquakin.DifferentiationConfig(
+      mode="forward", method="through_solve"))`` (``dgsm`` cannot set the
+      adjoint for you, because ``fn`` constructs the reactor): a reactor built
+      with the default ``settings`` carries ``RecursiveCheckpointAdjoint``,
+      which registers a ``custom_vjp`` that rejects forward-mode autodiff.
 
     Both modes return identical sensitivities (to machine precision);
     ``diff.mode`` is purely a performance choice. For a single scalar output

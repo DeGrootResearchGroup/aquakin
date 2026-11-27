@@ -214,9 +214,7 @@ class _AxialFlowReactor(GradientCheckMixin):
                 f"conditions must have 1 location or one per cell ({grid.n_cells}), "
                 f"got {n_locations}."
             )
-        init_solver_settings(
-            self, model, rtol=settings.rtol, integrator=settings.integrator, diff=settings.diff
-        )
+        init_solver_settings(self, model, settings)
         self.conditions = conditions
         self.grid = grid
         self.atol = resolve_layered_atol(model, settings.atol, grid.n_cells)

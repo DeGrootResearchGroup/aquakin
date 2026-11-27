@@ -536,14 +536,16 @@ class CompiledModel:
         ``default=None`` (the default) starts from the per-component noise floor
         :func:`~aquakin.core.tolerance.default_atol` scaled off the model's
         reference concentrations -- the same floor a reactor built with
-        ``atol=None`` uses -- rather than a fixed scalar, which is ~9 orders too
-        tight for g/m3 ASM/ADM states. Pass an explicit scalar ``default=`` for a
+        ``SolverSettings(atol=None)`` uses -- rather than a fixed scalar, which is
+        ~9 orders too tight for g/m3 ASM/ADM states. Pass an explicit scalar ``default=`` for a
         uniform floor.
 
         Examples
         --------
-        >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}))
-        >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}, default=1e-12))
+        >>> settings = SolverSettings(atol=net.atol({"OH": 1e-20}))
+        >>> reactor = BatchReactor(net, conds, settings=settings)
+        >>> settings = SolverSettings(atol=net.atol({"OH": 1e-20}, default=1e-12))
+        >>> reactor = BatchReactor(net, conds, settings=settings)
         """
         base = (
             default_atol(self.default_concentrations())

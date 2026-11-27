@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate._common import native_time_factor
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate._transforms import from_unconstrained, to_unconstrained
 from aquakin.integrate.calibration.coords import (
     _resolve_ic_coords,
@@ -108,10 +109,12 @@ class _ReactorForwardModel:
         rctr = type(self.reactor)(
             self.reactor.model,
             self.reactor.conditions,
-            rtol=self.reactor.rtol,
-            atol=self.reactor.atol,
-            integrator=replace(self.reactor.integrator, dtmax=dtmax),
-            diff=self.reactor.diff,
+            settings=SolverSettings(
+                rtol=self.reactor.rtol,
+                atol=self.reactor.atol,
+                integrator=replace(self.reactor.integrator, dtmax=dtmax),
+                diff=self.reactor.diff,
+            ),
         )
         return _ReactorForwardModel(
             rctr, self.gradient, self.stable_adjoint_max_steps, self.stable_adjoint_low_memory

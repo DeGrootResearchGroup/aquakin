@@ -681,7 +681,10 @@ def test_ozone_demand_intervals_against_the_profile_and_the_marginal():
     1e-6``: its O3 differs from a solve at ``1e-8`` by a few 1e-6 umol/L
     against the noise of 1, and it is four times as fast."""
     model = aquakin.load_model_from_file(EXAMPLES / "ozone_demand.yaml")
-    reactor = aquakin.BatchReactor(model, model.default_conditions(), rtol=1e-6, atol=1e-6)
+    reactor = aquakin.BatchReactor(model, model.default_conditions(), settings=aquakin.SolverSettings(
+        rtol=1e-6,
+        atol=1e-6,
+    ))
     C_true = model.concentrations({"O3": 50.0, "D": 15.0, "M": 1000.0})
     t_obs = jnp.asarray(
         np.r_[np.linspace(2.0, 20.0, 5), np.linspace(60.0, 600.0, 5), np.linspace(700.0, 1800.0, 5)]

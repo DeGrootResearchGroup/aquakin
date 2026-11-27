@@ -21,7 +21,7 @@ def main() -> None:
     # Per-species atol: OH lives in the 1e-12 M band.
     atol = model.atol({"OH": 1e-20}, default=1e-12)
     conditions = aquakin.OperatingConditions(pH=7.5, OH_scavenging=5.0e4)
-    reactor = aquakin.BatchReactor(model, conditions, atol=atol)
+    reactor = aquakin.BatchReactor(model, conditions, settings=aquakin.SolverSettings(atol=atol))
 
     C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 

@@ -481,7 +481,9 @@ def test_asm2d_grad_flows(asm2d):
     cond = aquakin.OperatingConditions(T=293.15)
     # dtmax caps the reverse-mode adjoint of the stiff bio-P kinetics (the
     # documented stiff-model gradient remedy).
-    reactor = aquakin.BatchReactor(net, cond, integrator=aquakin.IntegratorConfig(dtmax=1e-3))
+    reactor = aquakin.BatchReactor(net, cond, settings=aquakin.SolverSettings(
+        integrator=aquakin.IntegratorConfig(dtmax=1e-3),
+    ))
     C0 = net.concentrations(
         {
             "SO2": 2.0,

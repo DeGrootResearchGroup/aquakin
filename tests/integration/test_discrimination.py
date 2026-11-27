@@ -59,7 +59,9 @@ def second_order():
 
 
 def _reactor(model, rtol=1e-6):
-    return aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1, T=293.15), rtol=rtol)
+    return aquakin.BatchReactor(model, aquakin.SpatialConditions.uniform(1, T=293.15), settings=aquakin.SolverSettings(
+        rtol=rtol,
+    ))
 
 
 @pytest.fixture(scope="module")

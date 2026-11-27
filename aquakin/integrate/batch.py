@@ -13,10 +13,8 @@ import jax.numpy as jnp
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
-    DifferentiationConfig,
     ExportableSolutionMixin,
     GradientCheckMixin,
-    IntegratorConfig,
     PlottableSolutionMixin,
     _HasNamedSpecies,
     cached_jitted_solver,
@@ -31,6 +29,7 @@ from aquakin.integrate._common import (
     validate_C0_params,
     validate_t_eval,
 )
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.events import (
     Event,
@@ -89,30 +88,32 @@ class BatchReactor(GradientCheckMixin):
     conditions : SpatialConditions
         Condition fields. For a batch reactor only the single location
         ``loc_idx=0`` is used.
-    rtol : float, optional
-        Relative tolerance for the ODE solver.
-    atol : float or jnp.ndarray, optional
-        Absolute tolerance for the ODE solver. If an array, it must have
-        shape ``(n_species,)`` and gives a per-species tolerance. Useful when
-        some species (e.g. radical intermediates) sit several orders of
-        magnitude below the bulk concentrations.
-    integrator : IntegratorConfig, optional
-        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
-        ``dtmax``, ``max_steps``, an explicit ``solver``). The default flips the
-        reactor to the fast stack (Kvaerno3 + capped step growth). ``dtmax``
-        is always in the model's **native** time unit (the unit of its rate
-        constants -- seconds for ozone/UV, days for ASM/ADM/WATS), independent of
-        any ``time_unit=`` passed to :meth:`solve`.
-    diff : DifferentiationConfig, optional
-        Autodiff configuration. ``mode="reverse"`` (default) differentiates the
-        solve with ``RecursiveCheckpointAdjoint``: a bare ``solve`` under
-        ``jax.grad`` has no stable reverse adjoint, so ``method`` is ignored for
-        reverse mode here (:func:`aquakin.calibrate` with ``method="stable"``
-        fits through the cap-free discrete adjoint instead of calling
-        ``solve``). ``mode="forward", method="through_solve"`` builds a
-        forward-capable ``DirectAdjoint`` so ``jax.jvp`` / ``jax.jacfwd`` flow
-        through the solve; ``mode="forward", method="stable"`` is the augmented
-        ``solve_sensitivity`` path (cap-free).
+    settings : SolverSettings, optional
+        Tolerances and solver configuration. Its fields, as this reactor uses
+        them:
+
+        - ``rtol`` -- relative tolerance for the ODE solver.
+        - ``atol`` -- absolute tolerance. If an array, it must have shape
+          ``(n_species,)`` and gives a per-species tolerance. Useful when some
+          species (e.g. radical intermediates) sit several orders of magnitude
+          below the bulk concentrations.
+        - ``integrator`` -- integrator / step-size configuration (ESDIRK
+          ``order``, ``factormax``, ``dtmax``, ``max_steps``, an explicit
+          ``solver``). The default is the fast stack (Kvaerno3 + capped step
+          growth). ``dtmax`` is always in the model's **native** time unit (the
+          unit of its rate constants -- seconds for ozone/UV, days for
+          ASM/ADM/WATS), independent of any ``time_unit=`` passed to
+          :meth:`solve`.
+        - ``diff`` -- autodiff configuration. ``mode="reverse"`` (default)
+          differentiates the solve with ``RecursiveCheckpointAdjoint``: a bare
+          ``solve`` under ``jax.grad`` has no stable reverse adjoint, so
+          ``method`` is ignored for reverse mode here (:func:`aquakin.calibrate`
+          with ``method="stable"`` fits through the cap-free discrete adjoint
+          instead of calling ``solve``). ``mode="forward",
+          method="through_solve"`` builds a forward-capable ``DirectAdjoint`` so
+          ``jax.jvp`` / ``jax.jacfwd`` flow through the solve; ``mode="forward",
+          method="stable"`` is the augmented ``solve_sensitivity`` path
+          (cap-free).
 
     Notes
     -----
@@ -126,10 +127,12 @@ class BatchReactor(GradientCheckMixin):
     hand-rolled loss + optimizer through ``solve`` is exposed. The remedies, in
     order of convenience:
 
-    - build the reactor with a ``dtmax`` cap (the simplest fix);
+    - build the reactor with a ``dtmax`` cap
+      (``settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(dtmax=...))``,
+      the simplest fix);
     - differentiate in **forward mode** (``jax.jacfwd`` through a reactor built
-      with ``diff=aquakin.DifferentiationConfig(mode="forward",
-      method="through_solve")``), finite at any step;
+      with ``settings=aquakin.SolverSettings(diff=aquakin.DifferentiationConfig(
+      mode="forward", method="through_solve"))``), finite at any step;
     - use :func:`aquakin.calibrate` (cap-free with
       ``diff=aquakin.DifferentiationConfig(method="stable")``) or
       :func:`aquakin.sensitivity` (with
@@ -145,15 +148,12 @@ class BatchReactor(GradientCheckMixin):
         model: CompiledModel,
         conditions: SpatialConditions,
         *,
-        rtol: float = 1e-6,
-        atol=None,
-        integrator: IntegratorConfig = IntegratorConfig(),
-        diff: DifferentiationConfig = DifferentiationConfig(),
+        settings: SolverSettings = SolverSettings(),
     ) -> None:
         conditions.validate_required(model.conditions_required)
-        init_solver_settings(self, model, rtol=rtol, integrator=integrator, diff=diff)
+        init_solver_settings(self, model, settings)
         self.conditions = conditions
-        self.atol = resolve_state_atol(model, atol)
+        self.atol = resolve_state_atol(model, settings.atol)
         # Cache jit-compiled inner solve keyed on (t0, t1, t_eval_shape).
         # First call with a new signature pays the trace cost; subsequent
         # calls reuse the compiled graph.

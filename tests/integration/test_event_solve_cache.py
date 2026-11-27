@@ -15,7 +15,7 @@ import pytest
 
 import aquakin.integrate.batch as batch_mod
 import aquakin.plant.dynamic_solve as dynamic_mod
-from aquakin import BatchReactor, Event, SpatialConditions
+from aquakin import BatchReactor, Event, SolverSettings, SpatialConditions
 
 
 def _spy(monkeypatch, module):
@@ -124,7 +124,10 @@ def test_repeat_batch_event_solve_shares_the_compiled_segment(
     t_eval = jnp.array([1.0, 2.0, 3.0])
 
     def solve(rtol):
-        reactor = BatchReactor(simple_model, conditions, rtol=rtol, atol=1e-12)
+        reactor = BatchReactor(simple_model, conditions, settings=SolverSettings(
+            rtol=rtol,
+            atol=1e-12,
+        ))
         return reactor.solve(C0, (0.0, 3.0), t_eval, params=params, events=[ev])
 
     solve(1e-9)

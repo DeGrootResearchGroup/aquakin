@@ -55,10 +55,8 @@ import numpy as np
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
-    DifferentiationConfig,
     ExportableSolutionMixin,
     GradientCheckMixin,
-    IntegratorConfig,
     PlottableSolutionMixin,
     _HasNamedSpecies,
     _run_diffeqsolve,
@@ -70,6 +68,7 @@ from aquakin.integrate._common import (
     to_native_time,
     validate_t_eval,
 )
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.finite_volume import diffusive_flux, divergence
 from aquakin.integrate.steady import solve_steady_state
@@ -293,24 +292,21 @@ class BiofilmReactor(GradientCheckMixin):
         carry the suspended biomass ``[X_BH]`` or are abiotic. This separation,
         not a zeroed biomass state, is what keeps the two phases from leaking
         into each other.
-    rtol : float
-        Relative solver tolerance, applied across the whole layered state.
-    atol : float or jnp.ndarray, optional
-        Absolute solver tolerance. ``None`` (default) uses the per-component
-        :func:`~aquakin.integrate._common.default_atol` noise floor scaled off the
-        model's reference concentrations, tiled across every compartment (so g/m3
-        ASM/ADM states get a sensible floor instead of a fixed scalar ~9 orders
-        too tight). A scalar broadcasts to the whole state; a ``(n_species,)``
-        array is tiled across the ``n_layers+1`` compartments.
-    integrator : IntegratorConfig, optional
-        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
-        ``dtmax``, ``max_steps``, an explicit ``solver``); see
-        :class:`~aquakin.integrate.batch.BatchReactor`. A stiff per-layer-biomass
-        model with a tight ``dtmax`` can exceed the default ``max_steps``; raise
-        it if the solve raises a max-steps error.
-    diff : DifferentiationConfig, optional
-        Autodiff configuration (``mode``, ``method``); see
-        :class:`~aquakin.integrate.batch.BatchReactor`.
+    settings : SolverSettings, optional
+        Tolerances and solver configuration; see
+        :class:`~aquakin.integrate.batch.BatchReactor` for each field. Here:
+
+        - ``rtol`` is applied across the whole layered state.
+        - ``atol`` ``None`` (default) uses the per-component
+          :func:`~aquakin.integrate._common.default_atol` noise floor scaled off
+          the model's reference concentrations, tiled across every compartment
+          (so g/m3 ASM/ADM states get a sensible floor instead of a fixed scalar
+          ~9 orders too tight). A scalar broadcasts to the whole state; a
+          ``(n_species,)`` array is tiled across the ``n_layers+1``
+          compartments.
+        - ``integrator``: a stiff per-layer-biomass model with a tight
+          ``dtmax`` can exceed the default ``max_steps``; raise it if the solve
+          raises a max-steps error.
 
     Notes
     -----
@@ -368,17 +364,14 @@ class BiofilmReactor(GradientCheckMixin):
         feed=None,
         dilution_rate: float = 0.0,
         biofilm_reactions=None,
-        rtol: float = 1e-6,
-        atol=None,
-        integrator: IntegratorConfig = IntegratorConfig(),
-        diff: DifferentiationConfig = DifferentiationConfig(),
+        settings: SolverSettings = SolverSettings(),
     ) -> None:
         conditions.validate_required(model.conditions_required)
         if n_layers < 1:
             raise ValueError(f"n_layers must be >= 1; got {n_layers}.")
         if not (thickness > 0 and boundary_layer > 0 and area_per_volume > 0):
             raise ValueError("thickness, boundary_layer and area_per_volume must be positive.")
-        init_solver_settings(self, model, rtol=rtol, integrator=integrator, diff=diff)
+        init_solver_settings(self, model, settings)
         self.conditions = conditions
         self.n_layers = int(n_layers)
         self.thickness = float(thickness)
@@ -391,7 +384,7 @@ class BiofilmReactor(GradientCheckMixin):
         # diffrax's error test wants, so the multi-compartment state is no
         # obstacle -- a single scalar floor was ~9 orders too tight for g/m3
         # ASM/ADM states.
-        self.atol = resolve_layered_atol(model, atol, self.n_layers + 1)
+        self.atol = resolve_layered_atol(model, settings.atol, self.n_layers + 1)
 
         n = model.n_species
         if soluble_mask is None:
