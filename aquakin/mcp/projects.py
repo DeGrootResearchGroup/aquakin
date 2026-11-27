@@ -13,10 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aquakin.mcp.runs import StudyRuns
-
-#: The runs this server has started (one server per process).
-RUNS = StudyRuns()
+from aquakin.mcp.runs import start_run
 
 
 def write_flowsheet(
@@ -178,8 +175,10 @@ def update_study(path: str, study: dict) -> str:
 
 
 def run_study(path: str, replace: bool = False) -> dict:
-    """Start running a study in the background and return at once; ask
-    ``study_status`` how it is going. The editor shows the results when it ends.
+    """Start running a study in the background and return once it has started;
+    ask ``study_status`` how it is going. The run is a process of its own: it
+    goes on if this conversation or the assistant's app closes, and the editor
+    shows its progress and results.
 
     Parameters
     ----------
@@ -195,19 +194,23 @@ def run_study(path: str, replace: bool = False) -> dict:
         The study's status (see ``study_status``).
     """
     from aquakin.study import check_study
+    from aquakin.study.running import refuse_while_running
 
     folder = Path(path)
+    refuse_while_running(folder, "run")
+    # Refused here, where the assistant sees why, as the run itself would refuse it.
     if check_study(folder).has_results and not replace:
         raise ValueError(
             f"study {folder.name} already has results; run it with replace=true to "
             f"replace them, or copy_study first to keep them"
         )
-    RUNS.start(folder, replace=replace)
+    start_run(folder, replace=replace)
     return study_status(path)
 
 
 def study_status(path: str) -> dict:
-    """Say where a study stands and, if this server is running it, how far it has got.
+    """Say where a study stands and, while a run of it is in progress (started
+    here, in the editor or anywhere else), how far it has got.
 
     Parameters
     ----------
@@ -218,32 +221,26 @@ def study_status(path: str) -> dict:
     -------
     dict
         ``state``, ``has_results``, ``reasons`` and ``notes`` (as
-        ``list_studies`` gives them), ``running``, and for a run started here
-        ``progress`` (the latest ``stage``, ``done``, ``total``, ``fraction``,
-        ``message``) and, once it has ended, ``outcome`` (``finished``,
-        ``cancelled``, or ``failed`` with the ``error``).
+        ``list_studies`` gives them; ``state`` is that of the results the
+        study had before a run in progress), and ``running``: ``None``, or when
+        the run started and its latest ``progress`` (``stage``, ``done``,
+        ``total``, ``fraction``, ``message``).
     """
     from aquakin.study import check_study
 
     status = check_study(path)
-    out = {
+    return {
         "state": status.state,
         "has_results": status.has_results,
         "reasons": status.reasons,
         "notes": status.notes,
-        "running": False,
+        "running": status.running,
     }
-    run = RUNS.get(path)
-    if run is not None:
-        out |= {"running": run.running, "progress": run.progress}
-        if run.outcome is not None:
-            out |= run.outcome
-    return out
 
 
 def cancel_study(path: str) -> dict:
-    """Stop a study this server is running, at its next checkpoint. Results it
-    had before the run are kept.
+    """Stop a study's run at its next checkpoint, whichever program started it.
+    Results it had before the run are kept.
 
     Parameters
     ----------
@@ -255,10 +252,9 @@ def cancel_study(path: str) -> dict:
     dict
         The study's status (see ``study_status``).
     """
-    run = RUNS.get(path)
-    if run is None or not run.running:
-        raise ValueError(f"study {Path(path).name} is not running here")
-    run.cancel()
+    from aquakin.study import cancel_study as cancel
+
+    cancel(path)
     return study_status(path)
 
 

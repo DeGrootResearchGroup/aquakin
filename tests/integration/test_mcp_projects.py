@@ -4,14 +4,15 @@ answer is compared with the aquakin function the editor's worker calls."""
 
 from __future__ import annotations
 
-import threading
+import sys
+import time
 
 import pytest
 
 pytest.importorskip("mcp", reason="the mcp extra is not installed")
 
 import aquakin.study as st
-from aquakin.mcp import projects
+from aquakin.mcp import runs
 from aquakin.plant.spec import load_spec_file, write_spec
 from tests.conftest import study_project
 from tests.integration.mcp_client import error, value
@@ -26,9 +27,9 @@ def project(tmp_path):
 
 
 def _finished(path) -> dict:
-    """Wait for the run of ``path`` this server started; its status after."""
-    run = projects.RUNS.get(path)
-    assert run is not None and run.wait(RUN_TIMEOUT), "the run did not end"
+    """Wait for the run this process started last to end; the study's status after."""
+    proc, _ = runs._STARTED[-1]
+    assert proc.wait(RUN_TIMEOUT) is not None
     return value("study_status", path=str(path))
 
 
@@ -79,11 +80,9 @@ def test_a_study_is_created_updated_run_and_read(project):
     assert st.read_study(path)["description"] == "edited"
 
     started = value("run_study", path=path)
-    assert started["state"] == "not run"
+    assert started["running"] is not None or started["state"] == "fresh"  # under way, or done
     status = _finished(path)
-    assert status["outcome"] == "finished" and not status["running"]
-    assert status["state"] == "fresh" and status["has_results"]
-    assert status["progress"]["stage"] == "simulate"  # the last report the run made
+    assert status["state"] == "fresh" and status["has_results"] and status["running"] is None
     assert value("study_results", path=path) == st.study_results(path)
 
     # Results are not replaced unless asked; following the advice replaces them.
@@ -92,79 +91,84 @@ def test_a_study_is_created_updated_run_and_read(project):
         "or copy_study first to keep them"
     )
     value("run_study", path=path, replace=True)
-    assert _finished(path)["outcome"] == "finished"
+    assert _finished(path)["state"] == "fresh"
 
 
-def test_a_study_not_run_here_has_no_run_fields(project):
+def test_a_study_not_running_has_no_run(project):
     status = value("study_status", path=str(project / "studies" / "short"))
     assert status == {
         "state": "not run",
         "has_results": False,
         "reasons": [],
         "notes": [],
-        "running": False,
+        "running": None,
     }
 
 
-class _HeldRun:
-    """A stand-in for :func:`aquakin.study.run_study` that reports progress and
-    waits at a checkpoint until released, so a test can act while it runs."""
-
-    def __init__(self):
-        self.at_checkpoint = threading.Event()
-        self.release = threading.Event()
-
-    def __call__(self, path, *, replace=False, progress=None):
-        from aquakin.progress import Progress
-
-        progress(Progress("simulate", 0, 2, "starting"))
-        self.at_checkpoint.set()
-        assert self.release.wait(RUN_TIMEOUT)
-        progress(Progress("simulate", 1, 2, "halfway"))  # a cancel stops it here
-        return st.check_study(path)
-
-
-def test_a_running_study_reports_progress_and_can_be_cancelled(project, monkeypatch):
-    held = _HeldRun()
-    monkeypatch.setattr(st, "run_study", held)
-    path = str(project / "studies" / "short")
-    value("run_study", path=path)
-    assert held.at_checkpoint.wait(RUN_TIMEOUT)
-    status = value("study_status", path=path)
-    assert status["running"] is True
-    assert status["progress"] == {
-        "stage": "simulate",
-        "done": 0,
-        "total": 2,
-        "fraction": 0.0,
-        "message": "starting",
-    }
-    assert error("run_study", path=path).endswith(
-        "study short is already running; ask study_status how it is going, or "
-        "cancel_study to stop it"
-    )
-    assert value("cancel_study", path=path)["running"] is True  # stops at its next checkpoint
-    held.release.set()
-    assert _finished(path)["outcome"] == "cancelled"
-    assert error("cancel_study", path=path).endswith("study short is not running here")
-
-
-def test_a_run_that_fails_reports_aquakins_message(project, monkeypatch):
-    def failing(path, *, replace=False, progress=None):
-        raise st.StudyError("the plant did not converge")
-
-    monkeypatch.setattr(st, "run_study", failing)
-    path = str(project / "studies" / "short")
-    value("run_study", path=path)
-    status = _finished(path)
-    assert status["outcome"] == "failed"
-    assert status["error"] == "the plant did not converge"
-    assert status["type"] == "StudyError"
-
-
-def test_cancelling_a_study_never_started_here_is_refused(project):
+def test_a_run_started_elsewhere_is_followed_and_cancelled(project, hold_run):
     path = project / "studies" / "short"
-    assert error("cancel_study", path=str(path)).endswith("study short is not running here")
+    held = hold_run(path)
+    status = value("study_status", path=str(path))
+    assert status["running"]["progress"]["message"] == "step 3"
+    assert error("run_study", path=str(path)).endswith(
+        "study short is running; run it once the run has ended, or cancel the run first"
+    )
+    assert value("cancel_study", path=str(path))["running"] is not None  # stops at its next report
+    held.stdin.write("next\n")
+    held.stdin.flush()
+    assert held.stdout.readline() == "cancelled\n"
+    assert held.wait(60) == 0
+    assert error("cancel_study", path=str(path)).endswith("study short is not running")
+
+
+def test_a_run_that_fails_is_recorded_with_aquakins_message(project):
+    path = project / "studies" / "short"
+    (path / "study.yaml").write_text("study:\n  kind: simulate\n  streams: [nowhere]\n")
+    value("run_study", path=str(path))
+    status = _finished(path)
+    assert status["state"] == "failed"
+    assert status["reasons"] == [
+        "UnknownUnitError: \"Unknown unit 'nowhere' in endpoint 'nowhere'.\""
+    ]
+
+
+def test_a_run_refused_as_it_starts_says_why(project, hold_run, monkeypatch):
+    """Another program may take the study between the server's look and the
+    run's start: the run then refuses, and the assistant is told why."""
+    import aquakin.study.running as running
+
+    path = project / "studies" / "short"
+    hold_run(path)
+    monkeypatch.setattr(running, "refuse_while_running", lambda folder, action: None)
+    message = error("run_study", path=str(path))
+    assert message.endswith(
+        "the run of study short did not start: error: study short is already running"
+        f" (since {st.check_study(path).running['started']}); wait for it to end, or "
+        "cancel it"
+    )
+
+
+def test_a_run_goes_on_after_the_server_exits(project):
+    """The assistant's app closes the ``aquakin mcp`` process; the run it
+    started finishes and records its results."""
+    import asyncio
+
+    from mcp import Client, StdioServerParameters
+
+    path = project / "studies" / "short"
+    server = StdioServerParameters(command=sys.executable, args=["-m", "aquakin", "mcp"])
+
+    async def start():
+        async with Client(server) as client:
+            result = await client.call_tool("run_study", {"path": str(path)})
+            assert not result.is_error, result.content[0].text
+
+    asyncio.run(start())  # the server has exited when this returns
+    end = time.monotonic() + RUN_TIMEOUT
+    while st.check_study(path).state != "fresh":
+        assert time.monotonic() < end, "the run did not finish after its server exited"
+        time.sleep(0.1)
+    assert st.check_study(path).running is None
 
 
 def test_copy_freeze_and_unfreeze(project):

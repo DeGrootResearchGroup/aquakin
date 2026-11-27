@@ -85,10 +85,11 @@ def run_state(folder) -> dict | None:
     Returns
     -------
     dict or None
-        ``None`` when no run holds the study; otherwise ``{"started",
-        "progress"}``: when the run started (ISO 8601, UTC) and its latest
-        progress report (``{"stage", "done", "total", "fraction",
-        "message"}``, ``None`` before the first).
+        ``None`` when no run holds the study; otherwise ``{"started", "pid",
+        "progress"}``: when the run started (ISO 8601, UTC), the process
+        running it, and its latest progress report (``{"stage", "done",
+        "total", "fraction", "message"}``, ``None`` before the first). A
+        field is ``None`` when the file was caught being rewritten.
     """
     path = Path(folder) / RUNNING_FILE
     try:
@@ -102,7 +103,11 @@ def run_state(folder) -> dict | None:
     finally:
         os.close(fd)
     data = _read(path)
-    return {"started": data.get("started"), "progress": data.get("progress")}
+    return {
+        "started": data.get("started"),
+        "pid": data.get("pid"),
+        "progress": data.get("progress"),
+    }
 
 
 def refuse_while_running(folder, action: str) -> None:
@@ -189,7 +194,8 @@ class RunLock:
     def _write(self, progress: dict | None) -> None:
         # Rewritten in place: the lock is on this file, so it is never replaced.
         assert self._fd is not None  # only called while the lock is held
-        text = yaml.safe_dump({"started": self._started, "progress": progress}, sort_keys=False)
+        record = {"started": self._started, "pid": os.getpid(), "progress": progress}
+        text = yaml.safe_dump(record, sort_keys=False)
         os.lseek(self._fd, 0, os.SEEK_SET)
         os.ftruncate(self._fd, 0)
         os.write(self._fd, text.encode())

@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import re
 import signal
-import subprocess
-import sys
 
 import pytest
 
@@ -17,25 +15,6 @@ from aquakin.progress import Cancelled
 from aquakin.study import running
 from aquakin.study.common import CANCEL_FILE, RUNNING_FILE
 from tests.conftest import study_project
-
-#: A second program that holds a study's run lock until its input closes,
-#: reporting progress at each line it reads ("cancelled" once it is stopped).
-_HOLD = """
-import sys
-from pathlib import Path
-from aquakin.progress import Cancelled, Progress
-from aquakin.study.running import RunLock
-with RunLock(Path(sys.argv[1])) as run:
-    run.report(Progress("fit", 3, 10, "step 3"))
-    print("held", flush=True)
-    for line in sys.stdin:
-        try:
-            run.report(Progress("fit", 4, 10, "step 4"))
-        except Cancelled:
-            print("cancelled", flush=True)
-            break
-        print("reported", flush=True)
-"""
 
 DYNAMIC = {
     "kind": "simulate",
@@ -51,20 +30,9 @@ def study(tmp_path):
 
 
 @pytest.fixture
-def held(study):
+def held(study, hold_run):
     """Another process holding ``study``'s run lock, at its first progress report."""
-    proc = subprocess.Popen(
-        [sys.executable, "-c", _HOLD, str(study)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    assert proc.stdout.readline() == "held\n"
-    yield proc
-    if proc.poll() is None:
-        proc.stdin.close()
-        proc.wait(60)
-    proc.stdout.close()
+    return hold_run(study)
 
 
 def test_a_run_elsewhere_is_seen_and_refuses_a_second_run(study, held):
@@ -77,6 +45,7 @@ def test_a_run_elsewhere_is_seen_and_refuses_a_second_run(study, held):
         "fraction": 0.3,
         "message": "step 3",
     }
+    assert state.running["pid"] == held.pid
     started = state.running["started"]
     assert st.list_studies(study.parents[1])[0]["running"] == state.running
     with pytest.raises(st.StudyError, match=re.escape(f"study short is already running (since {started})")):
@@ -155,7 +124,7 @@ def test_cancelling_a_study_that_is_not_running_is_refused(study):
 
 def test_an_unreadable_running_file_still_counts_as_running(study, held):
     (study / RUNNING_FILE).write_text("{{ half written")
-    assert st.check_study(study).running == {"started": None, "progress": None}
+    assert st.check_study(study).running == {"started": None, "pid": None, "progress": None}
     with pytest.raises(st.StudyError, match=r"study short is already running; wait"):
         st.run_study(study)
 
