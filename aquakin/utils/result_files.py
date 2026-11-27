@@ -1,9 +1,11 @@
-"""Result files of a study, every value keyed by name.
+"""Result files, every value keyed by name.
 
-A study's results are plain files a person can open: parameters and plant
-states as YAML mappings, trajectories and matrices as CSV tables with named
-columns (and rows). Nothing is stored by position, so a result still reads
-correctly after the plant's units, models or parameter vector are reordered.
+The results of a study (:mod:`aquakin.study`) and a saved fit
+(:meth:`aquakin.CalibrationResult.save`) are plain files a person can open:
+parameters and plant states as YAML mappings, trajectories and matrices as CSV
+tables with named columns (and rows). Nothing is stored by position, so a
+result still reads correctly after the plant's units, models or parameter
+vector are reordered.
 Floats are written with Python's ``repr``, so every file reads back bit for bit.
 """
 
@@ -27,6 +29,7 @@ __all__ = [
     "write_named_values",
     "write_table",
     "write_trajectory",
+    "write_yaml",
 ]
 
 
@@ -48,6 +51,25 @@ def _write_text(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return path
+
+
+def write_yaml(path, data: Mapping) -> Path:
+    """Write a summary (a fit, a run record) as YAML, its keys in the given order.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The file to write (folders are created).
+    data : mapping
+        Plain Python values: ``str``, ``int``, ``float`` (written with
+        ``repr``, so they read back exactly), ``bool``, ``None``, and lists and
+        mappings of them.
+
+    Returns
+    -------
+    pathlib.Path
+    """
+    return _write_text(path, yaml.safe_dump(dict(data), sort_keys=False, allow_unicode=True))
 
 
 def _plain(values: Mapping) -> dict:

@@ -138,6 +138,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Profile-likelihood interval of one parameter or pool | `profile_likelihood` → `ProfileResult` |
 | Identifiability report from a fit or a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |
 | Compare model structures fitted to the same data (AIC, AICc, BIC, Akaike weights) | `aic`, `aicc`, `bic` of a `CalibrationResult`; `compare_models` → `ModelComparison` |
+| Save a fit to a folder and read it back | `CalibrationResult.save`; `load_calibration` |
 
 ## Experiment design
 

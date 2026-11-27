@@ -17,8 +17,6 @@ paths:
 
 # Rules — calibration internals (`aquakin/integrate/calibrate.py`, `calibration/`, and their consumers)
 
-Split out of `.claude/rules/integration.md`.
-
 ### Module layout
 
 - `integrate/calibrate.py` holds only `calibrate()`, and its `__all__` lists
@@ -30,7 +28,7 @@ Split out of `.claude/rules/integration.md`.
   no name is kept alive there for an importer. **New calibration code
   goes in the `integrate/calibration/` module for its concern** (`config`,
   `observation`, `loss`, `coords`, `result`, `problem`, `objective`,
-  `multistart`, `laplace`, `driver`, `criteria`), never back into
+  `multistart`, `laplace`, `driver`, `criteria`, `saved`), never back into
   `calibrate.py`. A public name defined there (`criteria`'s `aic`, ...) is
   imported by `aquakin` and `aquakin.integrate` from that module.
 - `calibration/*` modules must not import `calibrate.py` (it imports them), and
@@ -45,6 +43,13 @@ Split out of `.claude/rules/integration.md`.
   private `integrate` name, from `integrate/seam.py` (the rule is in
   `plant.md`); the names are unchanged, so the plant tests' stubs on
   `aquakin.plant.calibrate` still apply.
+- **A saved fit** (`saved`): `CalibrationResult.save`, `load_calibration` and
+  the study's calibrate runner write `parameters.yaml` / `fit.yaml` /
+  `covariance.csv` through the one `write_fit_files` (a study's `fit.yaml` is
+  `fit_summary` alone). A new `CalibrationResult` field is saved and read there,
+  or `test_calibration_save.py` fails; a layout change raises `FORMAT`. `save`
+  names vectors by `problem.model`'s `param_index` / `species_index` / `models`,
+  which `_PlantParamNamespace` must offer as a `CompiledModel` does.
 
 ### The optimizer's objective scale
 
@@ -221,9 +226,8 @@ sigma to `inf` in `_FisherSetup` and is part of the design `_structure_key`; it 
 `_CalibrationProblem` (and part of `struct_key`), so plant calibration, which
 builds its own problem, is unaffected. `CalibrationResult.posterior_draws(model, ...)`
 is the single Laplace sampler; `predictive_band` propagates its rows (or the given
-`draws=`). MCMC (`sample_posterior`) is in `integration-sampling.md`. All are unit-tested directly in
-`tests/unit/test_calibrate_internals.py` (no fit/solve). **The forward-solve is a
-seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
+`draws=`). MCMC (`sample_posterior`) is in `integration-sampling.md`. **The
+forward-solve is a seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
 — it turns `(params, C0)` into an observed-species trajectory (via the reactor's
 diffrax `solve`, or the cap-free ESDIRK adjoint on `gradient="stable_adjoint"`),
 and exposes `solve_trajectory` + `with_dtmax`. Everything else is generic over
@@ -233,10 +237,7 @@ that contract. A `Plant` has a different solve contract (flat assembled state,
 ([`plant/calibrate.py`](aquakin/plant/calibrate.py)) supplies a
 `_PlantForwardModel` (`plant.solve` + stream reconstruction) and a
 `_PlantParamNamespace` adapter, and reuses `_build_objective` / `_run_multistart`
-/ `_laplace_posterior` unchanged — the payoff of the seam. Behaviour equivalence
-of the decomposition to the old monolith is pinned by the full-fit suite
-(`tests/integration/test_calibrate.py`, `test_profile.py`); the plant path by
-`test_plant_calibrate.py`. **Solve failures
+/ `_laplace_posterior` unchanged — the payoff of the seam. **Solve failures
 mid-fit:** `_run_multistart` treats a start whose forward solve raises at runtime
 as a failed start. `_is_solve_failure` recognizes these: equinox's runtime error,
 or a JAX runtime / `ValueError` carrying the host-callback failure that
@@ -246,5 +247,4 @@ or a JAX runtime / `ValueError` carrying the host-callback failure that
 remedies is raised, chained to the first failure. Any other exception still
 propagates unchanged. `_check_start_gradient` turns a solve failure at the
 starting guess into a similar error. Both reach `Plant.calibrate` through the
-shared functions. Tested in `test_calibrate.py` (a fake forward
-model that raises through `equinox.error_if` past a rate threshold).
+shared functions.

@@ -207,6 +207,39 @@ draws, `np.percentile(samples.params_named[name], [2.5, 97.5])`.
 when each is the right one; say which you used, with the noise model and any
 priors.
 
+## Saving a fit
+
+`result.save(folder)` writes a fit to a folder of plain files, and
+`aquakin.load_calibration(folder)` reads it back, every number exactly as it
+was:
+
+```python
+joint.save("ozone_fit")
+saved = aquakin.load_calibration("ozone_fit")
+saved.params_named == joint.params_named     # True
+```
+
+% invisible-code-block: python
+%     assert saved.params_named == joint.params_named
+%     assert saved.ic_named == joint.ic_named
+%     assert np.array_equal(saved.joint_cov, joint.joint_cov)
+
+The folder holds `fit.yaml` (the fitted values and their standard deviations,
+the loss and the optimizer's status, the transforms and priors, the fitted
+initial pools, the counts the information criteria use, a fingerprint of the
+model and the aquakin version), `parameters.yaml` (the full parameter vector
+by name) and, when the fit has them, the covariance and Hessian matrices and
+the fitted initial states as CSV tables with named rows and columns. A
+calibration study writes its `fit.yaml`, `parameters.yaml` and
+`covariance.csv` the same way. `save` refuses a folder that already holds a
+saved fit.
+
+A loaded fit works wherever only its numbers are needed: the information
+criteria and `compare_models` (it still knows which observations it was fitted
+to), `posterior_draws(model)` and `predictive_band(reactor, ...)`. The model
+the fit ran on is not saved, so `aquakin.sample_posterior` needs the result
+`calibrate` returned.
+
 ## Identifiability report
 
 `aquakin.identifiability` analyzes a Fisher information matrix and reports

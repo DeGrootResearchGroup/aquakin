@@ -5,6 +5,7 @@ paths:
   - "tests/unit/test_study_files.py"
   - "tests/integration/test_study_form.py"
   - "tests/ui/test_study_form.py"
+  - "aquakin/utils/result_files.py"
 ---
 
 # Rules — `aquakin/study/` (studies)
@@ -71,7 +72,9 @@ results. The design and the owner's decisions are in
 - **Result file names are the module constants** in `study.py`
   (`PARAMETERS_FILE`, `FISHER_FILE`, `FIT_FILE`, ...; `STUDIES_DIR`,
   `STUDY_FILE`, `SPEC_FILE`), used by both the runner that writes a file and the
-  reader that reads it; never a bare literal. The names on disk are the stored
+  reader that reads it; never a bare literal. `PARAMETERS_FILE`, `FIT_FILE` and
+  `COVARIANCE_FILE` are a saved fit's, defined in
+  `aquakin/integrate/calibration/saved.py` and re-exported by `study.py`. The names on disk are the stored
   format and do not change (a test pins their spelling). Kinds and their files:
   - `simulate`: no `time` → steady state (`streams.yaml`, `measured.yaml`);
     with `time` → `streams.csv` / `measured.csv`; always `final_state.yaml`
@@ -80,9 +83,11 @@ results. The design and the owner's decisions are in
     when singular, the four design criteria), `parameters.yaml`.
   - `calibrate`: observations from `data:` (a `write_trajectory` table, one
     `<stream>.<channel>` column per channel, so channels must be named);
-    `fit.yaml`, `parameters.yaml` (the fitted vector), `fitted.csv` (the
-    fitted plant's channels at the data times), `covariance.csv` with
-    `laplace`. Priors are on by default (`use_priors`), as in `Plant.calibrate`.
+    `fit.yaml`, `parameters.yaml` (the fitted vector) and, with `laplace`,
+    `covariance.csv`, all written by `write_fit_files` (the files of
+    `CalibrationResult.save`, so one implementation; the study's `fit.yaml` is
+    `fit_summary` alone), and `fitted.csv` (the fitted plant's channels at the
+    data times). Priors are on by default (`use_priors`), as in `Plant.calibrate`.
   - `profile`: the calibrate fields plus `profile` and `grid`; `profile.csv`
     (`write_table`) and `profile.yaml` (MLE, interval).
   - `rank`: `candidates` (named sensor sets) and optional `base`;

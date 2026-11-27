@@ -48,7 +48,7 @@ from aquakin.integrate.particle import (
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
 from aquakin.integrate.calibration.config import SamplerConfig
-from aquakin.integrate.calibration.result import PosteriorSamples
+from aquakin.integrate.calibration.result import PosteriorSamples, load_calibration
 from aquakin.integrate.calibration.sampling import sample_posterior
 from aquakin.integrate.calibration.criteria import (
     ModelComparison,
@@ -152,6 +152,7 @@ __all__ = [
     "implicit_euler_adjoint_solve",
     "integrate_ensemble",
     "kpi_comparison",
+    "load_calibration",
     "monte_carlo",
     "optimize_design",
     "optimize_experiment",
