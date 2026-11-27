@@ -48,7 +48,9 @@ from aquakin.study.study import (
 from aquakin.utils.result_files import read_matrix, read_named_values, read_table, read_trajectory
 
 __all__ = [
+    "UNREADABLE",
     "create_study",
+    "list_studies",
     "plant_choices",
     "read_study",
     "simulation_study",
@@ -474,6 +476,65 @@ def _measure_units(species_units) -> dict:
     if cod:
         out["TSS"] = cod.replace("_COD", "")
     return {k: v for k, v in out.items() if v}
+
+
+#: The state of a listed study whose ``study.yaml`` cannot be read (beside
+#: :data:`aquakin.study.study.STATES`, which a readable study is in).
+UNREADABLE = "unreadable"
+
+
+def list_studies(project) -> list[dict]:
+    """Every study of a project with where it stands, for a front end to list.
+
+    Parameters
+    ----------
+    project : str or pathlib.Path
+        The project folder (the one holding ``studies/``).
+
+    Returns
+    -------
+    list of dict
+        One entry per ``studies/<name>/study.yaml``, sorted by name:
+        ``"name"``, ``"path"`` (the study folder), ``"kind"``,
+        ``"description"``, ``"state"`` (one of
+        :data:`~aquakin.study.study.STATES`, or :data:`UNREADABLE` when the
+        study cannot be read), ``"has_results"``, ``"frozen"``,
+        ``"flowsheet"`` (the spec its plant is built from: the snapshot's for a
+        frozen study; ``None`` when unreadable), ``"reasons"`` and ``"notes"``.
+        An unreadable study's ``reasons`` holds why.
+    """
+    from aquakin.plant.errors import error_reply
+
+    out = []
+    folder = Path(project) / STUDIES_DIR
+    for path in sorted(folder.glob(f"*/{STUDY_FILE}")) if folder.is_dir() else []:
+        entry = {"name": path.parent.name, "path": str(path.parent)}
+        try:
+            spec = load_study(path.parent)
+            status = check_study(path.parent)
+            entry |= {
+                "kind": spec.kind,
+                "description": spec.description or "",
+                "state": status.state,
+                "has_results": status.has_results,
+                "frozen": status.frozen,
+                "flowsheet": str(_flowsheet(path.parent, spec)),
+                "reasons": status.reasons,
+                "notes": status.notes,
+            }
+        except Exception as exc:  # one broken study is listed as such, not the listing lost
+            entry |= {
+                "kind": "",
+                "description": "",
+                "state": UNREADABLE,
+                "has_results": False,
+                "frozen": False,
+                "flowsheet": None,
+                "reasons": [error_reply(exc)["error"]],
+                "notes": [],
+            }
+        out.append(entry)
+    return out
 
 
 def study_results(path) -> dict:

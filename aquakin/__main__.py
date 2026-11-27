@@ -48,49 +48,8 @@ import json
 import os
 import sys
 
-#: The state of a listed study whose ``study.yaml`` cannot be read (beside
-#: :data:`aquakin.study.study.STATES`, which a readable study is in).
-UNREADABLE = "unreadable"
-
-
-def _list_studies(project) -> list[dict]:
-    """Every study under ``<project>/studies/`` with where it stands."""
-    from pathlib import Path
-
-    from aquakin import study as st
-    from aquakin.plant.errors import error_reply
-    from aquakin.study.study import STUDIES_DIR, STUDY_FILE, _flowsheet
-
-    out = []
-    folder = Path(project) / STUDIES_DIR
-    for path in sorted(folder.glob(f"*/{STUDY_FILE}")) if folder.is_dir() else []:
-        entry = {"name": path.parent.name, "path": str(path.parent)}
-        try:
-            spec = st.load_study(path.parent)
-            status = st.check_study(path.parent)
-            entry |= {
-                "kind": spec.kind,
-                "description": spec.description or "",
-                "state": status.state,
-                "has_results": status.has_results,
-                "frozen": status.frozen,
-                "flowsheet": str(_flowsheet(path.parent, spec)),
-                "reasons": status.reasons,
-                "notes": status.notes,
-            }
-        except Exception as exc:  # one broken study is listed as such, not the listing lost
-            entry |= {
-                "kind": "",
-                "description": "",
-                "state": UNREADABLE,
-                "has_results": False,
-                "frozen": False,
-                "flowsheet": None,
-                "reasons": [error_reply(exc)["error"]],
-                "notes": [],
-            }
-        out.append(entry)
-    return out
+# Named here too: the worker's replies carry it, and its protocol test reads it here.
+from aquakin.study.form import UNREADABLE as UNREADABLE
 
 
 def _study_module():
@@ -121,7 +80,7 @@ def _handlers():
         "model": lambda req: cat.model_info(req["name"], req.get("path")),
         "check_spec": lambda req: check_spec(req["spec"], base_dir=req.get("base_dir")),
         "read_spec": lambda req: load_spec_file(req["path"]),
-        "list_studies": lambda req: _list_studies(req["project"]),
+        "list_studies": lambda req: _study_module().list_studies(req["project"]),
         "freeze_study": lambda req: _study_call("freeze_study", req),
         "unfreeze_study": lambda req: _study_call(
             "unfreeze_study", req, discard_results=bool(req.get("discard_results"))
