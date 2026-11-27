@@ -77,6 +77,7 @@ parameters:               # model-level (shared) parameters
   <name>:
     value: <float>
     units: <str>                  # also sets the model's time unit (see below)
+    description: <str>            # optional: what the parameter is
     bounds: [<low>, <high>]
     transform: <str>              # "none" (default) | "positive_log" | "logit"
     prior: {mean: <float>, std: <float>}   # or {range: [<low>, <high>]}

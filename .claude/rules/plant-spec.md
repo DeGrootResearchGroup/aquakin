@@ -86,7 +86,11 @@ class or changing a unit's ports**, add or update its kind:
 rule-derived ports with the built unit's, and fails if an exported unit class
 has no kind. `aquakin serve` (`aquakin/__main__.py`) is a JSON-lines worker
 (`catalog`, `models`, `model`, `check_unit`, `check_spec`, `fingerprint`,
-`read_spec`, `write_spec`, `ping`).
+`read_spec`, `write_spec`, `ping`, and the model panel's `model_document`,
+`check_expression`, `check_model_edits`, `save_model_edits` from
+`plant/model_edit.py`, which validates an edit by loading and compiling the
+exact text it would write, and saves through `_plan_model` / `_check_writes` /
+`write_spec` so the model file and the flowsheet are written together).
 Replies go to a private duplicate of the process's stdout and descriptor 1 is
 pointed at stderr while serving (plus a Python-level redirect per handler), so
 no other output can corrupt a reply; a failed request, or a reply that is not
