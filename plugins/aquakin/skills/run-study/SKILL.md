@@ -1,6 +1,6 @@
 ---
 name: run-study
-description: Set up, run and read an aquakin study (a saved simulation, Fisher information, calibration, profile likelihood, sensor ranking or posterior sample of a flowsheet or a batch reactor). Use when the user asks to simulate a plant, fit parameters, check identifiability, quantify a fit's uncertainty, rank sensors, or rerun or compare existing studies.
+description: Set up, run and read an aquakin study (a saved simulation, Fisher information, calibration, profile likelihood, sensor ranking, posterior sample or experiment design of a flowsheet or a batch reactor). Use when the user asks to simulate a plant, fit parameters, check identifiability, quantify a fit's uncertainty, rank sensors, plan a batch experiment, or rerun or compare existing studies.
 ---
 
 # Running an aquakin study
@@ -31,6 +31,10 @@ results and run record. Use the aquakin MCP tools for every step.
      calibrate study (`fit:`), once that study is fresh. Before reporting its
      intervals, check every parameter's R-hat is below about 1.01 and its
      effective sample size is large enough; if not, run it with more draws.
+   - A `design` study (a batch reactor only) writes its optimized experiments
+     as an `experiments:` list; report them with the standard deviations at
+     the start and at the optimum, and paste them into a `fisher` study to
+     check another design against them.
 
 Never unfreeze a study with results (`discard_results=true`) or replace
 results without the user's explicit go-ahead: both delete their work.

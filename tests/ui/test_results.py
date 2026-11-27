@@ -195,3 +195,32 @@ def test_a_posterior_shows_its_parameters_diagnostics_and_histograms():
         "for m.a. Run it again with more draws."
     )
     assert flagged["charts"] == []
+
+
+def test_a_design_shows_its_criterion_experiments_and_standard_deviations():
+    from aquakin_ui.results import NO_VALUE, analysis_view
+
+    summary = {
+        "criterion": "D",
+        "subset": [],
+        "start": 10.8,
+        "optimum": 13.2,
+        "converged": True,
+        "message": "Optimization terminated successfully",
+        "iterations": 8,
+        "std": {"r.k": {"start": 0.0045, "optimum": 0.00136}, "r.k2": {"start": None, "optimum": 0.2}},
+        "experiments": [{"initial": {"A": 2.0, "B": 0.5}, "t_obs": [0.1667, 1.0]}],
+    }
+    view = analysis_view({"kind": "design", "summary": summary})
+    assert view["lines"][0] == (
+        "D criterion, scoring every free parameter: 10.80 at the start, 13.20 at the optimum. "
+        "The optimizer converged after 8 iterations (Optimization terminated successfully)."
+    )
+    experiments, std = view["tables"]
+    assert experiments["rows"] == [["1", "A 2.000, B 0.5000", "0.1667, 1.000"]]
+    assert std["rows"] == [["r.k", "0.004500", "0.001360"], ["r.k2", NO_VALUE, "0.2000"]]
+    scored = analysis_view(
+        {"kind": "design", "summary": {**summary, "subset": ["r.k"], "converged": False}}
+    )
+    assert scored["lines"][0].startswith("D criterion, scoring r.k: ")
+    assert "did not converge" in scored["lines"][0]

@@ -16,7 +16,7 @@ design). This plugin lets Claude work with it.
 - read, check and write plant flowsheets, as the aquakin flowsheet editor does;
 - create, edit, run and read studies (simulations, calibrations, Fisher
   information, profile likelihoods, sensor rankings, posterior sampling of a
-  calibration), saved in your project
+  calibration, optimized batch experiments), saved in your project
   folder with their results; a run goes on in the background;
 - search and read the aquakin user guide and API reference of the installed
   version.

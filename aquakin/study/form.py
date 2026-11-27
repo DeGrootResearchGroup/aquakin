@@ -20,6 +20,7 @@ from pathlib import Path
 import yaml
 
 from aquakin.study.common import (
+    DESIGN_FILE,
     DRAWS_FILE,
     FISHER_FILE,
     FISHER_SUMMARY_FILE,
@@ -83,6 +84,26 @@ _REACTOR_FIELDS = {
         "t_obs",
         "sigma",
         "time_unit",
+    ),
+    "design": (
+        "description",
+        "reactor",
+        "experiments",
+        "observed",
+        "base_experiments",
+        "parameters",
+        "free",
+        "t_obs",
+        "sigma",
+        "time_unit",
+        "criterion",
+        "subset",
+        "optimize_times",
+        "time_bounds",
+        "min_spacing",
+        "initial_bounds",
+        "transforms",
+        "max_iter",
     ),
     "calibrate": (
         "description",
@@ -165,7 +186,18 @@ _KINDS = {
             "time_unit",
         ),
     ),
+    # A batch reactor's experiments only: no fields of a flowsheet study.
+    "design": (
+        "Experiment design",
+        "Optimize a batch reactor's sampling times and initial concentrations for the "
+        "information they give about chosen parameters.",
+        (),
+    ),
 }
+
+#: The kinds that run on no flowsheet: a posterior on its calibrate study's
+#: plant or reactor, a design on a batch reactor.
+_NO_FLOWSHEET = ("posterior", "design")
 
 # (type, label, help, default). Types: text, number, integer, boolean, choice
 # (with choices), span (two numbers), times (an even grid or a list of times),
@@ -173,8 +205,8 @@ _KINDS = {
 # channel), parameter / parameters (plant parameter names), parameter_values
 # (name -> number), transforms (name -> choice), streams, observables (list of
 # {stream, channels}), candidates / candidate (named sensor sets), file, initial_state,
-# reactor ({model, conditions, integrator}), experiments (list of {data, initial}),
-# species (species names).
+# reactor ({model, conditions, integrator}), experiments (list of {data, initial,
+# t_obs}), species (species names), bounds (species -> [low, high]).
 _FIELDS = {
     "description": ("text", "Description", "What the study is for.", None),
     "reactor": (
@@ -190,7 +222,16 @@ _FIELDS = {
         "Experiments",
         "The reactor's batch experiments: each its initial concentrations by species "
         "(the model's defaults for the others) and, for a fit, a CSV table with a t "
-        "column and one column per observed species, copied into the study.",
+        "column and one column per observed species, copied into the study; for a "
+        "Fisher information or a design, its sampling times t_obs when they are not "
+        "the study's.",
+        [],
+    ),
+    "base_experiments": (
+        "experiments",
+        "Experiments already run",
+        "Experiments whose information a design counts but does not change, each its "
+        "initial concentrations and sampling times.",
         [],
     ),
     "observed": (
@@ -377,6 +418,34 @@ _FIELDS = {
         "modified_E (conditioning).",
         "D",
     ),
+    "subset": (
+        "parameters",
+        "Scored parameters",
+        "The parameters the criterion scores; the other free ones are estimated too but "
+        "not scored. Empty scores them all.",
+        [],
+    ),
+    "optimize_times": ("boolean", "Optimize the times", "Move the sampling times.", True),
+    "time_bounds": (
+        "span",
+        "Time window",
+        "Where the sampling times may go, in the study's time unit (by default, from 0 "
+        "to the latest starting time).",
+        None,
+    ),
+    "min_spacing": (
+        "number",
+        "Minimum spacing",
+        "The least time between two samples of an experiment, in the study's time unit.",
+        0.0,
+    ),
+    "initial_bounds": (
+        "bounds",
+        "Initial concentrations",
+        "The initial concentrations to optimize, each species with its range [low, high]; "
+        "every experiment's starting value must lie in it.",
+        {},
+    ),
 }
 
 _CHOICES = {
@@ -401,8 +470,9 @@ def study_form() -> dict:
         them; ``reactor_fields`` those of a study of a batch reactor (empty for
         a kind that takes no reactor); ``flowsheet`` whether a study of the
         kind runs on a flowsheet it names (``false`` for a posterior study,
-        which runs on its calibrate study's), so a front end sends the spec it
-        has open only to a kind that takes one.
+        which runs on its calibrate study's, and a design, which runs on a batch
+        reactor), so a front end sends the spec it has open only to a kind that
+        takes one, and offers a kind with no ``fields`` only for a reactor.
     """
 
     kinds = [
@@ -414,7 +484,7 @@ def study_form() -> dict:
             "required": list(_REQUIRED.get(kind, ())),
             "reactor_fields": list(_REACTOR_FIELDS.get(kind, ())),
             "reactor_required": list(REACTOR_REQUIRED.get(kind, ())),
-            "flowsheet": kind != "posterior",
+            "flowsheet": kind not in _NO_FLOWSHEET,
         }
         for kind, (label, summary, fields) in _KINDS.items()
     ]
@@ -837,6 +907,12 @@ def _read_posterior(folder: Path, study, out: Path) -> dict:
     return found
 
 
+def _read_design(folder: Path, study, out: Path) -> dict:
+    """The design: the optimized experiments, the criterion at the start and at
+    the optimum, and the standard deviations at both."""
+    return {"summary": _yaml_file(out / DESIGN_FILE)}
+
+
 _READERS = {
     "simulate": _read_simulate,
     "fisher": _read_fisher,
@@ -844,6 +920,7 @@ _READERS = {
     "profile": _read_profile,
     "rank": _read_rank,
     "posterior": _read_posterior,
+    "design": _read_design,
 }
 
 

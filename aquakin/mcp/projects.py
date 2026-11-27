@@ -76,8 +76,9 @@ def list_studies(project: str) -> list[dict]:
 
 def study_settings() -> dict:
     """Describe every kind of study (simulate, fisher, calibrate, profile, rank,
-    posterior) and every setting a study can have: its type, default, help,
-    which kinds use it and which are required.
+    posterior, design) and every setting a study can have: its type, default,
+    help, which kinds use it and which are required (``reactor_fields`` for a
+    study of a batch reactor, the only kind of design study).
 
     Returns
     -------

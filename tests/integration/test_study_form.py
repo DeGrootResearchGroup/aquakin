@@ -34,15 +34,17 @@ def test_the_form_describes_every_setting_and_kind():
     form = study_form()
     json.dumps(form, allow_nan=False)
     kinds = {k["kind"]: k for k in form["kinds"]}
-    assert set(kinds) == {"simulate", "fisher", "calibrate", "profile", "rank", "posterior"}
+    assert set(kinds) == {
+        "simulate", "fisher", "calibrate", "profile", "rank", "posterior", "design"
+    }
     # Every setting of study.yaml (but where the flowsheet sits) is in the form,
     # and every field a kind shows is described.
     settings = set(_Study.model_fields) - {"kind", "flowsheet"}
     assert set(form["fields"]) == settings
     for kind in kinds.values():
         assert set(kind["fields"]) <= set(form["fields"])
-        assert set(kind["required"]) <= set(kind["fields"])
-        assert kind["fields"][0] == "description"
+        assert set(kind["required"]) <= set(kind["fields"]) or not kind["fields"]
+        assert (kind["fields"] or kind["reactor_fields"])[0] == "description"
     assert form["fields"]["criterion"]["choices"] == ["D", "A", "E", "modified_E"]
     for name, field in form["fields"].items():
         assert field["help"].endswith("."), name
@@ -54,11 +56,15 @@ def test_the_form_describes_every_setting_and_kind():
     # A posterior study samples its calibrate study's plant or reactor: no target of its own.
     assert kinds["posterior"]["reactor_fields"] == []
     assert not kinds["posterior"]["flowsheet"]
-    assert all(kinds[k]["flowsheet"] for k in kinds if k != "posterior")
+    assert all(kinds[k]["flowsheet"] for k in kinds if k not in ("posterior", "design"))
+    # A design optimizes a batch reactor's experiments: it has only reactor fields.
+    assert kinds["design"]["fields"] == [] and not kinds["design"]["flowsheet"]
+    assert kinds["design"]["reactor_required"] == ["free", "experiments", "observed", "sigma"]
+    assert kinds["fisher"]["reactor_required"] == ["free", "experiments", "observed", "sigma"]
     assert kinds["posterior"]["required"] == ["fit"]
     assert form["fields"]["prior_space"]["choices"] == ["transformed", "physical"]
     assert kinds["calibrate"]["reactor_required"] == ["free", "experiments", "observed"]
-    for kind in ("calibrate", "profile", "fisher"):
+    for kind in ("calibrate", "profile", "fisher", "design"):
         shown = kinds[kind]["reactor_fields"]
         assert shown[:4] == ["description", "reactor", "experiments", "observed"]
         assert not {"observables", "data", "initial_state", "t_span"} & set(shown)

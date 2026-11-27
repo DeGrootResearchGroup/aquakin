@@ -264,13 +264,48 @@ The results are those of a flowsheet study: the fit is saved as
 `aquakin.load_calibration("studies/ozone_fit/results")` reads it back, and
 `fitted.csv` holds the fitted reactor's observed species at the data's times,
 in columns such as `run1.O3`. A `profile` study takes one experiment. A
-`fisher` study's experiments give only their initial concentrations, and
-`t_obs` and `sigma` the sampling times and measurement error.
+`fisher` study's experiments give only their initial concentrations and, when
+they differ from the study's `t_obs`, their own sampling times (`t_obs`);
+`sigma` is the measurement error.
 
 The study is stale once the model (with any model it `extends`), a data table
 or its settings change, and `check` names which. Freezing copies the model,
 flattened, and the data tables into the study's snapshot. A shipped model is
 copied too.
+
+### Designing a batch experiment
+
+A `design` study optimizes a batch reactor's experiments for the information
+they give about the `free` parameters
+([Designing experiments](experiment_design.md)): it moves their sampling times
+within `time_bounds`, at least `min_spacing` apart, and, for each species in
+`initial_bounds`, their initial concentrations within its range. Experiments
+already run go in `base_experiments`: they count, but do not move.
+
+```yaml
+# studies/next_run/study.yaml
+study:
+  kind: design
+  reactor: {model: ../../models/ozone_demand.yaml, conditions: {T: 293.15, pH: 7.5}}
+  base_experiments:
+    - {initial: {O3: 1.0, D: 12.0, M: 800.0}, t_obs: [5, 10, 20, 40]}
+  experiments:
+    - {initial: {O3: 2.0, D: 12.0, M: 800.0}, t_obs: [5, 10, 20, 40]}
+  observed: [O3]
+  free: [fast.k1, slow.k2]
+  sigma: 0.02
+  time_unit: min
+  criterion: D               # or A, E, modified_E; subset: [...] scores only some
+  time_bounds: [1, 60]
+  min_spacing: 2
+  initial_bounds: {O3: [0.5, 3.0]}
+```
+
+The experiments start the search and keep their number of samples. The study
+writes `design.yaml`: the optimized experiments as an `experiments:` list, in
+the study's time unit, ready to paste into a `fisher` or `calibrate` study (add
+each run's `data:` once it is made); the criterion at the start and at the
+optimum; and each parameter's standard deviation at both.
 
 The `simulate` and `rank` kinds do not take a reactor yet. The editor lists a
 reactor study and runs it, but its dialog edits only flowsheet studies; change a

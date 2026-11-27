@@ -21,4 +21,5 @@ description: Write and run Python that uses the aquakin library for analyses no 
    `run_python` tool when the server was started with `--allow-python`), read
    the output, and fix errors from the message rather than by guessing.
 5. When a saved, reproducible analysis fits a study kind (simulate, fisher,
-   calibrate, profile, rank, posterior), prefer a study: see the run-study skill.
+   calibrate, profile, rank, posterior, design), prefer a study: see the
+   run-study skill.

@@ -224,13 +224,21 @@ class _Reactor(BaseModel):
 
 class _Experiment(BaseModel):
     """One batch of a reactor study: its initial concentrations by species, and
-    the table of its observations (relative to the study folder) for a fit."""
+    the table of its observations (relative to the study folder) for a fit, or
+    its sampling times (``t_obs``, the study's when not given) for a Fisher
+    information or a design."""
 
     model_config = _STRICT
     data: str | None = None
     initial: dict[str, float] = {}
+    t_obs: _Grid | list[float] | None = None
 
     _initial = field_validator("initial", mode="before")(_float_values)
+
+    @field_validator("t_obs", mode="before")
+    @classmethod
+    def _int_times(cls, v):
+        return [_to_float(x) for x in v] if isinstance(v, list) else v
 
 
 class _Study(BaseModel):
@@ -239,10 +247,12 @@ class _Study(BaseModel):
     description: str | None = None
     # The flowsheet, relative to the study folder (a live study's plant).
     flowsheet: str = f"../../{SPEC_FILE}"
-    # In place of the flowsheet: a batch reactor (calibrate, profile, fisher),
-    # its experiments and the species observed in them.
+    # In place of the flowsheet: a batch reactor (calibrate, profile, fisher,
+    # design), its experiments and the species observed in them.
     reactor: _Reactor | None = None
     experiments: list[_Experiment] = []
+    # design: experiments already run, counted in the information, not changed.
+    base_experiments: list[_Experiment] = []
     observed: list[str] = []
     # Plant parameters changed from the flowsheet's, "<model>.<param>": value.
     parameters: dict[str, float] = {}
@@ -293,6 +303,13 @@ class _Study(BaseModel):
     n_warmup: int = 500
     seed: int = 0
     prior_space: Literal["transformed", "physical"] = "transformed"
+    # design (with criterion, transforms and max_iter): what is optimized, and
+    # the quantities the criterion scores (all free ones when empty).
+    subset: list[str] = []
+    optimize_times: bool = True
+    time_bounds: tuple[float, float] | None = None
+    min_spacing: float = 0.0
+    initial_bounds: dict[str, tuple[float, float]] = {}
 
     @field_validator("grid", mode="before")
     @classmethod
@@ -300,6 +317,22 @@ class _Study(BaseModel):
         return [_to_float(x) for x in v] if isinstance(v, list) else v
 
     _delta = field_validator("delta", mode="before")(_to_float)
+    _spacing = field_validator("min_spacing", mode="before")(_to_float)
+
+    @field_validator("time_bounds", mode="before")
+    @classmethod
+    def _int_bounds(cls, v):
+        return tuple(_to_float(x) for x in v) if isinstance(v, (list, tuple)) else v
+
+    @field_validator("initial_bounds", mode="before")
+    @classmethod
+    def _int_initial_bounds(cls, v):
+        if not isinstance(v, dict):
+            return v
+        return {
+            k: tuple(_to_float(x) for x in b) if isinstance(b, (list, tuple)) else b
+            for k, b in v.items()
+        }
 
     @field_validator("parameters", mode="before")
     @classmethod
@@ -330,6 +363,8 @@ _REQUIRED = {
     "profile": ("free", "observables", "data", "profile", "grid"),
     "rank": ("free", "candidates", "t_obs"),
     "posterior": ("fit",),
+    # A design optimizes a batch reactor's experiments: it has no flowsheet form.
+    "design": ("reactor",),
 }
 
 
@@ -339,7 +374,7 @@ def _check_target(study: _Study, where: str) -> None:
         if "flowsheet" in study.model_fields_set:
             raise StudyError(f"{where}: give a flowsheet or a reactor to study, not both")
         check_reactor_study(study, where)
-    elif study.experiments or study.observed:
+    elif study.experiments or study.base_experiments or study.observed:
         raise StudyError(
             f"{where}: experiments and observed are the settings of a reactor study; "
             f"give the reactor (its model and conditions) in a reactor: block"
@@ -1070,11 +1105,13 @@ def _run_posterior(folder: Path, study: _Study, out: Path, progress) -> list[Pat
 
 #: Each kind's run of a study that has no reactor, ``(folder, study, out,
 #: progress) -> files``: the flowsheet kinds on the study's plant, and the
-#: posterior on its calibrate study's plant or reactor. A reactor study runs
-#: through :func:`~aquakin.study.reactor.run_reactor_study`.
+#: posterior on its calibrate study's plant or reactor. A reactor study of any
+#: kind runs through :func:`~aquakin.study.reactor.run_reactor_study`, the only
+#: run of a design (which always has one).
 _RUNNERS = {
     **{kind: _on_plant(analysis) for kind, analysis in _PLANT_RUNNERS.items()},
     "posterior": _run_posterior,
+    "design": run_reactor_study,
 }
 
 

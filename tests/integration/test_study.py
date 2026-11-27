@@ -502,6 +502,11 @@ def test_a_singular_fisher_design_is_reported_without_failing(project):
         ),
         ({**FIT, "kind": "calibrate", "sigma": [1, 2, 3]}, "3 errors for 2 measured channels"),
         ({"kind": "simulate", "streams": ["x"], "sigma": "1"}, "sigma"),
+        ({"kind": "design", "free": ["a"]}, "a design study needs reactor"),
+        (
+            {"kind": "fisher", "base_experiments": [{"initial": {}}]},
+            "experiments and observed are the settings of a reactor study",
+        ),
     ],
 )
 def test_a_study_that_cannot_run_says_why(project, study, message):
@@ -1223,6 +1228,35 @@ def test_a_reactor_fisher_study_is_the_fisher_information(tmp_path):
         ),
         ({"sigma": [0.1, 0.2, 0.3]}, "3 errors for 2 measured channels"),
         (
+            {"experiments": [{"data": "run1.csv", "t_obs": [1.0]}]},
+            "experiments 0 give t_obs, but a calibrate study takes its times from each "
+            "experiment's data",
+        ),
+        ({"base_experiments": [{"initial": {}}]}, "base_experiments are a design study's setting"),
+        (
+            {"kind": "fisher", "experiments": [{"initial": {}, "t_obs": [1.0]}, {"initial": {}}]},
+            "give the sampling times, t_obs, for the study or for each experiment",
+        ),
+        (
+            {
+                "kind": "design",
+                "experiments": [{"initial": {}}],
+                "base_experiments": [{"data": "run1.csv"}],
+                "t_obs": [1.0],
+            },
+            "a design study reads no data; its base_experiments give their initial",
+        ),
+        (
+            {
+                "kind": "design",
+                "experiments": [{"initial": {}}],
+                "t_obs": [1.0],
+                "optimize_times": False,
+            },
+            r"optimizes the sampling times \(optimize_times\) or the initial concentrations "
+            r"\(initial_bounds\); it has neither",
+        ),
+        (
             {
                 "kind": "fisher",
                 "experiments": [{"initial": {}}],
@@ -1241,6 +1275,15 @@ def test_a_reactor_study_that_cannot_run_says_why(tmp_path, change, message):
         check_study(folder)
 
 
+#: A reactor fit turned into a design of the same reactor, for the refusals at run time.
+DESIGN_CHANGE = {
+    "kind": "design",
+    "experiments": [{"initial": {"A": 1.0}}],
+    "t_obs": [5.0],
+    "laplace": False,
+}
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [
@@ -1256,6 +1299,12 @@ def test_a_reactor_study_that_cannot_run_says_why(tmp_path, change, message):
             r"experiments\[0\].data: run1.csv has no column C \(its columns: A, B\)",
         ),
         ({"experiments": [{"data": "nowhere.csv"}]}, r"experiments\[0\].data: .*nowhere\.csv does not exist"),
+        (
+            {**DESIGN_CHANGE, "base_experiments": [{"initial": {"Q": 1.0}}]},
+            r"base_experiments\[0\].initial",
+        ),
+        ({**DESIGN_CHANGE, "initial_bounds": {"Q": [0.0, 1.0]}}, "design: Unknown species 'Q' in initial_bounds"),
+        ({**DESIGN_CHANGE, "subset": ["A_to_B.kk"]}, "design: Unknown subset name 'A_to_B.kk'"),
     ],
 )  # fmt: skip
 def test_a_reactor_study_names_what_it_cannot_find(tmp_path, change, message):
@@ -1296,6 +1345,113 @@ def test_experiments_sampled_at_other_times_share_one_table():
     assert list(columns) == ["run1.A", "run2.A", "run2.B"]
     np.testing.assert_array_equal(columns["run1.A"], [10.0, np.nan, 30.0])
     np.testing.assert_array_equal(columns["run2.B"], [np.nan, 2.0, 3.1])
+
+
+# ---------------------------------------------------------------------------
+# design: optimizing a reactor's experiments
+# ---------------------------------------------------------------------------
+
+#: One sample of A in first-order decay (k = 0.1 per second) carries the
+#: information (t A0 exp(-k t) / sigma)^2 about k, largest at t = 1/k = 10 s,
+#: with A0 as large as it may be. Times in minutes, to check the units.
+DECAY_K, DECAY_SIGMA = 0.1, 0.01
+BASE_T, BASE_A0 = 5.0, 1.0  # seconds; a batch already run, sampled once
+DESIGN = {
+    "kind": "design",
+    "reactor": {"model": "../../models/decay.yaml", "integrator": {"rtol": 1.0e-10}},
+    "experiments": [{"initial": {"A": 1.0}, "t_obs": [0.05]}],
+    "base_experiments": [{"initial": {"A": BASE_A0}, "t_obs": [BASE_T / 60.0]}],
+    "observed": ["A"],
+    "free": ["A_to_B.k"],
+    "sigma": DECAY_SIGMA,
+    "time_unit": "min",
+    "time_bounds": [0.0, 1.0],
+    "initial_bounds": {"A": [0.5, 2.0]},
+}
+
+
+def _decay_information(t, a0):
+    """The information about k of one sample of A at t seconds, from A0 = a0."""
+    return (t * a0 * np.exp(-DECAY_K * t) / DECAY_SIGMA) ** 2
+
+
+@pytest.fixture(scope="module")
+def designed_decay(tmp_path_factory):
+    project = _reactor_project(tmp_path_factory.mktemp("design") / "project")
+    folder = _study(project, "design", DESIGN)
+    seen = []
+    run_study(folder, progress=seen.append)
+    return project, folder, seen
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"initial_bounds": ["A"]}, "initial_bounds: Input should be a valid dictionary"),
+        ({"initial_bounds": {"A": 0.5}}, r"initial_bounds\.A: Input should be a valid tuple"),
+        ({"time_bounds": 1.0}, "time_bounds: Input should be a valid tuple"),
+    ],
+)
+def test_a_design_s_bounds_are_checked_as_it_is_read(tmp_path, change, message):
+    folder = _study(_reactor_project(tmp_path / "project"), "bad", {**DESIGN, **change})
+    with pytest.raises(StudyError, match=message):
+        check_study(folder)
+
+
+def test_a_design_study_finds_the_closed_form_optimum(designed_decay):
+    """The sample moves to t = 1/k (1/6 min) and A0 to its upper bound; the
+    standard deviations at the start and at the optimum are the closed form
+    1 / sqrt(information), the batch already run included; the criterion is
+    the D criterion of those designs."""
+    from aquakin import design_criterion, fisher_information
+
+    _, folder, seen = designed_decay
+    assert [p.stage for p in seen] == ["setup", "design", "design"]
+    design = yaml.safe_load((folder / "results" / "design.yaml").read_text())
+    (designed,) = design["experiments"]
+    assert designed["t_obs"] == [pytest.approx(1 / (60 * DECAY_K), rel=1e-4)]
+    assert designed["initial"] == {"A": pytest.approx(2.0, rel=1e-12)}
+    assert design["converged"] and design["criterion"] == "D" and design["subset"] == []
+    base = _decay_information(BASE_T, BASE_A0)
+    start = base + _decay_information(0.05 * 60, 1.0)
+    optimum = base + _decay_information(1 / DECAY_K, 2.0)
+    assert design["std"]["A_to_B.k"]["start"] == pytest.approx(start**-0.5, rel=1e-6)
+    assert design["std"]["A_to_B.k"]["optimum"] == pytest.approx(optimum**-0.5, rel=1e-6)
+    assert design["optimum"] > design["start"]
+    model = aquakin.load_model_from_file(folder.parents[1] / "models" / "decay.yaml")
+    reactor = aquakin.BatchReactor(model, model.default_conditions(), rtol=1.0e-10)
+    experiments = [
+        aquakin.Experiment(model.concentrations({"A": a0}), t_obs=np.asarray([t]),
+                           sigma=DECAY_SIGMA, observed_species=["A"])
+        for t, a0 in ((BASE_T, BASE_A0), (3.0, 1.0))
+    ]  # fmt: skip
+    fim = fisher_information(reactor, experiments, ["A_to_B.k"])
+    assert design["start"] == pytest.approx(float(design_criterion(fim, "D")), rel=1e-8)
+
+
+def test_a_designed_experiment_pastes_into_a_fisher_study(designed_decay, tmp_path):
+    """The written experiments: list, with the batch already run beside it, is a
+    fisher study's design (each experiment with its own t_obs), and gives the
+    standard deviation the design predicted."""
+    from aquakin.study import study_results
+
+    project, folder, _ = designed_decay
+    design = yaml.safe_load((folder / "results" / "design.yaml").read_text())
+    fisher = {
+        key: DESIGN[key] for key in ("reactor", "observed", "free", "sigma", "time_unit")
+    }
+    fisher.update(
+        kind="fisher", experiments=DESIGN["base_experiments"] + design["experiments"]
+    )
+    pasted = _study(_copy_project((project, None), tmp_path)[0], "pasted", fisher)
+    run_study(pasted)
+    summary = yaml.safe_load((pasted / "results" / "summary.yaml").read_text())
+    assert summary["std"]["A_to_B.k"] == pytest.approx(
+        design["std"]["A_to_B.k"]["optimum"], rel=1e-8
+    )
+    results = study_results(folder)
+    assert results["kind"] == "design" and results["files"] == ["design.yaml"]
+    assert results["summary"]["experiments"] == design["experiments"]
 
 
 # ---------------------------------------------------------------------------

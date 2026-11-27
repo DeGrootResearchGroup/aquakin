@@ -124,6 +124,17 @@ def _read_observations(path: Path, names: list[str], where: str):
     return t, np.stack([columns[n] for n in names], axis=1)
 
 
+def _std(fim) -> dict[str, float] | None:
+    """A Fisher information's standard deviations by name, ``None`` when it is
+    singular."""
+    import numpy as np
+
+    try:
+        return fim.std()
+    except np.linalg.LinAlgError:
+        return None
+
+
 def _write_fisher_files(out: Path, fim, parameters: dict) -> list[Path]:
     """Write a Fisher information's ``fisher.csv`` and ``summary.yaml`` (values,
     transforms, standard deviations or ``None`` when it is singular, the four
@@ -138,14 +149,10 @@ def _write_fisher_files(out: Path, fim, parameters: dict) -> list[Path]:
             criteria[c] = float(design_criterion(fim, c))
         except (np.linalg.LinAlgError, ValueError):
             criteria[c] = None
-    try:
-        std = fim.std()
-    except np.linalg.LinAlgError:
-        std = None
     summary = {
         "values": dict(fim.values),
         "transforms": dict(zip(fim.names, fim.transforms)),
-        "std": std,
+        "std": _std(fim),
         "criteria": criteria,
     }
     return [

@@ -510,14 +510,54 @@ def _posterior_view(results: dict, summary: dict, lines: list, tables: list, cha
 #: or a run in time), not by :func:`analysis_view`.
 SIMULATE = "simulate"
 
+
 #: Each other kind's view; ``tests/ui/test_protocol.py`` pins that these and
 #: :data:`SIMULATE` are exactly aquakin's study kinds.
+def _design_view(results: dict, summary: dict, lines: list, tables: list, charts: list) -> None:
+    """A design: the criterion before and after, the optimized experiments, and
+    each parameter's standard deviation at the start and at the optimum."""
+    scored = ", ".join(summary.get("subset") or []) or "every free parameter"
+    state = "converged" if summary.get("converged") else "did not converge"
+    lines.append(
+        f"{summary.get('criterion')} criterion, scoring {scored}: {fmt(summary.get('start'))} "
+        f"at the start, {fmt(summary.get('optimum'))} at the optimum. The optimizer "
+        f"{state} after {summary.get('iterations')} iterations ({summary.get('message')})."
+    )
+    tables.append(
+        _table(
+            "Optimized experiments",
+            ["experiment", "initial concentrations", "sampling times"],
+            [
+                [
+                    str(i + 1),
+                    ", ".join(f"{s} {fmt(v)}" for s, v in (e.get("initial") or {}).items()),
+                    ", ".join(fmt(t) for t in e.get("t_obs") or []),
+                ]
+                for i, e in enumerate(summary.get("experiments") or [])
+            ],
+        )
+    )
+    std = summary.get("std") or {}
+    tables.append(
+        _table(
+            "Standard deviations",
+            ["parameter", "at the start", "at the optimum"],
+            [[n, fmt(s.get("start")), fmt(s.get("optimum"))] for n, s in std.items()],
+        )
+    )
+    lines.append(
+        "The experiments are written in design.yaml as an experiments: list, to paste into "
+        "a fisher or calibrate study."
+    )
+
+
 ANALYSIS_VIEWS = {
     "fisher": _fisher_view,
     "rank": _rank_view,
     "calibrate": _calibrate_view,
     "profile": _profile_view,
     "posterior": _posterior_view,
+    "design": _design_view,
 }
 
 

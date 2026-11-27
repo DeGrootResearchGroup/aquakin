@@ -22,7 +22,11 @@ a ``t`` column and one column per observed species. An experiment is named by
 its data file (``run1``), and results that differ by experiment are keyed
 ``<experiment>.<species>``. The ``calibrate``, ``profile`` and ``fisher`` kinds
 take a reactor; they share the fit settings and the result files of a plant
-study (:mod:`aquakin.study.analysis`).
+study (:mod:`aquakin.study.analysis`). A Fisher information or a ``design``
+plans its experiments rather than reading data: each gives its sampling times
+(``t_obs``, the study's when it gives none), and a design optimizes them and
+the initial concentrations in ``initial_bounds``, counting
+``base_experiments`` already run.
 
 A model file is fingerprinted with its ``extends`` chain merged in, a shipped
 model by its shipped content, and each data table by its bytes: the study is
@@ -47,11 +51,19 @@ from aquakin.study.analysis import (
     _flattened,
     _read_observations,
     _sampler,
+    _std,
     _write_fisher_files,
     _write_profile_files,
 )
-from aquakin.study.common import FITTED_FILE, FROZEN_FILE, SNAPSHOT, StudyError, _times
-from aquakin.utils.result_files import write_trajectory
+from aquakin.study.common import (
+    DESIGN_FILE,
+    FITTED_FILE,
+    FROZEN_FILE,
+    SNAPSHOT,
+    StudyError,
+    _times,
+)
+from aquakin.utils.result_files import write_trajectory, write_yaml
 
 if TYPE_CHECKING:
     from aquakin.study.study import _Study
@@ -60,8 +72,13 @@ if TYPE_CHECKING:
 REQUIRED = {
     "calibrate": ("free", "experiments", "observed"),
     "profile": ("free", "experiments", "observed", "profile", "grid"),
-    "fisher": ("free", "experiments", "observed", "t_obs", "sigma"),
+    "fisher": ("free", "experiments", "observed", "sigma"),
+    "design": ("free", "experiments", "observed", "sigma"),
 }
+
+#: The kinds whose experiments are planned rather than run: each gives its
+#: sampling times (its own ``t_obs`` or the study's) and reads no data.
+_PLANNED = ("fisher", "design")
 
 #: The settings of a flowsheet study that a reactor study has no use for.
 _FLOWSHEET_ONLY = (
@@ -116,13 +133,17 @@ def check_reactor_study(study: _Study, where: str) -> None:
             f" of a flowsheet study; a reactor study has no use for "
             f"{'it' if len(unused) == 1 else 'them'}"
         )
-    if study.kind == "fisher":
-        if any(e.data is not None for e in study.experiments):
-            raise StudyError(
-                f"{where}: a fisher study reads no data; its experiments give their initial "
-                f"concentrations, and t_obs the sampling times"
-            )
+    if study.base_experiments and study.kind != "design":
+        raise StudyError(f"{where}: base_experiments are a design study's setting")
+    if study.kind in _PLANNED:
+        _check_planned(study, where)
         return
+    timed = [i for i, e in enumerate(study.experiments) if e.t_obs is not None]
+    if timed:
+        raise StudyError(
+            f"{where}: experiments {', '.join(map(str, timed))} give t_obs, but a "
+            f"{study.kind} study takes its times from each experiment's data"
+        )
     without = [i for i, e in enumerate(study.experiments) if e.data is None]
     if without:
         raise StudyError(
@@ -139,6 +160,28 @@ def check_reactor_study(study: _Study, where: str) -> None:
         raise StudyError(
             f"{where}: the experiments are named by their data tables, and "
             f"{', '.join(twice)} names more than one"
+        )
+
+
+def _check_planned(study: _Study, where: str) -> None:
+    """A Fisher information or a design reads no data, and every experiment has
+    sampling times; a design has something to optimize."""
+    entries = [("experiments", e) for e in study.experiments]
+    entries += [("base_experiments", e) for e in study.base_experiments]
+    with_data = sorted({name for name, e in entries if e.data is not None})
+    if with_data:
+        raise StudyError(
+            f"{where}: a {study.kind} study reads no data; its {' and '.join(with_data)} "
+            f"give their initial concentrations and sampling times (t_obs)"
+        )
+    if study.t_obs is None and any(e.t_obs is None for _, e in entries):
+        raise StudyError(
+            f"{where}: give the sampling times, t_obs, for the study or for each experiment"
+        )
+    if study.kind == "design" and not study.optimize_times and not study.initial_bounds:
+        raise StudyError(
+            f"{where}: a design study optimizes the sampling times (optimize_times) or "
+            f"the initial concentrations (initial_bounds); it has neither"
         )
 
 
@@ -258,6 +301,7 @@ class _Batch:
     initial: list
     names: list[str]
     to_model_time: float
+    base: list
 
 
 def _setting(where: str, read):
@@ -291,9 +335,13 @@ def _set_up(folder: Path, study: _Study, frozen: bool) -> _Batch:
         _setting(f"experiments[{i}].initial", lambda e=e: model.concentrations(e.initial))
         for i, e in enumerate(study.experiments)
     ]
+    base = [
+        _setting(f"base_experiments[{i}].initial", lambda e=e: model.concentrations(e.initial))
+        for i, e in enumerate(study.base_experiments)
+    ]
     factor = _setting("time_unit", lambda: native_time_factor(model.time_unit, study.time_unit))
     reactor = BatchReactor(model, conditions, integrator=IntegratorConfig(**settings), **tolerances)
-    return _Batch(model, reactor, params, initial, experiment_names(study), factor)
+    return _Batch(model, reactor, params, initial, experiment_names(study), factor, base)
 
 
 def _named(model, params) -> dict[str, float]:
@@ -408,25 +456,119 @@ def _run_profile(batch: _Batch, folder, study, out: Path, frozen: bool, progress
     return _write_profile_files(out, study, prof)
 
 
-def _run_fisher(batch: _Batch, folder, study, out: Path, frozen: bool, progress) -> list[Path]:
+def _planned(study: _Study, entries, initial) -> list:
+    """Planned experiments as :class:`aquakin.Experiment`: each from its initial
+    state, sampled at its own ``t_obs`` (the study's when it gives none), in the
+    study's time unit, observing the study's species with its ``sigma``."""
     import jax.numpy as jnp
 
-    from aquakin import Experiment, fisher_information
+    from aquakin import Experiment
+
+    sigma = np.asarray(study.sigma, dtype=float) if isinstance(study.sigma, list) else study.sigma
+    return [
+        Experiment(
+            c0,
+            t_obs=jnp.asarray(_times(e.t_obs if e.t_obs is not None else study.t_obs)),
+            sigma=sigma,
+            observed_species=list(study.observed),
+            time_unit=study.time_unit,
+        )
+        for e, c0 in zip(entries, initial)
+    ]
+
+
+def _run_fisher(batch: _Batch, folder, study, out: Path, frozen: bool, progress) -> list[Path]:
+    from aquakin import fisher_information
     from aquakin.progress import report
 
-    t_obs = jnp.asarray(_times(study.t_obs)) * batch.to_model_time
-    sigma = np.asarray(study.sigma, dtype=float) if isinstance(study.sigma, list) else study.sigma
-    design = [
-        Experiment(c0, t_obs=t_obs, sigma=sigma, observed_species=list(study.observed))
-        for c0 in batch.initial
-    ]
+    design = _planned(study, study.experiments, batch.initial)
     report(progress, "fisher", 0, 1, "computing the information")
     fim = fisher_information(batch.reactor, design, list(study.free), params=batch.params)
     return _write_fisher_files(out, fim, _named(batch.model, batch.params))
 
 
+def _run_design(batch: _Batch, folder, study, out: Path, frozen: bool, progress) -> list[Path]:
+    from aquakin import fisher_information, optimize_experiment
+    from aquakin.progress import report
+
+    start = _planned(study, study.experiments, batch.initial)
+    base = _planned(study, study.base_experiments, batch.base)
+    transforms = dict(study.transforms) or None
+    report(progress, "design", 0, 1, "optimizing the experiments")
+    result = _setting(
+        "design",
+        lambda: optimize_experiment(
+            batch.reactor,
+            start,
+            list(study.free),
+            criterion=study.criterion,
+            subset=list(study.subset) or None,
+            optimize_times=study.optimize_times,
+            time_bounds=study.time_bounds,
+            min_spacing=study.min_spacing,
+            initial_bounds=dict(study.initial_bounds) or None,
+            base=base or None,
+            params=batch.params,
+            transforms=transforms,
+            max_iter=study.max_iter,
+        ),
+    )
+    report(progress, "design", 1, 1, "writing the results")
+    std = [
+        _std(fisher_information(batch.reactor, base + design, list(study.free),
+                                params=batch.params, transforms=transforms))
+        for design in (start, result.experiments)
+    ]  # fmt: skip
+    return [_write_design(out, study, batch.model, result, *std)]
+
+
+def _write_design(out: Path, study: _Study, model, result, std_start, std_optimum) -> Path:
+    """Write a design study's ``design.yaml``: the optimized experiments as an
+    ``experiments:`` list (each its ``initial`` concentrations, of the species
+    the study named or optimized, and its ``t_obs``, in the study's time unit),
+    ready to paste into a fisher or calibrate study; the criterion at the start
+    and at the optimum; how the optimizer ended; and each free quantity's
+    standard deviation at the start and at the optimum (``None`` when the
+    information is singular)."""
+    species = [s for s in model.species if s in study.initial_bounds]
+    experiments = []
+    for entry, designed in zip(study.experiments, result.experiments):
+        named = list(entry.initial) + [s for s in species if s not in entry.initial]
+        c0 = np.asarray(designed.C0, dtype=float)
+        experiments.append(
+            {
+                "initial": {s: float(c0[model.species_index[s]]) for s in named},
+                "t_obs": [float(t) for t in np.asarray(designed.t_obs)],
+            }
+        )
+    names = list(std_optimum or std_start or {})
+    summary = {
+        "criterion": study.criterion,
+        "subset": list(study.subset),
+        "start": result.initial_value,
+        "optimum": result.value,
+        "converged": result.success,
+        "message": result.message,
+        "iterations": result.n_iter,
+        "std": {
+            n: {
+                "start": None if std_start is None else std_start[n],
+                "optimum": None if std_optimum is None else std_optimum[n],
+            }
+            for n in names
+        },
+        "experiments": experiments,
+    }
+    return write_yaml(out / DESIGN_FILE, summary)
+
+
 #: Each kind's reactor runner; one per entry of :data:`REQUIRED`.
-_RUNNERS = {"calibrate": _run_calibrate, "profile": _run_profile, "fisher": _run_fisher}
+_RUNNERS = {
+    "calibrate": _run_calibrate,
+    "profile": _run_profile,
+    "fisher": _run_fisher,
+    "design": _run_design,
+}
 
 
 def run_reactor_study(folder: Path, study: _Study, out: Path, progress) -> list[Path]:
