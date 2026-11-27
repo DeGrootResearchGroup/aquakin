@@ -57,8 +57,8 @@ def test_phosphorus_is_conserved_over_the_plant(runs):
 
 
 def test_biological_p_removal_matches_asm2d(runs):
-    """ASM2d on this plant: SF 0.95 g/m3 left at the end of the anaerobic zone,
-    effluent phosphate 5.09 g P/m3. The models differ in what decides the
+    """ASM2d on this plant: SF 1.05 g/m3 left at the end of the anaerobic zone,
+    effluent phosphate 3.00 g P/m3. The models differ in what decides the
     effluent phosphate (GAOs, P released per VFA, fermentation as growth), so
     it is compared to 1 g P/m3, and the fermentation by its result: the
     anaerobic zone leaves no more SF than ASM2d's."""

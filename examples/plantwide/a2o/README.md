@@ -37,9 +37,9 @@ both influents below give a stable PAO state.
 
 | | SF end of anaerobic zone (g COD/m3) | PAO (g COD/m3) | Effluent PO4 (g P/m3) |
 |---|---|---|---|
-| ASM2d | 0.95 | 794 | 5.09 |
-| plant-wide, VFA 75/25 | 0.36 | 1057 | 4.41 |
-| plant-wide, all acetate | 0.36 | 1027 | 4.56 |
+| ASM2d | 1.05 | 581 | 3.00 |
+| plant-wide, VFA 75/25 | 0.41 | 707 | 2.68 |
+| plant-wide, all acetate | 0.42 | 685 | 2.88 |
 
-Seeded GAOs die out in both plant-wide cases (Competibacter -0.028 and -0.013
-1/d, Alphaproteobacteria -0.027 and -0.034 1/d).
+Seeded GAOs die out in both plant-wide cases (Competibacter -0.042 and -0.019
+1/d, Alphaproteobacteria -0.041 and -0.051 1/d).
