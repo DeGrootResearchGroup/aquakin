@@ -33,15 +33,45 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 
-from aquakin.integrate.calibration.saved import COVARIANCE_FILE as COVARIANCE_FILE
-from aquakin.integrate.calibration.saved import FIT_FILE as FIT_FILE
-from aquakin.integrate.calibration.saved import (
+from aquakin.integrate.calibration.saved import fit_summary, write_fit_files
+from aquakin.study.analysis import _fit_sigma, _flattened
+from aquakin.study.common import (
+    _STRICT,
+    ATTEMPT_FILE,
+    FINAL_STATE_FILE,
+    FISHER_FILE,
+    FISHER_SUMMARY_FILE,
+    FITTED_FILE,
+    FROZEN_FILE,
+    KINDS,
+    MEASURED_FILE,
+    MEASURED_STEADY_FILE,
     PARAMETERS_FILE,
-    fit_summary,
-    write_fit_files,
+    PARTIAL,
+    PROFILE_FILE,
+    PROFILE_SUMMARY_FILE,
+    RANKING_FILE,
+    RESULT_STATES,
+    RESULTS,
+    RUN_FILE,
+    SNAPSHOT,
+    SPEC_FILE,
+    STREAMS_FILE,
+    STREAMS_STEADY_FILE,
+    STUDY_FILE,
+    StudyError,
+    _Grid,
+    _times,
+    _to_float,
 )
+
+# Re-exported: the stored-names test, the readers and the worker take them from here.
+from aquakin.study.common import COVARIANCE_FILE as COVARIANCE_FILE
+from aquakin.study.common import FIT_FILE as FIT_FILE
+from aquakin.study.common import STATES as STATES
+from aquakin.study.common import STUDIES_DIR as STUDIES_DIR
 from aquakin.utils.result_files import (
     read_named_values,
     write_matrix,
@@ -61,85 +91,9 @@ __all__ = [
     "unfreeze_study",
 ]
 
-#: The folder of a project that holds its studies, one folder each.
-STUDIES_DIR = "studies"
-STUDY_FILE = "study.yaml"
-#: The spec file a study follows unless its ``flowsheet:`` names another (and the
-#: name of the spec inside a frozen study's snapshot).
-SPEC_FILE = "flowsheet.yaml"
-RUN_FILE = "run.yaml"
-FROZEN_FILE = "frozen.yaml"
-RESULTS = "results"
-#: Where a run writes; it becomes ``results`` only when the run succeeds.
-PARTIAL = "results.partial"
-#: A run that failed or was cancelled while earlier results stood: they are kept.
-ATTEMPT_FILE = "last_attempt.yaml"
-SNAPSHOT = "snapshot"
-
-# Result files, inside ``results/``. Their names are part of the stored format:
-# a project written by an earlier aquakin must still read. A calibrate study's
-# fit files (PARAMETERS_FILE, FIT_FILE, COVARIANCE_FILE) are those of a saved
-# fit, imported above from aquakin.integrate.calibration.saved and re-exported
-# here, where the reader and the stored-names test take them.
-FINAL_STATE_FILE = "final_state.yaml"
-# simulate at steady state
-STREAMS_STEADY_FILE = "streams.yaml"
-MEASURED_STEADY_FILE = "measured.yaml"
-# simulate in time
-STREAMS_FILE = "streams.csv"
-MEASURED_FILE = "measured.csv"
-# fisher
-FISHER_FILE = "fisher.csv"
-FISHER_SUMMARY_FILE = "summary.yaml"
-# calibrate
-FITTED_FILE = "fitted.csv"
-# profile
-PROFILE_FILE = "profile.csv"
-PROFILE_SUMMARY_FILE = "profile.yaml"
-# rank
-RANKING_FILE = "ranking.csv"
-
-#: The kinds of study. Each has a runner (``_RUNNERS``), required fields
-#: (``_REQUIRED``), a form entry and a result reader (:mod:`aquakin.study.form`).
-KINDS = ("simulate", "fisher", "calibrate", "profile", "rank")
-#: Every state :func:`check_study` can report (see :class:`StudyStatus`).
-STATES = ("not run", "fresh", "stale", "damaged", "failed", "cancelled")
-#: The states of a study whose last run finished, so it has results to show or replace.
-RESULT_STATES = ("fresh", "stale", "damaged")
-
-
-class StudyError(ValueError):
-    """A study that cannot be read, run, frozen or unfrozen as asked."""
-
-
 # ---------------------------------------------------------------------------
 # What a study runs (study.yaml)
 # ---------------------------------------------------------------------------
-
-_STRICT = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
-
-
-def _to_float(v):
-    return float(v) if isinstance(v, int) and not isinstance(v, bool) else v
-
-
-class _Grid(BaseModel):
-    """Evenly spaced times: ``num`` points from ``start`` to ``stop``."""
-
-    model_config = _STRICT
-    start: float
-    stop: float
-    num: int
-
-    _floats = field_validator("start", "stop", mode="before")(_to_float)
-
-
-def _times(value) -> list[float]:
-    if isinstance(value, _Grid):
-        import numpy as np
-
-        return [float(x) for x in np.linspace(value.start, value.stop, value.num)]
-    return [float(x) for x in value]
 
 
 class _Measure(BaseModel):
@@ -726,19 +680,6 @@ def _observations(folder: Path, study: _Study):
     return t, np.stack([columns[n] for n in names], axis=1), names
 
 
-def _fit_sigma(study: _Study):
-    """The fit's ``sigma``: ``"estimate"``, one error for every observation, or an
-    array of one per channel (broadcast over the times; a list would mean one
-    per dataset)."""
-    import numpy as np
-
-    if study.estimate_sigma:
-        return "estimate"
-    if isinstance(study.sigma, list):
-        return np.asarray(study.sigma, dtype=float)
-    return study.sigma
-
-
 def _fit_arguments(plant, study: _Study, params, y0, progress) -> dict:
     from aquakin import OptimizerConfig
 
@@ -993,23 +934,6 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
 # ---------------------------------------------------------------------------
 # Freezing, unfreezing and copying
 # ---------------------------------------------------------------------------
-
-
-def _flattened(ref, name: str, base_dir: Path) -> str:
-    """A model's YAML with its whole ``extends`` chain merged in."""
-    from importlib.resources import files
-
-    from aquakin.schema.loader import _resolve_inheritance, parse_model_yaml
-
-    if ref["source"] == "shipped":
-        text = (files("aquakin.models") / f"{name}.yaml").read_text()
-        base = None
-    else:
-        path = Path(ref["source"])
-        path = path if path.is_absolute() else base_dir / path
-        text, base = path.read_text(), path.parent
-    data = _resolve_inheritance(parse_model_yaml(text), name, base, seen=())
-    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
 def freeze_study(path) -> dict:
