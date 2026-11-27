@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 from trame.app import asynchronous
 
-from aquakin_ui import checks, files, forms, page, studies, study_page, unit_form
+from aquakin_ui import checks, disk, files, forms, page, studies, study_page, unit_form
 from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
@@ -65,6 +65,8 @@ class Editor:
         self._loop: asyncio.AbstractEventLoop | None = None
         # The file opened, and its sha256 (None when it had gone by the time it was read).
         self._opened: tuple[Path, str | None] | None = None
+        self._declined_digest: str | None = None  # a version on disk the user kept edits over
+        self._project_seen: tuple | None = None  # the project folder and its files, last look
         self._study_action: tuple[str, str] | None = None
         self._study_form: dict | None = None  # the worker's study_form, asked once
         self._saved: str | None = None  # the document as last opened or saved
@@ -80,6 +82,9 @@ class Editor:
             self.open(path, quiet=True)
         self.publish(checks=False)
         self.server.controller.on_server_ready.add(lambda **_: self.schedule_checks())
+        self.server.controller.on_server_ready.add(
+            lambda **_: asynchronous.create_task(self.watch_disk())
+        )
         self._build()
 
     # -- drawing ------------------------------------------------------------
@@ -517,6 +522,12 @@ class Editor:
     answer_unsaved = files.answer_unsaved
     save = files.save
     _save_refusal = files._save_refusal
+    reload_if_changed = files.reload_if_changed
+
+    # -- other programs' changes to the project (disk.py) -------------------
+
+    follow_disk = disk.follow_disk
+    watch_disk = disk.watch_disk
 
     # -- the project's studies (studies.py) --------------------------------
 

@@ -9,8 +9,8 @@ import pytest
 from trame.app import get_server
 
 from aquakin_ui.app import Editor
+from tests.conftest import study_project
 
-from .conftest import study_project
 from .inprocess import InProcessWorker
 
 _names = itertools.count()

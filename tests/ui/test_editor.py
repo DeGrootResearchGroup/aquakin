@@ -16,9 +16,9 @@ from aquakin_ui.app import Editor
 from aquakin_ui.document import edge_id
 from aquakin_ui.settings import Settings
 from aquakin_ui.worker import WorkerError
+from tests.conftest import study_project as _study_project
 
 from .conftest import PROJECTS
-from .conftest import study_project as _study_project
 from .inprocess import InProcessWorker
 
 

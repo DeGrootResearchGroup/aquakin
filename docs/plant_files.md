@@ -215,6 +215,13 @@ you edit and lists any errors.
   `extends:`) or influent table from outside the project folder into it. Save
   refuses to overwrite a flowsheet that changed on disk since the window opened
   it, so two windows cannot silently undo each other's work.
+- The editor follows the project folder as other programs change it (an
+  [AI assistant](ai_assistants.md), a text editor, another window). When the
+  open flowsheet's file changes, the editor shows the new version, keeping your
+  view. If you have unsaved edits it asks first: discard them for the new
+  version, or keep them (Save then refuses to write over the file; save under
+  another name). When a study is added, edited or finishes, the Studies tab is
+  updated.
 - Opening another file while the flowsheet has unsaved edits asks first (save
   them, or discard them). **Undo** takes back the last edits: a removed unit or
   wire, a move, a new unit or wire, or an applied form. Delete removes the
@@ -269,6 +276,7 @@ Installing aquakin installs two commands:
 | `aquakin study unfreeze <study> --discard-results` | makes it follow the flowsheet again and deletes its results |
 | `aquakin study copy <study> <name>` | copies the study, results included, beside it under `<name>`, and prints the new folder |
 | `aquakin catalog` | prints every unit kind a flowsheet file may use, with its settings and ports, as JSON |
+| `aquakin mcp` | serves aquakin's tools to an AI assistant (see [Using aquakin from an AI assistant](ai_assistants.md)) |
 | `aquakin-ui [<flowsheet>] [--port <n>] [--no-browser]` | opens the editor; `--port` serves it on a fixed port (by default a free one), and `--no-browser` prints the address instead of opening a browser |
 
 `<study>` is the study's folder, such as `studies/effluent`. A command that
