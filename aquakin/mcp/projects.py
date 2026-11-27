@@ -75,9 +75,9 @@ def list_studies(project: str) -> list[dict]:
 
 
 def study_settings() -> dict:
-    """Describe every kind of study (simulate, fisher, calibrate, profile, rank)
-    and every setting a study can have: its type, default, help, which kinds
-    use it and which are required.
+    """Describe every kind of study (simulate, fisher, calibrate, profile, rank,
+    posterior) and every setting a study can have: its type, default, help,
+    which kinds use it and which are required.
 
     Returns
     -------

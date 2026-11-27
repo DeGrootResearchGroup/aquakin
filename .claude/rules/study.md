@@ -12,7 +12,8 @@ paths:
 
 A study is one analysis of a flowsheet project, saved in the project with its
 results; a `calibrate`, `profile` or `fisher` study may instead study a batch
-reactor (`reactor:`, below). The design and the owner's decisions are in
+reactor (`reactor:`, below), and a `posterior` study samples another study's
+fit (`fit:`, below). The design and the owner's decisions are in
 `.claude/notes/studies-design.md`; this file is how the code realizes them.
 
 ## Modules
@@ -72,8 +73,9 @@ take from it.
   when changing `aquakin/utils/composition.py`, or measured channels (TN, COD)
   break in frozen studies.
 - **A kind is one entry in each registry**, all keyed by `KINDS` (which
-  `_Study.kind` accepts): its runner in `_RUNNERS` (`_run_<kind>(plant, folder,
-  study, params, y0, out, progress)`), its required fields in `_REQUIRED`
+  `_Study.kind` accepts): its runner in `_RUNNERS` (`(folder, study, out,
+  progress) -> files`; a flowsheet kind's is its `_PLANT_RUNNERS` analysis
+  wrapped by `_on_plant`, which builds the plant), its required fields in `_REQUIRED`
   (`simulate`'s are `()`: it needs streams or observables, checked in
   `_check_kind`), its form entry in `form._KINDS`, its result reader in
   `form._READERS`, and its view in `aquakin_ui/results.py` (`ANALYSIS_VIEWS`, or
@@ -104,6 +106,9 @@ take from it.
     (`write_table`) and `profile.yaml` (MLE, interval).
   - `rank`: `candidates` (named sensor sets) and optional `base`;
     `ranking.csv`.
+  - `posterior`: `fit` (a calibrate study's name) and the sampler's settings;
+    `draws.csv` (one column per fitted parameter, the chains stacked),
+    `posterior.yaml` (per parameter optimum, mean, std, quantiles, R-hat, ESS).
   Data and initial-state files are part of the study's fingerprint.
   A new kind adds a runner, its required fields, a form entry, a reader, a view
   in `aquakin_ui`, and a test in `tests/integration/test_study.py`.
@@ -124,8 +129,8 @@ take from it.
   `grid`, `t_obs`, `time_unit`, ...). Share the analysis code: the fit options,
   the data reading and the Fisher / profile writers are `analysis.py`'s, called
   by both targets' runners; never copy a plant runner for the reactor.
-- **Dispatch on the target in one place**: `run_study` calls
-  `_run_plant_study` or `run_reactor_study`, and `_inputs` gives either
+- **Dispatch on the target in one place**: `_run_held` calls
+  `run_reactor_study` for a reactor study and `_RUNNERS[kind]` otherwise, and `_inputs` gives either
   target's `spec_inputs` / `spec_fingerprint` (the reactor's: `model:<reactor.model>`
   and `data:<file name>`), so `run.yaml`, staleness, `results.partial/` and
   `frozen.yaml` are the same code for both.
@@ -138,6 +143,23 @@ take from it.
   `update_study` store a project-relative or absolute one relative to it and
   copy each experiment's table in. A frozen study reads the snapshot's model and
   tables (`frozen=` on the `reactor.py` functions).
+## The posterior kind (owner's decisions on #932)
+
+- **A posterior study samples a calibrate study, named by `fit:`**, and has no
+  target of its own (`study_form` marks it `flowsheet: false`; `list_studies`
+  gives `flowsheet: None`). It refuses a fit that is not fresh or is running
+  (`_fresh_fit`).
+- **Its run re-enters the fit at the saved optimum** (`OptimizerConfig` with
+  that one start, Laplace on) through the calibrate study's own fit code
+  (`_fit_plant`, `reactor._fit`), because the sampler needs the fit record a
+  saved calibration lacks. Never rebuild the objective a second way.
+- **Its inputs are the fit's** (`_posterior_inputs`: the calibrate study's
+  inputs, settings and results hash under `fit/`), so refitting or editing the
+  calibrate study makes the posterior stale. Freezing puts a frozen copy of the
+  calibrate study, results included, in `snapshot/fit/` (`_freeze_posterior`).
+
+## Running
+
 - **A run builds its plant with `Plant.from_spec`** and never keeps a `Plant`
   between runs: rebuilt plants of one spec share their compiled solves
   (`.claude/rules/plant-solve.md`), so a repeat run compiles nothing, while a

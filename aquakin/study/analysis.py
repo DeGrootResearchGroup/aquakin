@@ -14,9 +14,11 @@ from typing import TYPE_CHECKING
 import yaml
 
 from aquakin.study.common import (
+    DRAWS_FILE,
     FISHER_FILE,
     FISHER_SUMMARY_FILE,
     PARAMETERS_FILE,
+    POSTERIOR_FILE,
     PROFILE_FILE,
     PROFILE_SUMMARY_FILE,
     StudyError,
@@ -57,18 +59,24 @@ def _flattened(ref, name: str, base_dir: Path) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
-def _fit_options(study: _Study) -> dict:
+def _fit_options(study: _Study, start=None) -> dict:
     """The settings of a study's fit that do not depend on what it fits: the
     transforms, the likelihood with its measurement error, the priors and the
-    optimizer."""
+    optimizer. With ``start`` (a full parameter vector), the optimizer starts
+    there alone, in place of the study's starts: how a posterior study re-enters
+    a saved fit at its optimum without changing what is fitted."""
     from aquakin import OptimizerConfig
 
+    if start is None:
+        optimizer = OptimizerConfig(n_starts=study.n_starts, max_iter=study.max_iter)
+    else:
+        optimizer = OptimizerConfig(starts=[start], max_iter=study.max_iter)
     return dict(
         transforms=dict(study.transforms) or None,
         loss="nll",
         sigma=_fit_sigma(study),
         use_priors=study.use_priors,
-        optimizer=OptimizerConfig(n_starts=study.n_starts, max_iter=study.max_iter),
+        optimizer=optimizer,
     )
 
 
@@ -173,3 +181,56 @@ def _write_profile_files(out: Path, study: _Study, prof) -> list[Path]:
     }
     written.append(write_yaml(out / PROFILE_SUMMARY_FILE, summary))
     return written
+
+
+def _write_posterior_files(out: Path, study: _Study, samples, fit) -> list[Path]:
+    """Write a posterior study's ``draws.csv`` (every draw of every chain, by
+    parameter name) and ``posterior.yaml`` (the sampler's settings, each
+    parameter's optimum, mean, standard deviation, 5 / 50 / 95 % quantiles,
+    R-hat and effective sample size, and each chain's acceptance rate)."""
+    import numpy as np
+
+    from aquakin.utils.result_files import write_table
+
+    n_chains, n_draws = samples.chains.shape[:2]
+    names = list(samples.parameter_names)
+    values = {n: np.asarray(samples.params_named[n], dtype=float) for n in names}
+    draws = {
+        "chain": [c for c in range(n_chains) for _ in range(n_draws)],
+        "draw": [d for _ in range(n_chains) for d in range(n_draws)],
+        **{n: [float(x) for x in values[n]] for n in names},
+    }
+    parameters = {}
+    for n in names:
+        v = values[n]
+        q05, q50, q95 = (float(x) for x in np.quantile(v, [0.05, 0.5, 0.95]))
+        parameters[n] = {
+            "optimum": float(fit.params_named[n]),
+            "mean": float(v.mean()),
+            "std": float(v.std(ddof=1)),
+            "q05": q05,
+            "q50": q50,
+            "q95": q95,
+            "r_hat": float(samples.r_hat[n]),
+            "ess_bulk": float(samples.ess_bulk[n]),
+        }
+    summary = {
+        "fit": study.fit,
+        "n_chains": n_chains,
+        "n_draws": n_draws,
+        "n_warmup": study.n_warmup,
+        "seed": study.seed,
+        "prior_space": study.prior_space,
+        "parameters": parameters,
+        "acceptance_rate": [float(a) for a in samples.acceptance_rate],
+    }
+    return [write_table(out / DRAWS_FILE, draws), write_yaml(out / POSTERIOR_FILE, summary)]
+
+
+def _sampler(study: _Study):
+    """The sampler settings of a posterior study."""
+    from aquakin import SamplerConfig
+
+    return SamplerConfig(
+        n_chains=study.n_chains, n_draws=study.n_draws, n_warmup=study.n_warmup, seed=study.seed
+    )

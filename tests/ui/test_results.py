@@ -144,3 +144,54 @@ def test_each_analysis_is_shown_as_tables_and_charts():
         )["lines"][0]
     )
     assert analysis_view({"kind": "calibrate"}) == {"lines": [], "tables": [], "charts": []}
+
+
+def test_a_posterior_shows_its_parameters_diagnostics_and_histograms():
+    from aquakin_ui.results import ESS_FLOOR, R_HAT_LIMIT, analysis_view
+
+    parameter = {
+        "optimum": 2.0,
+        "mean": 2.01,
+        "std": 0.05,
+        "q05": 1.92,
+        "q50": 2.01,
+        "q95": 2.09,
+        "r_hat": 1.002,
+        "ess_bulk": 840.0,
+    }
+    summary = {
+        "fit": "fit",
+        "n_chains": 4,
+        "n_draws": 1000,
+        "prior_space": "transformed",
+        "acceptance_rate": [0.3, 0.25],
+        "parameters": {"m.a": parameter},
+    }
+    view = analysis_view(
+        {
+            "kind": "posterior",
+            "summary": summary,
+            "histograms": {"m.a": {"edges": [1.9, 2.0, 2.1], "counts": [3, 7]}},
+        }
+    )
+    assert view["lines"] == [
+        "4 chains of 1000 draws each, sampling the fit of fit (prior flat in the transformed "
+        "coordinates). Acceptance rate per chain: 0.3000, 0.2500."
+    ]
+    assert view["tables"][0]["columns"][0] == "parameter"
+    assert view["tables"][0]["rows"] == [
+        ["m.a", "2.000", "2.010", "0.05000", "1.920", "2.010", "2.090", "1.002", "840.0"]
+    ]
+    (chart,) = view["charts"]
+    assert chart["channel"] == "m.a" and "Posterior of m.a" in chart["svg"]
+
+    # Draws that fail the diagnostics are flagged, naming each parameter.
+    poor = {**parameter, "r_hat": R_HAT_LIMIT + 0.05, "ess_bulk": ESS_FLOOR - 1}
+    flagged = analysis_view(
+        {"kind": "posterior", "summary": {**summary, "parameters": {"m.a": poor, "m.b": parameter}}}
+    )
+    assert flagged["lines"][1] == (
+        "Not enough to rely on yet: R-hat above 1.01 for m.a; fewer than 100 effective draws "
+        "for m.a. Run it again with more draws."
+    )
+    assert flagged["charts"] == []

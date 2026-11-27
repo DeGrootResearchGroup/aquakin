@@ -46,6 +46,7 @@ from aquakin.study.analysis import (
     _fit_options,
     _flattened,
     _read_observations,
+    _sampler,
     _write_fisher_files,
     _write_profile_files,
 )
@@ -341,12 +342,14 @@ def observed_data(folder: Path, study: _Study) -> tuple[np.ndarray, dict] | None
     return _on_one_grid(series) if series else None
 
 
-def _run_calibrate(batch: _Batch, folder, study, out: Path, frozen: bool, progress) -> list[Path]:
+def _fit(batch: _Batch, folder, study, frozen: bool, start=None):
+    """A calibrate study's fit of its reactor: ``(result, data)``, ``data`` each
+    experiment's ``(t, observations)``. With ``start`` (the saved optimum), it
+    re-enters the fit there, with a Laplace posterior whatever the study asks,
+    for a posterior study to sample."""
     from aquakin import calibrate
-    from aquakin.progress import report
 
     data = _observations(folder, study, frozen)
-    report(progress, "fit", 0, 1, "fitting")
     result = calibrate(
         batch.reactor,
         batch.initial,
@@ -355,9 +358,17 @@ def _run_calibrate(batch: _Batch, folder, study, out: Path, frozen: bool, progre
         list(study.free),
         initial_params=batch.params,
         observed_species=list(study.observed),
-        laplace=study.laplace,
-        **_fit_options(study),
+        laplace=study.laplace or start is not None,
+        **_fit_options(study, start),
     )
+    return result, data
+
+
+def _run_calibrate(batch: _Batch, folder, study, out: Path, frozen: bool, progress) -> list[Path]:
+    from aquakin.progress import report
+
+    report(progress, "fit", 0, 1, "fitting")
+    result, data = _fit(batch, folder, study, frozen)
     report(progress, "fit", 1, 1, "writing the results")
     result.save(out)
     written = sorted(out.iterdir())
@@ -449,3 +460,45 @@ def run_reactor_study(folder: Path, study: _Study, out: Path, progress) -> list[
     frozen = (folder / FROZEN_FILE).is_file()
     batch = _set_up(folder, study, frozen)
     return _RUNNERS[study.kind](batch, folder, study, out, frozen, progress)
+
+
+def sample_reactor_fit(fit_folder: Path, fit_study: _Study, start, posterior: _Study, progress):
+    """Sample the posterior of a reactor calibrate study's fit, for a posterior
+    study: re-enter the fit at its saved optimum ``start`` (the same reactor,
+    data and settings), then sample.
+
+    Parameters
+    ----------
+    fit_folder : pathlib.Path
+        The calibrate study's folder.
+    fit_study : _Study
+        Its settings.
+    start : array
+        Its saved optimum, the full parameter vector.
+    posterior : _Study
+        The posterior study: the sampler's settings.
+    progress : callable or None
+        Called with each :class:`aquakin.Progress` report.
+
+    Returns
+    -------
+    tuple
+        ``(result, samples)``: the re-entered fit and its
+        :class:`~aquakin.PosteriorSamples`.
+    """
+    from aquakin import sample_posterior
+    from aquakin.progress import report
+
+    report(progress, "setup", 0, None, "building the reactor")
+    frozen = (fit_folder / FROZEN_FILE).is_file()
+    batch = _set_up(fit_folder, fit_study, frozen)
+    report(progress, "fit", 0, 1, "re-entering the fit at its optimum")
+    result, _ = _fit(batch, fit_folder, fit_study, frozen, start)
+    samples = sample_posterior(
+        result,
+        batch.reactor,
+        config=_sampler(posterior),
+        prior_space=posterior.prior_space,
+        progress=progress,
+    )
+    return result, samples

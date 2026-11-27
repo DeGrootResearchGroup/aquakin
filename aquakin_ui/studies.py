@@ -399,7 +399,9 @@ def _write_study(self: Editor, form: dict, name: str, kind: str, draft: dict) ->
             study["flowsheet"] = self._study_flowsheet
         work = lambda: self.worker.request("update_study", path=editing, study=study)
     else:
-        study["flowsheet"] = str(self._spec_file())
+        # Only a kind that runs on a flowsheet names one (a posterior runs on its fit's).
+        if next((k for k in form["kinds"] if k["kind"] == kind), {}).get("flowsheet", True):
+            study["flowsheet"] = str(self._spec_file())
         project = str(self._project())
         work = lambda: self.worker.request("create_study", project=project, name=name, study=study)
 

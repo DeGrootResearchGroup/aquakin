@@ -153,9 +153,10 @@ weighted sum of your own; see
 [A channel of your own](plant_calibration.md#a-channel-of-your-own).
 
 Besides `simulate`, a study can be a `fisher` information of a sensor design, a
-`calibrate` fit to observations, a `profile` likelihood of one parameter, or a
+`calibrate` fit to observations, a `profile` likelihood of one parameter, a
 `rank` of candidate sensor sets (the methods are described in
-[Designing experiments](experiment_design.md)).
+[Designing experiments](experiment_design.md)), or a `posterior` sample of a
+calibration's uncertainty (below).
 A fit reads its observations from a CSV table in the study folder, a `t` column
 and one `<stream>.<channel>` column per measured channel. Because it fits the
 likelihood of the data, it needs each channel's measurement error: `sigma`, one
@@ -172,6 +173,28 @@ study:
   sigma: [0.2, 2.0]       # each channel's measurement error
   laplace: true
 ```
+
+A `posterior` study draws from the posterior of a `calibrate` study's fit by
+Markov chain Monte Carlo ([Sampling the posterior](fit_uncertainty.md#sampling-the-posterior)),
+on that study's plant or reactor, data and settings. It names the calibrate
+study of the same project, whose results must be fresh:
+
+```yaml
+study:
+  kind: posterior
+  fit: calibration        # the calibrate study, studies/calibration
+  n_chains: 4
+  n_draws: 1000
+  n_warmup: 500
+```
+
+It writes every draw (`draws.csv`) and, per parameter, the optimum, mean,
+standard deviation, 5 / 50 / 95 % quantiles, R-hat and effective sample size
+(`posterior.yaml`). Check that every R-hat is below about 1.01 and the
+effective sample sizes are large enough before using the draws; the editor
+flags those that are not. The study goes stale when its calibrate study is run
+again or changed, and freezing it keeps a frozen copy of the calibrate study,
+results included.
 
 A study follows the flowsheet: once a setting, a connection, a model or an
 influent table it was run on changes, `check` reports it **stale** and names
