@@ -298,3 +298,113 @@ placement = aquakin.design_from_candidates(
     sensors, budget=4, subset=["q3"], required=["node 0"],
 )
 ```
+
+## Telling two models apart
+
+The designs above sharpen the parameters of one model. When two model
+structures both fit the data in hand, such as two rate laws or a mechanism with
+and without an extra pathway (see
+[Comparing model structures](fit_uncertainty.md#comparing-model-structures)),
+the next experiment should rather be the one whose outcome tells them apart:
+it samples where the two models' predictions differ by more than the
+measurement noise and the uncertainty of their fitted parameters can explain.
+
+`aquakin.optimize_discrimination` designs that experiment, and
+`aquakin.rank_discrimination` scores candidate experiments for it. Each model
+is passed as a reactor with its calibration. For a design with predictions
+`y1` and `y2` of the observed quantities, each model at its fitted parameters,
+the default criterion, Buzzi-Ferraris (also called Box-Hill), is
+
+$$
+T = (y_1 - y_2)^\top \left(2\Sigma + V_1 + V_2\right)^{-1} (y_1 - y_2)
+$$
+
+where `Σ` is the diagonal measurement-noise covariance and `Vi` is the
+covariance of model `i`'s predictions under its Laplace posterior (its
+sensitivities to the fitted parameters times the fit's `posterior_cov`). A gap
+where a model's prediction is itself uncertain counts for less.
+`criterion="hunter_reiner"` leaves out `V1` and `V2` and weighs the gap by the
+noise alone, `(y1 - y2)ᵀ (2Σ)⁻¹ (y1 - y2)`; it needs no posterior. Larger is
+better for both. A T-optimal criterion, which judges a design by how badly the
+wrong model would fit the data it produces, is planned as a further option.
+
+`Σ` comes from the fits: each fit's `sigma_estimate`, or the `sigma` it was
+fitted with, averaged as variances over the two fits. Pass `sigma=` to set it
+yourself, for example for a new measurement method. The two models must have
+the same species and their fits must observe the same quantities; each
+experiment measures what the fits observed, so its `sigma` is not used.
+
+Here first-order and second-order decay of `A` are both fitted to early
+measurements of a first-order decay. Over the measured window the two curves
+agree to within the noise, so the data cannot choose between them:
+
+```yaml
+# first_order.yaml
+model: {name: first_order, version: "1.0", description: "A -> B, first order", references: []}
+species:
+  - {name: A, units: mol/L, default_concentration: 1.0}
+  - {name: B, units: mol/L, default_concentration: 0.0}
+conditions:
+  - {name: T, default: 293.15}
+reactions:
+  - name: decay
+    rate: "k * [A]"
+    parameters: {k: {value: 0.1, units: "s-1"}}
+    stoichiometry: {A: -1, B: +1}
+```
+
+```yaml
+# second_order.yaml
+model: {name: second_order, version: "1.0", description: "A -> B, second order", references: []}
+species:
+  - {name: A, units: mol/L, default_concentration: 1.0}
+  - {name: B, units: mol/L, default_concentration: 0.0}
+conditions:
+  - {name: T, default: 293.15}
+reactions:
+  - name: decay
+    rate: "k * [A] * [A]"
+    parameters: {k: {value: 0.1, units: "L/mol/s"}}
+    stoichiometry: {A: -1, B: +1}
+```
+
+```python
+first = aquakin.load_model_from_file("first_order.yaml")
+second = aquakin.load_model_from_file("second_order.yaml")
+reactor1 = aquakin.BatchReactor(first, first.default_conditions())
+reactor2 = aquakin.BatchReactor(second, second.default_conditions())
+
+C0_ab = jnp.array([1.0, 0.0])
+t_early = jnp.linspace(0.2, 2.0, 8)                   # seconds
+a_obs = jnp.exp(-0.3 * t_early) + 0.01 * np.random.default_rng(1).standard_normal(8)
+fit_kw = dict(observed_species=["A"], loss="nll", sigma=0.01)
+fit1 = aquakin.calibrate(reactor1, C0_ab, a_obs, t_early, ["decay.k"], **fit_kw)
+fit2 = aquakin.calibrate(reactor2, C0_ab, a_obs, t_early, ["decay.k"], **fit_kw)
+
+discriminating = aquakin.optimize_discrimination(
+    (reactor1, fit1), (reactor2, fit2),
+    aquakin.Experiment(C0_ab, t_obs=jnp.array([1.0, 1.5, 2.0]), sigma=0.01),
+    design=aquakin.DesignConfig(time_bounds=(0.1, 30.0), min_spacing=0.5),
+)
+discriminating.experiments[0].t_obs    # all three samples move past 5 s
+```
+
+% invisible-code-block: python
+%     assert discriminating.value > 10 * discriminating.initial_value
+%     assert bool(jnp.all(discriminating.experiments[0].t_obs > 5.0))
+
+The samples move to late times, where first-order decay has run further than
+second-order decay. `DesignConfig` holds the controls `optimize_experiment`
+takes as keywords: `optimize_times`, `time_bounds`, `min_spacing`,
+`initial_bounds` (to search the initial concentrations too), `max_iter` and
+`tol`. To choose between experiments you could run, rank them instead:
+
+```python
+choices = [aquakin.Experiment(C0_ab, t_obs=t, sigma=0.01)
+           for t in (jnp.array([0.5, 1.0, 1.5]), jnp.array([6.0, 9.0, 12.0]))]
+ranked = aquakin.rank_discrimination((reactor1, fit1), (reactor2, fit2), choices)
+ranked[0].index      # 1: the late samples
+```
+
+% invisible-code-block: python
+%     assert ranked[0].index == 1 and ranked[0].value > ranked[1].value
