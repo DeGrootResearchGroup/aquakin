@@ -20,56 +20,43 @@ from aquakin.mcp import server as mcp_server
 from aquakin.plant.catalog import catalog, shipped_models
 from aquakin.plant.spec import check_spec, load_spec_file
 from tests.conftest import EXAMPLES, FIXTURES
+from tests.integration.mcp_client import call as _call
+from tests.integration.mcp_client import session as _session
+from tests.integration.mcp_client import value as _value
 
 BSM1 = EXAMPLES / "projects" / "bsm1" / "flowsheet.yaml"
 
 
-def _session(calls):
-    """Run ``calls(client)`` against the server, in process; return its result."""
-
-    async def run():
-        async with Client(mcp_server.build_server()) as client:
-            return await calls(client)
-
-    return asyncio.run(run())
+#: What each effect tells the user's app: (read only, may destroy, idempotent).
+_HINTS = {
+    "read": (True, False, True),
+    "write": (False, False, False),
+    "overwrite": (False, True, False),
+}
 
 
-def _call(tool: str, **arguments):
-    """One tool call: ``(is_error, text of the first content block)``."""
-
-    async def calls(client):
-        result = await client.call_tool(tool, arguments)
-        return result.is_error, result.content[0].text
-
-    return _session(calls)
-
-
-def _value(tool: str, **arguments):
-    """A tool call that must succeed, its answer as data.
-
-    The SDK sends a list (one content block per item) with a structured copy
-    under ``"result"``, and a dict as one JSON text block."""
-
-    async def calls(client):
-        return await client.call_tool(tool, arguments)
-
-    result = _session(calls)
-    assert not result.is_error, result.content[0].text
-    if result.structured_content is not None:
-        return result.structured_content["result"]
-    return json.loads(result.content[0].text)
-
-
-def test_every_tool_is_listed_read_only_with_its_whole_docstring():
+def test_every_tool_is_listed_with_its_whole_docstring_and_its_effect():
     async def calls(client):
         return (await client.list_tools()).tools
 
     tools = _session(calls)
-    assert [t.name for t in tools] == [fn.__name__ for fn in mcp_server.TOOLS]
-    for tool, fn in zip(tools, mcp_server.TOOLS, strict=True):
+    assert [t.name for t in tools] == [fn.__name__ for fn, _ in mcp_server.TOOLS]
+    for tool, (fn, effect) in zip(tools, mcp_server.TOOLS, strict=True):
         assert tool.description == mcp_server.inspect.getdoc(fn)
-        assert tool.annotations.read_only_hint is True
-        assert tool.annotations.destructive_hint is False
+        a = tool.annotations
+        assert (a.read_only_hint, a.destructive_hint, a.idempotent_hint) == _HINTS[effect]
+        assert a.open_world_hint is False
+
+
+def test_tools_that_can_replace_or_delete_are_marked_destructive():
+    effects = {fn.__name__: effect for fn, effect in mcp_server.TOOLS}
+    assert {name for name, e in effects.items() if e == "overwrite"} == {
+        "write_flowsheet",
+        "update_study",
+        "run_study",
+        "unfreeze_study",
+    }
+    assert effects["check_flowsheet"] == "read" and effects["create_study"] == "write"
 
 
 def test_the_server_names_itself_and_says_how_to_use_its_tools():
@@ -219,6 +206,6 @@ def test_the_aquakin_mcp_command_answers_over_standard_input_and_output():
             return [t.name for t in tools], result
 
     names, result = asyncio.run(run())
-    assert names == [fn.__name__ for fn in mcp_server.TOOLS]
+    assert names == [fn.__name__ for fn, _ in mcp_server.TOOLS]
     assert not result.is_error
     assert json.loads(result.content[0].text)["kind"] == "mixer"

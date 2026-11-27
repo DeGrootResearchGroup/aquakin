@@ -1,12 +1,12 @@
 """The ``aquakin mcp`` server: aquakin's tools for an AI assistant.
 
-Each tool is a plain function in this module, calling the same aquakin
-function the ``aquakin serve`` worker calls for the editor (the unit
-catalogue, :func:`~aquakin.plant.spec.check_spec`, ...), so the assistant and
-the editor see one implementation. :func:`build_server` registers them on an
-MCP server; only it needs the ``mcp`` package.
-
-Every tool here only reads: none writes a file or runs a long solve.
+Each tool is a plain function, calling the same aquakin function the ``aquakin
+serve`` worker calls for the editor (the unit catalogue,
+:func:`~aquakin.plant.spec.check_spec`, :mod:`aquakin.study`, ...), so the
+assistant and the editor see one implementation. The tools that only read are
+here; those that write a flowsheet or create, edit and run studies are in
+:mod:`aquakin.mcp.projects`. :func:`build_server` registers them all on an MCP
+server; only it needs the ``mcp`` package.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import inspect
 import re
 from importlib.resources import files
 
-from aquakin.mcp import api, docs
+from aquakin.mcp import api, docs, projects
 
 #: What the assistant is told about the server when it connects.
 INSTRUCTIONS = """\
@@ -32,6 +32,15 @@ the functions you use (list_api, describe_api) rather than guessing names or
 arguments. Check a flowsheet with check_flowsheet, and a single unit's
 settings with check_unit, before relying on it. Model and unit names come from
 list_models and list_unit_kinds.
+
+A project is a folder holding a flowsheet file and its studies (studies/<name>/).
+write_flowsheet writes a flowsheet; a study is one analysis of it (simulate,
+fisher, calibrate, profile, rank: study_settings lists each kind's settings,
+study_choices what a study may name). run_study starts a run in the background
+and returns at once: poll study_status until it is no longer running, then read
+study_results. A user may have the project open in the aquakin editor, which
+shows each change as it is written. Never replace a file or results
+(replace=true, discard_results=true) unless the user asked for it.
 """
 
 
@@ -318,22 +327,39 @@ def describe_api(name: str) -> dict:
     return api.describe_api(name)
 
 
-#: Every tool, in the order an assistant is shown them.
+#: Every tool, in the order an assistant is shown them, with what it may do to
+#: the user's files (see :data:`aquakin.mcp.projects.TOOLS`).
 TOOLS = (
-    list_models,
-    describe_model,
-    read_model_file,
-    list_unit_kinds,
-    describe_unit_kind,
-    check_unit,
-    read_flowsheet,
-    check_flowsheet,
-    list_doc_pages,
-    search_docs,
-    read_doc_page,
-    list_api,
-    describe_api,
+    *(
+        (fn, "read")
+        for fn in (
+            list_models,
+            describe_model,
+            read_model_file,
+            list_unit_kinds,
+            describe_unit_kind,
+            check_unit,
+            read_flowsheet,
+            check_flowsheet,
+            list_doc_pages,
+            search_docs,
+            read_doc_page,
+            list_api,
+            describe_api,
+        )
+    ),
+    *projects.TOOLS,
 )
+
+
+def _annotations(effect: str) -> dict:
+    """The MCP hints for a tool's effect, so the user's app knows which calls
+    only read and which may replace or delete what is there."""
+    return {
+        "read": dict(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
+        "write": dict(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
+        "overwrite": dict(read_only_hint=False, destructive_hint=True, idempotent_hint=False),
+    }[effect]
 
 
 def _reported(fn, tool_error):
@@ -378,14 +404,13 @@ def build_server():
     from aquakin import __version__
 
     server = MCPServer(name="aquakin", version=__version__, instructions=INSTRUCTIONS)
-    read_only = ToolAnnotations(
-        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
-    )
-    for fn in TOOLS:
+    for fn, effect in TOOLS:
         # The whole docstring: its Parameters section is how the assistant
         # learns what each argument means.
         server.add_tool(
-            _reported(fn, ToolError), description=inspect.getdoc(fn), annotations=read_only
+            _reported(fn, ToolError),
+            description=inspect.getdoc(fn),
+            annotations=ToolAnnotations(open_world_hint=False, **_annotations(effect)),
         )
     return server
 
