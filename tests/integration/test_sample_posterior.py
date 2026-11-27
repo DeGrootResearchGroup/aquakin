@@ -441,6 +441,26 @@ def test_same_seed_gives_the_same_draws(reactor, k_fit):
     assert not np.array_equal(first.chains, other.chains)
 
 
+def test_progress_reports_each_step_and_a_cancel_stops_the_chains(reactor, k_fit):
+    """``progress`` sees every step of the chains (warm-up, then drawing) and
+    leaves the draws as they are without it; raising ``Cancelled`` from it
+    stops the sampling."""
+    config = aquakin.SamplerConfig(n_chains=2, n_draws=6, n_warmup=4, seed=3)
+    seen = []
+    with_progress = aquakin.sample_posterior(k_fit, reactor, config=config, progress=seen.append)
+    without = aquakin.sample_posterior(k_fit, reactor, config=config)
+    np.testing.assert_array_equal(with_progress.chains, without.chains)
+    assert [(p.stage, p.done, p.total) for p in seen] == [("sample", i, 10) for i in range(1, 11)]
+    assert [p.message for p in seen] == ["warm-up"] * 4 + ["drawing"] * 6
+
+    def stop(p):
+        if p.done == 3:
+            raise aquakin.Cancelled()
+
+    with pytest.raises(aquakin.Cancelled, match=r"^$"):  # Cancelled carries no message
+        aquakin.sample_posterior(k_fit, reactor, config=config, progress=stop)
+
+
 def test_predictive_band_propagates_given_draws(reactor, k_fit):
     """``predictive_band(draws=)`` propagates exactly the given parameter
     vectors: its percentiles are those of the closed-form decay ``A(t) =
@@ -589,7 +609,9 @@ def test_plant_posterior_agrees_with_laplace_on_the_single_cstr(cstr_plant):
         laplace=aquakin.LaplaceConfig(method="gauss_newton"),
     )
     config = aquakin.SamplerConfig(n_chains=2, n_draws=200, n_warmup=100, seed=0)
-    samples = plant.sample_posterior(result, config=config)
+    seen = []
+    samples = plant.sample_posterior(result, config=config, progress=seen.append)
+    assert [p.done for p in seen] == list(range(1, 301)) and seen[-1].total == 300
 
     log_k = np.log(samples.params_named[name])
     sd = float(np.sqrt(result.posterior_cov[0, 0]))

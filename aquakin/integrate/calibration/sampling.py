@@ -54,6 +54,7 @@ from aquakin.integrate.calibration.multistart import _is_solve_failure, _optimiz
 from aquakin.integrate.calibration.objective import _objective_fn
 from aquakin.integrate.calibration.problem import _ReactorForwardModel
 from aquakin.integrate.calibration.result import PosteriorSamples
+from aquakin.progress import report
 
 if TYPE_CHECKING:
     from aquakin.integrate._common import Reactor
@@ -237,7 +238,7 @@ def _start_points(density, theta_map, L, config: SamplerConfig, rng):
     return starts, log_p
 
 
-def _metropolis(density, theta_map, L, config: SamplerConfig):
+def _metropolis(density, theta_map, L, config: SamplerConfig, progress=None):
     """Run the chains.
 
     Parameters
@@ -250,6 +251,9 @@ def _metropolis(density, theta_map, L, config: SamplerConfig):
         The proposal factor from :func:`_proposal_factor`, ``(d, d)``.
     config : SamplerConfig
         Chains, draws, warm-up and seed.
+    progress : callable, optional
+        Called with an :class:`aquakin.Progress` after each step (stage
+        ``"sample"``); raising :class:`aquakin.Cancelled` from it stops the run.
 
     Returns
     -------
@@ -279,6 +283,8 @@ def _metropolis(density, theta_map, L, config: SamplerConfig):
         else:
             chains[:, step - config.n_warmup] = current
             accepted += accept
+        phase = "warm-up" if step < config.n_warmup else "drawing"
+        report(progress, "sample", step + 1, config.n_warmup + config.n_draws, phase)
     return chains, accepted / config.n_draws
 
 
@@ -446,7 +452,7 @@ def _samples_result(problem, params, chains, acceptance) -> PosteriorSamples:
 
 
 def _run_sampler(
-    result: CalibrationResult, fm, config: SamplerConfig, prior_space: str
+    result: CalibrationResult, fm, config: SamplerConfig, prior_space: str, progress=None
 ) -> PosteriorSamples:
     """Sample the posterior of a fitted result through the forward model ``fm``.
 
@@ -466,6 +472,8 @@ def _run_sampler(
     prior_space : {"transformed", "physical"}
         The space the sampled density is a density in (see
         :func:`sample_posterior`).
+    progress : callable, optional
+        As for :func:`sample_posterior`.
 
     Returns
     -------
@@ -483,7 +491,7 @@ def _run_sampler(
     _bounds, lb, ub, _ls, _has = _optimizer_bounds(problem, problem.rate_theta0())
     density = _BatchDensity(_log_density(problem, fm, prior_space), lb, ub)
     L = _proposal_factor(np.asarray(cov, dtype=float))
-    chains, acceptance = _metropolis(density, theta_map, L, config)
+    chains, acceptance = _metropolis(density, theta_map, L, config, progress)
     return _samples_result(problem, result.params, chains, acceptance)
 
 
@@ -493,6 +501,7 @@ def sample_posterior(
     *,
     config: SamplerConfig = SamplerConfig(),
     prior_space: str = "transformed",
+    progress=None,
 ) -> PosteriorSamples:
     """Draw from the posterior of a calibration by Markov chain Monte Carlo.
 
@@ -551,6 +560,10 @@ def sample_posterior(
         flat in the physical rate values (the behaviour of aquakin 0.3.0).
         Either is multiplied by any rate prior of the fit. Default
         ``"transformed"``.
+    progress : callable, optional
+        Called with an :class:`aquakin.Progress` after each step of the chains
+        (stage ``"sample"``, ``total`` the warm-up plus the draws); raising
+        :class:`aquakin.Cancelled` from it stops the sampling.
 
     Returns
     -------
@@ -578,4 +591,4 @@ def sample_posterior(
             "reactor is on a different model from the one the result was calibrated on."
         )
     fm = _ReactorForwardModel(reactor, "jax_adjoint", 0, False)
-    return _run_sampler(result, fm, config, prior_space)
+    return _run_sampler(result, fm, config, prior_space, progress)

@@ -25,6 +25,7 @@ def sample_posterior_plant(
     *,
     config: SamplerConfig = SamplerConfig(),
     prior_space: str = "transformed",
+    progress=None,
 ) -> PosteriorSamples:
     """Draw from the posterior of a plant calibration by Markov chain Monte Carlo.
 
@@ -53,6 +54,9 @@ def sample_posterior_plant(
     prior_space : {"transformed", "physical"}, optional
         The space in which the posterior is a density, as for
         :func:`aquakin.sample_posterior`. Default ``"transformed"``.
+    progress : callable, optional
+        Called after each step of the chains, as for
+        :func:`aquakin.sample_posterior`.
 
     Returns
     -------
@@ -77,4 +81,4 @@ def sample_posterior_plant(
         )
     if fm.plant is not plant:
         raise ValueError("This result was calibrated on a different plant.")
-    return _run_sampler(result, fm, config, prior_space)
+    return _run_sampler(result, fm, config, prior_space, progress)
