@@ -40,3 +40,20 @@ set to ASM2d's alone, lowers it from 11.02: fermentation off (its hydrogen,
 about 17% of the fermented COD, is stripped by the air rather than used for
 denitrification) to 10.78; anaerobic decay as aerobic to 10.86; `etafe` at
 ASM2d's 0.4 to 10.81; all three together to 10.35.
+
+## The nitrite level
+
+`plantwide_nitrite` runs on the same plant, with ASM1's nitrifiers carried over
+as AOB and NOB in the ratio of their yields and phosphate at a non-limiting
+10 g P/m3 (BSM1's influent has none). Tank 5 at its steady state (g/m3):
+
+| | NH4-N | NO2-N | NO3-N | nitrifiers |
+|---|---|---|---|---|
+| core (one-step) | 1.11 | - | 11.02 | 107.7 |
+| nitrite level | 0.22 | 0.15 | 9.35 | 73.7 AOB + 38.8 NOB |
+
+Its AOB grow faster at low ammonium (half-saturation 0.7 against the core
+nitrifiers' 1.0), and its heterotrophs denitrify nitrite as well as nitrate.
+From the steady state the plant's N, P and COD balances close to 1e-13 over
+10 days, the stripped N2 and the oxygen taken up counted
+(`tests/validation/test_plantwide_nitrite_bsm1.py`).
