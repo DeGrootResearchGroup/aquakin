@@ -39,7 +39,11 @@ Run from a clean, green `main`.
 On a release-prep branch:
 
 - [ ] **Version** — set `__version__ = "X.Y.Z"` in `aquakin/__init__.py` (already
-      `0.1.0` for the first release; bump for later ones).
+      `0.1.0` for the first release; bump for later ones), and the same version
+      in the Claude Code plugin: `version` in
+      `plugins/aquakin/.claude-plugin/plugin.json` and the `aquakin[mcp]==X.Y.Z`
+      pin in `plugins/aquakin/.mcp.json` (`tests/unit/test_claude_plugin.py`
+      fails until they match).
 - [ ] **CHANGELOG.md** — the unreleased changes are the fragments in
       `changelog.d/` (one file per entry; see `changelog.d/README.md`). Build
       them into the release's section with towncrier, from the `release` extra:
@@ -105,6 +109,10 @@ On a release-prep branch:
       install `X.Y.Z` with the `constraints.txt` of tag `vX.Y.Z`. Check that
       both are listed under the Release's assets: the user guide's download
       links (`releases/latest/download/…`) serve them.
+- [ ] The **`desktop-extension`** job attaches `aquakin.mcpb`, the Claude
+      Desktop extension of `X.Y.Z` (`scripts/build_mcpb.py`). Check it is listed
+      under the Release's assets, then install it in Claude Desktop (Settings →
+      Extensions → Install Extension) and ask it to list aquakin's models.
 
 ### 5. Post-release verification
 

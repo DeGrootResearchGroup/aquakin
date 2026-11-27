@@ -17,6 +17,7 @@ import re
 from importlib.resources import files
 
 from aquakin.mcp import api, docs, projects
+from aquakin.mcp.scripts import run_python
 
 #: What the assistant is told about the server when it connects.
 INSTRUCTIONS = """\
@@ -41,6 +42,15 @@ and returns at once: poll study_status until it is no longer running, then read
 study_results. A user may have the project open in the aquakin editor, which
 shows each change as it is written. Never replace a file or results
 (replace=true, discard_results=true) unless the user asked for it.
+"""
+
+
+#: Added to :data:`INSTRUCTIONS` when the script tool is offered.
+PYTHON_INSTRUCTIONS = """
+run_python runs a Python script in a project folder, for what no other tool
+does. Look up every function it calls with describe_api first; keep the script
+(save_as) when the user may want to run it again; and prefer a study for an
+analysis a study kind covers. Each run needs the user's approval.
 """
 
 
@@ -382,8 +392,14 @@ def _reported(fn, tool_error):
     return tool
 
 
-def build_server():
+def build_server(*, allow_python: bool = False):
     """The MCP server with every tool of :data:`TOOLS` registered.
+
+    Parameters
+    ----------
+    allow_python : bool, optional
+        Also offer :func:`aquakin.mcp.scripts.run_python`, which runs any
+        Python the assistant writes (``aquakin mcp --allow-python``).
 
     Returns
     -------
@@ -403,8 +419,10 @@ def build_server():
         raise ImportError('aquakin mcp needs the "mcp" extra: pip install "aquakin[mcp]"') from exc
     from aquakin import __version__
 
-    server = MCPServer(name="aquakin", version=__version__, instructions=INSTRUCTIONS)
-    for fn, effect in TOOLS:
+    instructions = INSTRUCTIONS + (PYTHON_INSTRUCTIONS if allow_python else "")
+    server = MCPServer(name="aquakin", version=__version__, instructions=instructions)
+    tools = (*TOOLS, (run_python, "overwrite")) if allow_python else TOOLS
+    for fn, effect in tools:
         # The whole docstring: its Parameters section is how the assistant
         # learns what each argument means.
         server.add_tool(
@@ -415,6 +433,12 @@ def build_server():
     return server
 
 
-def main() -> None:
-    """Run the server over standard input and output until the client closes it."""
-    build_server().run("stdio")
+def main(*, allow_python: bool = False) -> None:
+    """Run the server over standard input and output until the client closes it.
+
+    Parameters
+    ----------
+    allow_python : bool, optional
+        As for :func:`build_server`.
+    """
+    build_server(allow_python=allow_python).run("stdio")

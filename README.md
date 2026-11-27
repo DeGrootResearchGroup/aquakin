@@ -196,7 +196,7 @@ runs on your computer under the assistant's own account; aquakin needs no key.
 
 ```bash
 pip install "aquakin[mcp]"
-claude mcp add aquakin -- aquakin mcp     # Claude Code; other apps: see the guide
+claude mcp add aquakin -- aquakin mcp     # Claude Code; or the plugin and other apps: see the guide
 ```
 
 See [Using aquakin from an AI assistant](https://aquakin.readthedocs.io/en/latest/ai_assistants.html).

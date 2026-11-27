@@ -18,7 +18,28 @@ anything else you type.
 
 ## Installing
 
-Install aquakin with the `mcp` extra:
+**Claude Code.** Install the aquakin plugin, in a Claude Code session:
+
+```text
+/plugin install aquakin --marketplace DeGrootResearchGroup/aquakin
+```
+
+It starts the server for you and adds skills for the common tasks (building a
+flowsheet, running a study, writing a model, analyzing in Python), which you
+can also call as `/aquakin:build-flowsheet` and so on. The plugin runs the
+aquakin release it was published with through
+[uv](https://docs.astral.sh/uv/), which must be installed; the first start
+downloads aquakin and its dependencies (a few hundred MB), once.
+
+**Claude Desktop.** Download
+[aquakin.mcpb](https://github.com/DeGrootResearchGroup/aquakin/releases/latest/download/aquakin.mcpb)
+and open it, or drag it onto Claude Desktop's **Settings → Extensions**
+window, then select **Install**. Claude Desktop installs aquakin and its
+dependencies for the extension the first time it starts (a few hundred MB,
+once). The extension's settings hold the switch that lets Claude run Python
+scripts (see [below](#letting-the-assistant-run-python)).
+
+**Any app, from your own installation.** Install aquakin with the `mcp` extra:
 
 ```bash
 pip install "aquakin[mcp]"
@@ -30,13 +51,13 @@ path of the `aquakin` program in that environment (`which aquakin` on macOS or
 Linux, `where aquakin` on Windows), because the app does not activate the
 environment for you.
 
-**Claude Code.** Run this once, in a terminal:
+**Claude Code without the plugin.** Run this once, in a terminal:
 
 ```bash
 claude mcp add aquakin -- aquakin mcp
 ```
 
-**Claude Desktop.** Open **Settings → Developer → Edit Config**, add aquakin to
+**Claude Desktop without the extension.** Open **Settings → Developer → Edit Config**, add aquakin to
 `mcpServers` in the file that opens, save it, and restart Claude Desktop:
 
 ```json
@@ -80,6 +101,23 @@ once at a time, whichever program started it (see
 In Claude Code, the assistant can also run Python itself, so it can use the
 whole [public API](public_api.md) directly, including analyses no study kind
 covers.
+
+## Letting the assistant run Python
+
+Other apps, Claude Desktop among them, cannot run code themselves. Start the
+server with `aquakin mcp --allow-python` (in the Claude Desktop extension,
+turn on **Let Claude run Python scripts** in its settings; in Claude Desktop's
+config file, `"args": ["mcp", "--allow-python"]`) to add one more tool, `run_python`. With
+it the assistant writes a Python script and runs it in your project folder, so
+it can use any part of aquakin: a reactor fit, a sensitivity analysis, a plot
+saved to a file. The tool returns what the script printed and the files it
+wrote, and can keep the script in the project so you can run it again.
+
+A script can do anything Python can on your computer, so the tool is off
+unless you turn it on, and your app asks before each run. Read the script
+before you approve it. A script is stopped after 5 minutes unless the
+assistant asks for longer (up to an hour); a long analysis is better run as a
+study.
 
 ## Watching in the editor
 

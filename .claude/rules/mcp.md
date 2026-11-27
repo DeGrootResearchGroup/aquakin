@@ -3,6 +3,10 @@ paths:
   - "aquakin/mcp/**"
   - "setup.py"
   - "MANIFEST.in"
+  - "plugins/**"
+  - ".claude-plugin/**"
+  - "packaging/claude-desktop/**"
+  - "scripts/build_mcpb.py"
 ---
 
 # Rules — `aquakin/mcp/` (`aquakin mcp`)
@@ -50,6 +54,41 @@ following the project folder (`aquakin_ui/disk.py`, `.claude/rules/ui.md`).
   the editor and the command line see the same run. `run_study` returns once
   the run holds its study (its own pid in `running.yaml`); the assistant polls
   `study_status`.
+
+## The script tool (`scripts.py`)
+
+- **`run_python` is offered only with `aquakin mcp --allow-python`**
+  (`build_server(allow_python=True)`), and is `"overwrite"`: it runs any code.
+  Never add it to `TOOLS`, and never let another tool run code on its behalf.
+- Run a script in a subprocess with `sys.executable` (so `aquakin` imports),
+  in the project folder, with a timeout and `MPLBACKEND=Agg`; return its output
+  bounded (`OUTPUT_LIMIT`) and the files it wrote. Never write over a file to
+  keep the script (`save_as`), and never outside the project.
+
+## The Claude Code plugin (`plugins/aquakin/`, `.claude-plugin/marketplace.json`)
+
+- **The plugin starts the release it is versioned as**: `plugin.json`'s
+  `version` and the `uvx --from aquakin[mcp]==<version>` pin in `.mcp.json`
+  equal `aquakin.__version__` (`tests/unit/test_claude_plugin.py`). Never pin
+  a range: a plugin and the server it starts are tested together.
+- **Skills point at the tools and the guide; they do not restate them.** Name
+  only tools the server has and guide pages that exist (the same test), and
+  tell the assistant to look an API up with `describe_api` rather than
+  writing signatures into a skill, which would go stale.
+- Never put a `plugin.json` at the repository root (the repository would load
+  as a plugin). Check with `claude plugin validate ./plugins/aquakin` and
+  `claude plugin validate .` after changing either.
+
+## The Claude Desktop extension (`packaging/claude-desktop/`)
+
+- **The template carries no version**: `scripts/build_mcpb.py` stamps the
+  release's version, the `aquakin[mcp]==<version>` requirement and the tool
+  list (read from `TOOLS`) into a copy, and the release workflow packs that
+  after PyPI has the release. Never edit a version or a tool into the
+  template.
+- It uses the MCPB `uv` server type: Claude Desktop builds the environment
+  from `pyproject.toml`. Never bundle packages into it (JAX's wheels are
+  platform-specific).
 
 ## Imports and packaging
 
