@@ -90,6 +90,24 @@ def test_steady_first_order_decay_matches_wehner_wilhelm(simple_model, d):
     assert steady_outlet(simple_model, d) == pytest.approx(wehner_wilhelm(K * TAU, d), rel=1e-4)
 
 
+def test_implicit_solve_from_a_clean_basin_reaches_the_closed_form_steady_state(simple_model):
+    """With the default implicit solver, a basin of clean water fed a step of A from
+    ``t = 0`` reaches the Wehner--Wilhelm outlet after ten residence times.
+
+    The uniform start is flat everywhere, where a limiter without its constant is
+    not differentiable and the solver's Newton iteration stalls; this run then hits
+    the step budget instead of finishing. The end state equals the steady state of
+    the same reactor to the solve's tolerance, and the closed form to the 6e-5
+    discretization error of 50 cells.
+    """
+    reactor = DispersedFlowReactor(simple_model, COND, LENGTH, VELOCITY, 50, dispersion_number=0.1)
+    end = reactor.solve(jnp.zeros(2), (0.0, 10.0 * TAU), inlet={"A": "step(t)"})
+    outlet = float(end.C_named("A")[-1])
+    steady = float(reactor.steady_state(INLET).C_named("A")[0])
+    assert outlet == pytest.approx(steady, rel=1e-5)
+    assert outlet == pytest.approx(wehner_wilhelm(K * TAU, 0.1), rel=1e-4)
+
+
 def test_vanishing_dispersion_reduces_to_the_plug_flow_reactor(simple_model):
     """At ``d = 1e-6`` the outlet equals the PlugFlowReactor's, within the 3e-5 spatial
     error of 200 cells (the PFR integrates the axis adaptively to 1e-8)."""
@@ -219,18 +237,18 @@ def test_fit_dispersion_rejects_a_response_wider_than_a_stirred_tank():
 
 
 def _outlet_after(model, k, d):
-    """Outlet A at t = 15 under a rising inlet, as a function of ``k`` and ``d``."""
+    """Outlet A at t = 10 (half a residence time) under a rising inlet, on 6 cells."""
     reactor = DispersedFlowReactor(
         model,
         COND,
         LENGTH,
         VELOCITY,
-        12,
+        6,
         dispersion_number=d,
-        settings=SolverSettings(rtol=1e-10, atol=1e-12),
+        settings=SolverSettings(rtol=1e-9, atol=1e-11),
     )
     sol = reactor.solve(
-        jnp.zeros(2), (0.0, 15.0), inlet={"A": "1 - exp(-t/5)"}, params=jnp.array([k])
+        jnp.zeros(2), (0.0, 10.0), inlet={"A": "1 - exp(-t/5)"}, params=jnp.array([k])
     )
     return sol.C[-1, 0]
 
@@ -244,7 +262,14 @@ def _steady_outlet(model, k, d):
 def test_gradient_in_k_and_the_dispersion_number_matches_a_central_difference(simple_model, fn):
     """``jax.grad`` through the solve (and the implicit-function-theorem steady state)
     with respect to ``k`` and ``d`` equals a central difference with step 1e-5, whose
-    truncation error is ~1e-10 here; both agree to 1e-6."""
+    truncation error is ~1e-10 here; both agree to 1e-6 (1e-9 measured).
+
+    The ``solve`` case takes about 10 s, nearly all of it compiling the reverse pass
+    of the implicit solve, which a traced call cannot take from the solve cache:
+    measured at 8-11 s for 4, 6 and 12 cells alike, so fewer cells or a shorter
+    span do not shorten it. It stays in the fast tier because it is the only test
+    of the reverse-mode gradient through the transport operator.
+    """
 
     def loss(k, d):
         return fn(simple_model, k, d)
@@ -317,6 +342,7 @@ def test_per_cell_conditions_reach_their_own_cell():
         ({"dispersion": 0.1, "velocity": 0.0}, "velocity must be positive"),
         ({"dispersion": 0.1, "length": -1.0}, "length must be positive"),
         ({"dispersion": 0.1, "n_cells": 0}, "n_cells must be a positive integer"),
+        ({"dispersion": 0.1, "settings": SolverSettings(atol=0.0)}, "atol must be positive"),
     ],
 )
 def test_dispersed_flow_reactor_rejects_bad_construction(simple_model, kwargs, message):

@@ -258,33 +258,40 @@ def green_gauss_gradient(cells, grid: Grid1D, left, right):
     return (faces[1:] - faces[:-1]) / _per_row(grid.widths)
 
 
-def van_albada_slope(a, b):
+def van_albada_slope(a, b, epsilon):
     """The van Albada limited slope of two one-sided gradients.
 
-    ``s = a b (a + b) / (a^2 + b^2)``: the harmonic-like mean of ``a`` and
-    ``b``, equal to both where they agree, falling to zero where either does,
-    and with no constant to tune. It is a smooth function of ``a`` and ``b``
-    away from ``a = b = 0`` (where ``s = 0``), so a gradient through a solve
-    that uses it stays smooth. Written as the van Albada limiter ``phi(r) =
+    ``s = [a (b^2 + eps^2) + b (a^2 + eps^2)] / (a^2 + b^2 + 2 eps^2)``: equal
+    to both gradients where they agree, falling toward zero where they differ
+    in sign, and the central mean ``(a + b) / 2`` where both are small against
+    ``eps``. Where ``|a|, |b| >> eps`` it is the van Albada limiter ``phi(r) =
     (r^2 + r) / (r^2 + 1)``, ``r = a / b``, applied to ``b``.
+
+    ``eps`` is what makes the slope differentiable at ``a = b = 0``. A limiter
+    with no constant is homogeneous of degree one in ``(a, b)``, and such a
+    function is differentiable at the origin only if it is linear, which a
+    limiter is not. Its Jacobian at a flat region (every uniform initial
+    profile) is then wrong, and the Newton iteration of an implicit solver
+    stalls there.
 
     Parameters
     ----------
     a, b : jnp.ndarray
         The upwind-side and downwind-side gradients, the same shape.
+    epsilon : float or jnp.ndarray
+        Positive gradient scale below which a gradient counts as flat,
+        broadcastable to ``a``.
 
     Returns
     -------
     jnp.ndarray
         The limited slope, the shape of ``a``.
     """
-    denominator = a * a + b * b
-    nonzero = denominator > 0
-    # The inner where keeps the division's gradient finite where both vanish.
-    return jnp.where(nonzero, a * b * (a + b) / jnp.where(nonzero, denominator, 1.0), 0.0)
+    eps2 = epsilon * epsilon
+    return (a * (b * b + eps2) + b * (a * a + eps2)) / (a * a + b * b + 2.0 * eps2)
 
 
-def limited_upwind_flux(cells, velocity, grid: Grid1D, left, right, gradient):
+def limited_upwind_flux(cells, velocity, grid: Grid1D, left, right, gradient, epsilon):
     """Second-order upwind advective flux at every face, van Albada limited.
 
     The face value is reconstructed from the upwind cell ``C`` as ``C_f = C_C
@@ -295,7 +302,9 @@ def limited_upwind_flux(cells, velocity, grid: Grid1D, left, right, gradient):
     ``(C_C - C_U) / dx``, and the scheme is the classical limited
     second-order upwind (MUSCL) scheme: second order where the solution is
     smooth and monotone, falling toward first order at extrema and steep
-    fronts, so it does not oscillate. A face whose upwind side is a boundary
+    fronts, so it does not oscillate (gradients below ``epsilon`` are taken
+    as flat and reconstructed centrally, which can over- or undershoot by no
+    more than about ``epsilon`` times the cell width). A face whose upwind side is a boundary
     carries the boundary value.
 
     Parameters
@@ -312,6 +321,9 @@ def limited_upwind_flux(cells, velocity, grid: Grid1D, left, right, gradient):
     gradient : jnp.ndarray
         Cell gradients, shape ``(n_cells, n_species)``, normally
         :func:`green_gauss_gradient` with the same boundary values.
+    epsilon : float or jnp.ndarray
+        The limiter's flat-gradient scale in each cell, broadcastable to
+        ``(n_cells, n_species)`` and positive (see :func:`van_albada_slope`).
 
     Returns
     -------
@@ -323,10 +335,10 @@ def limited_upwind_flux(cells, velocity, grid: Grid1D, left, right, gradient):
     # Gradient across each face, from the node on its left to the one on its right.
     across = (nodes[1:] - nodes[:-1]) / _per_row(grid.face_spacing)
     # Reconstructed from the cell on the left of faces 1..n (flow toward +x) ...
-    toward_right = van_albada_slope(2.0 * gradient - across[1:], across[1:])
+    toward_right = van_albada_slope(2.0 * gradient - across[1:], across[1:], epsilon)
     from_left = cells + toward_right * _per_row(grid.edges[1:] - grid.centres)
     # ... and from the cell on the right of faces 0..n-1 (flow toward -x).
-    toward_left = van_albada_slope(2.0 * gradient - across[:-1], across[:-1])
+    toward_left = van_albada_slope(2.0 * gradient - across[:-1], across[:-1], epsilon)
     from_right = cells + toward_left * _per_row(grid.edges[:-1] - grid.centres)
     from_left = jnp.concatenate([left[None, :], from_left], axis=0)
     from_right = jnp.concatenate([from_right, right[None, :]], axis=0)

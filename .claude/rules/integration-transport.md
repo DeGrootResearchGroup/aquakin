@@ -30,10 +30,13 @@ its derivative.
 ## The scheme
 
 The advective face value is reconstructed from the upwind cell with the
-Green–Gauss gradient and the van Albada slope (`a = 2 g_C - b`, `b` the
-gradient toward the downwind node), so the scheme is second order on smooth,
-monotone profiles and does not oscillate at fronts; dispersion is the central
-difference. The inlet is Danckwerts (total flux `u C_in`) and the outlet zero
+Green–Gauss gradient and the van Albada slope with its constant
+(`a = 2 g_C - b`, `b` the gradient toward the downwind node, `ε = atol / Δx`
+per species), so the scheme is second order on smooth, monotone profiles and
+does not oscillate at fronts; dispersion is the central difference. A slope
+limiter used with the implicit solver must be differentiable at a = b = 0; one
+with no constant is not, and Newton stalls on flat regions. `steady_state` and
+`solve` share the fluxes, so they use the same `ε`. The inlet is Danckwerts (total flux `u C_in`) and the outlet zero
 gradient. `TanksInSeries` is the same core with first-order upwind and no
 dispersion, which is exactly `N` tanks in series: do not give it its own
 right-hand side. A change to the scheme keeps the second-order convergence

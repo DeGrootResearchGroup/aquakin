@@ -29,6 +29,7 @@ from dataclasses import dataclass
 import diffrax
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.hints import did_you_mean
@@ -219,6 +220,11 @@ class _AxialFlowReactor(GradientCheckMixin):
         self.conditions = conditions
         self.grid = grid
         self.atol = resolve_layered_atol(model, settings.atol, grid.n_cells)
+        if not np.all(np.asarray(self.atol) > 0):
+            raise ValueError(
+                "atol must be positive: it sets the solver's noise floor and the "
+                "advection limiter's flat-gradient scale atol / dx."
+            )
 
     @property
     def n_cells(self) -> int:
@@ -443,9 +449,11 @@ class _AxialFlowReactor(GradientCheckMixin):
                 f"steady_state needs a constant inlet; {names} are given as expressions of time."
             )
         y0 = self._initial_profile(constants if guess is None else guess)
+        # The atol in the settings key sets the limiter's scale, baked into the fluxes.
         cache_key = (
             f"{self._kind}_steady",
             id(self.model),
+            reactor_settings_key(self),
             self._geometry_key(),
             self.conditions.n_locations,
             float(tol),
@@ -499,8 +507,11 @@ class _AxialFlowReactor(GradientCheckMixin):
         return _steady
 
 
-def _dispersed_flow_fluxes(grid: Grid1D, velocity: float) -> Callable:
-    """Face fluxes of advection with axial dispersion, Danckwerts in, zero gradient out."""
+def _dispersed_flow_fluxes(grid: Grid1D, velocity: float, epsilon) -> Callable:
+    """Face fluxes of advection with axial dispersion, Danckwerts in, zero gradient out.
+
+    ``epsilon`` is the limiter's flat-gradient scale per cell and species.
+    """
     face_velocity = jnp.full(grid.n_cells + 1, velocity)
     # Half the first cell: the distance from the inlet face to the first centre.
     half = float(grid.face_spacing[0])
@@ -513,7 +524,7 @@ def _dispersed_flow_fluxes(grid: Grid1D, velocity: float) -> Callable:
         outlet_face = cells[-1]
         gradient = green_gauss_gradient(cells, grid, inlet_face, outlet_face)
         advective = limited_upwind_flux(
-            cells, face_velocity, grid, inlet_face, outlet_face, gradient
+            cells, face_velocity, grid, inlet_face, outlet_face, gradient, epsilon
         )
         nodes = jnp.concatenate([inlet_face[None, :], cells, outlet_face[None, :]], axis=0)
         diffusivity = jnp.broadcast_to(dispersion, (cells.shape[1],))
@@ -533,10 +544,14 @@ class DispersedFlowReactor(_AxialFlowReactor):
 
     **Scheme.** Cell-centred finite volume on ``n_cells`` equal cells. The
     advective face value is reconstructed from the upwind cell with its
-    Green--Gauss gradient, limited by the smooth van Albada limiter
+    Green--Gauss gradient, limited by the van Albada limiter
     (:func:`~aquakin.integrate.finite_volume.limited_upwind_flux`): second
     order in space where the profile is smooth, first order at extrema and
     steep fronts, without oscillation, and differentiable throughout. The
+    limiter's constant ``eps`` is set per species to ``atol / dx``: a gradient
+    below the solver's noise floor across one cell counts as flat. Without it
+    the limiter is not differentiable on a flat profile, and the implicit
+    solver's Newton iteration stalls there (from any uniform start). The
     dispersive flux is the central difference ``D (C_i - C_(i+1)) / dx``
     (second order). The inlet is Danckwerts -- the total flux through it is
     ``u C_in`` -- and the outlet is zero-gradient. Time integration is the
@@ -602,8 +617,9 @@ class DispersedFlowReactor(_AxialFlowReactor):
         else:
             _require_nonnegative(dispersion, "dispersion")
         self._dispersion = dispersion
-        self._fluxes = _dispersed_flow_fluxes(grid, self.velocity)
         self._setup(model, conditions, grid, settings)
+        epsilon = jnp.asarray(self.atol) / grid.widths[:, None]
+        self._fluxes = _dispersed_flow_fluxes(grid, self.velocity, epsilon)
 
     @property
     def dispersion(self):

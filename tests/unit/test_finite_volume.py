@@ -166,17 +166,19 @@ def test_green_gauss_gradient_on_uniform_cells_is_the_central_difference():
 
 
 def test_van_albada_slope_matches_hand_values():
-    """Equal gradients pass through; opposite or zero ones give the limited value."""
+    """``[a (b^2 + e^2) + b (a^2 + e^2)] / (a^2 + b^2 + 2 e^2)`` at ``e = 0.5``:
+    equal gradients pass through, opposite ones cancel."""
     a = jnp.array([1.0, 2.0, 1.0, 0.0, 0.0, -3.0])
     b = jnp.array([1.0, 1.0, -1.0, 2.0, 0.0, -3.0])
-    expected = [1.0, 2.0 * 3.0 / 5.0, 0.0, 0.0, 0.0, -3.0]
-    np.testing.assert_allclose(van_albada_slope(a, b), expected, rtol=1e-15, atol=0)
+    expected = [1.0, (2.0 * 1.25 + 4.25) / 5.5, 0.0, 0.5 / 4.5, 0.0, -3.0]
+    np.testing.assert_allclose(van_albada_slope(a, b, 0.5), expected, rtol=1e-15, atol=0)
 
 
-def test_van_albada_slope_gradient_is_finite_where_both_gradients_vanish():
-    """At ``a = b = 0`` the slope's gradient is zero, not NaN (the guarded division)."""
-    grads = jax.grad(lambda a, b: van_albada_slope(a, b), argnums=(0, 1))(0.0, 0.0)
-    assert [float(g) for g in grads] == [0.0, 0.0]
+def test_van_albada_slope_is_the_central_mean_near_a_flat_region():
+    """At ``a = b = 0`` the slope is differentiable, with the central-mean derivative
+    ``(1/2, 1/2)`` -- the property an implicit solver's Newton iteration needs there."""
+    grads = jax.grad(lambda a, b: van_albada_slope(a, b, 1e-9), argnums=(0, 1))(0.0, 0.0)
+    np.testing.assert_allclose([float(g) for g in grads], [0.5, 0.5], rtol=1e-15)
 
 
 @pytest.mark.parametrize("velocity", [0.8, -0.8])
@@ -185,7 +187,7 @@ def test_limited_flux_reproduces_a_linear_profile_exactly_on_uneven_cells(veloci
     cells = _linear(GRID.centres)
     left, right = _linear(0.0), _linear(6.0)
     gradient = green_gauss_gradient(cells, GRID, left, right)
-    flux = limited_upwind_flux(cells, jnp.full(4, velocity), GRID, left, right, gradient)
+    flux = limited_upwind_flux(cells, jnp.full(4, velocity), GRID, left, right, gradient, 0.3)
     np.testing.assert_allclose(flux, velocity * _linear(GRID.edges), rtol=1e-14)
 
 
@@ -195,19 +197,21 @@ def test_limited_flux_limits_to_the_cell_value_at_an_extremum():
     cells = jnp.array([[0.0], [1.0], [0.0]])
     left = right = jnp.array([0.0])
     gradient = green_gauss_gradient(cells, grid, left, right)
-    flux = limited_upwind_flux(cells, jnp.ones(4), grid, left, right, gradient)
+    flux = limited_upwind_flux(cells, jnp.ones(4), grid, left, right, gradient, 0.3)
     np.testing.assert_allclose(flux[2], [1.0], rtol=1e-15, atol=0)
 
 
 def test_limited_flux_matches_the_classical_muscl_face_value_on_uniform_cells():
     """``C_f = C_i + phi(r) (C_(i+1) - C_i) / 2`` with van Albada ``phi`` and ``r`` the
-    ratio of successive differences -- the textbook form of the same scheme."""
+    ratio of successive differences -- the textbook form of the same scheme, which
+    the limited slope equals once the gradients are far above ``epsilon`` (here
+    their ratio to it is 1e12, so the difference is ~1e-24)."""
     grid = Grid1D.uniform(5.0, 5)
     values = jnp.array([1.0, 2.0, 4.0, 5.0, 3.0])
     cells = values[:, None]
     left, right = jnp.array([0.5]), jnp.array([3.0])
     gradient = green_gauss_gradient(cells, grid, left, right)
-    flux = limited_upwind_flux(cells, jnp.ones(6), grid, left, right, gradient)
+    flux = limited_upwind_flux(cells, jnp.ones(6), grid, left, right, gradient, 1e-12)
     # Interior faces 1..3 (upwind cells 0..2, which have an interior downwind cell).
     for i in range(1, 4):
         upwind = values[i - 1] - (values[i - 2] if i >= 2 else 2 * 0.5 - values[0])
