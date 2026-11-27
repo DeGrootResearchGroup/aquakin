@@ -120,6 +120,7 @@ def schedule_checks(self: Editor) -> None:
 async def _run_checks(self: Editor) -> None:
     await asyncio.sleep(CHECK_DELAY)
     loop = asyncio.get_running_loop()
+    await self.run_model_checks(loop)  # the model panel's edits, which are quick
     # The document is read here, on the page's thread; only the worker's
     # answers are awaited in the executor, so an edit made meanwhile cannot
     # be half-read. An edit also cancels this task and schedules a new one.

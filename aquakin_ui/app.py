@@ -19,7 +19,17 @@ from pathlib import Path
 import yaml
 from trame.app import asynchronous
 
-from aquakin_ui import checks, files, forms, page, studies, study_page, unit_form
+from aquakin_ui import (
+    checks,
+    files,
+    forms,
+    model_page,
+    model_panel,
+    page,
+    studies,
+    study_page,
+    unit_form,
+)
 from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
@@ -57,6 +67,7 @@ class Editor:
         self.catalog = Catalog(self.worker.request("catalog"), self.worker.request("models"))
         self.doc = Flowsheet(self.catalog)
         self._model_info: dict = {}
+        self._model = model_panel.ModelPanel()  # the model panel's Python side
         self._unit_checks: dict[str, tuple[str, str | None]] = {}
         self._plant_check: tuple[str | None, dict | None] = (None, None)
         self._check_task: asyncio.Task | None = None
@@ -135,6 +146,7 @@ class Editor:
         self.state.products = [f"{uid}.{p}" for uid, ps in dangling.items() for p in ps]
         self.state.n_recycles = len(back)
         self.state.plant_name = self.doc.meta.get("name", "plant")
+        self.refresh_model_choices()
         self._publish_spec()
         self.refresh_selection()
         if checks:
@@ -462,6 +474,7 @@ class Editor:
             }
             for cat in self.catalog.categories
         ]
+        model_panel.init_model_state(self)
         s.change("panel")(lambda **_: self._publish_spec())
 
         @s.change("panel")
@@ -490,6 +503,20 @@ class Editor:
     _study_settings_dialog = study_page._study_settings_dialog
     _results_dialog = study_page._results_dialog
     _study_dialog = study_page._study_dialog
+
+    # -- the model panel (model_panel.py, model_page.py) -------------------
+
+    _model_panel = model_page._model_panel
+    _model_dialog = model_page._model_dialog
+    refresh_model_choices = model_panel.refresh_model_choices
+    open_model = model_panel.open_model
+    discard_model_edits = model_panel.discard_model_edits
+    model_edited = model_panel.model_edited
+    add_model_parameter = model_panel.add_model_parameter
+    run_model_checks = model_panel.run_model_checks
+    apply_model = model_panel.apply_model
+    plan_model_name = model_panel.plan_model_name
+    answer_model_dialog = model_panel.answer_model_dialog
 
     # -- aquakin's checks (checks.py) --------------------------------------
 
