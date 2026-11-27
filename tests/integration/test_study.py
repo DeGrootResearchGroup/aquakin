@@ -1421,7 +1421,7 @@ def test_a_design_study_finds_the_closed_form_optimum(designed_decay):
     assert design["std"]["A_to_B.k"]["optimum"] == pytest.approx(optimum**-0.5, rel=1e-6)
     assert design["optimum"] > design["start"]
     model = aquakin.load_model_from_file(folder.parents[1] / "models" / "decay.yaml")
-    reactor = aquakin.BatchReactor(model, model.default_conditions(), rtol=1.0e-10)
+    reactor = aquakin.BatchReactor(model, model.default_conditions(), settings=aquakin.SolverSettings(rtol=1.0e-10))
     experiments = [
         aquakin.Experiment(model.concentrations({"A": a0}), t_obs=np.asarray([t]),
                            sigma=DECAY_SIGMA, observed_species=["A"])
