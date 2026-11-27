@@ -19,8 +19,11 @@ if TYPE_CHECKING:
     from aquakin_ui.app import Editor
 
 
-def open_spec(self: Editor, path=None, *, quiet: bool = False) -> None:
-    """Read a spec with aquakin's reader (YAML 1.2) and show it."""
+def open_spec(self: Editor, path=None, *, quiet: bool = False, reload: bool = False) -> None:
+    """Read a spec with aquakin's reader (YAML 1.2) and show it.
+
+    With ``reload`` (the open file changed on disk, see :func:`reload_if_changed`)
+    the canvas keeps its view and the message says the file was reloaded."""
     path = Path(path or self.state.spec_path).resolve()
 
     def done(data):
@@ -36,14 +39,18 @@ def open_spec(self: Editor, path=None, *, quiet: bool = False) -> None:
         self._saved = self._snapshot()
         self.state.spec_path = str(path)
         self.state.selected = None
-        self.state.fit_key += 1
+        if not reload:
+            self.state.fit_key += 1
         self._unit_checks.clear()
         self._plant_check = (None, None)
         self._history = []
         self.state.can_undo = False
         if not quiet:
             self.publish()
-            self.say(f"opened {path}", error=False)
+            self.say(
+                f"reloaded {path.name}: it changed on disk" if reload else f"opened {path}",
+                error=False,
+            )
         self.refresh_studies()
 
     self._off_page(lambda: self.worker.request("read_spec", path=str(path)), done)
@@ -197,6 +204,33 @@ def _save_refusal(self: Editor, path: Path) -> str | None:
             )
         return None
     return f"{path} already exists; open it, or save under another name"
+
+
+def reload_if_changed(self: Editor) -> None:
+    """Show the open flowsheet again if another program (``aquakin mcp``, a text
+    editor) has changed its file since it was opened or saved here.
+
+    With no unsaved edits it is reloaded at once. With some, the user is asked
+    whether to discard them for the new version, once per change of the file:
+    keeping them leaves the file as the other program wrote it, and Save then
+    refuses to write over it (save under another name, or reload)."""
+    if self._opened is None:
+        return
+    path, digest = self._opened
+    now = _digest(path)
+    if now is None or now == digest or now == self._declined_digest:
+        return
+    if not self._unsaved():
+        self.open(path, reload=True)
+        return
+    self._declined_digest = now
+    self._unless_unsaved(
+        lambda: self.open(path, reload=True),
+        f"{path.name} has changed on disk (another program wrote it). Discard your "
+        f"edits and show the new version?",
+    )
+    # Saving would write over the other program's version: not offered here.
+    self.state.unsaved_can_save = False
 
 
 def _digest(path: Path) -> str | None:

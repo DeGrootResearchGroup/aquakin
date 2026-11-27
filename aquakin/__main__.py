@@ -1,7 +1,8 @@
 """The ``aquakin`` command line.
 
 ``aquakin catalog`` prints the unit catalogue (see :mod:`aquakin.plant.catalog`)
-as JSON. ``aquakin serve`` answers requests from a front end, one JSON object
+as JSON. ``aquakin mcp`` serves aquakin's tools to an AI assistant over the
+Model Context Protocol (see :mod:`aquakin.mcp`). ``aquakin serve`` answers requests from a front end, one JSON object
 per line on standard input, one reply per line on standard output::
 
     {"id": 1, "command": "catalog"}
@@ -43,7 +44,8 @@ no ``type`` for a request that is not JSON or names no known command) and the
 worker keeps serving. Each study listed carries its ``state`` (one of
 :data:`aquakin.study.study.STATES`, or ``"unreadable"``), ``has_results``, its
 folder (``path``) and the spec it builds its plant from (``flowsheet``: the
-snapshot's for a frozen study), so a front end never rebuilds study paths or
+snapshot's for a frozen study; ``None`` for a study of a batch reactor, whose
+``reactor`` is then its model), so a front end never rebuilds study paths or
 decides from a state's name what it implies.
 Standard output carries replies only; anything else goes to standard error.
 """
@@ -56,49 +58,8 @@ import json
 import os
 import sys
 
-#: The state of a listed study whose ``study.yaml`` cannot be read (beside
-#: :data:`aquakin.study.study.STATES`, which a readable study is in).
-UNREADABLE = "unreadable"
-
-
-def _list_studies(project) -> list[dict]:
-    """Every study under ``<project>/studies/`` with where it stands."""
-    from pathlib import Path
-
-    from aquakin import study as st
-    from aquakin.plant.errors import error_reply
-    from aquakin.study.study import STUDIES_DIR, STUDY_FILE, _flowsheet
-
-    out = []
-    folder = Path(project) / STUDIES_DIR
-    for path in sorted(folder.glob(f"*/{STUDY_FILE}")) if folder.is_dir() else []:
-        entry = {"name": path.parent.name, "path": str(path.parent)}
-        try:
-            spec = st.load_study(path.parent)
-            status = st.check_study(path.parent)
-            entry |= {
-                "kind": spec.kind,
-                "description": spec.description or "",
-                "state": status.state,
-                "has_results": status.has_results,
-                "frozen": status.frozen,
-                "flowsheet": str(_flowsheet(path.parent, spec)),
-                "reasons": status.reasons,
-                "notes": status.notes,
-            }
-        except Exception as exc:  # one broken study is listed as such, not the listing lost
-            entry |= {
-                "kind": "",
-                "description": "",
-                "state": UNREADABLE,
-                "has_results": False,
-                "frozen": False,
-                "flowsheet": None,
-                "reasons": [error_reply(exc)["error"]],
-                "notes": [],
-            }
-        out.append(entry)
-    return out
+# Named here too: the worker's replies carry it, and its protocol test reads it here.
+from aquakin.study.form import UNREADABLE as UNREADABLE
 
 
 def _study_module():
@@ -157,7 +118,7 @@ def _handlers():
         ),
         "check_spec": lambda req: check_spec(req["spec"], base_dir=req.get("base_dir")),
         "read_spec": lambda req: load_spec_file(req["path"]),
-        "list_studies": lambda req: _list_studies(req["project"]),
+        "list_studies": lambda req: _study_module().list_studies(req["project"]),
         "freeze_study": lambda req: _study_call("freeze_study", req),
         "unfreeze_study": lambda req: _study_call(
             "unfreeze_study", req, discard_results=bool(req.get("discard_results"))
@@ -352,6 +313,10 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve", help="answer JSON-line requests from a front end")
     sub.add_parser("catalog", help="print the unit catalogue as JSON")
+    sub.add_parser(
+        "mcp",
+        help='serve aquakin\'s tools to an AI assistant over MCP (needs the "mcp" extra)',
+    )
     study = sub.add_parser("study", help="run, check, freeze, unfreeze or copy a study")
     action = study.add_subparsers(dest="action", required=True)
     run = action.add_parser("run", help="run a study and write its results")
@@ -380,6 +345,10 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == "serve":
         serve()
+    elif args.command == "mcp":
+        from aquakin.mcp.server import main as serve_mcp
+
+        serve_mcp()
     elif args.command == "study":
         return _study_command(args)
     else:

@@ -8,7 +8,7 @@ aquakin/
 │
 ├── aquakin/
 │   ├── __init__.py                  # public API + jax x64 config
-│   ├── __main__.py                  # `aquakin` command: `catalog`, `serve` (JSON lines)
+│   ├── __main__.py                  # `aquakin` command: `catalog`, `serve` (JSON lines), `mcp`, `study`
 │   │
 │   ├── core/
 │   │   ├── nodes.py                 # ASTNode base class + all node types
@@ -209,6 +209,14 @@ aquakin/
 │   │   ├── precipitation_metal_phosphate_equilibrium.yaml  # mode: equilibrium (algebraic projection, differentiable)
 │   │   └── precipitation_metal_phosphate_bounded.yaml      # supersaturation_form: bounded (differentiable dynamics)
 │   │
+│   ├── mcp/                         # `aquakin mcp`: tools for an AI assistant (`mcp` extra)
+│   │   ├── server.py                # the reading tools (thin wrappers) and the MCPServer serving all
+│   │   ├── projects.py              # tools that write a flowsheet and create / edit / run studies
+│   │   ├── runs.py                  # study runs on background threads, with progress and cancel
+│   │   ├── docs.py                  # the published guide pages: list / read / search (stdlib only,
+│   │   │                            #   loaded by setup.py, which bundles them into guide/)
+│   │   └── api.py                   # the public API's names, signatures and docstrings
+│   │
 │   ├── utils/
 │   │   ├── latex.py                 # AST -> LaTeX rate expressions
 │   │   ├── balance.py               # mass / electron (COD) conservation checks
@@ -221,8 +229,14 @@ aquakin/
 │   │                                #   read back bit for bit (studies, saved fits)
 │   │
 │   └── study/                       # studies: analyses saved in a project
-│       └── study.py                 # study.yaml schema, run / check / freeze /
-│                                    #   unfreeze / copy (`aquakin study ...`)
+│       ├── common.py                # file names, kinds, states, StudyError, time grids
+│       ├── study.py                 # study.yaml schema, run / check / freeze /
+│       │                            #   unfreeze / copy (`aquakin study ...`)
+│       ├── reactor.py               # the reactor: target (a batch reactor in place
+│       │                            #   of the flowsheet): inputs, freeze, runners
+│       ├── analysis.py              # what both targets share: fit settings, data
+│       │                            #   reading, the Fisher and profile writers
+│       └── form.py                  # setting a study up and reading its results
 │
 ├── aquakin_ui/                         # browser flowsheet editor `aquakin-ui` (`ui` extra)
 │   ├── app.py                          # Editor: its state, drawing, undo, canvas events,
@@ -231,6 +245,7 @@ aquakin/
 │   ├── repeated.py                     # lists of records edited on the page (study dialog, unit form)
 │   ├── checks.py                       # aquakin's background checks of units and plant
 │   ├── files.py                        # open / save the spec, unsaved-edit questions
+│   ├── disk.py                         # follows the project folder: reload a changed spec, relist studies
 │   ├── unit_form.py                    # unit-form choices that redraw it; resending its rows
 │   ├── model_panel.py / model_page.py  # the Model tab: edits checked and saved; its page
 │   ├── model_form.py                   # the model panel's draft and its edits (pure)

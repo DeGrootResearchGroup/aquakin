@@ -194,6 +194,57 @@ From Python, `aquakin.study.create_study(project, name, settings)` and
 run would read them; `plant_choices(spec)` lists what a study of that flowsheet
 may name, and `study_results(path)` reads a study's results back.
 
+### A study of a batch reactor
+
+A `calibrate`, `profile` or `fisher` study can study a batch reactor instead of
+the flowsheet: a `reactor:` block gives its model and conditions, and
+`experiments` the batches it is run on. The other settings are those of a
+flowsheet study of the same kind:
+
+```yaml
+# studies/ozone_fit/study.yaml
+study:
+  kind: calibrate
+  reactor:
+    model: ../../models/ozone_demand.yaml   # a model file, or a shipped model's name
+    conditions: {T: 293.15, pH: 7.5}
+    integrator: {rtol: 1.0e-6}              # optional
+  experiments:
+    - {data: run1.csv, initial: {O3: 1.0, D: 12.0, M: 800.0}}
+    - {data: run2.csv, initial: {O3: 2.0, D: 12.0, M: 800.0}}
+  observed: [O3]
+  free: [fast.k1, slow.k2]
+  estimate_sigma: true
+```
+
+A model file's path is read from the study folder, like `flowsheet:`;
+`create_study` also takes one from the project folder (`models/ozone_demand.yaml`)
+and stores it that way. Each experiment starts from its `initial`
+concentrations (the model's defaults for the species it does not name). Its
+data table holds a `t` column and one column per observed species; the
+experiments are fitted together, sharing the parameters, and are named by their
+tables (`run1`, `run2`). The integrator settings are `rtol`, `atol`, `order`,
+`dtmax` and `max_steps` (see
+[Choosing the integrator](reactors.md#choosing-the-integrator)), and
+`time_unit` gives the unit of the data's times when it is not the model's.
+
+The results are those of a flowsheet study: the fit is saved as
+[`CalibrationResult.save`](fit_uncertainty.md#saving-a-fit) saves one, so
+`aquakin.load_calibration("studies/ozone_fit/results")` reads it back, and
+`fitted.csv` holds the fitted reactor's observed species at the data's times,
+in columns such as `run1.O3`. A `profile` study takes one experiment. A
+`fisher` study's experiments give only their initial concentrations, and
+`t_obs` and `sigma` the sampling times and measurement error.
+
+The study is stale once the model (with any model it `extends`), a data table
+or its settings change, and `check` names which. Freezing copies the model,
+flattened, and the data tables into the study's snapshot. A shipped model is
+copied too.
+
+The `simulate` and `rank` kinds do not take a reactor yet. The editor lists a
+reactor study and runs it, but its dialog edits only flowsheet studies; change a
+reactor study in its `study.yaml`.
+
 ## The flowsheet editor
 
 ```bash
@@ -215,6 +266,13 @@ you edit and lists any errors.
   `extends:`) or influent table from outside the project folder into it. Save
   refuses to overwrite a flowsheet that changed on disk since the window opened
   it, so two windows cannot silently undo each other's work.
+- The editor follows the project folder as other programs change it (an
+  [AI assistant](ai_assistants.md), a text editor, another window). When the
+  open flowsheet's file changes, the editor shows the new version, keeping your
+  view. If you have unsaved edits it asks first: discard them for the new
+  version, or keep them (Save then refuses to write over the file; save under
+  another name). When a study is added, edited or finishes, the Studies tab is
+  updated.
 - Opening another file while the flowsheet has unsaved edits asks first (save
   them, or discard them). **Undo** takes back the last edits: a removed unit or
   wire, a move, a new unit or wire, or an applied form. Delete removes the
@@ -286,6 +344,7 @@ Installing aquakin installs two commands:
 | `aquakin study unfreeze <study> --discard-results` | makes it follow the flowsheet again and deletes its results |
 | `aquakin study copy <study> <name>` | copies the study, results included, beside it under `<name>`, and prints the new folder |
 | `aquakin catalog` | prints every unit kind a flowsheet file may use, with its settings and ports, as JSON |
+| `aquakin mcp` | serves aquakin's tools to an AI assistant (see [Using aquakin from an AI assistant](ai_assistants.md)) |
 | `aquakin-ui [<flowsheet>] [--port <n>] [--no-browser]` | opens the editor; `--port` serves it on a fixed port (by default a free one), and `--no-browser` prints the address instead of opening a browser |
 
 `<study>` is the study's folder, such as `studies/effluent`. A command that

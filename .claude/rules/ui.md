@@ -43,7 +43,7 @@ tested, not asserted away.
 | `settings.py` | the user's preferences file (`AQUAKIN_UI_CONFIG` overrides); `tests/ui/conftest.py` points it at a temporary file, so a test never touches the user's |
 | `process.py`, `jobs.py` | starting / discarding child processes (below); `StudyRun`, one `aquakin study run --json` process per run |
 | `app.py` | `Editor`: state, drawing, undo, canvas events, the unit form, and the binding of every function below; do not grow it |
-| `checks.py`, `files.py`, `studies.py`, `page.py`, `study_page.py`, `unit_form.py`, `model_panel.py`, `model_page.py` | bound `Editor` concerns: checks; Open / Save; studies; the page; the Studies tab; the unit form's redrawing choices and resending its rows; the Model tab and its page |
+| `checks.py`, `files.py`, `studies.py`, `disk.py`, `page.py`, `study_page.py`, `unit_form.py`, `model_panel.py`, `model_page.py` | bound `Editor` concerns: checks; Open / Save; studies; following the project folder as other programs change it; the page; the Studies tab; the unit form's redrawing choices and resending its rows; the Model tab and its page |
 | `model_form.py` | **pure**; the model panel's draft and the edit set it makes (only what changed, every value as typed: nothing here reads an expression or a number) |
 | `repeated.py` | the one implementation of lists of records edited on the page (`bound`, `redraw`, `add_button`, `move_button`, `remove_button`), shared by the study dialog and the unit form (composition, named numbers, phase table) |
 | `widget/` | the built Vue Flow bundle, committed; source in `ui-widget/` |
@@ -137,7 +137,8 @@ that imports both. Keep it that way rather than copying knowledge across:
   while any row is, because the rows Python sends replace whatever was entered
   meanwhile. So `reshape_form` must send rows back on every path, the form as
   it was when the choice cannot be applied (`_resend_rows` drops the mark).
-- **Removing a wired port asks first** (`Flowsheet.dropped_by`, `confirm_apply`).
+- **Removing a wired port asks first** (`Flowsheet.dropped_by`; nothing changes
+  until `confirm_apply`).
 - **aquakin's checks run in the background** (`schedule_checks`, after
   `CHECK_DELAY` of quiet), each unit and the plant cached by its spec, so the
   canvas never waits; "None" is claimed only after a check finished. Read the
@@ -148,7 +149,8 @@ that imports both. Keep it that way rather than copying knowledge across:
   the spec file from `aquakin_ui`. Both run off the page's thread (`_off_page`).
 - **Save refuses to overwrite work** (`_save_refusal`): each window is its own
   document, so it refuses a file whose sha256 changed since this window opened or
-  saved it, and any other existing file.
+  saved it, and any other existing file. A change on disk (`reload_if_changed`,
+  polled by `watch_disk`) reloads unless unsaved; then it asks once, no "Save first".
 - **The flowsheet's file** (`_spec_file`) is the one last opened or saved here;
   the toolbar path is only where Open reads and Save writes next. A new
   flowsheet has none, and Save, Simulate and New study ask for one rather than
@@ -202,9 +204,7 @@ that imports both. Keep it that way rather than copying knowledge across:
   (`run_model_checks`, cached) and answered in state of its own (`model_errors`
   ...), so a check never redraws typing. Apply checks the whole model, then
   `save_model_edits` writes it and the flowsheet; never write model YAML here,
-  nor decide which units switch to a new model (its dry run lists them).
-- **A handler string with an `if` braces it and has a `;`** (`"if (!$event) {
-  trigger(...); }"`): without one it compiles as an expression; the page is blank.
+  nor decide which units switch or what a rewrite loses (its dry run says).
 - Icons are sent once; the spec text only while the Spec tab is open.
 
 ## The widget build
