@@ -11,6 +11,7 @@ in a whole **plant** (a flowsheet of units joined by streams and recycles).
 | drive a plant with a measured record, a feed that follows a pattern, a pump schedule, or laboratory and SCADA records | [Influents](influents.md) |
 | save a plant as a file, lay out a project folder, run reproducible studies from Python or the command line, or draw and edit it in the browser | [Flowsheet files, studies and the editor](plant_files.md) |
 | install the flowsheet editor on a computer without Python | [Installing the editor without Python](installing_the_editor.md) |
+| ask an AI assistant (Claude or another MCP app) about models, flowsheets and the guide, under your own account | [Using aquakin from an AI assistant](ai_assistants.md) |
 
 ```{toctree}
 :maxdepth: 2
@@ -21,4 +22,5 @@ custom_flowsheets
 influents
 plant_files
 installing_the_editor
+ai_assistants
 ```

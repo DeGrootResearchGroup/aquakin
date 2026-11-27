@@ -8,7 +8,7 @@ aquakin/
 │
 ├── aquakin/
 │   ├── __init__.py                  # public API + jax x64 config
-│   ├── __main__.py                  # `aquakin` command: `catalog`, `serve` (JSON lines)
+│   ├── __main__.py                  # `aquakin` command: `catalog`, `serve` (JSON lines), `mcp`, `study`
 │   │
 │   ├── core/
 │   │   ├── nodes.py                 # ASTNode base class + all node types
@@ -206,6 +206,12 @@ aquakin/
 │   │   ├── precipitation_metal_phosphate.yaml   # iron/Al chemical-P removal (FePO4/AlPO4 + Fe(OH)3/Al(OH)3 hydroxide fraction); kinetic power-law (AD-limited)
 │   │   ├── precipitation_metal_phosphate_equilibrium.yaml  # mode: equilibrium (algebraic projection, differentiable)
 │   │   └── precipitation_metal_phosphate_bounded.yaml      # supersaturation_form: bounded (differentiable dynamics)
+│   │
+│   ├── mcp/                         # `aquakin mcp`: tools for an AI assistant (`mcp` extra)
+│   │   ├── server.py                # the tools (thin wrappers) and the MCPServer that serves them
+│   │   ├── docs.py                  # the published guide pages: list / read / search (stdlib only,
+│   │   │                            #   loaded by setup.py, which bundles them into guide/)
+│   │   └── api.py                   # the public API's names, signatures and docstrings
 │   │
 │   ├── utils/
 │   │   ├── latex.py                 # AST -> LaTeX rate expressions

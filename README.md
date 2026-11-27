@@ -50,8 +50,8 @@ pip install aquakin
 ```
 
 Optional extras: `aquakin[plot]` (`solution.plot(...)` via matplotlib),
-`aquakin[dataframe]` (export to pandas / CSV) and `aquakin[ui]` (the flowsheet
-editor).
+`aquakin[dataframe]` (export to pandas / CSV), `aquakin[ui]` (the flowsheet
+editor) and `aquakin[mcp]` (tools for an AI assistant).
 
 > **Note.** `import aquakin` turns on JAX 64-bit mode for the whole process,
 > because stiff solves need double precision. Other JAX code in the same process
@@ -187,6 +187,20 @@ run studies with their results plotted. Colleagues who do not use Python can
 install it with one download (Windows) or one pasted line (macOS, Linux): see
 [Installing the editor without Python](https://aquakin.readthedocs.io/en/latest/installing_the_editor.html).
 
+## From an AI assistant
+
+`aquakin mcp` gives an AI assistant (Claude Desktop, Claude Code, or any app
+that speaks the Model Context Protocol) tools to look up the shipped models and
+unit kinds, check flowsheets, and read the user guide and API reference. It
+runs on your computer under the assistant's own account; aquakin needs no key.
+
+```bash
+pip install "aquakin[mcp]"
+claude mcp add aquakin -- aquakin mcp     # Claude Code; other apps: see the guide
+```
+
+See [Using aquakin from an AI assistant](https://aquakin.readthedocs.io/en/latest/ai_assistants.html).
+
 ## Documentation
 
 The full documentation is at **[aquakin.readthedocs.io](https://aquakin.readthedocs.io/en/latest/)**:
@@ -202,6 +216,7 @@ The full documentation is at **[aquakin.readthedocs.io](https://aquakin.readthed
 | [Building a flowsheet](https://aquakin.readthedocs.io/en/latest/custom_flowsheets.html) | a plant of your own and every unit operation |
 | [Influents](https://aquakin.readthedocs.io/en/latest/influents.html) | patterned feeds, pump schedules, laboratory and SCADA records |
 | [Flowsheet files, studies and the editor](https://aquakin.readthedocs.io/en/latest/plant_files.html) | saving a plant, reproducible studies, the browser editor |
+| [Using aquakin from an AI assistant](https://aquakin.readthedocs.io/en/latest/ai_assistants.html) | `aquakin mcp`: models, flowsheet checks and the guide as tools for Claude or another MCP app |
 | [Sensitivity analysis](https://aquakin.readthedocs.io/en/latest/sensitivity_and_calibration.html) | which tool answers which question, gradients, local and global sensitivity, uncertainty propagation |
 | [Calibration](https://aquakin.readthedocs.io/en/latest/calibration.html) | fitting parameters to data, posteriors, profile likelihood, identifiability, model comparison |
 | [Experiment design](https://aquakin.readthedocs.io/en/latest/experiment_design.html) | Fisher information, scoring and optimizing a design, choosing measurements |

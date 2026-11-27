@@ -54,6 +54,7 @@ Claude-facing files** at the end.
 | `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
 | `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog and the schema rules |
 | `.claude/rules/study.md` | `aquakin/study/**`, `utils/result_files.py` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
+| `.claude/rules/mcp.md` | `aquakin/mcp/**`, `setup.py`, `MANIFEST.in` | `aquakin mcp`, the tools for an AI assistant: tools as thin wrappers of the editor worker's functions, errors that reach the assistant, read-only versus writing tools, the guide bundled into the wheel |
 | `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `tests/browser/**`, `ui-widget/**`, `installers/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules, the uv installers |
 
 **On-demand docs (read when needed):**

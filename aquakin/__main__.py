@@ -1,7 +1,8 @@
 """The ``aquakin`` command line.
 
 ``aquakin catalog`` prints the unit catalogue (see :mod:`aquakin.plant.catalog`)
-as JSON. ``aquakin serve`` answers requests from a front end, one JSON object
+as JSON. ``aquakin mcp`` serves aquakin's tools to an AI assistant over the
+Model Context Protocol (see :mod:`aquakin.mcp`). ``aquakin serve`` answers requests from a front end, one JSON object
 per line on standard input, one reply per line on standard output::
 
     {"id": 1, "command": "catalog"}
@@ -315,6 +316,10 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve", help="answer JSON-line requests from a front end")
     sub.add_parser("catalog", help="print the unit catalogue as JSON")
+    sub.add_parser(
+        "mcp",
+        help='serve aquakin\'s tools to an AI assistant over MCP (needs the "mcp" extra)',
+    )
     study = sub.add_parser("study", help="run, check, freeze, unfreeze or copy a study")
     action = study.add_subparsers(dest="action", required=True)
     run = action.add_parser("run", help="run a study and write its results")
@@ -343,6 +348,10 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == "serve":
         serve()
+    elif args.command == "mcp":
+        from aquakin.mcp.server import main as serve_mcp
+
+        serve_mcp()
     elif args.command == "study":
         return _study_command(args)
     else:
