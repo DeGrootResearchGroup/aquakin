@@ -33,6 +33,13 @@ model:
     issues with new methods. Water Sci. Technol. 52(10-11), 461-468. doi:10.2166/wst.2005.0724'
   - Friedrich, Jimenez, Pruden, Miller, Metch & Takacs (2017). Rethinking growth and decay kinetics in
     activated sludge - towards a new adaptive kinetics approach. Water Sci. Technol. 75(3), 501-506. doi:10.2166/wst.2016.439
+  - 'Latimer, Pitt, Dold, Takacs & Lynch (2009). Kinetic parameters for modeling two-step nitrification
+    and denitrification: a case study. Water Sci. Technol. 59(4), 631-638. doi:10.2166/wst.2009.593'
+  - Kaelin, Manser, Rieger, Eugster, Rottermann & Siegrist (2009). Extension of ASM3 for two-step nitrification
+    and denitrification and its calibration and validation with batch tests and pilot scale data. Water
+    Res. 43(6), 1680-1692. doi:10.1016/j.watres.2008.12.039
+  - 'Hellinga, Schellen, Mulder, van Loosdrecht & Heijnen (1998). The SHARON process: an innovative method
+    for nitrogen removal from ammonium-rich waste water. Water Sci. Technol. 37(9), 135-142. doi:10.1016/S0273-1223(98)00281-9'
   - Mannucci, Caretti, Ducci, Lubello, Gori, Coppini & Munz (2020). Ammonia oxidizing bacteria (AOB) kinetic
     parameters estimated using the actual maximum ammonia oxidation rate. Int. Biodeterior. Biodegrad.
     147, 104876. doi:10.1016/j.ibiod.2019.104876
@@ -93,10 +100,10 @@ parameters:
     - 1.0
     transform: logit
   KNO2_H:
-    value: 0.2
+    value: 0.05
     units: g_N/m3
     bounds:
-    - 0.02
+    - 0.005
     - 2.0
     transform: positive_log
   muAOB:
@@ -107,7 +114,7 @@ parameters:
     - 3.0
     transform: positive_log
     temperature:
-      theta: 1.072
+      theta: 1.103899434
       ref_T: 293.15
   bAOB:
     value: 0.17
@@ -162,7 +169,7 @@ parameters:
     - 3.0
     transform: positive_log
     temperature:
-      theta: 1.11
+      theta: 1.075318211
       ref_T: 293.15
   bNOB:
     value: 0.089

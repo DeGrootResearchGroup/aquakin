@@ -21,9 +21,9 @@ temperature:
 |---|---|---|---|---|---|
 | BSM1 benchmark (ASM1), 15 C | 1.73 | - | 10.42 | 0.49 | 149.8 |
 | core, 15 C | 3.86 | - | 10.65 | 0.38 | 125.6 |
-| nitrite level, 15 C | 7.84 | 0.54 | 8.40 | 0.43 | 75.4 AOB + 32.7 NOB |
+| nitrite level, 15 C | 17.41 | 0.30 | 4.33 | 0.86 | 54.2 AOB + 21.6 NOB |
 | core, 20 C | 1.11 | - | 11.02 | | 107.7 |
-| nitrite level, 20 C | 2.58 | 0.10 | 13.21 | 0.22 | 84.9 AOB + 42.9 NOB |
+| nitrite level, 20 C | 1.68 | 0.08 | 11.76 | 0.26 | 86.5 AOB + 39.0 NOB |
 
 The core's autotrophs are ASM2d's (growth 1.0 1/d and decay 0.15 1/d at
 20 C, 0.59 and 0.087 at 15 C), against BSM1's ASM1 values at 15 C (0.5 and
@@ -32,11 +32,13 @@ ammonium; with ASM1's growth and decay together, 3.58: the autotrophs' rates
 do not account for the gap on their own (the core's tank 5 also holds less
 oxygen, 0.38 against 0.49).
 
-The nitrite level keeps its NOB and holds nitrite at 0.1-0.5 g N/m3, as plants
+The nitrite level keeps its NOB and holds nitrite at 0.1-0.3 g N/m3, as plants
 at low DO do. Its nitrifiers decay at measured rates (AOB 0.17 1/d at 20 C,
 0.15 at 15 C: WERF, Jones et al. 2005, Friedrich et al. 2017), three times
-BSM1's ASM1 value at 15 C (0.05), and BSM1's sludge age then leaves more
-ammonium. The benchmark's 1.73 rests on ASM1's low decay rate.
+BSM1's ASM1 value at 15 C (0.05), and their growth slows with cooling as their
+measured net growth does (Kaelin et al. 2009), AOB more than NOB. BSM1's
+sludge age then nitrifies only partly at 15 C. The benchmark's 1.73 rests on
+ASM1's low decay rate.
 
 ## Against ASM2d (20 C, tank 5, g/m3)
 

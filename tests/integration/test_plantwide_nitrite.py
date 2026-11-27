@@ -109,9 +109,9 @@ def _rates_at(model, state, T, pH):
 
 @pytest.mark.parametrize(("T", "pH"), [(293.15, 7.0), (288.15, 7.8)])
 def test_nitrifier_growth_is_monod_on_ammonium_and_nitrite_inhibited_by_fa_and_fna(nitrite, T, pH):
-    """AOB and NOB growth written out by hand: AOB 0.9 1/d with theta 1.072
-    (Jones et al. 2005), NOB 0.78 1/d with theta 1.11 (Hiatt & Grady 2008;
-    Mehrani et al. 2021); Monod on total ammonium (0.6, Mannucci et al. 2020)
+    """AOB and NOB growth written out by hand: AOB 0.9 1/d (Jones et al. 2005),
+    NOB 0.78 1/d (Hiatt & Grady 2008), with the growth thetas fitted to Kaelin
+    et al.'s (2009) net growth (1.103899434 and 1.075318211, as generated); Monod on total ammonium (0.6, Mannucci et al. 2020)
     and total nitrite (0.1); apparent floc oxygen half-saturations 0.65 and
     0.23 (Daebel et al. 2007); free ammonia and free nitrous acid from Hiatt &
     Grady's eqs 2-5, inhibiting with their constants (AOB: FA 1.0, FNA 0.1;
@@ -122,8 +122,8 @@ def test_nitrifier_growth_is_monod_on_ammonium_and_nitrite_inhibited_by_fa_and_f
     p = {k: float(nitrite.default_parameters()[i]) for k, i in nitrite.param_index.items()}
     fa = 30.0 * 10**pH / (np.exp(6344.0 / T) + 10**pH)
     fna = 8.0 / (np.exp(-2300.0 / T) * 10**pH)
-    mu_aob = 0.9 * 1.072 ** (T - 293.15)
-    mu_nob = 0.78 * 1.11 ** (T - 293.15)
+    mu_aob = 0.9 * 1.103899434 ** (T - 293.15)
+    mu_nob = 0.78 * 1.075318211 ** (T - 293.15)
     p_limit = 5.0 / (p["KP_H"] + 5.0)
     aob = (
         mu_aob * 30.0 / (0.6 + 30.0) * 1.5 / (0.65 + 1.5) * 1.0 / (1.0 + fa) * 0.1 / (0.1 + fna)
@@ -135,6 +135,18 @@ def test_nitrifier_growth_is_monod_on_ammonium_and_nitrite_inhibited_by_fa_and_f
     )  # fmt: skip
     assert rates["growth_of_AOB"] == pytest.approx(aob, rel=1e-10)
     assert rates["growth_of_NOB"] == pytest.approx(nob, rel=1e-10)
+
+
+def test_heterotroph_nitrite_reduction_half_saturates_at_latimer_value(nitrite):
+    """Nitrite to N2 by heterotrophs runs at half its nitrite-saturated rate
+    at 0.05 g N/m3 (Latimer et al. 2009), whatever the other factors: the
+    ratio of the rate at 0.05 to that at 1000 is 0.5 * 1000.05 / 1000."""
+    base = dict(SO2=0.0, SA=20.0, SNH4=10.0, SPO4=5.0, SIC=60.0, XH=1000.0)
+    name = "anoxic_growth_on_SA_NO2_N2"
+    low = _rates_at(nitrite, {**base, "SNO2": 0.05}, 293.15, 7.0)[name]
+    high = _rates_at(nitrite, {**base, "SNO2": 1000.0}, 293.15, 7.0)[name]
+    assert low > 0.0
+    assert low / high == pytest.approx(0.5 * 1000.05 / 1000.0, rel=1e-10)
 
 
 @pytest.mark.parametrize("T", [293.15, 283.15])
@@ -169,6 +181,38 @@ def test_anammox_growth_is_hao_at_30_and_20_c(nitrite):
     assert _rates_at(nitrite, state, 293.15, 7.0)["growth_of_anammox"] == pytest.approx(
         0.072 * arrhenius * terms, rel=1e-8
     )
+
+
+def _net_max_growth(nitrite, T):
+    """Maximum net growth (growth minus aerobic decay, 1/d) of AOB and NOB at
+    ``T``: every substrate saturating and the FA / FNA inhibition removed."""
+    p = nitrite.default_parameters()
+    for name in ("KI_FA_AOB", "KI_FNA_AOB", "KI_FA_NOB", "KI_FNA_NOB"):
+        p = p.at[nitrite.param_index[name]].set(1e12)
+    big = 1e9
+    state = dict(SO2=big, SNH4=big, SNO2=big, SPO4=big, XAOB=1.0, XNOB=1.0)
+    conditions = {"T": jnp.asarray([T]), "pH": jnp.asarray([7.0])}
+    r = dict(zip(nitrite.reaction_names, np.asarray(nitrite.rates(_vector(nitrite, state), p, conditions, 0))))
+    return r["growth_of_AOB"] - r["decay_of_XAOB"], r["growth_of_NOB"] - r["decay_of_XNOB"]
+
+
+def test_net_growth_follows_kaelin_and_aob_overtake_nob_when_warm(nitrite):
+    """Net growth relative to 20 C follows Kaelin et al.'s (2009) measured
+    exp(0.120 (T - 20)) for AOB and exp(0.078 (T - 20)) for NOB over 10-25 C,
+    to the fit's error (growth theta fitted with decay on its own theta: 6% for
+    AOB, 1% for NOB). NOB outgrow AOB at 16 C and AOB outgrow NOB at 25 and
+    35 C (Hellinga et al. 1998, 1999: NOB faster at typical plant temperatures,
+    AOB faster when warm)."""
+    aob20, nob20 = _net_max_growth(nitrite, 293.15)
+    for t_c in (10.0, 15.0, 25.0):
+        aob, nob = _net_max_growth(nitrite, 273.15 + t_c)
+        assert aob / aob20 == pytest.approx(np.exp(0.120 * (t_c - 20.0)), rel=0.06), t_c
+        assert nob / nob20 == pytest.approx(np.exp(0.078 * (t_c - 20.0)), rel=0.01), t_c
+    aob16, nob16 = _net_max_growth(nitrite, 289.15)
+    assert nob16 > aob16
+    for t_c in (25.0, 35.0):
+        aob, nob = _net_max_growth(nitrite, 273.15 + t_c)
+        assert aob > nob, t_c
 
 
 def _nitrifier_batch(nitrite):

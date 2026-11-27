@@ -242,10 +242,14 @@ kept equal by putting the organic-N difference in ammonium.
     Anthonisen et al. 1976's equilibria); oxygen half-saturations are apparent
     floc values, AOB 0.65 and NOB 0.23 (Daebel et al. 2007), since a model
     without diffusion takes apparent values (Picioreanu et al. 2016); growth
-    theta 1.11 for NOB (Mehrani et al. 2021). AOB growth and decay are the
-    WERF pair, 0.9 and 0.17 1/d with thetas 1.072 and 1.029 (Jones et al.
-    2005; Friedrich et al. 2017), ammonium half-saturation 0.6 (Mannucci et
-    al. 2020); NOB decay 0.089 1/d, theta 1.036 (Friedrich et al.). Anammox: Hao et
+    AOB growth and decay are the WERF pair, 0.9 and 0.17 1/d (Jones et al.
+    2005), decay theta 1.029 (Friedrich et al. 2017), ammonium half-saturation
+    0.6 (Mannucci et al. 2020); NOB decay 0.089 1/d, theta 1.036 (Friedrich et
+    al.). Growth thetas (AOB 1.104, NOB 1.075) are fitted so that net growth
+    follows Kaelin et al.'s (2009) measured exp(0.120 / 0.078 (T - 20)) with
+    decay on its own theta; AOB outgrow NOB above about 19 C (Hellinga et al.
+    1998, 1999). Heterotroph nitrite half-saturation 0.05 (Latimer et al.
+    2009). Anammox: Hao et
     al. (2002) with Arrhenius at 70 kJ/mol (Strous et al. 1999) and Strous et
     al.'s (1998) stoichiometry. No NOB mixotrophy.
 18. **Heterotrophs denitrify in two steps at ASMN's step capacities** (owner,
@@ -550,7 +554,7 @@ free nitrous acid:
 | | AOB | NOB | source |
 |---|---|---|---|
 | max growth (1/d) | 0.9 | 0.78 | Jones et al. 2005 (WERF); Hiatt & Grady 2008 |
-| growth theta | 1.072 | 1.11 | Jones et al. 2005; Mehrani et al. 2021 |
+| growth theta | 1.104 | 1.075 | fitted to Kaelin et al. 2009's net growth (below) |
 | decay (1/d), theta | 0.17, 1.029 | 0.089, 1.036 | WERF via Friedrich et al. 2017; Friedrich et al. (NOB activity loss) |
 | substrate half-saturation (g N/m3) | NH4 0.6 | NO2 0.1 | Mannucci et al. 2020 (batch); Mehrani et al. 2021 (measured 0.06-0.14) |
 | oxygen half-saturation (g/m3), apparent | 0.65 | 0.23 | Daebel et al. 2007, conventional sludge, 20 C |
@@ -604,8 +608,33 @@ grown sludge decays anoxically at 0.57 (AOB) and 0.45 (NOB) of the aerobic
 rate, which supports the 0.5 anoxic factor; their alternating reactor gave
 0.15-0.25. Growth rises at short sludge ages (Munz et al.'s literature summary:
 AOB 1.0 at 10 d, 0.5 at 20 d), so Munz et al.'s high values reflect their 2-5 d.
-On BSM1 at 15 C the AOB growth theta decides ammonium: 1.072 gives 7.84 g N/m3,
-1.11 gives 18.98; 1.072 is used, consistent with the 0.9 it normalized.
+**Growth temperature dependence (read 2026-11-27).** Kaelin et al. (2009)
+measured net growth on municipal pilot sludge between 5 and 25 C: AOB
+exp(0.120 (T - 20)), NOB exp(0.078 (T - 20)), both 0.47 1/d at 20 C, so AOB
+outgrow NOB when warm; their pilot lost NOB in summer (effluent nitrite 1.97 g
+N/m3 at 20 C, continuous aeration). Hellinga et al. (1998, 1999) use Hunik's
+activation energies, 65 kJ/mol (AOB) and 45 (NOB), theta about 1.095 and
+1.065 near 20 C, and state NOB grow faster at 16 C. Applying Kaelin's 1.127 to
+growth alone, beside Friedrich's weak decay theta, washed the AOB out of BSM1
+at 15 C (a 300-day run: ammonium 30 g N/m3); Kaelin's theta is of net growth.
+So growth theta is fitted (least squares in log, 10-25 C) to make growth
+minus decay follow Kaelin: AOB 1.104 (6% worst error), NOB 1.075 (0.6%);
+NOB outgrow AOB below about 19 C. The earlier choices, AOB 1.072 (WERF) and
+NOB 1.11 (Mehrani et al. 2021), had the order reversed. On BSM1 at 15 C the
+fitted pair leaves 17.4 g N/m3 of ammonium (Hunik's pair 14.3; AOB 1.072,
+7.84).
+
+**SHARON (Hellinga et al. 1998).** Lab CSTR without sludge retention, 35 C,
+1.5 d residence, 80 min aerobic / 40 min anoxic with methanol; centrate with
+1000 g NH4-N/m3, HCO3/N 1.1 mol/mol, pH 8.1-8.4: NOB washed out and the
+nitrite route held for two years, 80-85% conversion. Hellinga et al. found no
+ammonia inhibition of AOB up to 6000 g NH4-N/m3 at pH 7 and 40 C (about 95 g
+NH3-N/m3) and model AOB with FNA inhibition only (0.2 g HNO2-N/m3). With
+ASMN's free-ammonia inhibition of AOB (1.0 g N/m3) the level loses AOB and
+NOB in that reactor at 35 C (fixed pH 7.4, continuous aeration); without it,
+AOB stay and NOB wash out (nitrite 565, ammonium 408 g N/m3), and at 20 C both
+wash out, as Hellinga et al.'s minimum sludge ages say. The AOB inhibition
+constant is the owner's decision (2026-11-27, open).
 
 Temperature (NOB): Blackburne et al.'s Nitrospira activity 0.44 e^(0.055 (T - 15))
 (theta 1.057, 15-30 C, enriched culture, short-term) against Mehrani et al.'s
@@ -651,9 +680,10 @@ check is clean. Checked (`tests/integration/test_plantwide_nitrite.py`,
 - the AOB and NOB rates equal the forms above written out by hand, at 20 C /
   pH 7 and 15 C / pH 7.8; anammox equals Hao et al.'s at 30 and 20 C;
 - anammox: 1.32 NO2 and 0.26 NO3 per NH4, N2 1.02 (Strous);
-- on BSM1, tank 5 (g N/m3): at 20 C ammonium 2.58, nitrite 0.10, nitrate
-  13.21; at 15 C 7.84, 0.54 and 8.40; 22.4% of the influent N leaves as N2 at
-  20 C. With ASMN's NOB oxygen half-saturation (1.2) instead, nitrite 5.40 at
+- on BSM1, tank 5 (g N/m3): at 20 C ammonium 1.68, nitrite 0.08, nitrate
+  11.76; at 15 C 17.41, 0.30 and 4.33; 26.8% of the influent N leaves as N2
+  at 20 C. The heterotroph nitrite half-saturation 0.05 (Latimer et al. 2009;
+  ASMN's 0.2 left 13.21 nitrate at 20 C and 0.61 nitrite in anoxic tank 2). With ASMN's NOB oxygen half-saturation (1.2) instead, nitrite 5.40 at
   20 C and NOB washout at 15 C. The published BSM1 steady state (ASM1, 15 C)
   is 1.73 ammonium and 10.42 nitrate; it is ASM1's output with agreed
   parameters, a reference between models, not data, and its nitrifier decay
@@ -926,6 +956,13 @@ paper itself before citing it in a model file.
   https://doi.org/10.1016/j.watres.2014.12.053
 - Henze, M. et al. (1999). Activated Sludge Model No. 2d, ASM2d. *Water Sci.
   Technol.* 39(1), 165–182. https://doi.org/10.1016/S0273-1223(98)00829-4
+- Hellinga, C., Schellen, A.A.J.C., Mulder, J.W., van Loosdrecht, M.C.M. &
+  Heijnen, J.J. (1998). The SHARON process: an innovative method for nitrogen
+  removal from ammonium-rich waste water. *Water Sci. Technol.* 37(9), 135–142.
+  doi:10.1016/S0273-1223(98)00281-9
+- Hellinga, C., van Loosdrecht, M.C.M. & Heijnen, J.J. (1999). Model based
+  design of a novel process for nitrogen removal from concentrated flows.
+  *Math. Comput. Model. Dyn. Syst.* 5(4), 351–371.
 - Hiatt, W.C. & Grady, C.P.L. (2008). An updated process model for carbon
   oxidation, nitrification, and denitrification. *Water Environ. Res.* 80(11),
   2145–2156. https://doi.org/10.2175/106143008X304776
@@ -953,6 +990,9 @@ paper itself before citing it in a model file.
   systematic study of multiple minerals precipitation modelling in wastewater
   treatment. *Water Res.* 85, 359–370.
   https://doi.org/10.1016/j.watres.2015.08.041
+- Latimer, R.J., Pitt, P., Dold, P., Takács, I. & Lynch, T.J. (2009). Kinetic
+  parameters for modeling two-step nitrification and denitrification: a case
+  study. *Water Sci. Technol.* 59(4), 631–638. doi:10.2166/wst.2009.593
 - Law, Y. et al. (2019). High dissolved oxygen selection against Nitrospira
   sublineage I in full-scale activated sludge. *Environ. Sci. Technol.* 53(14),
   8157–8166. doi:10.1021/acs.est.9b00955
