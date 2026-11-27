@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate._transforms import from_unconstrained, to_unconstrained
+from aquakin.integrate.calibration.saved import read_calibration, save_calibration
 
 if TYPE_CHECKING:
     from aquakin.integrate._common import Reactor
@@ -259,6 +260,50 @@ class CalibrationResult:
     # The resolved problem and forward model the fit ran on, for
     # :func:`aquakin.sample_posterior` (``None`` on a result built by hand).
     _fit_record: _FitRecord | None = field(default=None, repr=False, compare=False)
+    # On a result read by :func:`load_calibration`: the names and model
+    # fingerprints it was saved with, so it can be saved again.
+    _model_record: dict | None = field(default=None, repr=False, compare=False)
+
+    def save(self, folder, *, model=None):
+        """Save the fit to a folder of plain files, to read back with
+        :func:`aquakin.load_calibration`.
+
+        The folder holds ``fit.yaml`` (the summary: fitted values and their
+        std, loss, optimizer status, transforms, priors, the
+        information-criteria counts, fitted initial pools, the fingerprint of
+        each model and the aquakin version), ``parameters.yaml`` (the full
+        parameter vector by name) and, when the fit has them, the matrices
+        ``covariance.csv``, ``hessian.csv``, ``joint_covariance.csv``,
+        ``joint_hessian.csv`` and the fitted initial states
+        ``initial_states.csv``, every row and column named. Floats are written
+        with ``repr``, so every number reads back exactly. The forward model
+        and the objective the fit ran on are not saved.
+
+        Parameters
+        ----------
+        folder : str or pathlib.Path
+            The folder to write (created if needed). It must not hold a saved
+            fit already.
+        model : CompiledModel, optional
+            The calibrated model (``reactor.model``), which names the full
+            parameter vector. Only needed for a result that came from neither
+            a fit nor :func:`aquakin.load_calibration` (built by hand); such a
+            result also has no model fingerprint other than this model's.
+
+        Returns
+        -------
+        pathlib.Path
+            The folder.
+
+        Raises
+        ------
+        FileExistsError
+            If the folder already holds a saved fit's files.
+        ValueError
+            If the result does not know its model and ``model`` is not given,
+            or ``model`` does not have the result's number of parameters.
+        """
+        return save_calibration(self, folder, model)
 
     def posterior_draws(self, model, n_draw: int = 200, *, seed: int = 0) -> np.ndarray:
         """Full parameter vectors drawn from the Laplace posterior.
@@ -452,3 +497,34 @@ class CalibrationResult:
             n_valid=len(curves),
             species=list(observed_species) if observed_species is not None else None,
         )
+
+
+def load_calibration(folder) -> CalibrationResult:
+    """Read a fit saved by :meth:`CalibrationResult.save`.
+
+    Every number the fit carried comes back exactly, including what the
+    information criteria check, so :func:`aquakin.aic` and
+    :func:`aquakin.compare_models` work on it as on the fit itself. Methods
+    that take the model or reactor (:meth:`~CalibrationResult.posterior_draws`,
+    :meth:`~CalibrationResult.predictive_band`) work too. The forward model the
+    fit ran on is not saved, so :func:`aquakin.sample_posterior` needs the
+    result a fit returns.
+
+    Parameters
+    ----------
+    folder : str or pathlib.Path
+        The folder written by :meth:`CalibrationResult.save`.
+
+    Returns
+    -------
+    CalibrationResult
+
+    Raises
+    ------
+    FileNotFoundError
+        If the folder does not exist, or a file of the saved fit is missing.
+    ValueError
+        If a file is damaged, or the fit was saved in another format (by a
+        newer aquakin).
+    """
+    return CalibrationResult(**read_calibration(folder))

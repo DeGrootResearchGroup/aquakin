@@ -19,7 +19,6 @@ from pathlib import Path
 
 import yaml
 
-from aquakin.study.files import read_matrix, read_named_values, read_table, read_trajectory
 from aquakin.study.study import (
     _REQUIRED,
     FISHER_FILE,
@@ -46,6 +45,7 @@ from aquakin.study.study import (
     check_study,
     load_study,
 )
+from aquakin.utils.result_files import read_matrix, read_named_values, read_table, read_trajectory
 
 __all__ = [
     "create_study",

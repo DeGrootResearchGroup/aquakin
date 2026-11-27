@@ -58,6 +58,7 @@ SHARED_INTERNALS: dict[str, frozenset[str]] = {
         {
             "_build_state_layout",
             "_is_concentration_unit",
+            "_named_positions",
             "_ordered_models",
             "_state_layout",
             "_unit_or_raise",

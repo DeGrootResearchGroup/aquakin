@@ -214,12 +214,13 @@ aquakin/
 │   │   │                            #   expressions (model.check_units) and the
 │   │   │                            #   scale-aware units_match; distinct from
 │   │   │                            #   core/units.py, which only formats units
-│   │   └── rtd.py                   # RTD analysis (E-curve, Morrill index)
+│   │   ├── rtd.py                   # RTD analysis (E-curve, Morrill index)
+│   │   └── result_files.py          # result files keyed by name (YAML / CSV),
+│   │                                #   read back bit for bit (studies, saved fits)
 │   │
 │   └── study/                       # studies: analyses saved in a project
-│       ├── study.py                 # study.yaml schema, run / check / freeze /
-│       │                            #   unfreeze / copy (`aquakin study ...`)
-│       └── files.py                 # result files keyed by name (YAML / CSV)
+│       └── study.py                 # study.yaml schema, run / check / freeze /
+│                                    #   unfreeze / copy (`aquakin study ...`)
 │
 ├── aquakin_ui/                         # browser flowsheet editor `aquakin-ui` (`ui` extra)
 │   ├── app.py                          # Editor: its state, drawing, undo, canvas events,

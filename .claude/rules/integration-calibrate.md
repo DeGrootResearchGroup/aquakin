@@ -29,21 +29,24 @@ paths:
   no name is kept alive there for an importer. **New calibration code
   goes in the `integrate/calibration/` module for its concern** (`config`,
   `observation`, `loss`, `coords`, `result`, `problem`, `objective`,
-  `multistart`, `laplace`, `driver`, `criteria`), never back into
+  `multistart`, `laplace`, `driver`, `criteria`, `saved`), never back into
   `calibrate.py`. A public name defined there (`criteria`'s `aic`, ...) is
   imported by `aquakin` and `aquakin.integrate` from that module.
 - `calibration/*` modules must not import `calibrate.py` (it imports them), and
   `calibration/__init__.py` stays a docstring with no imports, so `fisher.py`
   can import the pieces without a cycle. Cross-module references that are only
   type annotations go under `TYPE_CHECKING`.
-- `calibrate()` reads `_ReactorForwardModel` from `calibrate.py`'s namespace,
-  where `test_calibrate.py` monkeypatches it; `_IRLS_MAX_ITER` lives with
-  `_run_multistart`, where a unit test patches it. Keep both where the patch
-  lands when moving code.
-- `aquakin.plant` takes the calibration family's private names, like every
-  private `integrate` name, from `integrate/seam.py` (the rule is in
-  `plant.md`); the names are unchanged, so the plant tests' stubs on
-  `aquakin.plant.calibrate` still apply.
+- Keep `_ReactorForwardModel` in `calibrate.py`'s namespace and `_IRLS_MAX_ITER`
+  with `_run_multistart`: tests monkeypatch them there.
+- `aquakin.plant` takes the calibration family's private names from
+  `integrate/seam.py` (rule in `plant.md`).
+- **A saved fit** (`saved`): `CalibrationResult.save`, `load_calibration` and
+  the study's calibrate runner write `parameters.yaml` / `fit.yaml` /
+  `covariance.csv` through the one `write_fit_files` (a study's `fit.yaml` is
+  `fit_summary` alone). A new `CalibrationResult` field is saved and read there,
+  or `test_calibration_save.py` fails; a layout change raises `FORMAT`. `save`
+  names vectors by `problem.model`'s `param_index` / `species_index` / `models`,
+  which `_PlantParamNamespace` must offer as a `CompiledModel` does.
 
 ### The optimizer's objective scale
 
@@ -187,13 +190,9 @@ SLSQP on `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector
 (`param_draws` `vmap`ped). That program is held in `cached_jitted_solver` under
 `_FisherSetup.structure_key()`: anything new `_FisherSetup.information` bakes
 in must join that key, or a repeat call reuses a stale program.
-`discrimination.py` (`optimize_discrimination`) shares that driver
-(`_design_window`, `_start_design`, `_slsqp_design`, `_designed_experiments`)
-and builds one `_FisherSetup` per model in its fit's coordinates, both scaled
-by one common noise, so `outputs_and_jacobian` gives `Sigma^{-1/2}`-scaled
-predictions and sensitivities; its programs are keyed on both setups'
-`structure_key()`. The fit's noise is `sigma_estimate`, else
-`_CalibrationProblem.fit_sigma` (the `sigma` given, kept out of `struct_key`).
+`discrimination.py` shares that driver, builds one `_FisherSetup` per model in
+its fit's coordinates under one common noise (`sigma_estimate`, else `fit_sigma`,
+kept out of `struct_key`), and keys its programs on both setups' `structure_key()`.
 `fisher_information_from_fn` (in `fisher.py`) is the matrix-only path for a
 forward model that is not a reactor: AD Jacobian of `fn(theta)`, the same
 transforms and `FisherInformation` result, and `groups=` returning
@@ -227,8 +226,8 @@ sigma to `inf` in `_FisherSetup` and is part of the design `_structure_key`; it 
 `_CalibrationProblem` (and part of `struct_key`), so plant calibration, which
 builds its own problem, is unaffected. `CalibrationResult.posterior_draws(model, ...)`
 is the single Laplace sampler; `predictive_band` propagates its rows (or the given
-`draws=`). MCMC (`sample_posterior`) is in `integration-sampling.md`.
-**The forward-solve is a seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
+`draws=`). MCMC (`sample_posterior`) is in `integration-sampling.md`. **The
+forward-solve is a seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
 — it turns `(params, C0)` into an observed-species trajectory (via the reactor's
 diffrax `solve`, or the cap-free ESDIRK adjoint on `gradient="stable_adjoint"`),
 and exposes `solve_trajectory` + `with_dtmax`. Everything else is generic over
@@ -247,4 +246,5 @@ or a JAX runtime / `ValueError` carrying the host-callback failure that
 `RuntimeError` with the `param_halfwidth` / initial-guess / `free_ic`-bounds
 remedies is raised, chained to the first failure. Any other exception still
 propagates unchanged. `_check_start_gradient` turns a solve failure at the
-starting guess into a similar error; both are shared with `Plant.calibrate`.
+starting guess into a similar error. Both reach `Plant.calibrate` through the
+shared functions.
