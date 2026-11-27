@@ -423,7 +423,8 @@ Anything in the model's parameter vector can be fitted, and is also reached by
    `OptimizerConfig(bounds={...})`. A non-finite gradient raises an error
    naming its remedies: the cap-free adjoint
    `diff=aquakin.DifferentiationConfig(method="stable")` (batch reactors), or a
-   step cap on the reactor, `integrator=aquakin.IntegratorConfig(dtmax=...)`.
+   step cap on the reactor,
+   `settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(dtmax=...))`.
 6. **Look at `result.at_bound`.** A parameter that ends on a bound is held
    there, which can stop the others short. Widen the bound if it is not
    physical, or fix the parameter.

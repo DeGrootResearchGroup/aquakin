@@ -92,9 +92,11 @@ end.t        # [600.]
 % invisible-code-block: python
 %     assert end.t.tolist() == [600.0]
 
-Useful construction options (all keyword-only):
+Every reactor takes its solver configuration as one keyword-only value,
+`settings=aquakin.SolverSettings(...)`, with four fields:
 
-- `rtol`, `atol` — solver tolerances. `atol` may be a per-species array (use
+- `rtol`, `atol` — solver tolerances (defaults `1e-6` and a per-species floor
+  scaled to the model's concentrations). `atol` may be a per-species array (use
   `model.atol({...})` to build one) when trace intermediates sit orders of
   magnitude below the bulk species.
 - `integrator=IntegratorConfig(...)` — the ESDIRK order, step caps, and Jacobian
@@ -104,6 +106,14 @@ Useful construction options (all keyword-only):
   anaerobic digestion model ADM1, the WATS sewer models) a reverse-mode gradient
   through a reactor solve needs a step cap; see
   [Differentiating a solve](sensitivity_and_calibration.md#differentiating-a-solve).
+
+```python
+settings = aquakin.SolverSettings(rtol=1e-8, atol=model.atol({"OH": 1e-20}, default=1e-12))
+tight = aquakin.BatchReactor(model, conditions, settings=settings)
+```
+
+The same value works for every reactor, so one configuration can be built once
+and passed to several.
 
 ## Plug-flow reactor (1-D)
 
@@ -368,7 +378,8 @@ solution is the single point where the solve stopped.
 ## Choosing the integrator
 
 The integrator is configured with one value object, `aquakin.IntegratorConfig`,
-passed as `integrator=` to a reactor or to `plant.solve`. Its defaults are:
+passed as `integrator=` to `plant.solve`, or to a reactor inside its
+`SolverSettings`. Its defaults are:
 
 ```python
 aquakin.IntegratorConfig(order=3, factormax=3.0, colored_jacobian="auto",
@@ -394,7 +405,7 @@ aquakin.IntegratorConfig(order=3, factormax=3.0, colored_jacobian="auto",
 - `max_steps`: the step budget; `solver` overrides `order` with an explicit
   Diffrax solver.
 
-`rtol` and `atol` stay separate arguments of the reactor and of `plant.solve`.
+`rtol` and `atol` are separate fields of `SolverSettings` and separate arguments of `plant.solve`.
 For faster plant solves, including `forward_fast`, see
 [Plant-wide simulation](plants.md#faster-dynamic-solves).
 
