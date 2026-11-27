@@ -85,3 +85,14 @@ def test_the_plugin_readme_installs_from_this_marketplace_and_lists_every_skill(
     assert market["name"] == "aquakin"
     skills = {p.name for p in (PLUGIN / "skills").iterdir() if p.is_dir()}
     assert set(re.findall(r"`/aquakin:([a-z-]+)`", readme)) == skills
+
+
+def test_the_plugin_icon_is_a_square_png_the_directory_accepts():
+    """The plugin directory takes a square PNG of 512 to 2048 px, under 2 MB,
+    at ``.claude-plugin/icon.png``."""
+    icon = PLUGIN / ".claude-plugin" / "icon.png"
+    data = icon.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    width, height = int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    assert width == height and 512 <= width <= 2048
+    assert len(data) < 2 * 1024 * 1024
