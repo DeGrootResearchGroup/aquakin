@@ -158,6 +158,15 @@ def test_reactor_rejects_loose_solver_keywords(simple_model, cls, keyword):
         _BUILDERS[cls](simple_model, **{keyword: None})
 
 
+def test_integrate_ensemble_takes_solver_settings_as_one_keyword():
+    """``integrate_ensemble`` passes one ``settings=`` to every track's reactor,
+    with no loose ``rtol`` / ``atol`` / ``integrator`` / ``diff`` keywords."""
+    params = inspect.signature(aquakin.integrate_ensemble).parameters
+    assert params["settings"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["settings"].default == aquakin.SolverSettings()
+    assert not {"rtol", "atol", "integrator", "diff"} & set(params)
+
+
 @pytest.mark.parametrize("cls", list(_BUILDERS))
 def test_reactor_reads_its_solver_settings(simple_model, cls):
     """The fields of ``settings`` reach the reactor's solver attributes."""

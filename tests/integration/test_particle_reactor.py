@@ -185,8 +185,10 @@ def test_integrate_ensemble_forwards_adjoint_and_dtmax(simple_model):
     res = integrate_ensemble(
         simple_model, tracks, lambda pid: jnp.asarray([1.0, 0.0]),
         simple_model.default_parameters(),
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
-        integrator=aquakin.IntegratorConfig(dtmax=1.0),
+        settings=aquakin.SolverSettings(
+            diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+            integrator=aquakin.IntegratorConfig(dtmax=1.0),
+        ),
     )
     assert set(res) == {0, 1}
     for sol in res.values():

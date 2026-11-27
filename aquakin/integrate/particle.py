@@ -19,10 +19,8 @@ import jax.numpy as jnp
 
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
-    DifferentiationConfig,
     ExportableSolutionMixin,
     GradientCheckMixin,
-    IntegratorConfig,
     PlottableSolutionMixin,
     _HasNamedSpecies,
     _interp_fields_to_scalar,
@@ -224,11 +222,8 @@ def integrate_ensemble(
     C0_fn,
     params: jnp.ndarray,
     *,
-    rtol: float = 1e-6,
-    atol=None,
     n_save: int | None = None,
-    integrator: IntegratorConfig = IntegratorConfig(),
-    diff: DifferentiationConfig = DifferentiationConfig(),
+    settings: SolverSettings = SolverSettings(),
 ) -> dict[int, TrackSolution]:
     """
     Integrate the model along an ensemble of particle tracks.
@@ -243,9 +238,9 @@ def integrate_ensemble(
         ``lambda pid: model.default_concentrations()``.
     params : jnp.ndarray
         Flat parameter vector shared across all particles.
-    rtol, atol, n_save, integrator, diff : passed through to each
-        :class:`ParticleTrackReactor`. ``integrator`` / ``diff`` let an ensemble
-        of stiff tracks be differentiated the same way a single track can.
+    n_save, settings : passed through to each :class:`ParticleTrackReactor`.
+        ``settings`` (its ``integrator`` / ``diff``) lets an ensemble of stiff
+        tracks be differentiated the same way a single track can.
 
     Returns
     -------
@@ -258,7 +253,7 @@ def integrate_ensemble(
             model,
             track,
             n_save=n_save,
-            settings=SolverSettings(rtol=rtol, atol=atol, integrator=integrator, diff=diff),
+            settings=settings,
         )
         results[pid] = reactor.solve(C0_fn(pid), params=params)
     return results
