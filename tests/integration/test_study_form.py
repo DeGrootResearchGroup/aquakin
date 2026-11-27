@@ -46,6 +46,16 @@ def test_the_form_describes_every_setting_and_kind():
     assert form["fields"]["criterion"]["choices"] == ["D", "A", "E", "modified_E"]
     for name, field in form["fields"].items():
         assert field["help"].endswith("."), name
+    # A kind that studies a batch reactor shows the reactor's fields instead.
+    for kind in kinds.values():
+        assert set(kind["reactor_fields"]) <= set(form["fields"])
+        assert set(kind["reactor_required"]) <= set(kind["reactor_fields"])
+    assert kinds["simulate"]["reactor_fields"] == kinds["rank"]["reactor_fields"] == []
+    assert kinds["calibrate"]["reactor_required"] == ["free", "experiments", "observed"]
+    for kind in ("calibrate", "profile", "fisher"):
+        shown = kinds[kind]["reactor_fields"]
+        assert shown[:4] == ["description", "reactor", "experiments", "observed"]
+        assert not {"observables", "data", "initial_state", "t_span"} & set(shown)
 
 
 def test_the_plant_offers_its_streams_parameters_and_channels():
@@ -383,3 +393,81 @@ def test_the_results_of_each_analysis_read_as_plain_data(project):
     write_table(rank / "results" / "ranking.csv", {"rank": [1], "candidate": ["a"], "A": [0.5]})
     found = study_results(rank)
     assert found["criterion"] == "A" and found["table"]["candidate"] == ["a"]
+
+
+def test_a_reactor_study_is_created_with_its_data_and_model_where_a_run_reads_them(
+    project, tmp_path
+):
+    """Each experiment's table is copied in; a model file named from the project
+    or by an absolute path is stored relative to the study folder, one already
+    relative to it is kept, and a shipped model keeps its name."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    for run in ("run1", "run2"):
+        (elsewhere / f"{run}.csv").write_text("t,SNH\n0.5,1.0\n1.0,0.9\n")
+    (project / "models").mkdir()
+    (project / "models" / "local.yaml").write_text("model:\n  name: local\n  extends: asm1\n")
+    study = {
+        "kind": "calibrate",
+        "reactor": {"model": "models/local.yaml", "conditions": {"T": 288.15}},
+        "experiments": [
+            {"data": str(elsewhere / "run1.csv"), "initial": {"SNH": 20.0}},
+            {"data": str(elsewhere / "run2.csv")},
+        ],
+        "observed": ["SNH"],
+        "free": ["local.muA"],
+        "sigma": 0.1,
+    }
+    folder = create_study(project, "reactor", study)
+    stored = read_study(folder)
+    assert stored["reactor"] == {"model": "../../models/local.yaml", "conditions": {"T": 288.15}}
+    assert [e["data"] for e in stored["experiments"]] == ["run1.csv", "run2.csv"]
+    assert (folder / "run2.csv").read_text() == (elsewhere / "run2.csv").read_text()
+    assert check_study(folder).state == "not run"
+
+    absolute = {**stored, "reactor": {"model": str(project / "models" / "local.yaml")}}
+    update_study(folder, absolute)
+    assert read_study(folder)["reactor"] == {"model": "../../models/local.yaml"}
+    update_study(folder, stored)  # relative to the study folder already: kept
+    assert read_study(folder) == stored
+    shipped = {**stored, "reactor": {"model": "asm1"}, "free": ["asm1.muA"]}
+    update_study(folder, shipped)
+    assert read_study(folder)["reactor"] == {"model": "asm1"}
+
+    fisher = {
+        "kind": "fisher",
+        "reactor": {"model": "asm1"},
+        "experiments": [{"initial": {"SNH": 20.0}}],
+        "observed": ["SNH"],
+        "free": ["asm1.muA"],
+        "t_obs": [0.5],
+        "sigma": 0.1,
+    }
+    assert read_study(create_study(project, "design", fisher)) == fisher
+
+    with pytest.raises(StudyError, match=r"reactor.model: models/gone.yaml does not exist"):
+        create_study(project, "gone", {**study, "reactor": {"model": "models/gone.yaml"}})
+    assert not (project / "studies" / "gone").exists()
+
+
+def test_a_reactor_model_on_another_drive_is_kept_absolute(project, monkeypatch):
+    import aquakin.study.form as form
+
+    def across_drives(path, start):
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(form.os.path, "relpath", across_drives)
+    model = project / "models" / "local.yaml"
+    model.parent.mkdir()
+    model.write_text("model:\n  name: local\n  extends: asm1\n")
+    study = {
+        "kind": "fisher",
+        "reactor": {"model": str(model)},
+        "experiments": [{"initial": {}}],
+        "observed": ["SNH"],
+        "free": ["local.muA"],
+        "t_obs": [0.5],
+        "sigma": 0.1,
+    }
+    folder = create_study(project, "far", study)
+    assert read_study(folder)["reactor"] == {"model": str(model)}

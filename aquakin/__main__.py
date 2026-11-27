@@ -34,7 +34,8 @@ no ``type`` for a request that is not JSON or names no known command) and the
 worker keeps serving. Each study listed carries its ``state`` (one of
 :data:`aquakin.study.study.STATES`, or ``"unreadable"``), ``has_results``, its
 folder (``path``) and the spec it builds its plant from (``flowsheet``: the
-snapshot's for a frozen study), so a front end never rebuilds study paths or
+snapshot's for a frozen study; ``None`` for a study of a batch reactor, whose
+``reactor`` is then its model), so a front end never rebuilds study paths or
 decides from a state's name what it implies.
 Standard output carries replies only; anything else goes to standard error.
 """
@@ -73,7 +74,10 @@ def _list_studies(project) -> list[dict]:
                 "state": status.state,
                 "has_results": status.has_results,
                 "frozen": status.frozen,
-                "flowsheet": str(_flowsheet(path.parent, spec)),
+                "flowsheet": None
+                if spec.reactor is not None
+                else str(_flowsheet(path.parent, spec)),
+                "reactor": None if spec.reactor is None else spec.reactor.model,
                 "reasons": status.reasons,
                 "notes": status.notes,
             }
@@ -85,6 +89,7 @@ def _list_studies(project) -> list[dict]:
                 "has_results": False,
                 "frozen": False,
                 "flowsheet": None,
+                "reactor": None,
                 "reasons": [error_reply(exc)["error"]],
                 "notes": [],
             }

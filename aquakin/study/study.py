@@ -20,6 +20,11 @@ chosen initial state), ``fisher`` (the Fisher information of a sensor design),
 ``calibrate`` (a fit to observations in a data table), ``profile`` (the profile
 likelihood of one parameter) and ``rank`` (sensor sets ranked by the
 information they give).
+
+A ``calibrate``, ``profile`` or ``fisher`` study can instead study a batch
+reactor, given by a ``reactor:`` block in place of the flowsheet
+(:mod:`aquakin.study.reactor`): the runners dispatch on the target, and the
+results, their staleness and freezing work as for a plant.
 """
 
 from __future__ import annotations
@@ -79,6 +84,13 @@ from aquakin.study.common import PROFILE_FILE as PROFILE_FILE
 from aquakin.study.common import PROFILE_SUMMARY_FILE as PROFILE_SUMMARY_FILE
 from aquakin.study.common import STATES as STATES
 from aquakin.study.common import STUDIES_DIR as STUDIES_DIR
+from aquakin.study.reactor import REQUIRED as REACTOR_REQUIRED
+from aquakin.study.reactor import (
+    check_reactor_study,
+    freeze_reactor,
+    reactor_inputs,
+    run_reactor_study,
+)
 from aquakin.utils.result_files import (
     read_named_values,
     write_named_values,
@@ -173,12 +185,58 @@ class _Candidate(BaseModel):
         return [_to_float(x) for x in v] if isinstance(v, list) else _to_float(v)
 
 
+def _float_values(v):
+    return {k: _to_float(x) for k, x in v.items()} if isinstance(v, dict) else v
+
+
+class _Integrator(BaseModel):
+    """A reactor study's integrator settings; each left out keeps the reactor's own."""
+
+    model_config = _STRICT
+    rtol: float | None = None
+    atol: float | None = None
+    order: Literal[3, 5] | None = None
+    dtmax: float | None = None
+    max_steps: int | None = None
+
+    _floats = field_validator("rtol", "atol", "dtmax", mode="before")(_to_float)
+
+
+class _Reactor(BaseModel):
+    """The batch reactor a reactor study runs: its model (a model file relative
+    to the study folder, or a shipped model's name), its conditions by name, and
+    its integrator settings."""
+
+    model_config = _STRICT
+    model: str
+    conditions: dict[str, float] = {}
+    integrator: _Integrator = _Integrator()
+
+    _conditions = field_validator("conditions", mode="before")(_float_values)
+
+
+class _Experiment(BaseModel):
+    """One batch of a reactor study: its initial concentrations by species, and
+    the table of its observations (relative to the study folder) for a fit."""
+
+    model_config = _STRICT
+    data: str | None = None
+    initial: dict[str, float] = {}
+
+    _initial = field_validator("initial", mode="before")(_float_values)
+
+
 class _Study(BaseModel):
     model_config = _STRICT
     kind: Literal[KINDS]
     description: str | None = None
     # The flowsheet, relative to the study folder (a live study's plant).
     flowsheet: str = f"../../{SPEC_FILE}"
+    # In place of the flowsheet: a batch reactor (calibrate, profile, fisher),
+    # its experiments and the species observed in them.
+    reactor: _Reactor | None = None
+    experiments: list[_Experiment] = []
+    observed: list[str] = []
     # Plant parameters changed from the flowsheet's, "<model>.<param>": value.
     parameters: dict[str, float] = {}
     # "default" (each unit's own), "steady" (the steady state at the
@@ -259,18 +317,35 @@ _REQUIRED = {
 }
 
 
+def _check_target(study: _Study, where: str) -> None:
+    """A study studies the flowsheet (by default the project's) or a reactor."""
+    if study.reactor is not None:
+        if "flowsheet" in study.model_fields_set:
+            raise StudyError(f"{where}: give a flowsheet or a reactor to study, not both")
+        check_reactor_study(study, where)
+    elif study.experiments or study.observed:
+        raise StudyError(
+            f"{where}: experiments and observed are the settings of a reactor study; "
+            f"give the reactor (its model and conditions) in a reactor: block"
+        )
+
+
 def _check_kind(study: _Study, where: str) -> None:
+    _check_target(study, where)
     if study.kind == "simulate":
         if not study.streams and not study.observables:
             raise StudyError(f"{where}: a simulate study saves at least one stream or observable")
         return
+    required = _REQUIRED[study.kind] if study.reactor is None else REACTOR_REQUIRED[study.kind]
     missing = [
         name
-        for name in _REQUIRED[study.kind]
+        for name in required
         if getattr(study, name) is None or getattr(study, name) == [] or getattr(study, name) == ""
     ]
     if missing:
         raise StudyError(f"{where}: a {study.kind} study needs {', '.join(missing)}")
+    if study.kind == "fisher" and study.reactor is not None:
+        _check_sigma_count(study, where)
     if study.kind in ("calibrate", "profile"):
         if any(o.channels is None for o in study.observables):
             raise StudyError(
@@ -284,12 +359,23 @@ def _check_kind(study: _Study, where: str) -> None:
                 f"{where}: a {study.kind} study fits the likelihood of the data, so give "
                 f"the measurement error (sigma) or estimate it (estimate_sigma)"
             )
-        n_channels = sum(len(_channel_names(_channels(o))) for o in study.observables)
-        if isinstance(study.sigma, list) and len(study.sigma) != n_channels:
-            raise StudyError(
-                f"{where}: sigma gives {len(study.sigma)} errors for {n_channels} measured "
-                f"channel{'s' if n_channels != 1 else ''}; give one for all, or one per channel"
-            )
+        _check_sigma_count(study, where)
+
+
+def _check_sigma_count(study: _Study, where: str) -> None:
+    """A ``sigma`` list gives one error per measured channel (observed species)."""
+    if not isinstance(study.sigma, list):
+        return
+    n_channels = (
+        len(study.observed)
+        if study.reactor is not None
+        else sum(len(_channel_names(_channels(o))) for o in study.observables)
+    )
+    if len(study.sigma) != n_channels:
+        raise StudyError(
+            f"{where}: sigma gives {len(study.sigma)} errors for {n_channels} measured "
+            f"channel{'s' if n_channels != 1 else ''}; give one for all, or one per channel"
+        )
 
 
 def load_study(path) -> _Study:
@@ -367,6 +453,17 @@ def _flowsheet(folder: Path, study: _Study) -> Path:
     return (folder / study.flowsheet).resolve()
 
 
+def _inputs(folder: Path, study: _Study) -> tuple[dict[str, str], str]:
+    """What the study's target simulates: its inputs' fingerprints by name (the
+    flowsheet, each model and table), and one fingerprint of them all."""
+    from aquakin.plant.spec import spec_fingerprint, spec_inputs
+
+    if study.reactor is not None:
+        return reactor_inputs(folder, study, frozen=(folder / FROZEN_FILE).is_file())
+    spec = _flowsheet(folder, study)
+    return spec_inputs(spec), spec_fingerprint(spec)
+
+
 # ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
@@ -419,7 +516,11 @@ def _describe(key: str) -> str:
     if key == "flowsheet":
         return "the flowsheet"
     kind, _, name = key.partition(":")
-    return f"model '{name}'" if kind == "model" else f"the influent table of '{name}'"
+    if kind == "model":
+        return f"model '{name}'"
+    if kind == "data":
+        return f"data table '{name}'"
+    return f"the influent table of '{name}'"
 
 
 def check_study(path) -> StudyStatus:
@@ -434,7 +535,7 @@ def check_study(path) -> StudyStatus:
     -------
     StudyStatus
     """
-    from aquakin.plant.spec import aquakin_version, spec_inputs
+    from aquakin.plant.spec import aquakin_version
 
     folder = _folder(path)
     study = load_study(folder)
@@ -477,11 +578,12 @@ def check_study(path) -> StudyStatus:
         if run.get("spec_fingerprint") != frozen.get("spec_fingerprint"):
             status.reasons.append("the study was frozen on another plant than its results'")
     else:
+        target = "flowsheet" if study.reactor is None else "reactor's model or data"
         try:
-            now = spec_inputs(_flowsheet(folder, study))
+            now = _inputs(folder, study)[0]
         except Exception as exc:
             now = None
-            status.reasons.append(f"the flowsheet cannot be read: {exc}")
+            status.reasons.append(f"the {target} cannot be read: {exc}")
         if now is not None:
             status.reasons.extend(_changed_inputs(run.get("spec_inputs") or {}, now))
     if status.reasons:
@@ -776,6 +878,22 @@ def _named_parameters(plant, params) -> dict[str, float]:
     return {name: float(values[plant.parameter_index(name)]) for name in plant.parameter_names()}
 
 
+def _run_plant_study(folder: Path, study: _Study, out: Path, progress) -> list[Path]:
+    """Build the study's plant from its flowsheet and run its kind's runner."""
+    import numpy as np
+
+    from aquakin.plant import Plant
+    from aquakin.progress import report
+
+    report(progress, "setup", 0, None, "building the plant")
+    plant = Plant.from_spec(_flowsheet(folder, study))
+    params = plant.parameter_values(study.parameters) if study.parameters else None
+    params = plant.default_parameters() if params is None else params
+    y0 = _initial_state(plant, folder, study, params)
+    runner = _RUNNERS[study.kind]
+    return runner(plant, folder, study, params, np.asarray(y0), out, progress)
+
+
 def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     """Run a study and write its results and the record of the run.
 
@@ -804,10 +922,7 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
         A failure during the run itself is recorded in ``run.yaml`` and
         re-raised.
     """
-    import numpy as np
-
-    from aquakin.plant import Plant
-    from aquakin.plant.spec import aquakin_version, spec_fingerprint, spec_inputs
+    from aquakin.plant.spec import aquakin_version
 
     folder = _folder(path)
     study = load_study(folder)
@@ -819,12 +934,11 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
             f"study {folder.name} already has results; run it with replace=True to replace "
             f"them (copy the study first to keep them)"
         )
-    spec_path = _flowsheet(folder, study)
-    inputs = spec_inputs(spec_path)
+    inputs, fingerprint = _inputs(folder, study)
     record: dict[str, Any] = {
         "started": _now(),
         "aquakin": aquakin_version(),
-        "spec_fingerprint": spec_fingerprint(spec_path),
+        "spec_fingerprint": fingerprint,
         "spec_inputs": inputs,
         "study": _study_fingerprint(folder, study),
     }
@@ -834,15 +948,10 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     if partial.exists():
         shutil.rmtree(partial)  # left by a run that was killed
     try:
-        from aquakin.progress import report
-
-        report(progress, "setup", 0, None, "building the plant")
-        plant = Plant.from_spec(spec_path)
-        params = plant.parameter_values(study.parameters) if study.parameters else None
-        params = plant.default_parameters() if params is None else params
-        y0 = _initial_state(plant, folder, study, params)
-        runner = _RUNNERS[study.kind]
-        written = runner(plant, folder, study, params, np.asarray(y0), partial, progress)
+        if study.reactor is not None:
+            written = run_reactor_study(folder, study, partial, progress)
+        else:
+            written = _run_plant_study(folder, study, partial, progress)
     except BaseException as exc:
         from aquakin.progress import Cancelled
 
@@ -880,14 +989,34 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
 # ---------------------------------------------------------------------------
 
 
-def freeze_study(path) -> dict:
-    """Freeze a study on a snapshot of its plant as the flowsheet is now.
+def _freeze_plant(folder: Path, study: _Study, snapshot: Path) -> None:
+    """Write the flowsheet into ``snapshot`` with every model flattened."""
+    from aquakin.plant.spec import _located, load_spec_file, write_spec
 
-    The snapshot (``snapshot/``) holds the flowsheet, every influent table, and
-    every model flattened (its ``extends`` chain merged in, shipped models
-    included), so neither an edit to the project nor an aquakin upgrade can
-    change the plant the study runs. Results already there stay, and stay fresh
-    only if they were computed on the same plant.
+    source = (folder / study.flowsheet).resolve()
+    spec = load_spec_file(source)
+    (snapshot / "models").mkdir(parents=True)
+    models = {}
+    for name, ref in (spec.get("models") or {}).items():
+        flat = snapshot / "models" / f"{name}.yaml"
+        if ref.get("source", "shipped") != "shipped":
+            ref = {**ref, "source": str(_located(ref["source"], source.parent, name))}
+        flat.write_text(_flattened(ref, name, source.parent))
+        models[name] = {"source": str(flat)}
+        if ref.get("source", "shipped") == "shipped":
+            models[name]["copy_of"] = "shipped"
+    write_spec(dict(spec, models=models), snapshot / SPEC_FILE, base_dir=source.parent)
+
+
+def freeze_study(path) -> dict:
+    """Freeze a study on a snapshot of what it studies as that is now.
+
+    The snapshot (``snapshot/``) of a flowsheet study holds the flowsheet, every
+    influent table, and every model flattened (its ``extends`` chain merged in,
+    shipped models included); that of a reactor study, its model flattened and
+    its data tables. Neither an edit to the project nor an aquakin upgrade can
+    then change what the study runs. Results already there stay, and stay fresh
+    only if they were computed on the same plant or reactor.
 
     Parameters
     ----------
@@ -904,42 +1033,31 @@ def freeze_study(path) -> dict:
     StudyError
         If the study is already frozen.
     """
-    from aquakin.plant.spec import (
-        _located,
-        aquakin_version,
-        load_spec_file,
-        spec_fingerprint,
-        spec_inputs,
-        write_spec,
-    )
+    from aquakin.plant.spec import aquakin_version, spec_fingerprint, spec_inputs
 
     folder = _folder(path)
     study = load_study(folder)
     if (folder / FROZEN_FILE).exists():
         raise StudyError(f"study {folder.name} is already frozen")
-    source = (folder / study.flowsheet).resolve()
-    spec = load_spec_file(source)
     snapshot = folder / SNAPSHOT
     if snapshot.exists():
         shutil.rmtree(snapshot)
     try:
-        (snapshot / "models").mkdir(parents=True)
-        models = {}
-        for name, ref in (spec.get("models") or {}).items():
-            flat = snapshot / "models" / f"{name}.yaml"
-            if ref.get("source", "shipped") != "shipped":
-                ref = {**ref, "source": str(_located(ref["source"], source.parent, name))}
-            flat.write_text(_flattened(ref, name, source.parent))
-            models[name] = {"source": str(flat)}
-            if ref.get("source", "shipped") == "shipped":
-                models[name]["copy_of"] = "shipped"
-        write_spec(dict(spec, models=models), snapshot / SPEC_FILE, base_dir=source.parent)
+        if study.reactor is not None:
+            freeze_reactor(folder, study, snapshot)
+            origin = study.reactor.model
+            inputs, fingerprint = reactor_inputs(folder, study, frozen=True)
+        else:
+            _freeze_plant(folder, study, snapshot)
+            origin = study.flowsheet
+            inputs = spec_inputs(snapshot / SPEC_FILE)
+            fingerprint = spec_fingerprint(snapshot / SPEC_FILE)
         record = {
             "frozen": _now(),
             "aquakin": aquakin_version(),
-            "from": study.flowsheet,
-            "spec_fingerprint": spec_fingerprint(snapshot / SPEC_FILE),
-            "spec_inputs": spec_inputs(snapshot / SPEC_FILE),
+            "from": origin,
+            "spec_fingerprint": fingerprint,
+            "spec_inputs": inputs,
         }
     except BaseException:
         shutil.rmtree(snapshot, ignore_errors=True)

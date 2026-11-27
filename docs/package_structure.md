@@ -216,8 +216,14 @@ aquakin/
 │   │                                #   read back bit for bit (studies, saved fits)
 │   │
 │   └── study/                       # studies: analyses saved in a project
-│       └── study.py                 # study.yaml schema, run / check / freeze /
-│                                    #   unfreeze / copy (`aquakin study ...`)
+│       ├── common.py                # file names, kinds, states, StudyError, time grids
+│       ├── study.py                 # study.yaml schema, run / check / freeze /
+│       │                            #   unfreeze / copy (`aquakin study ...`)
+│       ├── reactor.py               # the reactor: target (a batch reactor in place
+│       │                            #   of the flowsheet): inputs, freeze, runners
+│       ├── analysis.py              # what both targets share: fit settings, data
+│       │                            #   reading, the Fisher and profile writers
+│       └── form.py                  # setting a study up and reading its results
 │
 ├── aquakin_ui/                         # browser flowsheet editor `aquakin-ui` (`ui` extra)
 │   ├── app.py                          # Editor: its state, drawing, undo, canvas events,

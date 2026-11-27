@@ -231,8 +231,9 @@ model and the aquakin version), `parameters.yaml` (the full parameter vector
 by name) and, when the fit has them, the covariance and Hessian matrices and
 the fitted initial states as CSV tables with named rows and columns. A
 calibration study writes its `fit.yaml`, `parameters.yaml` and
-`covariance.csv` the same way. `save` refuses a folder that already holds a
-saved fit.
+`covariance.csv` the same way, and a
+[study of a batch reactor](plant_files.md#a-study-of-a-batch-reactor) saves its
+whole fit with `save`. `save` refuses a folder that already holds a saved fit.
 
 A loaded fit works wherever only its numbers are needed: the information
 criteria and `compare_models` (it still knows which observations it was fitted
