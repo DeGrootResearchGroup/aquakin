@@ -4,7 +4,7 @@
 [![codecov](https://codecov.io/gh/DeGrootResearchGroup/aquakin/branch/main/graph/badge.svg)](https://codecov.io/gh/DeGrootResearchGroup/aquakin)
 [![Docs](https://readthedocs.org/projects/aquakin/badge/?version=latest)](https://aquakin.readthedocs.io/en/latest/)
 [![PyPI](https://img.shields.io/pypi/v/aquakin.svg)](https://pypi.org/project/aquakin/)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24573077.svg)](https://doi.org/10.5281/zenodo.24573077)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21268513.svg)](https://doi.org/10.5281/zenodo.21268513)
 
 **Differentiable reaction kinetics for water and wastewater treatment.**
 
@@ -242,7 +242,9 @@ pytest -m validation                      # validation against published data
 
 If you use aquakin in your work, please cite it using the metadata in
 [`CITATION.cff`](https://github.com/DeGrootResearchGroup/aquakin/blob/main/CITATION.cff) (DOI
-[10.5281/zenodo.24573077](https://doi.org/10.5281/zenodo.24573077)).
+[10.5281/zenodo.21268513](https://doi.org/10.5281/zenodo.21268513), which
+always resolves to the latest release; each release also has its own DOI on
+Zenodo).
 
 ## License
 
