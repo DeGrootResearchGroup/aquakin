@@ -51,6 +51,16 @@ following the project folder (`aquakin_ui/disk.py`, `.claude/rules/ui.md`).
   the run holds its study (its own pid in `running.yaml`); the assistant polls
   `study_status`.
 
+## The script tool (`scripts.py`)
+
+- **`run_python` is offered only with `aquakin mcp --allow-python`**
+  (`build_server(allow_python=True)`), and is `"overwrite"`: it runs any code.
+  Never add it to `TOOLS`, and never let another tool run code on its behalf.
+- Run a script in a subprocess with `sys.executable` (so `aquakin` imports),
+  in the project folder, with a timeout and `MPLBACKEND=Agg`; return its output
+  bounded (`OUTPUT_LIMIT`) and the files it wrote. Never write over a file to
+  keep the script (`save_as`), and never outside the project.
+
 ## Imports and packaging
 
 - **Only `server.py` imports `mcp`, and only inside `build_server`**, so

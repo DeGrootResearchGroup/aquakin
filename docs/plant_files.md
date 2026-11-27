@@ -353,7 +353,7 @@ Installing aquakin installs two commands:
 | `aquakin study unfreeze <study> --discard-results` | makes it follow the flowsheet again and deletes its results |
 | `aquakin study copy <study> <name>` | copies the study, results included, beside it under `<name>`, and prints the new folder |
 | `aquakin catalog` | prints every unit kind a flowsheet file may use, with its settings and ports, as JSON |
-| `aquakin mcp` | serves aquakin's tools to an AI assistant (see [Using aquakin from an AI assistant](ai_assistants.md)) |
+| `aquakin mcp [--allow-python]` | serves aquakin's tools to an AI assistant; `--allow-python` also lets it run Python scripts it writes (see [Using aquakin from an AI assistant](ai_assistants.md)) |
 | `aquakin-ui [<flowsheet>] [--port <n>] [--no-browser]` | opens the editor; `--port` serves it on a fixed port (by default a free one), and `--no-browser` prints the address instead of opening a browser |
 
 `<study>` is the study's folder, such as `studies/effluent`. A command that

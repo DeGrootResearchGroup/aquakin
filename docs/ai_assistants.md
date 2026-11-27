@@ -81,6 +81,22 @@ In Claude Code, the assistant can also run Python itself, so it can use the
 whole [public API](public_api.md) directly, including analyses no study kind
 covers.
 
+## Letting the assistant run Python
+
+Other apps, Claude Desktop among them, cannot run code themselves. Start the
+server with `aquakin mcp --allow-python` (in Claude Desktop's config,
+`"args": ["mcp", "--allow-python"]`) to add one more tool, `run_python`. With
+it the assistant writes a Python script and runs it in your project folder, so
+it can use any part of aquakin: a reactor fit, a sensitivity analysis, a plot
+saved to a file. The tool returns what the script printed and the files it
+wrote, and can keep the script in the project so you can run it again.
+
+A script can do anything Python can on your computer, so the tool is off
+unless you turn it on, and your app asks before each run. Read the script
+before you approve it. A script is stopped after 5 minutes unless the
+assistant asks for longer (up to an hour); a long analysis is better run as a
+study.
+
 ## Watching in the editor
 
 Keep the [flowsheet editor](plant_files.md#the-flowsheet-editor) open on the

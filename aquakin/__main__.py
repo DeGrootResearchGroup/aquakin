@@ -322,9 +322,15 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve", help="answer JSON-line requests from a front end")
     sub.add_parser("catalog", help="print the unit catalogue as JSON")
-    sub.add_parser(
+    mcp = sub.add_parser(
         "mcp",
         help='serve aquakin\'s tools to an AI assistant over MCP (needs the "mcp" extra)',
+    )
+    mcp.add_argument(
+        "--allow-python",
+        action="store_true",
+        help="also let the assistant run Python scripts it writes (each run is approved "
+        "in the assistant's app)",
     )
     study = sub.add_parser("study", help="run, check, freeze, unfreeze or copy a study")
     action = study.add_subparsers(dest="action", required=True)
@@ -361,7 +367,7 @@ def main(argv=None) -> int:
     elif args.command == "mcp":
         from aquakin.mcp.server import main as serve_mcp
 
-        serve_mcp()
+        serve_mcp(allow_python=args.allow_python)
     elif args.command == "study":
         return _study_command(args)
     else:
