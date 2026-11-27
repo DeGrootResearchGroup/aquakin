@@ -58,3 +58,49 @@ def test_the_check_notices_a_settler_without_factors():
     )
     missing = set(settler.particulate_species) - set(settler.tss_factors)
     assert missing == {"XH", "XPAO", "XPP", "XPHA", "XAUT", "XTSS"}
+
+
+def test_iron_precipitates_weigh_their_molar_mass_in_the_settler():
+    """asm2d_chemp's iron solids are in mol/m3; their TSS factors (from the
+    stoichiometry) are molar masses giving g TSS, the TSS state's unit, so the
+    settler applies them as they are and the unit audit has nothing to report."""
+    from aquakin.plant._constants import lumped_tss_weights
+
+    model = aquakin.load_model("asm2d_chemp")
+    parts = [s for s in model.species if s.startswith("X")]
+    settler = TakacsClarifier(
+        name="s", model=model, area=1500.0, height=4.0, underflow_Q=1.8e4,
+        particulate_species=parts, tss_factors=lumped_tss_weights(model),
+    )
+    factors = dict(zip(parts, settler._part_tss_factors, strict=True))
+    assert factors["X_FePO4"] == pytest.approx(150.82, rel=1e-12)
+    assert factors["X_FeOH3"] == pytest.approx(106.87, rel=1e-12)
+    assert settler.assumed_units() == {}
+
+
+_MOLAR_TSS = """
+model: {name: molar_tss, version: "1.0", description: "test", references: []}
+species:
+  - {name: S,    units: "g_COD/m3", default_concentration: 1.0}
+  - {name: XB,   units: "g_COD/m3", default_concentration: 1.0}
+  - {name: XTSS, units: "mol/m3",   default_concentration: 1.0}
+conditions: [{name: T, default: 293.15}]
+reactions:
+  - name: growth
+    rate: "k * [S]"
+    parameters: {k: {value: 1.0}}
+    stoichiometry: {S: -1, XB: 1, XTSS: 0.01}
+"""
+
+
+def test_a_tss_state_in_moles_is_reported_by_the_unit_audit(tmp_path):
+    """The settling parameters are per g/m3; a TSS state in mol/m3 cannot be
+    put on that basis, so the settler reports it as an assumed unit."""
+    path = tmp_path / "molar_tss.yaml"
+    path.write_text(_MOLAR_TSS)
+    model = aquakin.load_model_from_file(path)
+    settler = TakacsClarifier(
+        name="s", model=model, area=100.0, height=4.0, underflow_Q=100.0,
+        particulate_species=["XB", "XTSS"], tss_factors={"XB": 0.01, "XTSS": 0.0},
+    )
+    assert settler.assumed_units() == {"XTSS": "g/m3"}

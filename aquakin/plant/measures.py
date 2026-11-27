@@ -433,6 +433,11 @@ def as_measure(channel):
 # ---------------------------------------------------------------------------
 
 
+# Ammonium, by name: the composition table gives it the same content as soluble
+# organic nitrogen (ASM1's SND).
+_AMMONIUM = ("SNH", "SNH4")
+
+
 def _gas_phase(model) -> set[str]:
     return {s for s in model.species if s.startswith("S_gas_")}
 
@@ -452,7 +457,61 @@ def _nitrogen_classes(model) -> tuple[set[str], set[str]]:
     return nox, gases
 
 
-def _composition_weights(model, keyword: str, params) -> np.ndarray:
+def ammonium_species(model) -> str:
+    """The ammonium species of a model, by name (``SNH`` or ``SNH4``).
+
+    Ammonium and soluble organic nitrogen (ASM1's ``SND``) carry the same
+    content per unit (1 g N, no COD), so the composition table cannot tell
+    them apart; the name does, as it does for the other nitrogen classes.
+
+    Parameters
+    ----------
+    model : CompiledModel
+        The model.
+
+    Returns
+    -------
+    str
+        The ammonium species.
+
+    Raises
+    ------
+    KeyError
+        If the model has neither ``SNH`` nor ``SNH4``.
+    """
+    found = [s for s in _AMMONIUM if s in model.species_index]
+    if not found:
+        raise KeyError(
+            f"model '{model.name}' has no ammonium species ({', '.join(_AMMONIUM)}); "
+            "read its nitrogen as TKN instead."
+        )
+    return found[0]
+
+
+def composition_weights(model, keyword: str, params) -> np.ndarray:
+    """Species weights of a composition measurement (``COD``, ``TKN``, ``NOx``,
+    ``TN`` or ``TP``), in g/m³ per unit of each species.
+
+    Parameters
+    ----------
+    model : CompiledModel
+        The model.
+    keyword : str
+        One of ``"COD"``, ``"TKN"``, ``"NOx"``, ``"TN"``, ``"TP"``.
+    params : array-like or None
+        Parameter vector whose composition fractions (``i_XB``, ``iN_BM``, ...)
+        the weights use; the model defaults if ``None``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Weight per species, shape ``(n_species,)``.
+
+    Raises
+    ------
+    KeyError
+        If the model has no composition table.
+    """
     from aquakin.utils.composition import canonical_content
 
     component = {"COD": "COD", "TP": "P"}.get(keyword, "N")
@@ -510,7 +569,7 @@ def _keyword(model, keyword: str, params) -> tuple[np.ndarray, float, float]:
     if keyword == "T":
         return zero, 0.0, 1.0
     if keyword in _COMPOSITION:
-        w = _composition_weights(model, keyword, params)
+        w = composition_weights(model, keyword, params)
         if not np.any(w):
             raise KeyError(f"model '{model.name}' carries nothing measured as {keyword}")
         return w, 0.0, 0.0
@@ -566,7 +625,7 @@ def _channel(model, channel, params) -> tuple[np.ndarray, float, float]:
     if channel == "T":
         return zero, 0.0, 1.0
     if channel in _COMPOSITION:
-        w = _composition_weights(model, channel, params)
+        w = composition_weights(model, channel, params)
         if not np.any(w):
             raise KeyError(f"model '{model.name}' carries nothing measured as {channel}")
         return w, 0.0, 0.0

@@ -191,7 +191,7 @@ results have gone stale.
 | Score BSM1 / BSM2 performance | `evaluate_bsm1` → `BSM1Evaluation`, `evaluate_bsm2` → `BSM2Evaluation` (`NoDigesterError`) |
 | Effluent quality / operating-cost indices | `effluent_quality_index`, `operational_cost_index`, `operational_cost_index_bsm2` |
 | Sludge and effluent statistics | `sludge_metrics` → `SludgeMetrics`, `effluent_averages`, `time_average` |
-| Lumped measurements from model states | `derived_COD`, `derived_BOD`, `derived_TKN`, `derived_TSS` |
+| Lumped measurements from model states | `derived_COD`, `derived_BOD`, `derived_TKN`, `derived_NOx`, `derived_TSS` |
 | Greenhouse-gas footprint | `carbon_footprint` → `CarbonFootprint`, `direct_n2o_emission`, `stripped_n2o`, `n2o_n_to_co2e`, `methane_to_co2e`, `co2e_from_energy`, `carbon_mass` |
 | Monetized operating cost | `operating_cost` → `OperatingCost`, `CostFactors` |
 | Compare KPIs across scenarios | `kpi_comparison` → `KPIComparison` |

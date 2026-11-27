@@ -61,7 +61,7 @@ _NITRATE = {"SNO", "SNO3", "SNOX"}  # COD = iCOD_NO3, N = 1
 # hydroxide, the ADM inorganic-carbon / charge / gas-CO2 states): these
 # legitimately map to ``{}``. A species that is neither a role carrier nor in
 # these sets fell through unrecognised -- see ``_warn_unmapped``.
-_ASM_NO_CONTENT = {"SALK", "XSS", "XTSS", "XMeOH", "SHCO"}
+_ASM_NO_CONTENT = {"SALK", "XSS", "XTSS", "XMeOH", "SHCO", "S_Fe3", "X_FeOH3"}
 _ADM1_NO_CONTENT = {"S_IC", "S_cat", "S_an", "S_gas_co2"}
 
 
@@ -161,6 +161,8 @@ def _asm_composition(
             c = {"P": 1.0}
         elif sp == "XMeP":  # precipitated phosphate
             c = {"P": 1.0 / fMeP} if fMeP else {}
+        elif sp == "X_FePO4":  # strengite, in mol/m3: one mole of P per mole
+            c = {"P": P("P_MW")}
         elif sp not in _ASM_NO_CONTENT:
             recognized = False
         if not recognized:
@@ -250,6 +252,7 @@ _BUILDERS = {
     "asm3_2step_anammox": _asm_composition,
     "asm3_2step_comammox": _asm_composition,
     "asm2d": _asm_composition,
+    "asm2d_chemp": _asm_composition,
     "asm2d_tud": _asm_composition,
     "asm3": _asm_composition,
     "asm3_biop": _asm_composition,

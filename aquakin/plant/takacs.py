@@ -61,6 +61,7 @@ from aquakin.plant._constants import (
     ASM1_TSS_SPECIES,
     EPS_Q,
     grams_per_m3_factors,
+    lumped_tss_state,
     species_indices,
 )
 from aquakin.plant._flow_split import (
@@ -221,7 +222,10 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
         the model's default particulate concentrations.
     tss_factors : dict of str to float
         TSS per unit of each particulate species (g TSS/g COD); a species not
-        listed counts 1.
+        listed counts 1. For a model with a TSS state (``XTSS`` / ``XSS``) a
+        factor gives TSS in that state's unit, whatever the species' own unit
+        (a precipitate in mol/m³ weighs its molar mass), as
+        :func:`~aquakin.plant._constants.lumped_tss_weights` reads them.
     input_port : str
     overflow_port : str
     underflow_port : str
@@ -302,7 +306,15 @@ class TakacsClarifier(FlowParameterized, CouplingAware):
                 for sp, f in zip(self.particulate_species, self._part_tss_factors, strict=True)
                 if f != 0.0
             ]
-            factors, self._unconverted_tss = grams_per_m3_factors(self.model, solids)
+            # A model with a TSS state weighs its solids into that state's
+            # unit, so that unit, not each species', is the one converted.
+            tss_state = lumped_tss_state(self.model)
+            if tss_state is None:
+                factors, self._unconverted_tss = grams_per_m3_factors(self.model, solids)
+            else:
+                (factor,), unconverted = grams_per_m3_factors(self.model, [tss_state])
+                factors = [factor] * len(solids)
+                self._unconverted_tss = [tss_state] if unconverted else []
             to_g = dict(zip(solids, factors, strict=True))
             self._part_tss_factors = [
                 f if to_g.get(sp, 1.0) == 1.0 else f * to_g[sp]

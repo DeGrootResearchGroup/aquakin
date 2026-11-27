@@ -333,16 +333,28 @@ def test_a2o_clarifier_settles_the_models_particulates(name, use_takacs):
         ]  # fmt: skip
 
 
+def _without_iron_solids(plant, y):
+    """``y`` with every unit's strengite and ferrihydrite set to zero."""
+    names = [name for unit in plant.state_names().values() for name in unit]
+    iron = [i for i, n in enumerate(names) if n.endswith(("X_FePO4", "X_FeOH3"))]
+    return jnp.asarray(y).at[jnp.asarray(iron)].set(0.0)
+
+
 def test_a2o_on_asm2d_chemp_has_the_asm2d_dynamics_without_metal(asm2d, asm2d_chemp):
-    """With no metal dosed, ``asm2d_chemp`` is ``asm2d`` with its (idle)
-    precipitation swapped, so the A²O plant's right-hand side on the warm start
-    agrees, state by state, with the ``asm2d`` plant's: the influent, warm start,
-    aeration and settler all carry over to the extending model."""
+    """With no metal dosed and no iron solids, ``asm2d_chemp`` is ``asm2d`` with
+    its (idle) precipitation swapped, so the A²O plant's right-hand side on the
+    warm start agrees, state by state, with the ``asm2d`` plant's: the influent,
+    warm start, aeration and settler all carry over to the extending model. The
+    iron solids' nucleation seeds are zeroed: they are suspended solids, so the
+    settler would weigh them."""
     rates = {}
     for model in (asm2d, asm2d_chemp):
         plant = build_a2o(model)
         plant.add_influent("feed", a2o_influent(model))
-        rates[model.name] = plant.named_state(plant.derivative(a2o_warm_start(plant)))
+        y0 = a2o_warm_start(plant)
+        if model is asm2d_chemp:
+            y0 = _without_iron_solids(plant, y0)
+        rates[model.name] = plant.named_state(plant.derivative(y0))
     base, chemp = rates["asm2d"], rates["asm2d_chemp"]
     assert set(base) == set(chemp)
     compared = 0

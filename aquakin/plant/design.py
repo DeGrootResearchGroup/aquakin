@@ -32,9 +32,6 @@ import jax.numpy as jnp
 
 from aquakin.plant._constants import (
     EPS_Q,
-    lumped_tss_state,
-    lumped_tss_weights,
-    tss_concentration,
 )
 from aquakin.plant.metrics import (
     derived_BOD,
@@ -424,21 +421,6 @@ def _pick_influent(plant, influent_name):
     )
 
 
-def _tss_of(model):
-    """The TSS of a concentration array of ``model`` (g/m³).
-
-    A model that tracks its suspended solids as a state (ASM2d, ASM3) weighs
-    each particulate by its own TSS factor (:func:`lumped_tss_weights`), the
-    weighting its Takács settler's blanket uses; any other is read with the
-    ASM1 benchmark convention of :func:`derived_TSS`.
-    """
-    if lumped_tss_state(model) is None:
-        return lambda C: derived_TSS(C, model)
-    weights = lumped_tss_weights(model)
-    vec = jnp.asarray([weights.get(s, 0.0) for s in model.species])
-    return lambda C: tss_concentration(C, vec)
-
-
 def sludge_metrics(
     plant: Plant,
     solution: PlantSolution,
@@ -503,14 +485,13 @@ def sludge_metrics(
     reactors = _reactor_units(plant, reactor_units)
     model = plant.units[reactors[0]].model
     t = solution.t
-    tss = _tss_of(model)
 
     # ----- System solids inventory (g): reactors + secondary clarifier. -----
     reactor_volume = sum(float(plant.units[n].volume) for n in reactors)
     reactor_solids = jnp.zeros_like(t)  # (n_t,) g
     for name in reactors:
         X = solution.unit_state(name)  # (n_t, n_species)
-        reactor_solids = reactor_solids + tss(X) * float(plant.units[name].volume)
+        reactor_solids = reactor_solids + derived_TSS(X, model) * float(plant.units[name].volume)
 
     clarifier_solids = jnp.zeros_like(t)
     for name, unit in plant.units.items():
@@ -528,8 +509,8 @@ def sludge_metrics(
     eff_port, w_port = _srt_ports(plant, effluent_port, waste_port)
     eff = plant.stream(solution, eff_port, params_full)
     waste = plant.stream(solution, w_port, params_full)
-    eff_solids_rate = eff.Q * tss(eff.C)  # (n_t,) g/d
-    waste_solids_rate = waste.Q * tss(waste.C)
+    eff_solids_rate = eff.Q * derived_TSS(eff.C, model)  # (n_t,) g/d
+    waste_solids_rate = waste.Q * derived_TSS(waste.C, model)
     loss_mean = float(time_average(eff_solids_rate + waste_solids_rate, t))  # g/d
 
     SRT = inventory_mean / (loss_mean + EPS_Q)  # days

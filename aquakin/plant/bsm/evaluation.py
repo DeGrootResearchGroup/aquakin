@@ -50,7 +50,6 @@ from aquakin.plant.balance import oxygen_transfer_history, unit_terms
 from aquakin.plant.errors import NoDigesterError
 from aquakin.plant.metrics import (
     _EQI_WEIGHTS,
-    _composition,
     aeration_energy,
     bsm2_oci_terms,
     carbon_mass,
@@ -689,7 +688,7 @@ def evaluate_bsm2(
         comp = _reconstruct(plant, solution, params_full, [_EFFLUENT_PORT, "bypass_split.bypass"])
         Qt, Ct = comp[_EFFLUENT_PORT]
         Qb, Cb = comp["bypass_split.bypass"]
-        _, _, f_P = _composition(model, params_asm)
+        f_P = float(params_asm[model.param_index["f_P"]])
         eqi, bod_average = _bypass_bod_correction(t, eqi, Qt, Ct, Qb, Cb, model, f_P)
         averages = {**averages, "BOD": bod_average}
 

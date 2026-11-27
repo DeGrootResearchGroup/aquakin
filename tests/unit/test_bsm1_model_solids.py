@@ -129,8 +129,8 @@ def test_tss_without_composition_reads_declared_units(tmp_path):
 
 
 def test_asm2d_chemp_tss_matches_asm2d():
-    # asm2d_chemp has no composition table; its TSS species now match those
-    # asm2d gets from its table, and the Takacs settler audits clean.
+    # asm2d_chemp's TSS species (its COD-bearing particulates) match asm2d's,
+    # and the Takacs settler audits clean.
     chemp = aquakin.load_model("asm2d_chemp")
     assert solids_species(chemp)[1] == solids_species(aquakin.load_model("asm2d"))[1]
     aeration = {f"tank{i}": Aeration(kla=240.0, species="SO2") for i in (3, 4, 5)}

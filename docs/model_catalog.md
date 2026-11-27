@@ -87,9 +87,10 @@ phosphorus-accumulating organisms), a starting point for trying the model.
   orthophosphate as strengite (FePO₄) and competes to form ferrihydrite
   (Fe(OH)₃), with the rate driven by the mineral saturation index — so the
   achievable effluent phosphate carries a pH-dependent floor. The bounded rate
-  form keeps a dynamic solve differentiable. The worked example of the
-  precipitation engine composed with a full biological model. *(20 species, 21
-  reactions.)* Precipitation framework after Kazadi Mbamba et al. (2015).
+  form keeps a dynamic solve differentiable. The precipitates add their molar
+  mass to the suspended solids (`XTSS`), so the settler and the TSS readings
+  count them. The worked example of the precipitation engine composed with a
+  full biological model. *(20 species, 21 reactions.)* Precipitation framework after Kazadi Mbamba et al. (2015).
 
 `asm3`
 : Activated Sludge Model No. 3: a revision of ASM1 in which stored internal

@@ -221,9 +221,10 @@ def test_a_file_model_named_like_a_shipped_one_borrows_no_table(tmp_path):
     assert composition_base(aquakin.load_model("asm1")) == "asm1"
 
 
-def test_channels_a_model_cannot_give_or_name_twice(tmp_path):
-    with pytest.raises(KeyError, match="no COD for model 'asm2d_chemp'"):
-        measure_map(aquakin.load_model("asm2d_chemp"), ("COD",))
+def test_channels_a_model_cannot_give_or_name_twice(tmp_path, simple_model):
+    # A model with no composition table (the A -> B decay fixture) has no COD.
+    with pytest.raises(KeyError, match=f"no COD for model '{simple_model.name}'"):
+        measure_map(simple_model, ("COD",))
     text = (Path(__file__).parents[1] / "fixtures" / "simple_model.yaml").read_text()
     path = tmp_path / "tn.yaml"
     path.write_text(

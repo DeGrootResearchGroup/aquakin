@@ -84,7 +84,9 @@ warning). So a non-ASM1 model must name its own `settling_species` /
 families) takes its settler `tss_factors` from `_constants.lumped_tss_weights`**
 (solved from the stoichiometry: each particulate at its `iTSS` factor, the TSS
 state at 0), as `build_a2o`, `build_bsm1` (unless given `tss_species`) and
-`design.sludge_metrics` do; the Takács
+`derived_TSS` do. Such a weight gives TSS in the TSS state's unit whatever the
+species' own (a mol/m³ precipitate weighs its molar mass), so the Takács
+converts by the TSS state's unit for such a model, never per species; the Takács
 `tss_factors.get(sp, 1.0)` fallback otherwise adds COD, g P and the TSS state
 together into the TSS that sets the settling velocity. A shipped composition
 for such a model sets the TSS state with `with_lumped_tss`, never by hand. TSS

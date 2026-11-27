@@ -237,8 +237,7 @@ corrects oxygen only; `required_signals` must de-duplicate. **`rhs` and
 tss_species=)` and `build_a2o` take clarifier solids from `_constants.solids_species`
 (never a fixed list), which must return the ASM1 constants unchanged for a model whose
 particulates are exactly the ASM1 settling species (so ASM1 stays bit-identical).
-The BSM1 metrics
-(`derived_TSS`, `evaluate_bsm1`'s EQI) still use the ASM1 species only.
+The effluent metrics read the model too (`plant-audits.md`).
 
 **Shared numeric constants (`plant/_constants.py`).** Use `EPS_Q` for every
 flow-, volume- or mass-weighted division guard and `SECONDS_PER_DAY` /

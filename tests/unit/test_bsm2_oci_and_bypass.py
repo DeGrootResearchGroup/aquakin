@@ -13,7 +13,6 @@ import pytest
 from aquakin.plant.bsm import bsm2_asm1_model
 from aquakin.plant.bsm.evaluation import _bypass_bod_correction
 from aquakin.plant.metrics import (
-    _composition,
     bsm2_oci_terms,
     derived_BOD,
     operational_cost_index_bsm2,
@@ -52,7 +51,7 @@ def test_bsm2_oci_net_heating_positive_branch():
 
 def test_bypass_bod_correction_zero_and_positive_bypass():
     model = bsm2_asm1_model()
-    _, _, f_P = _composition(model, model.default_parameters())
+    f_P = float(model.default_parameters()[model.param_index["f_P"]])
     Ct = model.concentrations({"SS": 2.0, "XS": 5.0, "XB_H": 1.0}, base="zero")  # treated
     Cb = model.concentrations({"SS": 60.0, "XS": 200.0, "XB_H": 30.0}, base="zero")  # raw bypass
     t = jnp.array([0.0, 1.0])

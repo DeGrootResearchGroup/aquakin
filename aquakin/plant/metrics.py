@@ -46,7 +46,11 @@ from aquakin.plant._constants import (
     HOURS_PER_DAY,
     SECONDS_PER_DAY,
     cod_content,
+    lumped_tss_state,
+    lumped_tss_weights,
+    tss_concentration,
 )
+from aquakin.plant.measures import ammonium_species, composition_weights
 
 if TYPE_CHECKING:  # pragma: no cover
     from aquakin.core.model import CompiledModel
@@ -64,7 +68,7 @@ _EQI_WEIGHTS = {
     "COD": 1.0,
     "BOD": 2.0,
     "TKN": 30.0,  # total Kjeldahl nitrogen
-    "SNO": 10.0,  # nitrate-nitrogen (the SNO species column)
+    "SNO": 10.0,  # nitrate plus nitrite nitrogen (derived_NOx)
 }
 
 
@@ -84,27 +88,6 @@ def _conc_model(C, model):
     if _is_stream(C):
         return C.C, (model if model is not None else C.model)
     return C, model
-
-
-def _composition(model, params=None):
-    """``(i_XB, i_XP, f_P)`` for the derived TKN and BOD quantities.
-
-    Read from ``params`` when given (the composition the simulation actually
-    used, so a calibrated or benchmark-specific value such as the BSM2
-    ``i_XB = 0.08`` is honoured), else from the model's declared defaults, else
-    the standard ASM1 values. This keeps the post-processed nitrogen and BOD
-    consistent with the model the states came from instead of a fixed constant.
-    """
-
-    def g(name, fallback):
-        idx = getattr(model, "param_index", {}).get(name) if model else None
-        if idx is None:
-            return fallback
-        if params is not None:
-            return float(params[idx])
-        return float(model.default_parameters()[idx])
-
-    return g("i_XB", 0.086), g("i_XP", 0.06), g("f_P", 0.08)
 
 
 def _effluent_args(stream_or_t, C, Q, model):
@@ -170,14 +153,58 @@ def time_average(integrand, t, axis: int = 0):
 
 
 def derived_TSS(C, model: CompiledModel | None = None) -> jnp.ndarray:
-    """Total suspended solids from ASM1 particulate species.
+    """Total suspended solids (g TSS/m³).
 
-    ``TSS = 0.75 × (XS + XI + XB_H + XB_A + XP)``. Scalar for 1-D ``C``, a
-    leading-axis vector for 2-D ``C``. ``C`` may be a concentration array (with
-    an explicit ``model``) or a ``StreamSeries`` (model taken from it).
+    A model that tracks its suspended solids as a state (``XTSS`` in ASM2d,
+    ``XSS`` in ASM3) weighs each particulate by its own TSS factor
+    (:func:`~aquakin.plant._constants.lumped_tss_weights`, read from the
+    stoichiometry), the weighting its Takács settler uses. An ASM1-family model
+    uses the benchmark convention ``0.75 × (XS + XI + XB_H + XB_A + XP)``
+    (Copp 2002). Scalar for 1-D ``C``, a leading-axis vector for 2-D ``C``.
+    ``C`` may be a concentration array (with an explicit ``model``) or a
+    ``StreamSeries`` (model taken from it).
+
+    Raises
+    ------
+    ValueError
+        If the model has neither a TSS state nor the ASM1 particulates.
     """
     C, model = _conc_model(C, model)
+    if lumped_tss_state(model) is not None:
+        weights = lumped_tss_weights(model)
+        return tss_concentration(C, jnp.asarray([weights.get(s, 0.0) for s in model.species]))
+    if not all(s in model.species_index for s in _TSS_SPECIES):
+        raise ValueError(
+            f"model '{model.name}' has no TSS state (XTSS / XSS) and not the ASM1 particulates "
+            f"{list(_TSS_SPECIES)}, so its TSS cannot be derived."
+        )
     return _TSS_FACTOR * jnp.sum(C[..., _species_idx(model, _TSS_SPECIES)], axis=-1)
+
+
+def _grouped_sum(C, groups) -> jnp.ndarray:
+    """``sum(weight × sum(C[..., cols]))`` over ``(weight, cols)`` groups, in order.
+
+    Each group's columns are added in the order given before its weight is
+    applied, and a weight of exactly 1 is not multiplied, so a fixed formula
+    such as the Copp (2002) BOD or TKN evaluates in its own order.
+    """
+    total = jnp.zeros(jnp.shape(C)[:-1])
+    for k, (weight, cols) in enumerate(groups):
+        group = C[..., cols[0]]
+        for c in cols[1:]:
+            group = group + C[..., c]
+        term = group if weight == 1.0 else weight * group
+        total = term if k == 0 else total + term
+    return total
+
+
+def _weight_groups(model: CompiledModel, w) -> list[tuple[float, list[int]]]:
+    """Species with a nonzero weight in ``w``, grouped by weight, largest first."""
+    groups: dict[float, list[int]] = {}
+    for col, weight in enumerate(map(float, w)):
+        if weight != 0.0:
+            groups.setdefault(weight, []).append(col)
+    return sorted(groups.items(), key=lambda item: -item[0])
 
 
 def derived_COD(C, model: CompiledModel | None = None) -> jnp.ndarray:
@@ -297,40 +324,109 @@ def derived_BOD(
         params = base.at[model.param_index["f_P"]].set(f_P)
     # Sum each weight's species before weighting them, adding in model order,
     # so ASM1 evaluates exactly the Copp expression.
-    total = jnp.zeros(jnp.shape(C)[:-1])
-    for k, (weight, cols) in enumerate(_biodegradable_weights(model, params)):
-        group = C[..., cols[0]]
-        for c in cols[1:]:
-            group = group + C[..., c]
-        term = group if weight == 1.0 else weight * group
-        total = term if k == 0 else total + term
-    return 0.25 * total
+    return 0.25 * _grouped_sum(C, _biodegradable_weights(model, params))
+
+
+def _with_overrides(model: CompiledModel, params, **values) -> jnp.ndarray | None:
+    """``params`` (or the model defaults) with the named parameters set.
+
+    Raises
+    ------
+    ValueError
+        If the model has no parameter of a name given a value.
+    """
+    given = {k: v for k, v in values.items() if v is not None}
+    if not given:
+        return params
+    missing = sorted(set(given) - set(model.param_index))
+    if missing:
+        raise ValueError(
+            f"model '{model.name}' has no parameter {missing}; its nitrogen contents come "
+            "from its composition, so pass params= instead."
+        )
+    out = model.default_parameters() if params is None else jnp.asarray(params)
+    for name, value in given.items():
+        out = out.at[model.param_index[name]].set(value)
+    return out
 
 
 def derived_TKN(
-    C, model: CompiledModel | None = None, *, i_XB: float | None = None, i_XP: float | None = None
+    C,
+    model: CompiledModel | None = None,
+    *,
+    i_XB: float | None = None,
+    i_XP: float | None = None,
+    params=None,
 ) -> jnp.ndarray:
-    """Total Kjeldahl Nitrogen = S_NH + S_ND + X_ND + i_XB × (XB_H + XB_A)
-    + i_XP × (XP + XI).
+    """Total Kjeldahl nitrogen: ammonium plus organic nitrogen (g N/m³).
 
-    ``i_XB`` / ``i_XP`` default to the model's declared N-fractions (the
-    standard ASM1 0.086 / 0.06 when undeclared); the BSM2 parameter set uses
-    ``i_XB = 0.08``. ``C`` may be a concentration array (with ``model``) or a
-    ``StreamSeries``.
+    Each species weighs its nitrogen content from the model's composition table
+    (:meth:`~aquakin.CompiledModel.composition`); oxidized nitrogen (nitrate,
+    nitrite) and dissolved nitrogen gases count none. For ASM1 this is
+    ``SNH + SND + XND + i_XB × (XB_H + XB_A) + i_XP × (XP + XI)``; for ASM2d,
+    ``SNH4 + iN_SF SF + iN_SI SI + iN_XI XI + iN_XS XS + iN_BM (XH + XPAO + XAUT)``.
+
+    Parameters
+    ----------
+    C : jnp.ndarray or StreamSeries
+        Concentrations, shape ``(..., n_species)``, or a stream (its ``C`` and
+        model are used).
+    model : CompiledModel, optional
+        The model of ``C``; taken from the stream when one is passed.
+    i_XB, i_XP : float, optional
+        Override the ASM1 nitrogen fractions of biomass and of the inert
+        particulates (the BSM2 parameter set uses ``i_XB = 0.08``).
+    params : jnp.ndarray, optional
+        Model parameter vector whose composition fractions are used; the model
+        defaults if omitted.
+
+    Returns
+    -------
+    jnp.ndarray
+        TKN, scalar for a 1-D ``C``, a leading-axis vector for a 2-D one.
+
+    Raises
+    ------
+    ValueError
+        If ``i_XB`` / ``i_XP`` is given for a model without that parameter.
+    KeyError
+        If the model has no composition table.
     """
     C, model = _conc_model(C, model)
-    if i_XB is None or i_XP is None:
-        d_XB, d_XP, _ = _composition(model)
-        i_XB = d_XB if i_XB is None else i_XB
-        i_XP = d_XP if i_XP is None else i_XP
-    i = model.species_index
-    return (
-        C[..., i["SNH"]]
-        + C[..., i["SND"]]
-        + C[..., i["XND"]]
-        + i_XB * (C[..., i["XB_H"]] + C[..., i["XB_A"]])
-        + i_XP * (C[..., i["XP"]] + C[..., i["XI"]])
-    )
+    params = _with_overrides(model, params, i_XB=i_XB, i_XP=i_XP)
+    # Largest weight first, each weight's species in model order, so ASM1
+    # evaluates exactly the expression above.
+    return _grouped_sum(C, _weight_groups(model, composition_weights(model, "TKN", params)))
+
+
+def derived_NOx(C, model: CompiledModel | None = None, *, params=None) -> jnp.ndarray:
+    """Nitrate plus nitrite nitrogen (g N/m³).
+
+    ``SNO`` in ASM1, ``SNO3`` in ASM2d, ``SNOX`` in ASM3, ``SNO2 + SNO3`` in a
+    two-step nitrification model, each weighed by its nitrogen content from the
+    model's composition table.
+
+    Parameters
+    ----------
+    C : jnp.ndarray or StreamSeries
+        Concentrations, shape ``(..., n_species)``, or a stream.
+    model : CompiledModel, optional
+        The model of ``C``; taken from the stream when one is passed.
+    params : jnp.ndarray, optional
+        Model parameter vector; the model defaults if omitted.
+
+    Returns
+    -------
+    jnp.ndarray
+        NOx-N, scalar for a 1-D ``C``, a leading-axis vector for a 2-D one.
+
+    Raises
+    ------
+    KeyError
+        If the model has no composition table.
+    """
+    C, model = _conc_model(C, model)
+    return _grouped_sum(C, _weight_groups(model, composition_weights(model, "NOx", params)))
 
 
 def effluent_averages(
@@ -359,13 +455,23 @@ def effluent_averages(
     model : CompiledModel, optional
         Model; taken from the stream when one is passed.
 
+    params : jnp.ndarray, optional
+        Model parameter vector whose composition the derived quantities use;
+        the model defaults if omitted.
+
     Returns
     -------
     dict[str, float]
-        Time-averaged COD, BOD, TSS, TKN, SNH, SNO (g/m³).
+        Time-averaged TSS, COD, BOD, TKN, ``SNH`` (ammonium-N) and ``SNO``
+        (nitrate plus nitrite N, :func:`derived_NOx`), in g/m³, under those
+        keys whatever the model calls the species.
+
+    Raises
+    ------
+    KeyError
+        If the model has no composition table or no ammonium species.
     """
     t, C_traj, Q_traj, model = _effluent_args(stream_or_t, C_traj, Q_traj, model)
-    i_XB, i_XP, _ = _composition(model, params)
     t = jnp.asarray(t)
     single_point = t.shape[0] <= 1
     # Use trapezoidal integration over time.
@@ -386,9 +492,9 @@ def effluent_averages(
         "TSS": time_avg(derived_TSS(C_traj, model)),
         "COD": time_avg(derived_COD(C_traj, model)),
         "BOD": time_avg(derived_BOD(C_traj, model, params=params)),
-        "TKN": time_avg(derived_TKN(C_traj, model, i_XB=i_XB, i_XP=i_XP)),
-        "SNH": time_avg(C_traj[:, model.species_index["SNH"]]),
-        "SNO": time_avg(C_traj[:, model.species_index["SNO"]]),
+        "TKN": time_avg(derived_TKN(C_traj, model, params=params)),
+        "SNH": time_avg(C_traj[:, model.species_index[ammonium_species(model)]]),
+        "SNO": time_avg(derived_NOx(C_traj, model, params=params)),
     }
 
 
@@ -414,12 +520,11 @@ def effluent_quality_index(
     -- or the explicit ``(t, C_traj, Q_traj, model)`` form.
     """
     t, C_traj, Q_traj, model = _effluent_args(stream_or_t, C_traj, Q_traj, model)
-    i_XB, i_XP, _ = _composition(model, params)
     TSS_t = derived_TSS(C_traj, model)
     COD_t = derived_COD(C_traj, model)
     BOD_t = derived_BOD(C_traj, model, params=params)
-    TKN_t = derived_TKN(C_traj, model, i_XB=i_XB, i_XP=i_XP)
-    SNO_t = C_traj[:, model.species_index["SNO"]]
+    TKN_t = derived_TKN(C_traj, model, params=params)
+    SNO_t = derived_NOx(C_traj, model, params=params)
 
     integrand = Q_traj * (
         _EQI_WEIGHTS["TSS"] * TSS_t

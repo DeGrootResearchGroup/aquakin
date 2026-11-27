@@ -21,7 +21,8 @@ model:
     fixed operating condition (a `speciation:` charge-balance pH could supply it
     instead). The metal and the solids are tracked in mol/m3; the biological
     phosphate SPO4 stays in ASM2d's g_P/m3, so the precipitation reactions carry
-    the P molar mass (`P_MW`) to convert between the two.
+    the P molar mass (`P_MW`) to convert between the two, and add each solid's
+    molar mass to the suspended solids `XTSS`.
   references:
     - "Henze, M. et al. (2000). Activated Sludge Models ASM1, ASM2, ASM2d and ASM3. IWA STR No. 9."
     - "Kazadi Mbamba, C., Batstone, D.J., Flores-Alsina, X. & Tait, S. (2015). A generalised chemical precipitation modelling approach in wastewater treatment applied to calcite. Water Research 68, 342-353."
@@ -74,6 +75,10 @@ parameters:
   # Phosphorus molar mass: bridges the mol/m3 precipitation to ASM2d's g_P/m3 SPO4
   # (1 mol FePO4 consumes 1 mol P = P_MW g of SPO4).
   P_MW: {value: 31.0, units: "g_P/mol", bounds: [31.0, 31.0], transform: none}
+  # Molar masses of the precipitates: each mole formed adds its mass to ASM2d's
+  # suspended solids XTSS (g TSS/m3), so the settler and the TSS readings see it.
+  FePO4_MW: {value: 150.82, units: "g_TSS/mol", bounds: [150.82, 150.82], transform: none}
+  FeOH3_MW: {value: 106.87, units: "g_TSS/mol", bounds: [106.87, 106.87], transform: none}
 
 reactions:
   - name: FePO4_precipitation
@@ -83,6 +88,7 @@ reactions:
       S_Fe3: -1.0
       SPO4: "(-1) * P_MW"
       X_FePO4: 1.0
+      XTSS: "FePO4_MW"
 
   - name: FeOH3_precipitation
     description: "Fe3+ + 3 OH- -> Fe(OH)3 (saturation-index bounded-driver kinetics)."
@@ -90,3 +96,4 @@ reactions:
     stoichiometry:
       S_Fe3: -1.0
       X_FeOH3: 1.0
+      XTSS: "FeOH3_MW"

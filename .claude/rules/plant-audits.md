@@ -157,10 +157,13 @@ paths:
   `_phase_index`), so the balance integrates the term the solve did. **This is
   the tool that found the ADM1 nitrogen transcription error** (see the `adm1`
   model note).
-- **`derived_COD` / `derived_BOD` (`metrics.py`) read the model, never a list
-  of species names**: COD content from `_constants.cod_content` (the
-  composition, else the declared units), each species' biodegradable share from
-  the stoichiometry (`metrics._biodegradable_weights`). What the model does not
-  determine raises, naming `substrate="COD"`; a skipped species silently
-  under-counts the ASM2d F:M load. ASM1 keeps the Copp expression's
-  evaluation order, so BSM1 / BSM2 stay bit-identical.
+- **The derived quantities (`metrics.py`) read the model, never a list of
+  species names**: COD content from `_constants.cod_content` (the composition,
+  else the declared units), each species' biodegradable share from the
+  stoichiometry (`metrics._biodegradable_weights`), TKN and NOx from
+  `measures.composition_weights` (the measured channels' weights, so the two
+  agree), TSS from `lumped_tss_weights` for a model with a TSS state, ammonium
+  through `measures.ammonium_species`. What the model does not determine
+  raises; a skipped species silently under-counts the ASM2d F:M load. ASM1
+  keeps the Copp expressions' evaluation order (`metrics._grouped_sum`), so
+  BSM1 / BSM2 stay bit-identical.

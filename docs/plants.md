@@ -358,6 +358,14 @@ updated-convention reference values. `evaluate_bsm2` uses the same EQI weights
 and the full BSM2 OCI (Gernaey et al. 2014).
 ```
 
+`effluent_averages(eff)` and `effluent_quality_index(eff)` score the effluent
+of a plant on any ASM-family model, not only ASM1. The quantities come from the
+model: TSS from its suspended-solids factors (ASM2d's `iTSS_*`, ASM3's `iSS_*`;
+ASM1 uses the benchmark 0.75 × its particulates), COD and TKN from its
+composition, BOD₅ from the biodegradable COD its stoichiometry implies, and the
+`"SNH"` and `"SNO"` entries are its ammonium and its nitrate plus nitrite
+(`derived_NOx`). Pass `params=` to score with the parameters the run used.
+
 ### Faster dynamic solves
 
 A plain forward run that you will not differentiate can use the lean forward
