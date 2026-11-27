@@ -110,6 +110,12 @@ from aquakin.integrate._common import (
     check_finite_gradient,
     forward_adjoint,
 )
+from aquakin.integrate._config import SolverSettings
+from aquakin.integrate.dispersed_flow import (
+    AxialFlowSolution,
+    DispersedFlowReactor,
+    TanksInSeries,
+)
 from aquakin.integrate.forward_sensitivity import (
     ForwardSensitivityResult,
     forward_sensitivity,
@@ -234,6 +240,8 @@ from aquakin.utils import (
     check_nitrogen,
     composition_table,
     conversion_factor,
+    fit_dispersion,
+    fit_tanks_in_series,
     parse_units,
     units_match,
 )
@@ -245,6 +253,7 @@ __all__ = [
     "AerationDesignPoint",
     "AerationSystem",
     "AlgebraicTemperature",
+    "AxialFlowSolution",
     "BSM1Evaluation",
     "BSM2Evaluation",
     "BatchReactor",
@@ -267,6 +276,7 @@ __all__ = [
     "DGSMResult",
     "DesignConfig",
     "DifferentiationConfig",
+    "DispersedFlowReactor",
     "EigenDirection",
     "Event",
     "EventedResult",
@@ -313,10 +323,12 @@ __all__ = [
     "SetpointSplitter",
     "SludgeMetrics",
     "SobolResult",
+    "SolverSettings",
     "SpatialConditions",
     "SpeciationUnitsWarning",
     "StateTranslator",
     "Stream",
+    "TanksInSeries",
     "TemperatureModel",
     "ThresholdSplitter",
     "Track",
@@ -371,6 +383,8 @@ __all__ = [
     "fisher_information",
     "fisher_information_from_fn",
     "fit",
+    "fit_dispersion",
+    "fit_tanks_in_series",
     "forward_adjoint",
     "forward_sensitivity",
     "fractionate",

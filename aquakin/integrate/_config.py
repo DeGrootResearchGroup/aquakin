@@ -217,6 +217,35 @@ FORWARD_REACTOR_REMEDY = (
 )
 
 
+@dataclass(frozen=True)
+class SolverSettings:
+    """The tolerances and solver configuration of a reactor, in one value.
+
+    The settings the other reactors take as four loose keyword arguments
+    (``rtol``, ``atol``, ``integrator``, ``diff``), bundled for a reactor whose
+    constructor already carries its geometry and transport parameters
+    (:class:`~aquakin.DispersedFlowReactor`, :class:`~aquakin.TanksInSeries`).
+
+    Parameters
+    ----------
+    rtol : float
+        Relative tolerance for the ODE solver.
+    atol : float or array-like, optional
+        Absolute tolerance: a scalar, a ``(n_species,)`` array applied in every
+        cell, or one value per state. ``None`` (default) uses the per-species
+        noise floor scaled off the model's reference concentrations.
+    integrator : IntegratorConfig
+        Integrator / step-size configuration.
+    diff : DifferentiationConfig
+        Autodiff configuration.
+    """
+
+    rtol: float = 1e-6
+    atol: object = None
+    integrator: IntegratorConfig = IntegratorConfig()
+    diff: DifferentiationConfig = DifferentiationConfig()
+
+
 # --- AD-mode helpers (hide the diffrax adjoint plumbing) ---------------------
 
 

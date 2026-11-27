@@ -26,12 +26,20 @@ import pytest
 import aquakin
 from aquakin.integrate.batch import BatchReactor
 from aquakin.integrate.biofilm import BiofilmReactor
+from aquakin.integrate.dispersed_flow import DispersedFlowReactor, TanksInSeries
 from aquakin.integrate.particle import ParticleTrackReactor
 from aquakin.integrate.pfr import PlugFlowReactor
 from aquakin.plant.plant import Plant
 
-# Every reactor exposes solve(); these are the four shipped reactor types.
-_REACTORS = [BatchReactor, PlugFlowReactor, BiofilmReactor, ParticleTrackReactor]
+# Every reactor exposes solve(); these are the shipped reactor types.
+_REACTORS = [
+    BatchReactor,
+    PlugFlowReactor,
+    BiofilmReactor,
+    ParticleTrackReactor,
+    DispersedFlowReactor,
+    TanksInSeries,
+]
 # solve_sensitivity is implemented on the continuous reactors only (not the
 # Lagrangian particle-track reactor).
 _SENS_REACTORS = [BatchReactor, PlugFlowReactor, BiofilmReactor]

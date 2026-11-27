@@ -15,6 +15,7 @@ from aquakin.integrate._common import (
     check_finite_gradient,
     forward_adjoint,
 )
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate.batch import BatchReactor, BatchSolution
 from aquakin.integrate.biofilm import BiofilmReactor, BiofilmSolution
 from aquakin.integrate.calibrate import (
@@ -27,6 +28,11 @@ from aquakin.integrate.calibrate import (
 )
 from aquakin.integrate.cfd import CFDReactor
 from aquakin.integrate.design import Constraint, OptimizeResult, optimize_design
+from aquakin.integrate.dispersed_flow import (
+    AxialFlowSolution,
+    DispersedFlowReactor,
+    TanksInSeries,
+)
 from aquakin.integrate.discrete_adjoint import (
     esdirk_adjoint_solve,
     implicit_euler_adjoint_solve,
@@ -96,6 +102,7 @@ from aquakin.integrate.variance_sensitivity import (
 )
 
 __all__ = [
+    "AxialFlowSolution",
     "BatchReactor",
     "BatchSolution",
     "BiofilmReactor",
@@ -109,6 +116,7 @@ __all__ = [
     "DGSMResult",
     "DesignConfig",
     "DifferentiationConfig",
+    "DispersedFlowReactor",
     "EigenDirection",
     "Event",
     "EventedResult",
@@ -136,6 +144,8 @@ __all__ = [
     "ScenarioComparison",
     "SensitivityResult",
     "SobolResult",
+    "SolverSettings",
+    "TanksInSeries",
     "Track",
     "TrackSolution",
     "aic",
