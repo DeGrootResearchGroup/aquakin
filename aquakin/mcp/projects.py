@@ -132,7 +132,8 @@ def read_study(path: str) -> dict:
 
 
 def create_study(project: str, name: str, study: dict) -> str:
-    """Create a study in a project, following the project's flowsheet.
+    """Create a study in a project: an analysis of the project's flowsheet, or,
+    with a ``reactor:`` block, of a batch reactor and its experiments.
 
     Parameters
     ----------

@@ -194,6 +194,57 @@ From Python, `aquakin.study.create_study(project, name, settings)` and
 run would read them; `plant_choices(spec)` lists what a study of that flowsheet
 may name, and `study_results(path)` reads a study's results back.
 
+### A study of a batch reactor
+
+A `calibrate`, `profile` or `fisher` study can study a batch reactor instead of
+the flowsheet: a `reactor:` block gives its model and conditions, and
+`experiments` the batches it is run on. The other settings are those of a
+flowsheet study of the same kind:
+
+```yaml
+# studies/ozone_fit/study.yaml
+study:
+  kind: calibrate
+  reactor:
+    model: ../../models/ozone_demand.yaml   # a model file, or a shipped model's name
+    conditions: {T: 293.15, pH: 7.5}
+    integrator: {rtol: 1.0e-6}              # optional
+  experiments:
+    - {data: run1.csv, initial: {O3: 1.0, D: 12.0, M: 800.0}}
+    - {data: run2.csv, initial: {O3: 2.0, D: 12.0, M: 800.0}}
+  observed: [O3]
+  free: [fast.k1, slow.k2]
+  estimate_sigma: true
+```
+
+A model file's path is read from the study folder, like `flowsheet:`;
+`create_study` also takes one from the project folder (`models/ozone_demand.yaml`)
+and stores it that way. Each experiment starts from its `initial`
+concentrations (the model's defaults for the species it does not name). Its
+data table holds a `t` column and one column per observed species; the
+experiments are fitted together, sharing the parameters, and are named by their
+tables (`run1`, `run2`). The integrator settings are `rtol`, `atol`, `order`,
+`dtmax` and `max_steps` (see
+[Choosing the integrator](reactors.md#choosing-the-integrator)), and
+`time_unit` gives the unit of the data's times when it is not the model's.
+
+The results are those of a flowsheet study: the fit is saved as
+[`CalibrationResult.save`](fit_uncertainty.md#saving-a-fit) saves one, so
+`aquakin.load_calibration("studies/ozone_fit/results")` reads it back, and
+`fitted.csv` holds the fitted reactor's observed species at the data's times,
+in columns such as `run1.O3`. A `profile` study takes one experiment. A
+`fisher` study's experiments give only their initial concentrations, and
+`t_obs` and `sigma` the sampling times and measurement error.
+
+The study is stale once the model (with any model it `extends`), a data table
+or its settings change, and `check` names which. Freezing copies the model,
+flattened, and the data tables into the study's snapshot. A shipped model is
+copied too.
+
+The `simulate` and `rank` kinds do not take a reactor yet. The editor lists a
+reactor study and runs it, but its dialog edits only flowsheet studies; change a
+reactor study in its `study.yaml`.
+
 ## The flowsheet editor
 
 ```bash
