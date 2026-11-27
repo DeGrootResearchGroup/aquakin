@@ -1005,13 +1005,14 @@ starts from healthy bio-P sludge rather than the slow, seed-sensitive cold-start
 PAO establishment. The default config (ten-layer Takács settler) reaches a
 feasible steady state with full nitrification (effluent SNH4 ≈ 0.2 g N/m³),
 partial denitrification (effluent SNO3 ≈ 10 g N/m³ from 25 g N/m³ influent
-ammonia) and **partial biological P removal** (effluent SPO4 ≈ 3.9 g P/m³ from 8;
+ammonia) and **partial biological P removal** (effluent SPO4 ≈ 3.0 g P/m³ from 8;
 clear anaerobic release and aerobic uptake). The settler reads its solids as
-TSS through the `asm2d` `iTSS` factors (MLSS ≈ 4750 g TSS/m³ in the last
-aerated tank); at that loading the sludge blanket reaches the eighth of its ten
-layers and the effluent carries ≈ 54 g TSS/m³ (too little wastage: see the
-clarifier analysis below). With `use_takacs=False` the ideal
-clarifier gives SNH4 ≈ 0.1, SNO3 ≈ 10 and SPO4 ≈ 5. A 200-day dynamic solve to
+TSS through the `asm2d` `iTSS` factors (MLSS ≈ 3960 g TSS/m³ in the last
+aerated tank, wastage 250 m³/d, SRT ≈ 11 d); the sludge blanket stays in the
+bottom three of its ten layers and the effluent carries ≈ 14 g TSS/m³ (the
+clarifier analysis below explains the wastage). With `use_takacs=False` the
+ideal clarifier gives the same effluent nutrients (SNH4 ≈ 0.2, SNO3 ≈ 10,
+SPO4 ≈ 3.0), since the Takács blanket no longer reaches the weir. A 200-day dynamic solve to
 that steady state takes ~1 min with either settler (60 s Takács, 51 s ideal,
 compile included, on a 4-core machine; under a concurrent load the Takács solve
 took 3 min), and `Plant.steady_state` from `a2o_warm_start` ~40 s against
@@ -1034,10 +1035,11 @@ conserves mass). It is the substrate for the chemical-P (ferric/alum dosing)
 demonstration.
 
 **A²O secondary clarifier: overloaded by too little wastage, not too little
-area** (2026-11-26; `scripts/probe_a2o_clarifier.py`, 200-day dynamic solves
+area** (2026-11-26, at the earlier wastage of 120 m³/d; the shipped
+`A2O_WASTAGE_FLOW` is now 250 m³/d as a result; `scripts/probe_a2o_clarifier.py`, 200-day dynamic solves
 from `a2o_warm_start`, `asm2d`, 20 °C, constant `a2o_influent`; last-10-day
 drift of effluent TSS ≤ 0.03 g/m³). The checks, against the settler's own
-Takács curve (the BSM1 parameters, `X_min = fns·MLSS`), for the shipped design
+Takács curve (the BSM1 parameters, `X_min = fns·MLSS`), for the earlier design
 (area 1500 m², `Q_r = 0.75·Q`, `Q_w = 120 m³/d`):
 
 - **Hydraulics are fine.** Surface overflow rate 12.2 m/d (typical average
@@ -1060,14 +1062,14 @@ Takács curve (the BSM1 parameters, `X_min = fns·MLSS`), for the shipped design
 
 | design | MLSS g/m³ | SRT d | blanket (layers ≥ 1000 g/m³) | eff. TSS | SNH4 | SNO3 | SPO4 | SLR / G_L |
 |---|---|---|---|---|---|---|---|---|
-| shipped: A 1500, RAS 0.75, Q_w 120 | 4751 | 14.5 | 8 | 54.0 | 0.17 | 10.26 | 3.89 | 0.95 |
+| earlier: A 1500, RAS 0.75, Q_w 120 | 4751 | 14.5 | 8 | 54.0 | 0.17 | 10.26 | 3.89 | 0.95 |
 | A 2000 | 5008 | 15.6 | 8 | 46.7 | 0.16 | 10.30 | 4.16 | 0.95 |
 | A 2500 | 5206 | 16.6 | 8 | 41.3 | 0.15 | 10.34 | 4.37 | 0.95 |
 | RAS 1.0 | 5235 | 17.3 | 8 | 48.0 | 0.16 | 9.52 | 5.20 | 0.95 |
 | Q_w 200 | 4535 | 13.5 | 5 | 14.7 | 0.18 | 10.21 | 3.66 | 0.90 |
 | Q_w 200, A 2000 | 4582 | 13.7 | 4 | 13.0 | 0.18 | 10.22 | 3.71 | 0.87 |
 | Q_w 200, RAS 1.0 | 4859 | 15.5 | 4 | 15.4 | 0.17 | 9.46 | 4.87 | 0.88 |
-| **Q_w 250** | 3957 | 11.0 | 3 | 13.7 | 0.23 | 10.06 | 3.01 | 0.79 |
+| **Q_w 250 (shipped)** | 3957 | 11.0 | 3 | 13.7 | 0.23 | 10.06 | 3.01 | 0.79 |
 | Q_w 250, A 2500 | 4011 | 11.2 | 2 | 11.0 | 0.22 | 10.08 | 3.07 | 0.73 |
 | Q_w 300 | 3523 | 9.3 | 2 | 12.9 | 0.29 | 9.92 | 2.53 | 0.70 |
 
@@ -1080,9 +1082,9 @@ BSM1), still full nitrification, and better phosphorus removal (SPO4 3.9 → 3.0
 more P-rich sludge wasted). A higher RAS ratio returns more nitrate to the
 anaerobic zone and loses bio-P (SPO4 5.2); a larger area alone raises the MLSS.
 `Q_w = 300` (SRT 9 d) works too at 20 °C but leaves less nitrification margin
-for winter. Changing the shipped `A2O_WASTAGE_FLOW` would move the documented
-A²O numbers and `A2O_WARM_REACTOR_COMPOSITION` (re-derived from the new
-operating point), so it is the owner's decision; not changed.
+for winter. The shipped `A2O_WASTAGE_FLOW` is now 250 m³/d, and
+`A2O_WARM_REACTOR_COMPOSITION` was re-derived from that operating point (a
+200-day solve; `Plant.steady_state` from it converges to the same state).
 
 **BSM2 — open-loop plant (Gernaey et al. 2014 / Jeppsson et al. 2007).**
 `aquakin.plant.bsm.build_bsm2()` wraps the BSM1 activated-sludge core with the

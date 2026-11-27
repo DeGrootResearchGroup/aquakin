@@ -65,7 +65,7 @@ A2O_AEROBIC_KLA = (360.0, 360.0, 240.0)  # d⁻¹ (open-loop; high enough that
 A2O_DO_SATURATION = 8.0  # g O₂ / m³
 A2O_INTERNAL_RECYCLE_RATIO = 1.0  # Q_a / Q_in (aerobic → anoxic)
 A2O_RAS_RATIO = 0.75  # Q_r / Q_in (underflow → anaerobic)
-A2O_WASTAGE_FLOW = 120.0  # m³/d (a long SRT, to retain PAOs)
+A2O_WASTAGE_FLOW = 250.0  # m³/d (an SRT of about 11 d, which the clarifier can hold)
 A2O_CLARIFIER_AREA = 1500.0  # m²
 A2O_CLARIFIER_HEIGHT = 4.0  # m
 
@@ -179,13 +179,13 @@ A2O_WARM_REACTOR_COMPOSITION = {
     "SI": 30.0,
     "SALK": 0.007,
     "SN2": 5.0,
-    "XI": 2400.0,
-    "XS": 53.0,
-    "XH": 1800.0,
-    "XPAO": 680.0,
-    "XPP": 210.0,
-    "XPHA": 1.0,
-    "XAUT": 89.0,
+    "XI": 1700.0,
+    "XS": 50.0,
+    "XH": 1600.0,
+    "XPAO": 580.0,
+    "XPP": 180.0,
+    "XPHA": 1.1,
+    "XAUT": 79.0,
 }
 
 # The species the A²O influent, warm start and aeration name (the ``asm2d``
