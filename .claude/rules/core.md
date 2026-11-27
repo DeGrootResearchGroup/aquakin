@@ -169,6 +169,10 @@ fixed in two of them, by hand, from memory.
 Each language keeps its own error class (a message should name the language the
 reader is writing in), which is why `tokenize` takes the class to raise rather
 than owning one.
+**A parse error carries its position**: raise it through `located(error,
+message, position)`, as the tokenizer, `PrecedenceParser` and the rate parser
+do, so a front end marks `exc.position` (the editor's caret) without reading it
+out of the message.
 
 ### One precedence, three languages (`core/precedence.py`)
 
