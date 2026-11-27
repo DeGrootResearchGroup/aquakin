@@ -20,7 +20,9 @@ from aquakin.utils.result_files import (
     write_trajectory,
 )
 from aquakin.study.form import (
+    UNREADABLE,
     create_study,
+    list_studies,
     plant_choices,
     read_study,
     simulation_study,
@@ -40,12 +42,14 @@ from aquakin.study.study import (
 )
 
 __all__ = [
+    "UNREADABLE",
     "StudyError",
     "StudyStatus",
     "check_study",
     "copy_study",
     "create_study",
     "freeze_study",
+    "list_studies",
     "load_study",
     "plant_choices",
     "read_matrix",

@@ -208,7 +208,9 @@ aquakin/
 │   │   └── precipitation_metal_phosphate_bounded.yaml      # supersaturation_form: bounded (differentiable dynamics)
 │   │
 │   ├── mcp/                         # `aquakin mcp`: tools for an AI assistant (`mcp` extra)
-│   │   ├── server.py                # the tools (thin wrappers) and the MCPServer that serves them
+│   │   ├── server.py                # the reading tools (thin wrappers) and the MCPServer serving all
+│   │   ├── projects.py              # tools that write a flowsheet and create / edit / run studies
+│   │   ├── runs.py                  # study runs on background threads, with progress and cancel
 │   │   ├── docs.py                  # the published guide pages: list / read / search (stdlib only,
 │   │   │                            #   loaded by setup.py, which bundles them into guide/)
 │   │   └── api.py                   # the public API's names, signatures and docstrings
@@ -241,6 +243,7 @@ aquakin/
 │   ├── repeated.py                     # lists of records edited on the page (study dialog, unit form)
 │   ├── checks.py                       # aquakin's background checks of units and plant
 │   ├── files.py                        # open / save the spec, unsaved-edit questions
+│   ├── disk.py                         # follows the project folder: reload a changed spec, relist studies
 │   ├── unit_form.py                    # unit-form choices that redraw it; resending its rows
 │   ├── studies.py                      # list / run / freeze studies, Simulate, results
 │   ├── document.py                     # the flowsheet document (pure)

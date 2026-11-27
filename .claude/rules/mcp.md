@@ -8,7 +8,8 @@ paths:
 # Rules — `aquakin/mcp/` (`aquakin mcp`)
 
 The MCP server an AI assistant starts on the user's computer. The user guide
-page is `docs/ai_assistants.md`.
+page is `docs/ai_assistants.md`; the editor shows the assistant's changes by
+following the project folder (`aquakin_ui/disk.py`, `.claude/rules/ui.md`).
 
 ## A tool is a thin wrapper
 
@@ -31,13 +32,22 @@ page is `docs/ai_assistants.md`.
 
 ## Reading versus writing
 
-- **Tools here only read, and are annotated `read_only_hint=True`.** A tool
-  that writes a file, deletes results or runs a solve is a separate change:
-  it must say so in its annotations (`read_only_hint=False`, and
-  `destructive_hint=True` when it can overwrite or delete), so the user's app
-  asks before running it. Writing goes through the same functions the editor
-  uses (`write_spec`, `aquakin.study`) and keeps their refusals (never
-  overwrite results without the explicit flag).
+- **Every tool declares its effect in `TOOLS`** (`server.py` for the readers,
+  `projects.py` for the rest): `"read"`, `"write"` (adds files or records) or
+  `"overwrite"` (may replace or delete, given its `replace` /
+  `discard_results`). The effect sets the MCP hints the user's app shows and
+  asks on; a tool that can replace anything is `"overwrite"` even when the
+  default call cannot.
+- **Keep aquakin's refusals.** Writing goes through the functions the editor
+  uses (`write_spec`, `aquakin.study`) and never past their guards: results are
+  replaced only with `replace`, a frozen study with results unfrozen only with
+  `discard_results`, and an existing flowsheet file written over only with
+  `replace` (the editor's Save refuses it outright).
+- **A study run is `aquakin.study.run_study` on a thread** (`runs.py`), never a
+  subprocess: process management lives in `aquakin_ui`, which aquakin may not
+  import, and a copy would be a second implementation. Cancel through the
+  progress callback (`Cancelled`), as `aquakin study run --json` does.
+  `run_study` returns at once; the assistant polls `study_status`.
 
 ## Imports and packaging
 

@@ -171,7 +171,7 @@ take from it.
   answers all of them.
 - **States**: `STATES` lists every state `check_study` reports (and
   `RESULT_STATES` those with results, `StudyStatus.has_results`); the worker adds
-  `UNREADABLE` (`aquakin/__main__.py`) for a listed study whose `study.yaml`
+  `UNREADABLE` (`list_studies`, `aquakin/study/form.py`) for a listed study whose `study.yaml`
   cannot be read. A new state goes in `STATES` and in `aquakin_ui`'s
   `STATE_COLOURS` (`tests/ui/test_protocol.py` pins the match). Front ends read
   `has_results` rather than deciding from a state's name.

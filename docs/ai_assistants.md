@@ -4,8 +4,10 @@
 Claude Code or any other app that supports the
 [Model Context Protocol](https://modelcontextprotocol.io) (MCP). You then ask
 the assistant in plain language ("which shipped model has two-step
-nitrification?", "check my flowsheet", "how do I calibrate a batch test?"), and
-it answers by calling aquakin's tools.
+nitrification?", "add a second aerobic tank to my plant", "calibrate the
+nitrifier growth rate against these data"), and it answers by calling
+aquakin's tools: it can read and check your project, write flowsheets, and
+create, run and read [studies](plant_files.md).
 
 The assistant runs under your own account and plan with its provider. aquakin
 itself needs no account or key and sends nothing anywhere: the assistant's app
@@ -54,21 +56,44 @@ argument `mcp`, speaking over standard input and output.
 |---|---|
 | `list_models`, `describe_model`, `read_model_file` | list the shipped kinetic models; show a model's species, reactions, stoichiometry and parameters; read a model's YAML source, the shipped ones or your own |
 | `list_unit_kinds`, `describe_unit_kind`, `check_unit` | list the units a flowsheet can contain; show every setting of one kind; build one unit from settings and report its ports or why it cannot be built |
-| `read_flowsheet`, `check_flowsheet` | read a flowsheet file; build the plant and report every problem in it, as the editor does |
+| `read_flowsheet`, `check_flowsheet`, `write_flowsheet` | read a flowsheet file; build the plant and report every problem in it, as the editor does; write a flowsheet file, as the editor's Save does |
+| `list_studies`, `study_settings`, `study_choices`, `read_study`, `create_study`, `update_study` | list a project's studies and where each stands; describe every kind of study and its settings; list the streams, parameters and channels a study may name; read, create and edit a study |
+| `run_study`, `study_status`, `cancel_study`, `study_results` | start a run in the background, follow its progress, stop it, and read the results |
+| `copy_study`, `freeze_study`, `unfreeze_study` | copy a study with its results; freeze it on a snapshot of its plant, or make it follow the flowsheet again |
 | `list_doc_pages`, `search_docs`, `read_doc_page` | list, search and read this user guide, for the version of aquakin you have installed |
 | `list_api`, `describe_api` | list the public functions and classes; give one's signature and full docstring |
 
-Every tool only reads: none writes a file or runs a simulation. When the
-assistant writes a model file, a flowsheet or a Python script for you, it can
-check its work against these tools and the guide, and you save and run the
-result. In Claude Code, the assistant can also run Python itself, so it can use
-the whole [public API](public_api.md) directly.
+The tools write the same files the editor and `aquakin study` write, and they
+keep the same safeguards. A flowsheet file is not written over, a study's
+results are not replaced, and a frozen study with results is not unfrozen,
+unless the assistant passes `replace` or `discard_results`. It is told to do
+that only when you ask. Your assistant's app also shows which tools change
+files, and may ask you before each such call.
+
+A study runs in the background, so a long calibration does not hold up the
+conversation: the assistant starts it, checks on it, and reads the results when
+it has finished. Runs belong to the `aquakin mcp` process: closing the
+assistant's app stops them, and the study keeps the results it had before.
+
+In Claude Code, the assistant can also run Python itself, so it can use the
+whole [public API](public_api.md) directly, including analyses no study kind
+covers.
+
+## Watching in the editor
+
+Keep the [flowsheet editor](plant_files.md#the-flowsheet-editor) open on the
+same project while you work with the assistant: it shows each flowsheet the
+assistant writes, and the studies it creates and runs, within a second or two.
 
 ## Things to ask
 
 - "Which shipped models include phosphorus removal, and how do they differ?"
 - "Describe the ASM1 parameters that control nitrification."
 - "Check `flowsheet.yaml` in this folder and explain each problem it reports."
+- "Add a 500 m³ anoxic tank before the first aerobic tank, then simulate a
+  week of dynamic influent and compare effluent nitrate."
+- "Set up a calibration of `muA` and `KNH_A` against `data/nitrification.csv`,
+  run it, and tell me how well the data determine them."
 - "Write a model file for ozone decay with a fast and a slow phase, and check
   it against the model format."
 - "How do I find which parameters my batch data can identify?"
