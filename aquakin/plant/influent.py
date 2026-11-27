@@ -29,6 +29,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from aquakin.core.time_expr import compile_time_expression
 from aquakin.plant.streams import Stream, make_scalars
 from aquakin.utils.units import CELSIUS_SPELLINGS, conversion_factor, parse_units
 
@@ -903,8 +904,6 @@ class InfluentExpression:
         :class:`InfluentSeries` scales its arrays -- the value is a string -- so
         it is applied to the result instead, which is the same number.
         """
-        from aquakin.core.time_expr import compile_time_expression
-
         expr_clock = self._expression_clock
         caller_clock = self.clock or expr_clock
         time_scale = 1.0
