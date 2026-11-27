@@ -7,12 +7,11 @@ drift.
 """
 
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
 
-EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
+from tests.conftest import EXAMPLES
 
 
 @pytest.mark.slow

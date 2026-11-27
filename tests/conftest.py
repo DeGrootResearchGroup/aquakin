@@ -9,6 +9,7 @@ import aquakin
 from . import mem_watchdog
 
 FIXTURES = Path(__file__).parent / "fixtures"
+EXAMPLES = Path(__file__).parent.parent / "examples"
 
 # Each shipped model with a TSS state: that state's name and, per particulate,
 # the parameter converting it to TSS (iTSS_* in ASM2d, iSS_* in ASM3).
