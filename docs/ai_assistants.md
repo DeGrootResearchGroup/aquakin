@@ -18,7 +18,20 @@ anything else you type.
 
 ## Installing
 
-Install aquakin with the `mcp` extra:
+**Claude Code.** Install the aquakin plugin, in a Claude Code session:
+
+```text
+/plugin install aquakin --marketplace DeGrootResearchGroup/aquakin
+```
+
+It starts the server for you and adds skills for the common tasks (building a
+flowsheet, running a study, writing a model, analyzing in Python), which you
+can also call as `/aquakin:build-flowsheet` and so on. The plugin runs the
+aquakin release it was published with through
+[uv](https://docs.astral.sh/uv/), which must be installed; the first start
+downloads aquakin and its dependencies (a few hundred MB), once.
+
+**Any app, from your own installation.** Install aquakin with the `mcp` extra:
 
 ```bash
 pip install "aquakin[mcp]"
@@ -30,7 +43,7 @@ path of the `aquakin` program in that environment (`which aquakin` on macOS or
 Linux, `where aquakin` on Windows), because the app does not activate the
 environment for you.
 
-**Claude Code.** Run this once, in a terminal:
+**Claude Code without the plugin.** Run this once, in a terminal:
 
 ```bash
 claude mcp add aquakin -- aquakin mcp

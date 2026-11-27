@@ -39,7 +39,11 @@ Run from a clean, green `main`.
 On a release-prep branch:
 
 - [ ] **Version** — set `__version__ = "X.Y.Z"` in `aquakin/__init__.py` (already
-      `0.1.0` for the first release; bump for later ones).
+      `0.1.0` for the first release; bump for later ones), and the same version
+      in the Claude Code plugin: `version` in
+      `plugins/aquakin/.claude-plugin/plugin.json` and the `aquakin[mcp]==X.Y.Z`
+      pin in `plugins/aquakin/.mcp.json` (`tests/unit/test_claude_plugin.py`
+      fails until they match).
 - [ ] **CHANGELOG.md** — the unreleased changes are the fragments in
       `changelog.d/` (one file per entry; see `changelog.d/README.md`). Build
       them into the release's section with towncrier, from the `release` extra:
