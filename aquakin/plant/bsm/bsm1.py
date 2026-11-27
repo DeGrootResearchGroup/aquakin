@@ -40,7 +40,12 @@ from aquakin.plant._builder_support import (
     recycle_pump_flows,
     register_recycle_streams,
 )
-from aquakin.plant._constants import ASM1_TSS_FACTOR, solids_species
+from aquakin.plant._constants import (
+    ASM1_TSS_FACTOR,
+    lumped_tss_state,
+    lumped_tss_weights,
+    solids_species,
+)
 from aquakin.plant.cstr import Aeration, CSTRUnit
 from aquakin.plant.mixer import MixerUnit, SetpointSplitter
 from aquakin.plant.plant import Plant
@@ -60,6 +65,21 @@ BSM1_EXTERNAL_RECYCLE_RATIO = 1.0  # Q_r / Q_in
 BSM1_WASTAGE_FLOW = 385.0  # m³/d
 BSM1_CLARIFIER_AREA = 1500.0  # m²
 BSM1_CLARIFIER_HEIGHT = 4.0  # m
+
+
+def _settler_tss_factors(model, settling, tss, derived: bool) -> dict[str, float]:
+    """The Takács settler's TSS weight for each settling particulate.
+
+    A model that tracks its suspended solids as a state weighs each particulate
+    by its own TSS factor (the TSS state itself at 0), as ``build_a2o`` does,
+    when the TSS species were ``derived`` rather than given. Otherwise each TSS
+    species weighs the ASM1 COD-to-TSS factor 0.75 and any other settling
+    species (XND, the N carried on XS) 0.
+    """
+    if derived and lumped_tss_state(model) is not None:
+        weights = lumped_tss_weights(model)
+        return {sp: weights.get(sp, 0.0) for sp in settling}
+    return {sp: (ASM1_TSS_FACTOR if sp in tss else 0.0) for sp in settling}
 
 
 def build_bsm1(
@@ -153,8 +173,11 @@ def build_bsm1(
         suspended solids (the Takács settler's settling solids, at the COD-to-TSS
         factor 0.75). ``None`` (default) derives them from the model: the ASM1
         sets for ASM1, otherwise every ``X``-prefixed species settles and those
-        carrying COD are TSS. ``tss_species`` must be a subset of the settling
-        species.
+        carrying COD are TSS. A model that tracks its suspended solids as a state
+        (``XTSS`` / ``XSS``: the ASM2d and ASM3 families) instead weighs each
+        settling particulate by its own TSS factor (its ``iTSS`` parameters, as
+        :func:`~aquakin.plant.a2o.build_a2o` does) unless ``tss_species`` is
+        given. ``tss_species`` must be a subset of the settling species.
 
     Returns
     -------
@@ -275,9 +298,7 @@ def build_bsm1(
             composition_mode=settler_composition_mode,
             interface_flux=settler_interface_flux,
             particulate_species=list(settling),
-            # Settling solids that are not TSS (XND, the N carried on XS) settle
-            # with zero TSS weight.
-            tss_factors={sp: (ASM1_TSS_FACTOR if sp in tss else 0.0) for sp in settling},
+            tss_factors=_settler_tss_factors(model, settling, tss, tss_species is None),
         ),
         ideal_kwargs=dict(particulate_species=list(settling)),
     )

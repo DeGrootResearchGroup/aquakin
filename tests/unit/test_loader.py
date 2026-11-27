@@ -1,6 +1,7 @@
 """Loader / schema unit tests."""
 
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -385,6 +386,87 @@ def test_extends_base_malformed_yaml_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match="failed to parse base"):
         aquakin.load_model_from_file(derived)
+
+
+def test_duplicate_stoichiometry_key_rejected_naming_key_and_lines(tmp_path):
+    """A mapping that repeats a key is refused, naming the key and both lines,
+    rather than loaded as whichever value came last (``asm2d`` once listed
+    XMeOH / XMeP twice in a stoichiometry)."""
+    p = _write(
+        tmp_path,
+        """
+        model: {name: dup, version: "1.0"}
+        species:
+          - {name: A, default_concentration: 1.0}
+          - {name: B, default_concentration: 0.0}
+        reactions:
+          - name: r1
+            rate: "k * [A]"
+            parameters:
+              k: {value: 1.0}
+            stoichiometry:
+              A: -1
+              B: 1
+              A: -2
+        """,
+    )
+    with pytest.raises(ValueError, match=r"duplicate key 'A' \(first given on line 12\)") as err:
+        aquakin.load_model_from_file(p)
+    assert "line 14" in str(err.value)  # where the repeat is
+
+
+def test_duplicate_key_in_an_extended_base_rejected(tmp_path):
+    (tmp_path / "base.yaml").write_text(
+        textwrap.dedent("""
+        model: {name: base, version: "1.0"}
+        species:
+          - {name: A, default_concentration: 1.0}
+        reactions:
+          - name: r1
+            rate: "k * [A]"
+            rate: "2 * k * [A]"
+            parameters:
+              k: {value: 1.0}
+            stoichiometry:
+              A: -1
+        """)
+    )
+    derived = tmp_path / "derived.yaml"
+    derived.write_text("model: {name: d, extends: base.yaml}\n")
+    with pytest.raises(ValueError, match=r"(?s)failed to parse base 'base\.yaml'.*duplicate key 'rate'"):
+        aquakin.load_model_from_file(derived)
+
+
+def test_model_yaml_parser_keeps_safe_loader_semantics():
+    """Merge keys still let an explicit key override a merged one, and the safe
+    loader's own errors (an unhashable key, a ``!!map`` scalar) are unchanged."""
+    import yaml
+
+    from aquakin.schema.loader import parse_model_yaml
+
+    doc = parse_model_yaml("base: &b {x: 1, y: 2}\nd:\n  <<: *b\n  x: 3\n")
+    assert doc["d"] == {"x": 3, "y": 2}
+    with pytest.raises(yaml.constructor.ConstructorError, match="found unhashable key"):
+        parse_model_yaml("? [a, b]\n: 1\n")
+    with pytest.raises(yaml.constructor.ConstructorError, match="expected a mapping node"):
+        parse_model_yaml("a: !!map scalar\n")
+
+
+_REPO = Path(__file__).resolve().parents[2]
+_ALL_YAML = sorted(
+    p.relative_to(_REPO).as_posix()
+    for pattern in ("aquakin/models/**/*.yaml", "tests/fixtures/**/*.yaml", "examples/**/*.yaml")
+    for p in _REPO.glob(pattern)
+)
+
+
+@pytest.mark.parametrize("path", _ALL_YAML)
+def test_shipped_fixture_and_example_yaml_have_no_duplicate_keys(path):
+    """Every shipped model, test fixture and example YAML parses under the
+    duplicate-refusing loader (a repeat raises, naming the key)."""
+    from aquakin.schema.loader import parse_model_yaml
+
+    assert parse_model_yaml((_REPO / path).read_text(encoding="utf-8")) is not None
 
 
 def test_asm1_adm1_ship_literature_priors():

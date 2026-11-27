@@ -62,6 +62,23 @@ ASM1_TSS_FACTOR: float = 0.75
 LUMPED_TSS_SPECIES: tuple[str, ...] = ("XTSS", "XSS")
 
 
+def lumped_tss_state(model: CompiledModel) -> str | None:
+    """The state that carries a model's suspended solids, or ``None``.
+
+    Parameters
+    ----------
+    model : CompiledModel
+        The model.
+
+    Returns
+    -------
+    str or None
+        The first of :data:`LUMPED_TSS_SPECIES` the model has (``XTSS`` in
+        ASM2d, ``XSS`` in ASM3), or ``None`` for a model without one (ASM1).
+    """
+    return next((s for s in LUMPED_TSS_SPECIES if s in model.species_index), None)
+
+
 def lumped_tss_weights(model: CompiledModel, params=None) -> dict[str, float]:
     """TSS per unit of each particulate of a model that tracks its TSS as a state.
 
@@ -104,7 +121,7 @@ def lumped_tss_weights(model: CompiledModel, params=None) -> dict[str, float]:
 
     from aquakin.utils.units import units_match
 
-    tss = next((s for s in LUMPED_TSS_SPECIES if s in model.species_index), None)
+    tss = lumped_tss_state(model)
     if tss is None:
         raise ValueError(
             f"model '{model.name}' has no TSS state ({', '.join(LUMPED_TSS_SPECIES)}); "
@@ -212,22 +229,80 @@ def _counts_as_cod_solid(species: str, units: str | None) -> bool:
     """Whether a particulate without composition data counts towards TSS.
 
     The TSS factor converts COD to suspended solids, so only a particulate
-    declared as a COD mass per volume (``g_COD/m3``, ``kgCOD/m3``) counts; one
-    declared in other units -- moles of a precipitate, g P of stored
-    polyphosphate, g TSS of a lumped solids state -- does not. A particulate
+    whose declared unit carries COD (:func:`_unit_cod`) counts. A particulate
     whose unit cannot be read falls back to the naming convention: every one
     but ``XND`` (the nitrogen carried on ``XS``).
+    """
+    cod = _unit_cod(units)
+    if cod is None:
+        return species != "XND"
+    return cod > 0.0
+
+
+def _unit_cod(units: str | None) -> float | None:
+    """COD per unit of a species, read from its declared unit alone.
+
+    A COD mass per volume (``g_COD/m3``, ``kgCOD/m3``) carries 1 per unit of
+    its own measure; any other readable unit -- moles of a precipitate, g P of
+    stored polyphosphate, g N, g TSS of a lumped solids state -- carries none.
+    ``None`` when the unit cannot be read, so the caller decides.
     """
     from aquakin.utils.units import _to_base_units, parse_units
 
     dim = parse_units(units or "")
     if dim is None:
-        return species != "XND"
-    tokens = dim.as_dict()
-    if tokens.get("COD") != 1:
-        return False
+        return None
+    if dim.as_dict().get("COD") != 1:
+        return 0.0
     base, _ = _to_base_units(dim)
-    return base == _to_base_units(parse_units("g_COD/m3"))[0]
+    return 1.0 if base == _to_base_units(parse_units("g_COD/m3"))[0] else 0.0
+
+
+def cod_content(model: CompiledModel, params=None) -> dict[str, float]:
+    """COD per unit of each COD-bearing species of a model (lab COD).
+
+    Read from the model's composition (its declared ``composition:`` block,
+    else the shipped table of its family), on the lab-COD convention: only the
+    species an analyst's COD test oxidizes carry COD, so oxygen, nitrate and
+    N₂ do not. A model with no composition is read from its declared units
+    (see the COD-unit rule of :func:`solids_species`).
+
+    Parameters
+    ----------
+    model : CompiledModel
+        The model.
+    params : jnp.ndarray, optional
+        Parameter vector the shipped composition table reads; the model
+        defaults if omitted.
+
+    Returns
+    -------
+    dict of str to float
+        COD content of each species carrying a positive amount, in model
+        order.
+
+    Raises
+    ------
+    ValueError
+        If the model has no composition and the unit of some species cannot be
+        read, so whether it carries COD is unknown; or if no species carries
+        COD.
+    """
+    comp = model.composition(params=params, electron_acceptor_cod=False)
+    if comp:
+        cod = {s: float(comp.get(s, {}).get("COD", 0.0)) for s in model.species}
+    else:
+        cod = {s: _unit_cod(model.species_units.get(s)) for s in model.species}
+        unknown = [s for s, c in cod.items() if c is None]
+        if unknown:
+            raise ValueError(
+                f"model '{model.name}' has no composition, and the units of {unknown} do "
+                "not say whether they carry COD; declare a `composition:` block."
+            )
+    cod = {s: c for s, c in cod.items() if c > 0.0}
+    if not cod:
+        raise ValueError(f"model '{model.name}' has no species that carries COD.")
+    return cod
 
 
 def species_indices(model: CompiledModel, names, *, what: str = "species") -> list[int]:

@@ -61,8 +61,9 @@ docstrings of `aquakin/plant/colored.py`, `aquakin/plant/solve_cache.py` and
 
 - **All solver-run memoization that bakes in reactor conditions lives in
   `SolveCache`** (`plant._solve_cache`: the jitted forward and
-  `solve_sensitivity` solves, the PTC steady solves, the continuation and
-  arclength kernels, the located-event segment solves under an `"events"` key).
+  `solve_sensitivity` solves, the steady-state IFT sensitivity kernel, the PTC
+  steady solves, the continuation and arclength kernels, the located-event
+  segment solves under an `"events"` key).
   A new compiled artefact of that kind is stored there, so one `invalidate()`
   drops it.
 - **A compiled-solve key includes `RecycleResolver.cache_flags()`**: the
