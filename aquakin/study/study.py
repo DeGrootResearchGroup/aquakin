@@ -29,7 +29,6 @@ results, their staleness and freezing work as for a plant.
 
 from __future__ import annotations
 
-import datetime as _dt
 import hashlib
 import json
 import shutil
@@ -73,6 +72,7 @@ from aquakin.study.common import (
     STUDY_FILE,
     StudyError,
     _Grid,
+    _now,
     _times,
     _to_float,
 )
@@ -433,10 +433,6 @@ def _study_fingerprint(folder: Path, study: _Study) -> str:
             inputs[key] = hashlib.sha256((folder / rel).read_bytes()).hexdigest()
     text = json.dumps(inputs, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(text.encode()).hexdigest()
-
-
-def _now() -> str:
-    return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
 
 
 def _read_yaml(path: Path) -> dict | None:

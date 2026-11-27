@@ -7,6 +7,8 @@ aquakin must still read, so they do not change.
 
 from __future__ import annotations
 
+import datetime as _dt
+
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from aquakin.integrate.calibration.saved import COVARIANCE_FILE as COVARIANCE_FILE
@@ -26,6 +28,11 @@ RESULTS = "results"
 PARTIAL = "results.partial"
 #: A run that failed or was cancelled while earlier results stood: they are kept.
 ATTEMPT_FILE = "last_attempt.yaml"
+#: Present while a run is in progress, locked by it (:mod:`aquakin.study.running`):
+#: when it started and its latest progress.
+RUNNING_FILE = "running.yaml"
+#: Created to ask the run in progress to stop at its next checkpoint.
+CANCEL_FILE = "cancel"
 SNAPSHOT = "snapshot"
 
 # Result files, inside ``results/``. Their names are part of the stored format:
@@ -58,6 +65,11 @@ KINDS = ("simulate", "fisher", "calibrate", "profile", "rank")
 STATES = ("not run", "fresh", "stale", "damaged", "failed", "cancelled")
 #: The states of a study whose last run finished, so it has results to show or replace.
 RESULT_STATES = ("fresh", "stale", "damaged")
+
+
+def _now() -> str:
+    """The time now, UTC, to the second (ISO 8601), as run records keep it."""
+    return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
 
 
 class StudyError(ValueError):
