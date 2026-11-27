@@ -1,6 +1,6 @@
 """The plant-wide nitrite level (``plantwide_nitrite``) on BSM1.
 
-The level runs on ``build_bsm1`` (open loop, ideal clarifier) with BSM1's
+The level runs on ``build_bsm1`` (open loop, Takács settler) with BSM1's
 constant influent carried into its species (``examples/plantwide/bsm1``; ASM1's
 nitrifiers become AOB and NOB in the ratio of their yields, phosphate is given
 in excess). Its nitrifiers have the kinetics of Hiatt & Grady (2008).

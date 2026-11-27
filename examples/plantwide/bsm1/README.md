@@ -2,8 +2,36 @@
 
 `bsm1_comparison.py` runs the plant-wide core (`../models/plantwide_core.yaml`)
 and the shipped `asm2d` on BSM1 (`aquakin.plant.bsm.build_bsm1`, open loop,
-ideal clarifier) with BSM1's constant dry-weather influent, and prints tank 5
-(whose solubles are the effluent's) at each steady state. Run it as a script
+the ten-layer Takács settler) with BSM1's constant dry-weather influent, and
+prints tank 5 at each steady state.
+
+## The benchmark
+
+BSM1's published open-loop steady state (Alex et al. 2008), ASM1 at 15 C,
+tank 5, g/m3: NH4-N 1.733, NO3-N 10.415, O2 0.491, heterotrophs 2559.3,
+autotrophs 149.8, SS 0.889. `build_bsm1` with ASM1 at BSM1's parameter values
+reproduces all of them to the printed figures. The plant-wide models are
+compared at 15 C (the benchmark) and at 20 C, their parameters' reference
+temperature:
+
+| tank 5 (g/m3) | NH4-N | NO2-N | NO3-N | O2 | nitrifiers |
+|---|---|---|---|---|---|
+| BSM1 benchmark (ASM1), 15 C | 1.73 | - | 10.42 | 0.49 | 149.8 |
+| core, 15 C | 3.86 | - | 10.65 | 0.38 | 125.6 |
+| nitrite level, 15 C | 9.85 | 5.68 | 0.00 | 0.82 | 98.7 AOB, NOB washed out |
+| core, 20 C | 1.11 | - | 11.02 | | 107.7 |
+| nitrite level, 20 C | 1.77 | 5.40 | 2.34 | 0.50 | 108.4 AOB + 13.3 NOB |
+
+The core's autotrophs are ASM2d's (growth 1.0 1/d and decay 0.15 1/d at
+20 C, 0.59 and 0.087 at 15 C), against BSM1's ASM1 values at 15 C (0.5 and
+0.05). At 15 C, with ASM1's decay alone the core leaves 1.25 g N/m3 of
+ammonium; with ASM1's growth and decay together, 3.58: the autotrophs' rates
+do not account for the gap on their own (the core's tank 5 also holds less
+oxygen, 0.38 against 0.49). The nitrite level's NOB
+(Hiatt & Grady 2008: growth 0.78 1/d at 20 C, 0.46 at 15 C, oxygen
+half-saturation 1.2) cannot hold on at BSM1's sludge age and aeration at
+15 C.
+ Run it as a script
 (about 2 minutes). `tests/validation/test_plantwide_core_bsm1.py` checks the
 results.
 
@@ -18,7 +46,7 @@ excess, since its growth is limited by both and the core's by neither.
 The aerated tanks strip the gases the core declares (its hydrogen, methane,
 nitrogen and CO2); ASM2d declares none.
 
-## Results (20 C, tank 5, g/m3)
+## Against ASM2d (20 C, tank 5, g/m3)
 
 | | NH4-N | NO3-N | XH | XS | propionate | H2 |
 |---|---|---|---|---|---|---|

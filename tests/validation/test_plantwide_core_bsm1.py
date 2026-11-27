@@ -1,6 +1,6 @@
 """The plant-wide core (``plantwide_core``) on BSM1, against ASM2d.
 
-Both models run on ``build_bsm1`` (open loop, ideal clarifier) with BSM1's
+Both models run on ``build_bsm1`` (open loop, Takács settler) with BSM1's
 constant dry-weather influent carried into their species
 (``examples/plantwide/bsm1``). Checked:
 

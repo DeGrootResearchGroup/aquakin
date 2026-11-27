@@ -483,7 +483,7 @@ days 75 to 150) and nothing else moves, so these are stable steady states
 ## The core on BSM1 (2026-11-26)
 
 `examples/plantwide/bsm1` runs the core and `asm2d` on `build_bsm1` (open loop,
-ideal clarifier) with BSM1's constant influent carried into each model's
+Takács settler, 20 C) with BSM1's constant influent carried into each model's
 species (`tests/validation/test_plantwide_core_bsm1.py`).
 
 - *Aligned* (the core's fermentation off and anaerobic decay as aerobic;
@@ -602,6 +602,13 @@ check is clean. Checked (`tests/integration/test_plantwide_nitrite.py`,
   (0.4 g COD/m3 of substrate in the aerated tanks). The owner accepted the
   build-up as the paper kinetics' prediction (2026-11-27). N, P and COD close
   over the plant with the stripped gases counted.
+- at BSM1's own 15 C the NOB wash out (ammonium 9.85, nitrite 5.68, no
+  nitrate) and the core leaves 3.86 ammonium and 10.65 nitrate, against the
+  published benchmark's 1.73 and 10.42 (Alex et al. 2008, ASM1 at its 15 C
+  values; `build_bsm1` reproduces it to the printed figures). The core with
+  ASM1's autotroph decay at 15 C leaves 1.25 ammonium, with ASM1's growth
+  and decay 3.58, so the autotroph rates alone do not explain the gap; the
+  nitrite level's NOB growth at 15 C is 0.46 1/d.
 
 ## Structure: a linear `extends:` chain
 

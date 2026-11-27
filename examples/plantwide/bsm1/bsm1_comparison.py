@@ -3,7 +3,7 @@
 The core's aerobic and anoxic processes are ASM2d's; its own choices are
 fermentation as heterotroph growth, slower heterotroph decay without oxygen or
 nitrate, and a lower anaerobic hydrolysis factor (``etafe``). Both models run
-on ``build_bsm1`` (open loop, BSM1's kLa, ideal clarifier) with BSM1's
+on ``build_bsm1`` (open loop, BSM1's kLa, Takács settler) with BSM1's
 constant dry-weather influent, carried into each model's species:
 
 - readily biodegradable substrate ``SS`` as fermentable ``SF``, inert products
@@ -141,8 +141,8 @@ def run(model, params=None):
 
 
 def summary(result):
-    """Tank 5 and the effluent at the steady state (the ideal clarifier passes
-    the solubles through, so tank 5's solubles are the effluent's)."""
+    """Tank 5 at the steady state (the settler reacts nothing, so at steady
+    state tank 5's solubles are the effluent's)."""
     plant, model = result["plant"], result["model"]
     tank5 = plant.states_by_unit(result["steady"].state)["tank5"]
 
