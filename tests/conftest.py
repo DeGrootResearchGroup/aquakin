@@ -271,3 +271,56 @@ def study_project(tmp_path):
         "  streams: [tank]\n"
     )
     return project
+
+
+#: A second program that holds a study's run lock until its input closes,
+#: reporting progress at each line it reads ("cancelled" once it is stopped).
+_HOLD = """
+import sys
+from pathlib import Path
+from aquakin.progress import Cancelled, Progress
+from aquakin.study.running import RunLock
+with RunLock(Path(sys.argv[1])) as run:
+    run.report(Progress("fit", 3, 10, "step 3"))
+    print("held", flush=True)
+    for line in sys.stdin:
+        try:
+            run.report(Progress("fit", 4, 10, "step 4"))
+        except Cancelled:
+            print("cancelled", flush=True)
+            break
+        print("reported", flush=True)
+"""
+
+
+@pytest.fixture
+def hold_run():
+    """``hold_run(folder) -> Popen``: another process holding a study's run lock
+    (``aquakin/study/running.py``) at a first progress report, "step 3".
+
+    Each line written to its input makes it report again: it answers
+    "reported", or "cancelled" once the study was cancelled (and then ends).
+    Closing its input ends the run. Every holder is ended at the test's end.
+    """
+    import subprocess
+    import sys
+
+    started = []
+
+    def hold(folder):
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _HOLD, str(folder)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        started.append(proc)
+        assert proc.stdout.readline() == "held\n"
+        return proc
+
+    yield hold
+    for proc in started:
+        if not proc.stdin.closed:
+            proc.stdin.close()  # ends a holder still running; a closed one has gone
+        proc.wait(60)
+        proc.stdout.close()

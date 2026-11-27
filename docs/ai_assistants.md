@@ -72,8 +72,10 @@ files, and may ask you before each such call.
 
 A study runs in the background, so a long calibration does not hold up the
 conversation: the assistant starts it, checks on it, and reads the results when
-it has finished. Runs belong to the `aquakin mcp` process: closing the
-assistant's app stops them, and the study keeps the results it had before.
+it has finished. Each run is a process of its own, so it goes on if you close
+the assistant's app; ask again later, or watch it in the editor. A study runs
+once at a time, whichever program started it (see
+[Studies](plant_files.md#studies)).
 
 In Claude Code, the assistant can also run Python itself, so it can use the
 whole [public API](public_api.md) directly, including analyses no study kind

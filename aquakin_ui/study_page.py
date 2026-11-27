@@ -98,6 +98,13 @@ def _studies_panel(self: Editor) -> None:
         _study_card_actions(self)
 
 
+#: A running study's latest progress (``st`` in a card): this editor's run's
+#: own events, else what the run another program started records in its folder.
+_PROGRESS = (
+    "(study_progress[st.name] || (st.run && st.run.progress) || {fraction: null, message: ''})"
+)
+
+
 def _study_card_item() -> None:
     """A study card's heading, state, notes and run progress (the study is ``st``)."""
     with v3.VCardItem():
@@ -128,18 +135,20 @@ def _study_card_item() -> None:
             key="n",
             classes="text-caption text-medium-emphasis",
         )
-        with html.Div(v_if="st.running && study_progress[st.name]", classes="mt-1"):
+        with html.Div(v_if="st.running", classes="mt-1"):
             v3.VProgressLinear(
-                model_value=(
-                    "study_progress[st.name].fraction == null ? 0 : "
-                    "100 * study_progress[st.name].fraction",
-                ),
-                indeterminate=("study_progress[st.name].fraction == null",),
+                model_value=(f"{_PROGRESS}.fraction == null ? 0 : 100 * {_PROGRESS}.fraction",),
+                indeterminate=(f"{_PROGRESS}.fraction == null",),
                 height=4,
                 rounded=True,
             )
             html.Div(
-                "{{ study_progress[st.name].message }}",
+                f"{{{{ {_PROGRESS}.message }}}}",
+                classes="text-caption text-medium-emphasis",
+            )
+            html.Div(
+                "started by another program",
+                v_if="!study_progress[st.name]",
                 classes="text-caption text-medium-emphasis",
             )
 

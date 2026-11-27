@@ -18,6 +18,7 @@ reactor (`reactor:`, below). The design and the owner's decisions are in
 ## Modules
 
 `common.py` (file names, kinds, states, `StudyError`, time grids) <
+`running.py` (the run in progress) <
 `analysis.py` (what both targets share) < `reactor.py` (the reactor target) <
 `study.py` (schema, run, check, freeze) < `form.py`. A lower module never
 imports a higher one; `study.py` re-exports the names tests and the worker
@@ -31,6 +32,8 @@ take from it.
 | `run.yaml` | `run_study` | the run record: times, aquakin version, `spec_fingerprint`, `spec_inputs`, the study's own fingerprint (`_study_fingerprint`: settings + any file they read), outcome / error, `results: {path: sha256}` |
 | `results/` | `run_study` | result files (`aquakin/utils/result_files.py`), every value keyed by name |
 | `results.partial/` | `run_study` | where a run writes; renamed to `results/` only on success (a killed run leaves it; the next run deletes it, copies leave it out) |
+| `running.yaml` | `run_study` (`RunLock`) | present while a run is in progress, **held under an OS lock** (`flock` / `msvcrt.locking`): when it started, its pid, its latest progress; removed at the end; one nobody holds (a killed run) is ignored |
+| `cancel` | `cancel_study` | asks the run in progress to stop at its next checkpoint; cleared when a run starts and ends |
 | `last_attempt.yaml` | `run_study` | the record of a run that failed or was cancelled while earlier results stood (they are kept; `check_study` notes it; a success removes it) |
 | `frozen.yaml` | `freeze_study` | its presence means frozen; the snapshot's fingerprint and `spec_inputs` at freeze time (never recomputed: a spec from an older aquakin may not read through the current catalogue) |
 | `snapshot/` | `freeze_study` | `flowsheet.yaml`, `models/` (every model **flattened**: its `extends` chain merged in, shipped models included as `copy_of: shipped`), `data/`; a reactor study's: `models/<model's file stem>.yaml` (flattened) and `data/` (its experiments' tables) |
@@ -143,6 +146,17 @@ take from it.
 - **Progress and cancel** (`aquakin/progress.py`): `run_study(progress=)` passes
   the callable to the analysis; `Cancelled` (a `BaseException`) stops it and
   the run is recorded with outcome `cancelled` (state `"cancelled"`).
+- **One run of a study at a time, from any program** (`running.py`):
+  `run_study` takes `RunLock` before anything else it writes, and every
+  report goes through `RunLock.report` (records progress, raises `Cancelled`
+  when `cancel` exists) before the caller's callback. A run in progress is a
+  **field** (`StudyStatus.running`, `list_studies`' `running`), not a state:
+  `state` stays that of the results it had. Anything that changes what a run
+  reads (`freeze_study`, `unfreeze_study`, `update_study`) calls
+  `refuse_while_running`; `copy_study` leaves both files out. Never decide
+  "running" from a process handle or a pid alone: `run_state` asks the lock.
+  Rewrite `running.yaml` in place (the lock is on that file; replacing it
+  would release it), and remove it before releasing the lock.
 - **Setting a study up** (`form.py`): `study_form()` describes every `_Study`
   field (type, label, help, default) and each kind's fields and required ones
   (`_REQUIRED`), and its `reactor_fields` / `reactor_required` (`_REACTOR_FIELDS`,

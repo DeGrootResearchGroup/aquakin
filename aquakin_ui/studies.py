@@ -49,14 +49,14 @@ def refresh_studies(self: Editor) -> None:
     """List the project's studies with where each stands (off the page's thread)."""
     project = self._project()
     if project is None:
-        self.state.studies = []
+        self._list([])
         return
 
     def done(studies):
         if isinstance(studies, Exception):
             self.say(f"could not list the studies: {studies}")
             return
-        self.state.studies = [{**st, "running": st["name"] in self._runs} for st in studies]
+        self._list(studies)
 
     self._off_page(lambda: self.worker.request("list_studies", project=str(project)), done)
 
@@ -189,7 +189,7 @@ def _run_simulation(self: Editor, spec: Path) -> None:
         if isinstance(studies, Exception):
             self.say(f"could not set up the simulation: {studies}")
             return
-        self.state.studies = [{**st, "running": st["name"] in self._runs} for st in studies]
+        self._list(studies)
         self.state.panel = "studies"
         if (self._study(name) or {}).get("frozen"):
             self.say(
@@ -478,6 +478,8 @@ def _start_run(self: Editor, study: dict, *, replace: bool) -> None:
 
 
 def cancel_run(self: Editor, name: str) -> None:
+    """Stop a study's run: this editor's own through its process, one another
+    program started through the worker (it stops at its next checkpoint)."""
     run = self._runs.get(name)
     if run is not None:
         run.cancel()
@@ -485,6 +487,12 @@ def cancel_run(self: Editor, name: str) -> None:
             **self.state.study_progress,
             name: {**self.state.study_progress.get(name, {}), "message": "cancelling"},
         }
+        return
+    study = self._study(name)
+    if study is not None and study.get("run"):
+        self._worker_study(
+            "cancel_study", study, then=lambda: self.say(f"{name}: cancelling", error=False)
+        )
 
 
 def _on_run_event(self: Editor, name: str, event: dict) -> None:
@@ -519,8 +527,19 @@ def _apply_run_event(self: Editor, name: str, event: dict) -> None:
         self.refresh_studies()
 
 
+def _list(self: Editor, studies: list[dict]) -> None:
+    """Show the worker's ``list_studies``: each study ``running`` when this
+    editor runs it or the worker reports a run in progress (``run``: when it
+    started and its progress, from whichever program)."""
+    self._listed = studies
+    self._mark_running()
+
+
 def _mark_running(self: Editor) -> None:
-    self.state.studies = [{**st, "running": st["name"] in self._runs} for st in self.state.studies]
+    self.state.studies = [
+        {**st, "run": st["running"], "running": st["name"] in self._runs or bool(st["running"])}
+        for st in self._listed
+    ]
     self.state.simulating = self._simulation() in self._runs
 
 
