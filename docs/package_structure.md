@@ -71,6 +71,9 @@ aquakin/
 │   │   │                            #   friendly_solve_errors
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
 │   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)
+│   │   ├── finite_volume.py         # the shared 1-D finite-volume core:
+│   │   │                            #   diffusive_flux, upwind_flux, divergence; the
+│   │   │                            #   biofilm diffusion and growth-advection operators use it
 │   │   ├── steady.py                # pseudo-transient continuation steady solver +
 │   │   │                            #   continuation / arclength drivers, generic in the RHS
 │   │   │                            #   (Plant.steady_state, BiofilmReactor.steady_state;

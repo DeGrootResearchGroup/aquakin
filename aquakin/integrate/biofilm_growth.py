@@ -41,6 +41,8 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
+from aquakin.integrate.finite_volume import divergence, upwind_flux
+
 #: Detachment laws, as the exponent of ``L_f`` in ``u_det = rate * L_f**power``.
 #: Constant erosion (0) strips a fixed velocity; linear (1) is proportional to
 #: thickness; quadratic (2) is the common erosion closure, whose restoring force
@@ -181,19 +183,17 @@ def advection_transport(layers, bulk, face_velocities, dLdt, dz, advect_mask):
     n_layers = layers.shape[0]
     # Fractional depth of each face, surface first: 1 at the surface, 0 at the wall.
     sigma = jnp.flip(jnp.arange(n_layers + 1, dtype=layers.dtype)) / n_layers
-    w = face_velocities - sigma * dLdt  # velocity relative to the moving grid
+    # Velocity relative to the moving grid, positive toward the wall (increasing
+    # layer index): the negative of the outward ``w_f``, so the face-flux
+    # convention of :mod:`aquakin.integrate.finite_volume` applies directly.
+    toward_wall = sigma * dLdt - face_velocities
 
-    # Upwind concentration at each face. Outward flow (w > 0) carries the layer
-    # on the wall side of the face; inward flow carries the one outside it, which
-    # at the surface is the bulk.
-    inner = jnp.concatenate([layers, layers[-1:]], axis=0)  # wall side of each face
-    outer = jnp.concatenate([bulk[None, :], layers], axis=0)  # surface side
-    w_col = w[:, None]
-    flux = jnp.where(w_col > 0, w_col * inner, w_col * outer) * advect_mask[None, :]
-
-    # Divergence over each layer: flux in at its wall-side face, out at its
-    # surface-side face. Face f bounds layer f on its surface side.
-    divergence = (flux[1:] - flux[:-1]) / dz
+    # Upwind flux at each face. Outward flow carries the layer on the wall side of
+    # the face; inward flow carries the one outside it, which at the surface is
+    # the bulk. Nothing moves through the wall face, so the value beyond it only
+    # has to be finite: the wall layer itself.
+    flux = upwind_flux(layers, toward_wall, bulk, layers[-1]) * advect_mask[None, :]
+    advected = divergence(flux, dz)
 
     # The cells themselves stretch with the film, and it is the mass in a cell
     # that the fluxes govern, not its concentration: ``d(X*dz)/dt`` carries a
@@ -202,8 +202,8 @@ def advection_transport(layers, bulk, face_velocities, dLdt, dz, advect_mask):
     # uniform film drifts off its own density as it grows -- the incompressibility
     # the displacement velocity was derived from.
     dilation = dLdt / (n_layers * dz)
-    d_layers = divergence - layers * dilation * advect_mask[None, :]
-    return d_layers, flux[0]
+    d_layers = advected - layers * dilation * advect_mask[None, :]
+    return d_layers, -flux[0]  # positive leaving the film
 
 
 def layer_thickness(thickness, n_layers, floor: float = 1e-9):
