@@ -13,7 +13,7 @@ Checked:
   ADM1 digester input;
 - the core digester's methane production and particulate COD destruction
   equal ADM1's at BSM2's steady state (the heterotroph anaerobic hydrolysis
-  factor ``etafe`` = 0.15 was chosen by this comparison).
+  factor ``etafe`` = 0.144 was chosen by this comparison).
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ ASM1_FEED = {
 # BSM2's digester pH at its steady state; pH is a condition of the core model.
 PH = 7.26
 # Particulate organics of each model, g COD/m3 (ADM1 states are kg/m3).
-CORE_PARTICULATES = ("XI", "XS", "XH", "XAUT", "XFE", "XPRO", "XAC", "XH2M")
+CORE_PARTICULATES = ("XI", "XS", "XH", "XAUT", "XPRO", "XAC", "XH2M")
 ADM1_PARTICULATES = (
     "X_c", "X_ch", "X_pr", "X_li", "X_su", "X_aa", "X_fa", "X_c4", "X_pro", "X_ac", "X_h2", "X_I",
 )  # fmt: skip
@@ -119,7 +119,7 @@ def core_digester():
         ),
         to="digester.inlet",
     )
-    seed = {**feed, "XFE": 500.0, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
+    seed = {**feed, "XPRO": 100.0, "XAC": 500.0, "XH2M": 200.0}
     y0 = plant.initial_state(
         overrides={"digester": jnp.concatenate([vector(seed), jnp.zeros(len(core.gases.entries))])}
     )
@@ -141,8 +141,8 @@ def _adm1_methane():
 
 
 def test_core_digester_methane_and_solids_destruction_equal_adm1(core_digester):
-    """Methane to 0.5% (1064 against 1065 kg CH4/d) and particulate COD
-    destroyed to one percentage point (53.8% against 54.2%). Both models are
+    """Methane to 0.5% (1067 against 1065 kg CH4/d) and particulate COD
+    destroyed to one percentage point (53.9% against 54.2%). Both models are
     fed the same particulate COD, so the destruction compares directly.
 
     The tolerances are the model difference, not solver error: the two models

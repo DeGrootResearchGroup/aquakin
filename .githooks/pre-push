@@ -20,18 +20,15 @@ set -euo pipefail
 # link means nothing to a reader of the repository, and the session can be
 # private (CLAUDE.md, "Pushing and merging"). git gives one line per ref on
 # stdin: "<local ref> <local sha> <remote ref> <remote sha>". The commits pushed
-# are those in local_sha that are neither on any remote-tracking ref nor in the
-# remote branch being updated. A commit that reached the branch by merging main
-# is already on the remote and passed its own checks there, so it is not this
-# push's: counting it would block every branch that merges a main commit with a
-# link written where no hook ran (a squash message GitHub composed, say). This
-# runs before the ruff gate, which exits early when ruff is not installed.
+# are those in local_sha on no remote-tracking ref: not "remote_sha..local_sha",
+# which after a merge of main also lists main's commits, already reviewed and
+# beyond any rewrite. This runs before the ruff gate, which exits early when
+# ruff is not installed.
 zero=0000000000000000000000000000000000000000
 pins_changed=0
-while read -r _local_ref local_sha _remote_ref remote_sha; do
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
   [ "$local_sha" = "$zero" ] && continue          # a branch deletion
   range=("$local_sha" --not --remotes)
-  [ "$remote_sha" = "$zero" ] || range+=("$remote_sha")
   # Read the whole list before matching: piped into `grep -q`, git would be
   # killed by SIGPIPE once grep stops at a match, and `pipefail` turns that into
   # "no pin change" for a push that changes many files.

@@ -356,22 +356,6 @@ def test_a2o_on_asm2d_chemp_has_the_asm2d_dynamics_without_metal(asm2d, asm2d_ch
     assert compared == 7 * 17 + 10 * 8
 
 
-@pytest.mark.parametrize("name", ["asm2d_tud", "asm3_biop"])
-def test_a2o_refuses_a_model_without_the_asm2d_species_names(name):
-    model = aquakin.load_model(name)
-    # Both name oxygen SO, not SO2 (and more besides).
-    msg = rf"asm2d species names.*model '{name}' has no \[.*'SO2'"
-    with pytest.raises(ValueError, match=msg):
-        build_a2o(model)
-    with pytest.raises(ValueError, match=msg):
-        a2o_influent(model)
-
-
-def test_a2o_ferric_refused_on_a_model_without_xmeoh(asm2d_chemp):
-    with pytest.raises(ValueError, match="XMeOH, which model 'asm2d_chemp' does not have"):
-        build_a2o(asm2d_chemp, ferric=FerricDose(flow=5.0))
-
-
 @pytest.mark.slow
 def test_a2o_on_asm2d_chemp_reaches_the_asm2d_steady_state(asm2d, asm2d_chemp):
     """``build_a2o(asm2d_chemp)`` without metal reaches the same nutrient-removal

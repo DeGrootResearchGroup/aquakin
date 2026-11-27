@@ -76,47 +76,34 @@ def test_blocks_a_new_branch_whose_commit_links_a_session(repo):
 
 def test_checks_only_the_commits_being_pushed(repo):
     old = _commit(repo, f"Already pushed\n\nClaude-Session: {LINK}")
+    _git(repo, "push", "-q", "--no-verify", "origin", "HEAD:refs/heads/b")
     new = _commit(repo, "New and clean")
     result = _run_hook(repo, f"refs/heads/b {new} refs/heads/b {old}\n")
     assert "link to a Claude session" not in result.stderr
     assert result.returncode == 0
 
 
-def test_skips_commits_merged_in_from_a_branch_already_on_the_remote(repo):
-    """A branch that merges ``main`` brings in ``main``'s commits, which are
-    already on the remote: they are not this push's, so a link in one of them
-    (a squash message GitHub wrote, which no hook saw) must not block it."""
-    _git(repo, "checkout", "-q", "-b", "feature")
-    pushed = _commit(repo, "Feature work")
-    _git(repo, "push", "-q", "origin", "feature")
+def test_main_merged_into_a_pushed_branch_is_not_checked_again(repo):
+    """A branch pushed before main gained a linked commit, then merged with
+    main: the merge brings main's commits in after the branch's remote sha, but
+    they are on the remote already (and cannot be rewritten), so only the
+    branch's new commits are checked."""
+    _git(repo, "checkout", "-q", "-b", "b")
+    branch_tip = _commit(repo, "Branch work")
+    _git(repo, "push", "-q", "--no-verify", "origin", "b")
     _git(repo, "checkout", "-q", "main")
-    _commit(repo, f"Squashed elsewhere (#1)\n\nClaude-Session: {LINK}")
+    _commit(repo, f"Merged elsewhere\n\nClaude-Session: {LINK}")
     _git(repo, "push", "-q", "--no-verify", "origin", "main")
-    _git(repo, "fetch", "-q", "origin")
-    _git(repo, "checkout", "-q", "feature")
-    _git(repo, "merge", "-q", "--no-edit", "origin/main")
-    head = _commit(repo, "More feature work")
-    result = _run_hook(repo, f"refs/heads/feature {head} refs/heads/feature {pushed}\n")
-    assert "link to a Claude session" not in result.stderr
-    assert result.returncode == 0, result.stderr
-
-
-def test_a_linked_commit_of_this_branch_still_blocks_after_a_merge(repo):
-    """Excluding what the remote already has must not hide the branch's own
-    new commits: a link in one of them still blocks the push."""
-    _git(repo, "checkout", "-q", "-b", "feature")
-    pushed = _commit(repo, "Feature work")
-    _git(repo, "push", "-q", "origin", "feature")
-    _git(repo, "checkout", "-q", "main")
-    _commit(repo, "Clean main change")
-    _git(repo, "push", "-q", "origin", "main")
-    _git(repo, "fetch", "-q", "origin")
-    _git(repo, "checkout", "-q", "feature")
-    _git(repo, "merge", "-q", "--no-edit", "origin/main")
-    head = _commit(repo, f"Linked feature work\n\nClaude-Session: {LINK}")
-    result = _run_hook(repo, f"refs/heads/feature {head} refs/heads/feature {pushed}\n")
-    assert result.returncode == 1
-    assert "Linked feature work" in result.stderr
+    _git(repo, "checkout", "-q", "b")
+    _git(repo, "merge", "-q", "--no-edit", "main")
+    merged = _git(repo, "rev-parse", "HEAD")
+    clean = _run_hook(repo, f"refs/heads/b {merged} refs/heads/b {branch_tip}\n")
+    assert clean.returncode == 0, clean.stderr
+    bad = _commit(repo, f"New on the branch\n\nClaude-Session: {LINK}")
+    blocked = _run_hook(repo, f"refs/heads/b {bad} refs/heads/b {branch_tip}\n")
+    assert blocked.returncode == 1
+    assert "New on the branch" in blocked.stderr
+    assert "Merged elsewhere" not in blocked.stderr
 
 
 def test_passes_clean_commits_and_deletions(repo):
@@ -182,6 +169,7 @@ def test_a_pin_change_that_resolves_passes(repo, stub_path):
 
 def test_a_push_without_pin_changes_skips_the_resolve(repo, stub_path):
     base = _commit_file(repo, "pyproject.toml", PYPROJECT, "Add pyproject")
+    _git(repo, "push", "-q", "--no-verify", "origin", "HEAD:refs/heads/b")
     sha = _commit_file(repo, "README.md", "text\n", "Docs only")
     # The stub would fail, so a run of the check would block the push.
     result = _run_hook(repo, f"refs/heads/b {sha} refs/heads/b {base}\n",

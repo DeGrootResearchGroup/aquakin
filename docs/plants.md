@@ -202,8 +202,8 @@ tanks, where the phosphorus-accumulating organisms take up the volatile fatty
 acids, two anoxic and three aerated tanks, and a secondary clarifier, with a
 nitrate recycle from the last aerated tank to the anoxic zone and the RAS to the
 anaerobic zone. It is a representative municipal design rather than a published
-benchmark. It runs on `asm2d` or a model extending it that keeps its species
-names, such as `asm2d_chemp`. `a2o_influent(model)` is a matching constant influent, and
+benchmark. It runs on `asm2d` by default, or on a model extending it that keeps
+its species names, such as `asm2d_chemp`. `a2o_influent(model)` is a matching constant influent, and
 `a2o_warm_start(plant)` seeds the tanks with an established phosphorus-removing
 sludge, which a cold start takes a long time to grow:
 

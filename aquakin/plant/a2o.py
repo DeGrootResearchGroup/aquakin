@@ -1,4 +1,4 @@
-"""A²O biological-nutrient-removal plant builder (ASM2d family).
+"""A²O biological-nutrient-removal plant builder (ASM2d).
 
 The **A²O** (Anaerobic–Anoxic–Oxic) process is the canonical biological
 nutrient-removal flowsheet: an anaerobic selector at the front (where
@@ -16,14 +16,12 @@ close the loop:
 The secondary clarifier is the ten-layer Takács settler by default;
 ``use_takacs=False`` swaps in the fast stateless ``IdealClarifier``.
 
-It runs the shipped ``asm2d`` model by default, which already carries the
-biological phosphorus model (PAO / poly-P / PHA) and ASM2d's own simple
-metal-phosphate precipitation (``XMeOH`` / ``XMeP``), so the plant simultaneously
-removes carbon, nitrogen and phosphorus. It is the home for the
-chemical-phosphorus (metal-salt dosing) demonstration that the BSM plants — built
-on the phosphorus-free ASM1 — cannot host. Any model with the ``asm2d`` species
-names its influent, warm start and aeration use runs too, such as
-``asm2d_chemp``; the settler's solids are the model's own particulates.
+It runs the shipped ``asm2d`` model by default, which already carries the biological
+phosphorus model (PAO / poly-P / PHA) and ASM2d's own simple metal-phosphate
+precipitation (``XMeOH`` / ``XMeP``), so the plant simultaneously removes carbon,
+nitrogen and phosphorus. It is the home for the chemical-phosphorus (metal-salt
+dosing) demonstration that the BSM plants — built on the phosphorus-free ASM1 —
+cannot host.
 
 Unlike BSM1/BSM2 this is **not** a standardised benchmark; the default sizing is
 a defensible municipal A²O design, not a published reference set, so use it as a
@@ -128,8 +126,7 @@ def a2o_influent(
     Parameters
     ----------
     model : CompiledModel
-        The ASM2d-family model, with the ``asm2d`` species names (must match the
-        one passed to :func:`build_a2o`).
+        The ASM2d model (must match the one passed to :func:`build_a2o`).
     Q : float
         Influent flow (m³/d). Default the dry-weather average ``A2O_Q_AVG``.
     T : float
@@ -144,13 +141,7 @@ def a2o_influent(
         A constant-in-time, zero-based influent (unlisted species are 0). Its
         suspended solids ``XTSS`` are the TSS of its particulates through the
         model's ``iTSS`` factors, unless ``overrides`` gives them.
-
-    Raises
-    ------
-    ValueError
-        If the model lacks a species the influent names.
     """
-    _check_a2o_model(model)
     comp = dict(A2O_INFLUENT)
     if overrides:
         comp.update(overrides)
@@ -188,39 +179,6 @@ A2O_WARM_REACTOR_COMPOSITION = {
     "XAUT": 79.0,
 }
 
-# The species the A²O influent, warm start and aeration name (the ``asm2d``
-# names, the oxygen ``SO2`` and the TSS state ``XTSS`` included): a model that
-# lacks any of them cannot run on ``build_a2o``.
-_A2O_MODEL_SPECIES = frozenset(A2O_INFLUENT) | frozenset(A2O_WARM_REACTOR_COMPOSITION) | {"XTSS"}
-
-
-def _check_a2o_model(model: CompiledModel) -> None:
-    """Refuse a model the A²O builder, influent and warm start cannot run.
-
-    The builder's influent, warm start and aeration are written in the
-    ``asm2d`` species names, so the model must have every one of
-    ``_A2O_MODEL_SPECIES``: ``asm2d`` and the models extending it that keep
-    those names (``asm2d_chemp``) do; ``asm2d_tud`` and ``asm3_biop``, which
-    name their states differently, do not.
-
-    Parameters
-    ----------
-    model : CompiledModel
-        The candidate model.
-
-    Raises
-    ------
-    ValueError
-        If the model lacks any of ``_A2O_MODEL_SPECIES``; the message names
-        the missing species.
-    """
-    missing = sorted(_A2O_MODEL_SPECIES - set(model.species))
-    if missing:
-        raise ValueError(
-            f"the A²O plant runs on a model with the asm2d species names (such as "
-            f"'asm2d' or 'asm2d_chemp'); model '{model.name}' has no {missing}."
-        )
-
 
 def a2o_warm_start(plant: Plant) -> jnp.ndarray:
     """A warm-start state vector for an :func:`build_a2o` plant.
@@ -248,18 +206,123 @@ def a2o_warm_start(plant: Plant) -> jnp.ndarray:
     return plant.initial_state(overrides=dict.fromkeys(reactors, ml))
 
 
-def _add_reactor_zones(plant: Plant, model: CompiledModel, conditions: dict) -> None:
-    """Add the anaerobic, anoxic and aerobic tanks and the anoxic mixer, in order.
+def _add_a2o_clarifier(
+    plant: Plant, model: CompiledModel, Q_underflow: float, use_takacs: bool
+) -> None:
+    """Add the A²O secondary clarifier, named ``clarifier``, to ``plant``.
+
+    Every X-prefixed species of ``model`` settles: ASM2d's biomass, storage
+    pools, inerts, TSS state and metal precipitates, or the particulates of
+    whichever activated-sludge model is passed. The Takács settler reads the
+    solids as TSS (each particulate through the model's ``iTSS`` factor, the TSS
+    state itself at 0, so no solid is counted twice), which only a model with a
+    TSS state carries; the ideal clarifier needs none.
+    """
+    particulates = list(solids_species(model)[0])
+    add_secondary_clarifier(
+        plant,
+        model=model,
+        underflow_Q=Q_underflow,
+        use_takacs=use_takacs,
+        takacs_kwargs=dict(
+            area=A2O_CLARIFIER_AREA,
+            height=A2O_CLARIFIER_HEIGHT,
+            init_underflow_Q=Q_underflow,
+            particulate_species=particulates,
+            tss_factors=lumped_tss_weights(model) if use_takacs else None,
+        ),
+        ideal_kwargs=dict(particulate_species=particulates),
+    )
+
+
+def build_a2o(
+    model: CompiledModel | None = None,
+    *,
+    Q_avg: float = A2O_Q_AVG,
+    wastage_flow: float = A2O_WASTAGE_FLOW,
+    internal_recycle_ratio: float = A2O_INTERNAL_RECYCLE_RATIO,
+    ras_ratio: float = A2O_RAS_RATIO,
+    ferric: FerricDose | None = None,
+    conditions: dict[str, float] | None = None,
+    use_takacs: bool = True,
+) -> Plant:
+    """Assemble an A²O biological-nutrient-removal plant (ASM2d by default).
+
+    Flowsheet (7 reactors): an anaerobic selector (2 tanks) → anoxic zone
+    (2 tanks) → aerobic zone (3 tanks) → secondary clarifier, with the
+    mixed-liquor internal recycle (aerobic → anoxic) and RAS (underflow →
+    anaerobic) closing the loop.
 
     Parameters
     ----------
-    plant : Plant
-        The A²O plant being built (its front mixer already added).
-    model : CompiledModel
-        The plant's model.
-    conditions : dict
-        The tanks' operating conditions.
+    model : CompiledModel, optional
+        The activated-sludge model. Defaults to ``aquakin.load_model("asm2d")``.
+        Another model works if it names its particulates with an ``X`` prefix
+        (they settle in the clarifier) and its oxygen ``SO2``; the ferric
+        dose needs ``XMeOH``, and the Takács settler a TSS state (``XTSS``
+        or ``XSS``), so a model without one is built with
+        ``use_takacs=False``.
+    Q_avg : float
+        Design inlet flow used to size the recycle pumps (m³/d).
+    wastage_flow : float
+        Sludge-wastage pump flow ``Q_w`` (m³/d). The clarifier underflow is
+        ``Q_r + Q_w`` and the wastage is the free remainder after the RAS split.
+    internal_recycle_ratio, ras_ratio : float
+        ``Q_a / Q_avg`` (aerobic → anoxic nitrate recycle) and ``Q_r / Q_avg``
+        (underflow → anaerobic return sludge).
+    conditions : dict, optional
+        Per-tank condition overrides (e.g. ``{"T": 288.15}`` for winter).
+        Defaults to the model's declared defaults.
+    use_takacs : bool
+        If True (default), use the ten-layer Takács secondary clarifier, with
+        its own per-layer solids state, settling between layers with the
+        Godunov interface flux (:class:`~aquakin.plant.takacs.TakacsClarifier`'s
+        defaults), at a settling velocity set by the solids' TSS through the
+        model's ``iTSS`` factors. If False, use the fast stateless ``IdealClarifier``, which
+        captures a fixed fraction of the particulates and has no state of its
+        own.
+
+    Returns
+    -------
+    Plant
+        Fully wired A²O plant. Add the influent with
+        ``plant.add_influent("feed", a2o_influent(model))`` and read the
+        effluent off ``plant.effluent_endpoint``.
+
+    Notes
+    -----
+    Not a standardised benchmark — the sizing is a representative municipal A²O
+    design. Use :func:`a2o_influent` for a matching constant influent.
     """
+    if model is None:
+        import aquakin
+
+        model = aquakin.load_model("asm2d")
+
+    if conditions is None:
+        conditions = reactor_conditions(model)
+
+    plant = Plant("A2O", time_unit="d")
+
+    # Controlled recycle-pump flows (constant volumetric setpoints off the design
+    # flow, like the BSM plants -- see recycle_pump_flows / the SetpointSplitter
+    # docstring).
+    Qa, Qr, Qw, Q_underflow = recycle_pump_flows(
+        internal_ratio=internal_recycle_ratio,
+        ras_ratio=ras_ratio,
+        Q_design=Q_avg,
+        wastage=wastage_flow,
+    )
+
+    # ----- Front mixer: fresh influent + RAS -> anaerobic selector -----
+    plant.add_unit(
+        MixerUnit(
+            name="front_mix",
+            input_port_names=["fresh", "ras"],
+            model=model,
+        )
+    )
+
     # ----- Anaerobic selector (no aeration) -----
     for i, vol in enumerate(A2O_ANAEROBIC_VOLUMES):
         plant.add_unit(
@@ -308,110 +371,6 @@ def _add_reactor_zones(plant: Plant, model: CompiledModel, conditions: dict) -> 
             )
         )
 
-
-def build_a2o(
-    model: CompiledModel | None = None,
-    *,
-    Q_avg: float = A2O_Q_AVG,
-    wastage_flow: float = A2O_WASTAGE_FLOW,
-    internal_recycle_ratio: float = A2O_INTERNAL_RECYCLE_RATIO,
-    ras_ratio: float = A2O_RAS_RATIO,
-    ferric: FerricDose | None = None,
-    conditions: dict[str, float] | None = None,
-    use_takacs: bool = True,
-) -> Plant:
-    """Assemble an A²O biological-nutrient-removal plant on an ASM2d-family model.
-
-    Flowsheet (7 reactors): an anaerobic selector (2 tanks) → anoxic zone
-    (2 tanks) → aerobic zone (3 tanks) → secondary clarifier, with the
-    mixed-liquor internal recycle (aerobic → anoxic) and RAS (underflow →
-    anaerobic) closing the loop.
-
-    Parameters
-    ----------
-    model : CompiledModel, optional
-        An ASM2d-family model with the ``asm2d`` species names, such as
-        ``asm2d`` or ``asm2d_chemp`` (not ``asm2d_tud`` or ``asm3_biop``, which
-        name their states differently).
-        Defaults to ``aquakin.load_model("asm2d")``. The clarifier settles the
-        model's particulates (its ``X``-prefixed species).
-    Q_avg : float
-        Design inlet flow used to size the recycle pumps (m³/d).
-    wastage_flow : float
-        Sludge-wastage pump flow ``Q_w`` (m³/d). The clarifier underflow is
-        ``Q_r + Q_w`` and the wastage is the free remainder after the RAS split.
-    internal_recycle_ratio, ras_ratio : float
-        ``Q_a / Q_avg`` (aerobic → anoxic nitrate recycle) and ``Q_r / Q_avg``
-        (underflow → anaerobic return sludge).
-    conditions : dict, optional
-        Per-tank condition overrides (e.g. ``{"T": 288.15}`` for winter).
-        Defaults to the model's declared defaults.
-    use_takacs : bool
-        If True (default), use the ten-layer Takács secondary clarifier, with
-        its own per-layer solids state, settling between layers with the
-        Godunov interface flux (:class:`~aquakin.plant.takacs.TakacsClarifier`'s
-        defaults), at a settling velocity set by the solids' TSS through the
-        model's ``iTSS`` factors. If False, use the fast stateless ``IdealClarifier``, which
-        captures a fixed fraction of the particulates and has no state of its
-        own.
-
-    Returns
-    -------
-    Plant
-        Fully wired A²O plant. Add the influent with
-        ``plant.add_influent("feed", a2o_influent(model))`` and read the
-        effluent off ``plant.effluent_endpoint``.
-
-    Raises
-    ------
-    ValueError
-        If the model lacks a species the plant's influent, warm start or
-        aeration names, or ``ferric`` is given for a model without ASM2d's metal hydroxide
-        ``XMeOH``.
-
-    Notes
-    -----
-    Not a standardised benchmark — the sizing is a representative municipal A²O
-    design. Use :func:`a2o_influent` for a matching constant influent.
-    """
-    if model is None:
-        import aquakin
-
-        model = aquakin.load_model("asm2d")
-    _check_a2o_model(model)
-    if ferric is not None and "XMeOH" not in model.species:
-        raise ValueError(
-            f"ferric= doses ASM2d's metal hydroxide XMeOH, which model '{model.name}' "
-            "does not have."
-        )
-    particulates = list(solids_species(model)[0])
-
-    if conditions is None:
-        conditions = reactor_conditions(model)
-
-    plant = Plant("A2O", time_unit="d")
-
-    # Controlled recycle-pump flows (constant volumetric setpoints off the design
-    # flow, like the BSM plants -- see recycle_pump_flows / the SetpointSplitter
-    # docstring).
-    Qa, Qr, Qw, Q_underflow = recycle_pump_flows(
-        internal_ratio=internal_recycle_ratio,
-        ras_ratio=ras_ratio,
-        Q_design=Q_avg,
-        wastage=wastage_flow,
-    )
-
-    # ----- Front mixer: fresh influent + RAS -> anaerobic selector -----
-    plant.add_unit(
-        MixerUnit(
-            name="front_mix",
-            input_port_names=["fresh", "ras"],
-            model=model,
-        )
-    )
-
-    _add_reactor_zones(plant, model, conditions)
-
     n_aer = len(A2O_AEROBIC_VOLUMES)
 
     # ----- Aerobic outlet splitter: internal recycle Qa + clarifier feed -----
@@ -425,23 +384,7 @@ def build_a2o(
     )
 
     # ----- Secondary clarifier (Takács 1-D settler, or the fast IdealClarifier) -----
-    add_secondary_clarifier(
-        plant,
-        model=model,
-        underflow_Q=Q_underflow,
-        use_takacs=use_takacs,
-        takacs_kwargs=dict(
-            area=A2O_CLARIFIER_AREA,
-            height=A2O_CLARIFIER_HEIGHT,
-            init_underflow_Q=Q_underflow,
-            particulate_species=particulates,
-            # The settling velocity reads the solids as TSS: each particulate
-            # through the model's iTSS factor, and XTSS itself (which already
-            # sums them) at 0, so no solid is counted twice.
-            tss_factors=lumped_tss_weights(model),
-        ),
-        ideal_kwargs=dict(particulate_species=particulates),
-    )
+    _add_a2o_clarifier(plant, model, Q_underflow, use_takacs)
 
     # ----- Underflow splitter: RAS Qr + wastage Qw -----
     plant.add_unit(
