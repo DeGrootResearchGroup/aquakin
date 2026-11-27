@@ -5,6 +5,8 @@ paths:
   - "MANIFEST.in"
   - "plugins/**"
   - ".claude-plugin/**"
+  - "packaging/claude-desktop/**"
+  - "scripts/build_mcpb.py"
 ---
 
 # Rules — `aquakin/mcp/` (`aquakin mcp`)
@@ -76,6 +78,17 @@ following the project folder (`aquakin_ui/disk.py`, `.claude/rules/ui.md`).
 - Never put a `plugin.json` at the repository root (the repository would load
   as a plugin). Check with `claude plugin validate ./plugins/aquakin` and
   `claude plugin validate .` after changing either.
+
+## The Claude Desktop extension (`packaging/claude-desktop/`)
+
+- **The template carries no version**: `scripts/build_mcpb.py` stamps the
+  release's version, the `aquakin[mcp]==<version>` requirement and the tool
+  list (read from `TOOLS`) into a copy, and the release workflow packs that
+  after PyPI has the release. Never edit a version or a tool into the
+  template.
+- It uses the MCPB `uv` server type: Claude Desktop builds the environment
+  from `pyproject.toml`. Never bundle packages into it (JAX's wheels are
+  platform-specific).
 
 ## Imports and packaging
 

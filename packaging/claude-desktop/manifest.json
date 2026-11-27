@@ -1,0 +1,37 @@
+{
+  "manifest_version": "0.4",
+  "name": "aquakin",
+  "display_name": "aquakin",
+  "version": "0.0.0",
+  "description": "Reactive transport and wastewater treatment modelling: models, flowsheets, studies and aquakin's user guide as tools for Claude.",
+  "long_description": "Look up aquakin's kinetic models and unit operations, build and check plant flowsheets, set up and run studies (simulations, calibrations, Fisher information, profile likelihoods, sensor rankings) and read the user guide and API reference, in the project folders on your computer. Everything runs locally. The first start installs aquakin and its dependencies (a few hundred MB), once.",
+  "author": { "name": "DeGroot Research Group" },
+  "repository": { "type": "git", "url": "https://github.com/DeGrootResearchGroup/aquakin" },
+  "homepage": "https://github.com/DeGrootResearchGroup/aquakin",
+  "documentation": "https://aquakin.readthedocs.io/en/latest/ai_assistants.html",
+  "support": "https://github.com/DeGrootResearchGroup/aquakin/issues",
+  "license": "MIT",
+  "keywords": ["wastewater", "activated sludge", "kinetics", "flowsheet", "calibration"],
+  "server": {
+    "type": "uv",
+    "entry_point": "src/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "src/server.py", "${user_config.allow_python}"]
+    }
+  },
+  "user_config": {
+    "allow_python": {
+      "type": "boolean",
+      "title": "Let Claude run Python scripts",
+      "description": "Adds a tool that runs Python scripts Claude writes in your project folder, so it can use any part of aquakin. Each run asks for your approval. Off by default.",
+      "default": false
+    }
+  },
+  "tools": [],
+  "tools_generated": true,
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": { "python": ">=3.11" }
+  }
+}

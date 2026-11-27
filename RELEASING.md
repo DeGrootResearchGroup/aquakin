@@ -109,6 +109,10 @@ On a release-prep branch:
       install `X.Y.Z` with the `constraints.txt` of tag `vX.Y.Z`. Check that
       both are listed under the Release's assets: the user guide's download
       links (`releases/latest/download/…`) serve them.
+- [ ] The **`desktop-extension`** job attaches `aquakin.mcpb`, the Claude
+      Desktop extension of `X.Y.Z` (`scripts/build_mcpb.py`). Check it is listed
+      under the Release's assets, then install it in Claude Desktop (Settings →
+      Extensions → Install Extension) and ask it to list aquakin's models.
 
 ### 5. Post-release verification
 
