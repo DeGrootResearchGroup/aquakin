@@ -113,7 +113,26 @@ posterior mean is about its standard deviation over `sqrt(ess_bulk)`. A larger
 `r_hat` means the chains disagree; run them longer.
 
 The sampled density is the one `calibrate` maximized, so the likelihood, the
-priors and the transforms are the same. It needs `loss="nll"` (the other
+priors and the transforms are the same. For a rate fitted through a transform
+(`positive_log` or `logit`) there is one more choice, the prior the data are
+combined with, set by `prior_space`:
+
+- `prior_space="transformed"` (the default) takes the prior to be flat in the
+  coordinate the fit ran in: in `log k` for a `positive_log` rate, so every
+  factor of ten in `k` is equally likely beforehand. This is the density whose
+  peak `calibrate` found and which the Laplace posterior approximates, so the
+  MCMC, Laplace and profile-likelihood intervals answer the same question.
+  Where the posterior is close to Gaussian in `log k` the three agree; where
+  they differ, the posterior really is curved or skewed.
+- `prior_space="physical"` takes the prior to be flat in `k` itself, so every
+  equal step in `k` is equally likely beforehand. That puts more weight on
+  large values, and moves a poorly determined rate's draws up, on the log
+  scale by about the variance of `log k`. Use it when a uniform prior on `k`
+  is what you mean; it is what aquakin 0.3.0 sampled.
+
+A prior you give with `priors=` is a Gaussian on the physical value in both
+modes, and multiplies the flat one. Rates without a transform and fitted
+initial pools are sampled the same way in both. It needs `loss="nll"` (the other
 losses are not likelihoods) and a Laplace posterior, which supplies the
 starting points and the proposal. Fitted initial pools are sampled together
 with the rates, which needs `LaplaceConfig(include_ic=True)`. With

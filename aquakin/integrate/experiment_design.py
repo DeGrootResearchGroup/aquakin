@@ -546,6 +546,156 @@ def _spacing_constraints(layout, n_x, span, gap):
     return constraints
 
 
+@dataclass(frozen=True)
+class _DesignWindow:
+    """The checked design controls of an optimized design.
+
+    Attributes
+    ----------
+    ib : dict
+        ``{(experiment, species): (lo, hi)}`` from :func:`_initial_bounds_map`.
+    time_bounds : tuple of float
+        ``(lo, hi)`` sampling-time window, in the experiments' time unit.
+    lo, span : float
+        Lower end and width of the window.
+    gap : float
+        Minimum spacing between consecutive samples (at least ``1e-6 * span``).
+    t_end : float
+        End of every optimized experiment's solve, in the model's native time
+        unit: the window's upper end.
+    """
+
+    ib: dict
+    time_bounds: tuple
+    lo: float
+    span: float
+    gap: float
+    t_end: float
+
+
+def _design_window(exps, model, optimize_times, time_bounds, min_spacing, initial_bounds):
+    """Check the design controls of an optimized design.
+
+    Parameters
+    ----------
+    exps : list of Experiment
+        The experiments to optimize.
+    model : CompiledModel
+        The model they run on (species and native time unit).
+    optimize_times : bool
+        Whether the sampling times are optimized.
+    time_bounds : tuple of float or None
+        ``(lo, hi)`` window for the sampling times; ``None`` for
+        ``(0, latest sampling time)``.
+    min_spacing : float
+        Minimum gap between consecutive samples.
+    initial_bounds : dict or None
+        Initial concentrations to optimize, as :func:`optimize_experiment`
+        takes them.
+
+    Returns
+    -------
+    _DesignWindow
+
+    Raises
+    ------
+    ValueError
+        If nothing is to be optimized, the experiments do not share one time
+        unit, or the window is not ``0 <= lo < hi``.
+    """
+    ib = _initial_bounds_map(initial_bounds, len(exps), model)
+    if not optimize_times and not ib:
+        raise ValueError("Nothing to optimise: set optimize_times and/or initial_bounds.")
+    units = {ex.time_unit for ex in exps}
+    if len(units) > 1:
+        raise ValueError("The optimised experiments must share one time_unit.")
+    factor = native_time_factor(model.time_unit, units.pop())
+    if time_bounds is None:
+        time_bounds = (0.0, max(float(np.max(np.asarray(ex.t_obs))) for ex in exps))
+    lo, hi = float(time_bounds[0]), float(time_bounds[1])
+    if not 0.0 <= lo < hi:
+        raise ValueError(f"time_bounds must satisfy 0 <= lo < hi; got {time_bounds}.")
+    span = hi - lo
+    return _DesignWindow(
+        ib=ib,
+        time_bounds=time_bounds,
+        lo=lo,
+        span=span,
+        gap=max(float(min_spacing), 1e-6 * span),
+        t_end=hi * factor,
+    )
+
+
+def _slsqp_design(value_and_grad, x0, v0, sign, layout, window, max_iter, tol):
+    """Optimize a design vector by SLSQP within its box and spacing constraints.
+
+    Parameters
+    ----------
+    value_and_grad : callable
+        ``x -> (value, gradient)`` of the criterion at the design vector.
+    x0 : np.ndarray
+        The starting design vector, in ``[0, 1]``.
+    v0 : float
+        The criterion at ``x0``; the objective is divided by its magnitude.
+    sign : float
+        ``-1`` for a criterion that is better larger, ``+1`` for one better
+        smaller (SLSQP minimizes).
+    layout : _DesignLayout
+        Where each experiment's times sit in the design vector.
+    window : _DesignWindow
+        The sampling-time window and minimum spacing.
+    max_iter : int
+        SLSQP iteration limit.
+    tol : float
+        SLSQP tolerance on the scaled objective.
+
+    Returns
+    -------
+    x : np.ndarray
+        The optimized design vector, clipped to ``[0, 1]``.
+    res : scipy.optimize.OptimizeResult
+        SLSQP's result.
+    """
+    scale = abs(v0) if v0 != 0.0 else 1.0
+
+    def _objective(x):
+        v, g = value_and_grad(x)
+        return sign * float(v) / scale, sign * np.asarray(g) / scale
+
+    res = minimize(
+        _objective,
+        x0,
+        jac=True,
+        method="SLSQP",
+        bounds=[(0.0, 1.0)] * len(x0),
+        constraints=_spacing_constraints(layout, len(x0), window.span, window.gap),
+        options={"maxiter": max_iter, "ftol": tol},
+    )
+    return np.clip(res.x, 0.0, 1.0), res
+
+
+def _designed_experiments(exps, n_base, tobs, C0s):
+    """``exps`` with the sampling times and initial states of the design.
+
+    Parameters
+    ----------
+    exps : list of Experiment
+        The optimized experiments.
+    n_base : int
+        Number of fixed experiments before them in ``tobs`` and ``C0s``.
+    tobs, C0s : list of jnp.ndarray
+        Every experiment's designed sampling times and initial state.
+
+    Returns
+    -------
+    list of Experiment
+    """
+    return [
+        replace(ex, t_obs=np.asarray(tobs[n_base + e]), C0=np.asarray(C0s[n_base + e]))
+        for e, ex in enumerate(exps)
+    ]
+
+
 def optimize_experiment(
     reactor: Reactor,
     experiments: Experiment | list[Experiment],
@@ -637,22 +787,7 @@ def optimize_experiment(
         raise ValueError("experiments must contain at least one Experiment.")
     model = reactor.model
     n_base, n_exp = len(base), len(exps)
-    ib = _initial_bounds_map(initial_bounds, n_exp, model)
-    if not optimize_times and not ib:
-        raise ValueError("Nothing to optimise: set optimize_times and/or initial_bounds.")
-
-    units = {ex.time_unit for ex in exps}
-    if len(units) > 1:
-        raise ValueError("The optimised experiments must share one time_unit.")
-    factor = native_time_factor(model.time_unit, units.pop())
-    if time_bounds is None:
-        time_bounds = (0.0, max(float(np.max(np.asarray(ex.t_obs))) for ex in exps))
-    lo, hi = float(time_bounds[0]), float(time_bounds[1])
-    if not 0.0 <= lo < hi:
-        raise ValueError(f"time_bounds must satisfy 0 <= lo < hi; got {time_bounds}.")
-    span = hi - lo
-    gap = max(float(min_spacing), 1e-6 * span)
-
+    window = _design_window(exps, model, optimize_times, time_bounds, min_spacing, initial_bounds)
     setup = _FisherSetup(
         reactor,
         base + exps,
@@ -662,16 +797,17 @@ def optimize_experiment(
         free_ic=free_ic,
         priors=priors,
         use_priors=use_priors,
-        t_end=[None] * n_base + [hi * factor] * n_exp,
+        t_end=[None] * n_base + [window.t_end] * n_exp,
     )
     sub, nui = _subset_indices(setup.names, subset)
     x0, layout, conc_lo, conc_hi = _start_design(
-        exps, ib, model, n_base, optimize_times, time_bounds, gap
+        exps, window.ib, model, n_base, optimize_times, window.time_bounds, window.gap
     )
     # Everything the design changes is an argument of the compiled program, so
     # a repeat call with the same structure reuses it (see _design_program).
     program = _design_program(setup, layout, criterion, sub, nui)
-    args = (_draws(setup, param_draws), setup.tobs, setup.C0, lo, span, conc_lo, conc_hi)
+    bounds = (window.lo, window.span, conc_lo, conc_hi)
+    args = (_draws(setup, param_draws), setup.tobs, setup.C0, *bounds)
 
     def value_and_grad(x):
         return program(jnp.asarray(x), *args)
@@ -684,29 +820,10 @@ def optimize_experiment(
             "aquakin.identifiability)."
         )
     sign = -1.0 if _LARGER_IS_BETTER[criterion] else 1.0
-    scale = abs(v0) if v0 != 0.0 else 1.0
-
-    def _objective(x):
-        v, g = value_and_grad(x)
-        return sign * float(v) / scale, sign * np.asarray(g) / scale
-
-    res = minimize(
-        _objective,
-        x0,
-        jac=True,
-        method="SLSQP",
-        bounds=[(0.0, 1.0)] * len(x0),
-        constraints=_spacing_constraints(layout, len(x0), span, gap),
-        options={"maxiter": max_iter, "ftol": tol},
-    )
-    x = np.clip(res.x, 0.0, 1.0)
-    tobs, C0s = layout.apply(jnp.asarray(x), setup.tobs, setup.C0, lo, span, conc_lo, conc_hi)
-    out = [
-        replace(ex, t_obs=np.asarray(tobs[n_base + e]), C0=np.asarray(C0s[n_base + e]))
-        for e, ex in enumerate(exps)
-    ]
+    x, res = _slsqp_design(value_and_grad, x0, v0, sign, layout, window, max_iter, tol)
+    tobs, C0s = layout.apply(jnp.asarray(x), setup.tobs, setup.C0, *bounds)
     return ExperimentDesignResult(
-        experiments=out,
+        experiments=_designed_experiments(exps, n_base, tobs, C0s),
         value=float(value_and_grad(x)[0]),
         initial_value=v0,
         success=bool(res.success),

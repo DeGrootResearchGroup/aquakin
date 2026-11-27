@@ -747,51 +747,86 @@ class _FisherSetup:
             return jnp.log(pools[1:]) - jnp.log(pools[0])
         return jnp.log(pools)
 
+    def _theta(self, p, C0_list):
+        """The estimated quantities' unconstrained coordinates at ``p`` and
+        ``C0_list``: the rates through their transforms, then each
+        experiment's pool coordinates."""
+        rate_theta = [
+            jnp.atleast_1d(to_unconstrained(p[i], t))
+            for i, t in zip(self.free_idx, self.rate_transforms)
+        ]
+        pool_theta = [self._pool_theta(C0) for C0 in C0_list] if self.m_theta else []
+        return jnp.concatenate(rate_theta + pool_theta)
+
+    def _scaled_outputs(self, theta, p, tobs_list, C0_list):
+        """The noise-scaled predictions ``Sigma^{-1/2} y`` at the unconstrained
+        coordinates ``theta`` (plus the prior rows, when priors are active),
+        stacked over the experiments: the vector :meth:`jacobian`
+        differentiates. An unmeasured (masked) entry is exactly 0. Pure JAX."""
+        d, m = len(self.free_params), self.m_theta
+        trs = self.rate_transforms
+        # No rate parameters (only initial pools estimated): an empty block.
+        physical = (
+            jnp.stack([from_unconstrained(theta[i], trs[i]) for i in range(d)]) if d else theta[:0]
+        )
+        pp = p.at[self.free_idx].set(physical)
+        parts = []
+        for e, (rctr, C0, tobs) in enumerate(zip(self.reactors, C0_list, tobs_list)):
+            if self.ic_species:
+                th_e = theta[d + e * m : d + (e + 1) * m]
+                if self.ic_fixed_total:
+                    pools = _simplex_pools(th_e, jnp.sum(C0[self.ic_idx]))
+                else:
+                    pools = jnp.exp(th_e)
+                C0 = C0.at[self.ic_idx].set(pools)
+            t_native = tobs * self.time_factor[e]
+            C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=t_native).C
+            y = observe(C, pp, self.obs_idx[e], self.obs_fn[e], t=tobs)
+            keep = self.keep[e]
+            if keep is not None:
+                # Forward-mode AD: the select drops the tangent of the
+                # unselected branch, so a non-finite one there cannot leak.
+                y = jnp.where(keep, y, 0.0)
+            parts.append((y / self.sigma_div[e]).reshape(-1))
+        if self.has_rate_prior:
+            parts.append(self.prior_mask * physical / self.prior_std)
+        if self.ic_prior:
+            parts.append(theta[d:] / self.ic_prior)
+        return jnp.concatenate(parts)
+
     def jacobian(self, p, tobs_list, C0_list):
         """Noise-scaled sensitivity ``Sigma^{-1/2} S`` at parameters ``p`` for
         sampling times ``tobs_list`` (each in its experiment's ``time_unit``)
         and initial states ``C0_list`` (one per experiment), in unconstrained
         coordinates. An unmeasured (masked) entry gives an exactly zero row,
         even where the prediction is not finite. Pure JAX."""
-        d, m = len(self.free_params), self.m_theta
-        trs = self.rate_transforms
+        return jax.jacfwd(lambda th: self._scaled_outputs(th, p, tobs_list, C0_list))(
+            self._theta(p, C0_list)
+        )
 
-        def _residuals(theta):
-            # No rate parameters (only initial pools estimated): an empty block.
-            physical = (
-                jnp.stack([from_unconstrained(theta[i], trs[i]) for i in range(d)])
-                if d
-                else theta[:0]
-            )
-            pp = p.at[self.free_idx].set(physical)
-            parts = []
-            for e, (rctr, C0, tobs) in enumerate(zip(self.reactors, C0_list, tobs_list)):
-                if self.ic_species:
-                    th_e = theta[d + e * m : d + (e + 1) * m]
-                    if self.ic_fixed_total:
-                        pools = _simplex_pools(th_e, jnp.sum(C0[self.ic_idx]))
-                    else:
-                        pools = jnp.exp(th_e)
-                    C0 = C0.at[self.ic_idx].set(pools)
-                t_native = tobs * self.time_factor[e]
-                C = rctr.solve(C0, params=pp, t_span=(0.0, self.t_end[e]), t_eval=t_native).C
-                y = observe(C, pp, self.obs_idx[e], self.obs_fn[e], t=tobs)
-                keep = self.keep[e]
-                if keep is not None:
-                    # Forward-mode AD: the select drops the tangent of the
-                    # unselected branch, so a non-finite one there cannot leak.
-                    y = jnp.where(keep, y, 0.0)
-                parts.append((y / self.sigma_div[e]).reshape(-1))
-            if self.has_rate_prior:
-                parts.append(self.prior_mask * physical / self.prior_std)
-            if self.ic_prior:
-                parts.append(theta[d:] / self.ic_prior)
-            return jnp.concatenate(parts)
+    def outputs(self, p, tobs_list, C0_list):
+        """Noise-scaled predictions ``Sigma^{-1/2} y`` at ``(p, tobs_list,
+        C0_list)``, stacked over the experiments in the row order of
+        :meth:`jacobian` (an unmeasured entry is exactly 0). Pure JAX."""
+        return self._scaled_outputs(self._theta(p, C0_list), p, tobs_list, C0_list)
 
-        rate_theta = [jnp.atleast_1d(to_unconstrained(p[i], t)) for i, t in zip(self.free_idx, trs)]
-        pool_theta = [self._pool_theta(C0) for C0 in C0_list] if m else []
-        theta = jnp.concatenate(rate_theta + pool_theta)
-        return jax.jacfwd(_residuals)(theta)
+    def outputs_and_jacobian(self, p, tobs_list, C0_list):
+        """:meth:`outputs` and :meth:`jacobian` from one forward-mode pass.
+
+        Returns
+        -------
+        y : jnp.ndarray, shape (n_rows,)
+            The noise-scaled predictions.
+        J : jnp.ndarray, shape (n_rows, n)
+            Their Jacobian with respect to the unconstrained coordinates.
+        """
+
+        def both(theta):
+            y = self._scaled_outputs(theta, p, tobs_list, C0_list)
+            return y, y
+
+        J, y = jax.jacfwd(both, has_aux=True)(self._theta(p, C0_list))
+        return y, J
 
     def information(self, p, tobs_list, C0_list):
         """Fisher information ``J^T J`` at ``(p, tobs_list, C0_list)``. Pure JAX."""

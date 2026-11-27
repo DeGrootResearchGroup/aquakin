@@ -70,6 +70,11 @@ from aquakin.integrate.calibration.criteria import (
     compare_models,
 )
 from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
+from aquakin.integrate.discrimination import (
+    DesignConfig,
+    optimize_discrimination,
+    rank_discrimination,
+)
 from aquakin.integrate.experiment_design import (
     CandidateScore,
     ExperimentDesignResult,
@@ -260,6 +265,7 @@ __all__ = [
     "Constraint",
     "CostFactors",
     "DGSMResult",
+    "DesignConfig",
     "DifferentiationConfig",
     "EigenDirection",
     "Event",
@@ -385,12 +391,14 @@ __all__ = [
     "operational_cost_index",
     "operational_cost_index_bsm2",
     "optimize_design",
+    "optimize_discrimination",
     "optimize_experiment",
     "parse_rate_expression",
     "parse_units",
     "profile_likelihood",
     "pumping_energy",
     "pumping_energy_bsm2",
+    "rank_discrimination",
     "rank_experiments",
     "read_influent_csv",
     "register_rate_function",

@@ -150,6 +150,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Choose between candidate experiments | `rank_experiments` → `CandidateScore` |
 | Choose the best set of measurements from a candidate pool under a budget | `design_from_candidates` → `CandidateDesign` |
 | Optimize sampling times and initial concentrations | `optimize_experiment` → `ExperimentDesignResult` |
+| Design an experiment that tells two fitted models apart (Buzzi-Ferraris, Hunter-Reiner) | `optimize_discrimination` (configured by `DesignConfig`) → `ExperimentDesignResult`; `rank_discrimination` → `CandidateScore` |
 
 ## Calibrating a plant
 
