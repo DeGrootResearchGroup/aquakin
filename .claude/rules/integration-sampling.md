@@ -10,16 +10,23 @@ paths:
 Metropolis on the posterior a calibration maximized. The calibration internals
 it builds on are in `.claude/rules/integration-calibrate.md`.
 
-### The density is the fit's, plus the Jacobian
+### The density is the fit's; the Jacobian is the `prior_space` choice
 
-- **The log density is `-_objective_fn(problem, fm)(theta, *problem.data)
-  + _log_jacobian(...)`.** Do not write a second data term, prior or
-  transform for the sampler: a change to the objective must reach the fit and
-  the sampler together, which only one function guarantees.
+- **The log density is `-_objective_fn(problem, fm)(theta, *problem.data)`,
+  plus `_log_jacobian(...)` only with `prior_space="physical"`** (built in
+  `_log_density`). Do not write a second data term, prior or transform for
+  the sampler: a change to the objective must reach the fit and the sampler
+  together, which only one function guarantees.
+- **The default `prior_space="transformed"` adds no Jacobian**, so the
+  sampled density is the one the MAP and the Laplace Hessian describe and
+  MCMC, Laplace and the profile likelihood are comparable. The default is the
+  owner's decision: do not change it or add the Jacobian back to it.
 - **The Jacobian of the rate transforms belongs to the sampled density only.**
   Never add it to `_objective_fn`, `_add_prior_term` or `_data_term`: the MAP,
   the reported `loss`, `log_likelihood` and the Laplace Hessian are defined
   without it.
+- `prior_space` is checked by `_check_prior_space` inside `_run_sampler`, so
+  both entry points take it and refuse a bad value the same way.
 - The fitted pools carry no Jacobian: their prior (`ic_prior_log_std`, or flat)
   is defined on their log / log-ratio coordinates, which is what is sampled.
 - `loss="nll"` only (`problem.is_likelihood`). The `sigma="estimate"`

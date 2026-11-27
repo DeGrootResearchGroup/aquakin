@@ -1,9 +1,10 @@
 """Integration tests of ``aquakin.sample_posterior`` and ``Plant.sample_posterior``:
 the draws against closed-form posteriors (linear-Gaussian with a prior, a
-transformed parameter, a truncated one, the Jeffreys-marginal noise level),
-against the Laplace posterior where it is accurate (one rate, a rate with its
-initial pool, a plant), against a quadrature reference on a banana-shaped
-posterior where Laplace is not, and the errors.
+transformed parameter in each ``prior_space``, a truncated one, the
+Jeffreys-marginal noise level), against the Laplace posterior where it is
+accurate (one rate, a rate with its initial pool, a log-linear rate, a plant),
+against a quadrature reference on a banana-shaped posterior where Laplace is
+not, and the errors.
 
 Monte Carlo tolerances: a posterior mean is checked to ``4 * sd /
 sqrt(ess)`` and a standard deviation to ``4 / sqrt(2 * ess)`` relative (the
@@ -11,7 +12,12 @@ standard error of a sample standard deviation of a near-Gaussian quantity is
 ``sd / sqrt(2 n)``), with ``ess`` the sampler's own bulk effective sample size,
 which the diagnostics tests pin against closed forms. Four standard errors keep
 a fixed seed comfortably clear of chance while still failing when a density
-term is wrong (each test states the size of the error it must detect).
+term is wrong (each test states the size of the error it must detect). An
+interval endpoint (a quantile ``q``) is checked by :func:`_quantile_band`: its
+Monte Carlo error in probability is ``sqrt(q (1 - q) / ess_q)``, with ``ess_q``
+the effective sample size of the indicator ``x <= x_q`` (the tail ESS of
+Vehtari et al. 2021), and the reference must lie between the draws' quantiles
+four such errors either side of ``q``.
 """
 
 from dataclasses import replace
@@ -23,6 +29,7 @@ from scipy.stats import norm
 
 import aquakin
 from aquakin.integrate.calibration.result import CalibrationResult
+from aquakin.integrate.calibration.sampling import _ess, _split_chains
 from tests.conftest import FIXTURES
 
 K = "A_to_B.k"
@@ -53,6 +60,19 @@ def _mean_tol(sd, samples):
 
 def _std_tol(samples, name=K):
     return 4.0 / np.sqrt(2.0 * samples.ess_bulk[name])
+
+
+def _quantile_band(chains, q, n_se=4.0):
+    """The range a reference ``q``-quantile may take and still agree with the
+    draws ``chains``, ``(n_chains, n_draws)``: the draws' quantiles at ``q -
+    n_se * e`` and ``q + n_se * e``, with ``e = sqrt(q (1 - q) / ess_q)`` the
+    Monte Carlo standard error of the estimated probability below the quantile
+    and ``ess_q`` the effective sample size of the indicator chains ``x <=
+    x_q``. Free of any density estimate, so it holds for a skewed posterior."""
+    x_q = np.quantile(chains, q)
+    ess_q = _ess(_split_chains((chains <= x_q).astype(float)))
+    e = n_se * np.sqrt(q * (1.0 - q) / ess_q)
+    return float(np.quantile(chains, max(q - e, 0.0))), float(np.quantile(chains, min(q + e, 1.0)))
 
 
 def _fit_k(reactor, y, sigma, **kwargs):
@@ -100,12 +120,43 @@ def test_linear_gaussian_with_prior_matches_the_conjugate_posterior(reactor):
 
 
 def test_transform_jacobian_keeps_the_physical_posterior(reactor):
-    """With ``positive_log`` and no prior, the posterior of ``k`` itself is the
-    likelihood ``N(mean(y), sigma / sqrt(n))`` truncated to the model's bounds
-    ``[1e-3, 10]``. The sampler works in ``log k``, so it is right only with the
-    transform's Jacobian ``e^u`` in its density: without it the density of
-    ``k`` gains a factor ``1/k``. Both means are computed by quadrature on the
-    support; the one without the Jacobian is more than four tolerances away."""
+    """With ``positive_log``, no prior and ``prior_space="physical"``, the
+    posterior of ``k`` itself is the likelihood ``N(mean(y), sigma / sqrt(n))``
+    truncated to the model's bounds ``[1e-3, 10]``. The sampler works in ``log
+    k``, so it is right only with the transform's Jacobian ``e^u`` in its
+    density: without it the density of ``k`` gains a factor ``1/k``. Both
+    means are computed by quadrature on the support; the one without the
+    Jacobian is more than four tolerances away."""
+    y = np.array([0.4, 1.6, 0.7, 1.3])
+    sigma = 1.0
+    result = _fit_k(
+        reactor,
+        y,
+        sigma,
+        transforms={K: "positive_log"},
+        initial_params=reactor.model.default_parameters().at[0].set(1.0),
+    )
+    config = aquakin.SamplerConfig(n_chains=4, n_draws=2000, n_warmup=300, seed=0)
+    samples = aquakin.sample_posterior(result, reactor, config=config, prior_space="physical")
+
+    tau = sigma / np.sqrt(len(y))
+    grid = np.linspace(1e-3, 10.0, 200001)
+    likelihood = norm.pdf(grid, y.mean(), tau)
+    expected = np.sum(grid * likelihood) / np.sum(likelihood)
+    without_jacobian = np.sum(likelihood) / np.sum(likelihood / grid)
+    k = samples.params_named[K]
+    tol = _mean_tol(k.std(), samples)
+    assert abs(without_jacobian - expected) > 4 * tol  # the error the test must detect
+    assert abs(k.mean() - expected) < tol
+
+
+def test_transformed_prior_space_samples_the_density_in_log_k(reactor):
+    """With ``positive_log``, no prior and the default ``prior_space``, the
+    posterior is the likelihood read as a density in ``u = log k``: ``exp(-n
+    (e^u - mean(y))^2 / (2 sigma^2))`` on ``[log 1e-3, log 10]``, with no
+    Jacobian. The draws of ``log k`` match its mean and standard deviation by
+    quadrature. The physical-space density (the same times ``e^u``) has a mean
+    of ``u`` more than four tolerances away, so a Jacobian left in is caught."""
     y = np.array([0.4, 1.6, 0.7, 1.3])
     sigma = 1.0
     result = _fit_k(
@@ -118,15 +169,54 @@ def test_transform_jacobian_keeps_the_physical_posterior(reactor):
     config = aquakin.SamplerConfig(n_chains=4, n_draws=2000, n_warmup=300, seed=0)
     samples = aquakin.sample_posterior(result, reactor, config=config)
 
-    tau = sigma / np.sqrt(len(y))
-    grid = np.linspace(1e-3, 10.0, 200001)
-    likelihood = norm.pdf(grid, y.mean(), tau)
-    expected = np.sum(grid * likelihood) / np.sum(likelihood)
-    without_jacobian = np.sum(likelihood) / np.sum(likelihood / grid)
-    k = samples.params_named[K]
-    tol = _mean_tol(k.std(), samples)
-    assert abs(without_jacobian - expected) > 4 * tol  # the error the test must detect
-    assert abs(k.mean() - expected) < tol
+    u = np.linspace(np.log(1e-3), np.log(10.0), 200001)
+    w = np.exp(-0.5 * len(y) * (np.exp(u) - y.mean()) ** 2 / sigma**2)
+    mean_u = np.sum(u * w) / np.sum(w)
+    sd_u = np.sqrt(np.sum((u - mean_u) ** 2 * w) / np.sum(w))
+    physical_mean_u = np.sum(u * w * np.exp(u)) / np.sum(w * np.exp(u))
+    log_k = np.log(samples.params_named[K])
+    tol = _mean_tol(sd_u, samples)
+    assert abs(physical_mean_u - mean_u) > 4 * tol  # the error the test must detect
+    assert abs(log_k.mean() - mean_u) < tol
+    assert log_k.std() / sd_u == pytest.approx(1.0, abs=_std_tol(samples))
+
+
+def test_transformed_prior_space_interval_is_the_laplace_interval(reactor):
+    """Observing ``log k`` itself, ``y_i ~ N(log k, sigma)``, with
+    ``positive_log`` makes the posterior of ``u = log k`` exactly Gaussian in
+    the default prior space, ``N(mean(y), sigma / sqrt(n))``, which is the
+    Laplace posterior. The draws' 95 % interval of ``log k`` has the Laplace
+    endpoints, ``u_MAP -/+ 1.96 sd``, within its Monte Carlo error. In the
+    physical prior space the posterior of ``u`` is shifted by ``sd^2`` = 0.36,
+    outside that error at both ends."""
+    y = np.array([-2.9, -2.0, -2.5, -1.8])  # about log 0.1; [1e-3, 10] is 7 sd away
+    sigma = 1.2
+    model = reactor.model
+    idx = model.param_index[K]
+    result = aquakin.calibrate(
+        reactor,
+        model.default_concentrations(),
+        jnp.asarray(y),
+        T_SHORT[: len(y)],
+        [K],
+        observation_fn=lambda C, p: jnp.log(p[idx]),
+        transforms={K: "positive_log"},
+        loss="nll",
+        sigma=sigma,
+        laplace=aquakin.LaplaceConfig(method="gauss_newton"),
+    )
+    config = aquakin.SamplerConfig(n_chains=4, n_draws=2000, n_warmup=300, seed=0)
+    samples = aquakin.sample_posterior(result, reactor, config=config)
+
+    sd = float(np.sqrt(result.posterior_cov[0, 0]))
+    assert sd == pytest.approx(sigma / np.sqrt(len(y)), rel=1e-6)  # Laplace is exact here
+    u_map = np.log(result.params_named[K])
+    chains = samples.chains[:, :, 0]
+    for q, z in ((0.025, -1.959964), (0.975, 1.959964)):
+        lo, hi = _quantile_band(chains, q)
+        assert lo < u_map + z * sd < hi
+        assert not lo < u_map + z * sd + sd**2 < hi  # the physical-space endpoint
+    assert samples.r_hat[K] < 1.01
 
 
 def test_draws_stay_inside_the_fit_bounds_as_a_truncated_posterior(reactor):
@@ -459,6 +549,16 @@ def test_each_entry_point_refuses_the_other_kind_of_fit(reactor, k_fit, make_cst
         other_plant.sample_posterior(plant_result, config=CONFIG)
 
 
+def test_each_entry_point_refuses_an_unknown_prior_space(reactor, k_fit, make_cstr_plant):
+    """``prior_space`` is checked by the shared sampler, so the reactor and the
+    plant entry points give the same error."""
+    plant = make_cstr_plant()
+    with pytest.raises(ValueError, match=r"prior_space must be 'transformed'.*got 'log'"):
+        aquakin.sample_posterior(k_fit, reactor, config=CONFIG, prior_space="log")
+    with pytest.raises(ValueError, match=r"prior_space must be 'transformed'.*got 'log'"):
+        plant.sample_posterior(_as_plant_result(k_fit, plant), config=CONFIG, prior_space="log")
+
+
 # --- Plant ----------------------------------------------------------------------
 
 
@@ -496,3 +596,4 @@ def test_plant_posterior_agrees_with_laplace_on_the_single_cstr(cstr_plant):
     )
     assert log_k.std() / sd == pytest.approx(1.0, abs=_std_tol(samples, name))
     assert samples.draws.shape == (400, plant.default_parameters().shape[0])
+
