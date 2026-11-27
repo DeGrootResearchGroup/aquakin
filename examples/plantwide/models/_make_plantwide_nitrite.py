@@ -155,23 +155,25 @@ def parameters() -> dict:
     # 2008's inhibition constants, as N). Oxygen half-saturations are apparent
     # floc values, measured together on conventional activated sludge at 20 C
     # (Daebel et al. 2007): a model without diffusion takes apparent values,
-    # for which AOB's exceeds NOB's (Picioreanu et al. 2016). Growth follows
-    # theta = 1.11 (Mehrani et al. 2021, full-scale sludge at 12 and 20 C);
-    # decay ASM2d's autotroph theta (0.15 / 0.05 1/d at 20 / 10 C).
-    # Provisional, pending an activated-sludge source that fits them together:
-    # the AOB growth and decay (Hiatt & Grady 2008) and ammonium half-saturation
-    # (as used by Mehrani et al. 2021). The NOB nitrite half-saturation is the
-    # middle of Mehrani et al.'s 0.06-0.14 g N/m3, measured on full-scale sludge.
-    mu_theta, b_theta = 1.11, num(3.0**0.1)
-    add("muAOB", 0.78, "1/d", bounds=(0.2, 3.0), theta=mu_theta)
-    add("bAOB", 0.096, "1/d", bounds=(0.02, 0.5), theta=b_theta)
-    add("KNH4_AOB", 0.675, "g_N/m3", bounds=(0.05, 5.0))
+    # for which AOB's exceeds NOB's (Picioreanu et al. 2016).
+    # AOB growth and decay are a pair: the WERF growth rate 0.9 1/d (0.80-1.0
+    # over several plants and methods), derived with decay 0.17 1/d and growth
+    # theta 1.072 (Jones et al. 2005); decay theta 1.029 (WERF, as tabulated by
+    # Friedrich et al. 2017). Ammonium half-saturation from batch tests on
+    # full-scale sludge (Mannucci et al. 2020). NOB decay is the measured loss
+    # of NOB activity, 0.089 1/d with theta 1.036 (Friedrich et al. 2017); NOB
+    # growth is Hiatt & Grady's (2008) with theta 1.11 (Mehrani et al. 2021,
+    # full-scale sludge at 12 and 20 C); NOB nitrite half-saturation the middle
+    # of Mehrani et al.'s measured 0.06-0.14 g N/m3.
+    add("muAOB", 0.9, "1/d", bounds=(0.2, 3.0), theta=1.072)
+    add("bAOB", 0.17, "1/d", bounds=(0.02, 0.5), theta=1.029)
+    add("KNH4_AOB", 0.6, "g_N/m3", bounds=(0.05, 5.0))
     add("KI_FA_AOB", 1.0, "g_N/m3", bounds=(0.1, 10.0))
     add("KI_FNA_AOB", 0.1, "g_N/m3", bounds=(0.01, 1.0))
     add("KO2_AOB", 0.65, "g_O2/m3", bounds=(0.05, 2.0))
     add("YAOB", 0.18, "g_COD/g_N", bounds=(0.05, 0.4))
-    add("muNOB", 0.78, "1/d", bounds=(0.1, 3.0), theta=mu_theta)
-    add("bNOB", 0.096, "1/d", bounds=(0.02, 0.5), theta=b_theta)
+    add("muNOB", 0.78, "1/d", bounds=(0.1, 3.0), theta=1.11)
+    add("bNOB", 0.089, "1/d", bounds=(0.02, 0.5), theta=1.036)
     add("KNO2_NOB", 0.1, "g_N/m3", bounds=(0.01, 2.0))
     add("KI_FNA_NOB", 0.04, "g_N/m3", bounds=(0.004, 0.4))
     add("KI_FA_NOB", 0.2, "g_N/m3", bounds=(0.02, 2.0))
@@ -194,8 +196,9 @@ def parameters() -> dict:
     add("Y_AMX_NO2", 1.32, "-", bounds=(1.1, 1.6))
     add("Y_AMX_NO3", 0.26, "-", bounds=(0.1, 0.4))
     # Decay of the autotrophs with nitrite or nitrate, relative to aerobic:
-    # Hao et al. (2002), after Koch et al. (2000). Without either they use the
-    # core's eta_b_AN.
+    # Hao et al. (2002), after Koch et al. (2000); Munz et al. (2011) measured
+    # 0.57 (AOB) and 0.45 (NOB) on aerobically grown sludge. Without either
+    # they use the core's eta_b_AN.
     add("eta_b_NOX_AUT", 0.5, "-", bounds=(0.05, 1.0), transform="logit")
     return p
 
@@ -299,7 +302,8 @@ def build() -> dict:
                 "intermediate. Ammonia- and nitrite-oxidizing bacteria replace the one-step "
                 "nitrifiers, growing on ammonium and nitrite, inhibited by free ammonia and free "
                 "nitrous acid (Hiatt & Grady 2008), with oxygen affinities measured on activated "
-                "sludge (Daebel et al. 2007) and temperature dependence from Mehrani et al. (2021); anammox oxidizes ammonium with nitrite, with the kinetics of "
+                "sludge (Daebel et al. 2007), AOB growth and decay from WERF measurements (Jones et al. "
+                "2005; Friedrich et al. 2017) and NOB temperature dependence from Mehrani et al. (2021); anammox oxidizes ammonium with nitrite, with the kinetics of "
                 "Hao et al. (2002) and the stoichiometry of Strous et al. (1998); and every group "
                 "that reduces nitrate (heterotrophs, PAOs, both GAO groups) does it in two steps, "
                 "nitrate to nitrite and nitrite to N2, at the step capacities of Hiatt & Grady (2008). "
@@ -313,6 +317,10 @@ def build() -> dict:
                 "Daebel, Manser & Gujer (2007). Exploring temporal variations of oxygen saturation constants of nitrifying bacteria. Water Res. 41(5), 1094-1102. doi:10.1016/j.watres.2006.11.011",
                 "Picioreanu, Perez & van Loosdrecht (2016). Impact of cell cluster size on apparent half-saturation coefficients for oxygen in nitrifying sludge and biofilms. Water Res. 106, 371-382. doi:10.1016/j.watres.2016.10.017",
                 "Mehrani, Lu, Kowal, Sobotka & Makinia (2021). Incorporation of the complete ammonia oxidation (comammox) process for modeling nitrification in suspended growth wastewater treatment systems. J. Environ. Manage. 297, 113223. doi:10.1016/j.jenvman.2021.113223",
+                "Jones, Bye & Dold (2005). Nitrification parameter measurement for plant design: experience and experimental issues with new methods. Water Sci. Technol. 52(10-11), 461-468. doi:10.2166/wst.2005.0724",
+                "Friedrich, Jimenez, Pruden, Miller, Metch & Takacs (2017). Rethinking growth and decay kinetics in activated sludge - towards a new adaptive kinetics approach. Water Sci. Technol. 75(3), 501-506. doi:10.2166/wst.2016.439",
+                "Mannucci, Caretti, Ducci, Lubello, Gori, Coppini & Munz (2020). Ammonia oxidizing bacteria (AOB) kinetic parameters estimated using the actual maximum ammonia oxidation rate. Int. Biodeterior. Biodegrad. 147, 104876. doi:10.1016/j.ibiod.2019.104876",
+                "Munz, Lubello & Oleszkiewicz (2011). Factors affecting the growth rates of ammonium and nitrite oxidizing bacteria. Chemosphere 83(5), 720-725. doi:10.1016/j.chemosphere.2011.01.058",
                 "Anthonisen, Loehr, Prakasam & Srinath (1976). Inhibition of nitrification by ammonia and nitrous acid. J. Water Pollut. Control Fed. 48(5), 835-852.",
             ],
         ),

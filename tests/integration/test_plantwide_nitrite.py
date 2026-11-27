@@ -109,29 +109,50 @@ def _rates_at(model, state, T, pH):
 
 @pytest.mark.parametrize(("T", "pH"), [(293.15, 7.0), (288.15, 7.8)])
 def test_nitrifier_growth_is_monod_on_ammonium_and_nitrite_inhibited_by_fa_and_fna(nitrite, T, pH):
-    """AOB and NOB growth written out by hand: Monod on total ammonium (0.675)
+    """AOB and NOB growth written out by hand: AOB 0.9 1/d with theta 1.072
+    (Jones et al. 2005), NOB 0.78 1/d with theta 1.11 (Hiatt & Grady 2008;
+    Mehrani et al. 2021); Monod on total ammonium (0.6, Mannucci et al. 2020)
     and total nitrite (0.1); apparent floc oxygen half-saturations 0.65 and
     0.23 (Daebel et al. 2007); free ammonia and free nitrous acid from Hiatt &
-    Grady's (2008) eqs 2-5, inhibiting with their constants (AOB: FA 1.0, FNA
-    0.1; NOB: FA 0.2, FNA 0.04); growth theta 1.11 (Mehrani et al. 2021). The
-    nutrient terms are the core's. All in closed form, hence rel=1e-10."""
+    Grady's eqs 2-5, inhibiting with their constants (AOB: FA 1.0, FNA 0.1;
+    NOB: FA 0.2, FNA 0.04). The nutrient terms are the core's. All in closed
+    form, hence rel=1e-10."""
     state = dict(SO2=1.5, SNH4=30.0, SNO2=8.0, SPO4=5.0, XAOB=100.0, XNOB=50.0)
     rates = _rates_at(nitrite, state, T, pH)
     p = {k: float(nitrite.default_parameters()[i]) for k, i in nitrite.param_index.items()}
     fa = 30.0 * 10**pH / (np.exp(6344.0 / T) + 10**pH)
     fna = 8.0 / (np.exp(-2300.0 / T) * 10**pH)
-    mu = 0.78 * 1.11 ** (T - 293.15)
+    mu_aob = 0.9 * 1.072 ** (T - 293.15)
+    mu_nob = 0.78 * 1.11 ** (T - 293.15)
     p_limit = 5.0 / (p["KP_H"] + 5.0)
     aob = (
-        mu * 30.0 / (0.675 + 30.0) * 1.5 / (0.65 + 1.5) * 1.0 / (1.0 + fa) * 0.1 / (0.1 + fna)
+        mu_aob * 30.0 / (0.6 + 30.0) * 1.5 / (0.65 + 1.5) * 1.0 / (1.0 + fa) * 0.1 / (0.1 + fna)
         * p_limit * 100.0
     )  # fmt: skip
     nob = (
-        mu * 8.0 / (0.1 + 8.0) * 1.5 / (0.23 + 1.5) * 0.04 / (0.04 + fna) * 0.2 / (0.2 + fa)
+        mu_nob * 8.0 / (0.1 + 8.0) * 1.5 / (0.23 + 1.5) * 0.04 / (0.04 + fna) * 0.2 / (0.2 + fa)
         * 30.0 / (p["KNH4_H"] + 30.0) * p_limit * 50.0
     )  # fmt: skip
     assert rates["growth_of_AOB"] == pytest.approx(aob, rel=1e-10)
     assert rates["growth_of_NOB"] == pytest.approx(nob, rel=1e-10)
+
+
+@pytest.mark.parametrize("T", [293.15, 283.15])
+def test_nitrifier_decay_is_the_werf_measurement(nitrite, T):
+    """Aerobic decay: AOB 0.17 1/d with theta 1.029 (WERF, Jones et al. 2005;
+    Friedrich et al. 2017), NOB 0.089 1/d with theta 1.036 (Friedrich et al.).
+    At 10 C, 0.128 and 0.062, Friedrich et al.'s tabulated values (to their
+    three figures)."""
+    state = dict(SO2=8.0, SNH4=10.0, SPO4=5.0, XAOB=100.0, XNOB=50.0)
+    rates = _rates_at(nitrite, state, T, 7.0)
+    p = {k: float(nitrite.default_parameters()[i]) for k, i in nitrite.param_index.items()}
+    aerobic = 8.0 / (p["KO2_H"] + 8.0)
+    switch = aerobic + p["eta_b_NOX_AUT"] * 0.0 + p["eta_b_AN"] * (1.0 - aerobic)
+    assert rates["decay_of_XAOB"] == pytest.approx(0.17 * 1.029 ** (T - 293.15) * switch * 100.0, rel=1e-10)
+    assert rates["decay_of_XNOB"] == pytest.approx(0.089 * 1.036 ** (T - 293.15) * switch * 50.0, rel=1e-10)
+    if T == 283.15:
+        assert rates["decay_of_XAOB"] / (switch * 100.0) == pytest.approx(0.128, abs=5e-4)
+        assert rates["decay_of_XNOB"] / (switch * 50.0) == pytest.approx(0.062, abs=5e-4)
 
 
 def test_anammox_growth_is_hao_at_30_and_20_c(nitrite):

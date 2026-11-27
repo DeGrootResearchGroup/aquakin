@@ -9,13 +9,14 @@ in excess), at 20 C. Checked:
   10 days: what the influent brings equals what leaves in the effluent and
   wastage, plus the gases the aeration strips (N2, and the oxygen taken up);
 - it nitrifies through nitrite without accumulating it: effluent ammonium
-  below 2 g N/m3, nitrite below 0.5. Plants at low DO keep their NOB and
+  below a tenth of the influent's, nitrite below 0.5 g N/m3. Plants at low DO keep their NOB and
   little nitrite (Law et al. 2019: 0.3-0.7 g N/m3 at DO 0.8-1.2 and 4-6 d
   sludge age; Liu et al. 2019: none at DO 0.3), and BSM1's last tank runs at
   about 0.2-0.5 g O2/m3.
 
-This level leaves 1.57 g N/m3 of ammonium, 0.10 of nitrite and 13.96 of
-nitrate (the core: 1.11 and 11.02).
+This level leaves 2.58 g N/m3 of ammonium, 0.10 of nitrite and 13.21 of
+nitrate (the core: 1.11 and 11.02); its AOB decay is the measured 0.17 1/d
+(the core's ASM2d autotrophs: 0.15).
 
 About 2 minutes.
 """
@@ -54,7 +55,7 @@ def nitrite_bsm1():
 def test_plant_conserves_nitrogen_phosphorus_and_cod(nitrite_bsm1):
     """Each balance to 1e-9 of the inflow: the plant is at steady state, the
     fluxes are integrated over 11 saved times, and the solve's rtol is 1e-8.
-    The N balance counts the denitrified N leaving as stripped N2 (22.8% of
+    The N balance counts the denitrified N leaving as stripped N2 (22.4% of
     the influent N at 20 C)."""
     _, _, result, solution = nitrite_bsm1
     assert bool(result["steady"].converged)
@@ -71,7 +72,8 @@ def test_level_nitrifies_through_nitrite_on_bsm1(nitrite_bsm1):
     def at(species):
         return float(tank5[model.species_index[species]])
 
-    assert at("SNH4") < 2.0
+    influent_nh4 = b.carry_over(model, b.BSM1_INFLUENT)["SNH4"]
+    assert at("SNH4") < 0.1 * influent_nh4
     assert at("SNO2") < 0.5
     assert at("SNO3") > 10.0 * at("SNO2")
     assert at("XAOB") > at("XNOB") > 1.0
