@@ -512,9 +512,10 @@ def steady_state_sensitivity(
     else:
         y_star = jax.lax.stop_gradient(plant.steady_state(params, y0=y0, **steady_kwargs).state)
 
-    def F(y, p):
-        return plant.derivative(y, params=p)
-
+    # The output enters the IFT only through its value and its Jacobian at the
+    # steady state, so both are taken here and passed to the compiled kernel as
+    # arrays: the kernel never sees ``output_fn``, and a new callable per call
+    # (a fresh lambda) reuses the same compiled program.
     out_fn = output_fn if output_fn is not None else (lambda y: y)
     g0 = jnp.atleast_1d(out_fn(y_star))
     G = jax.jacfwd(out_fn)(y_star)  # (m, n) or (n,)
@@ -531,66 +532,136 @@ def steady_state_sensitivity(
     n_wrt = int(wrt_idx.shape[0])
 
     # Operating-condition inputs (the influent scales, nominal 1.0): their IFT
-    # columns are appended after the kinetic-parameter columns below, through
-    # the same ``design`` override the steady-state solve uses. The
-    # no-operating path is byte-for-byte unchanged.
-    op_meta = plant._parse_operating(operating)
+    # columns are appended after the kinetic-parameter columns, through the
+    # same ``design`` override the steady-state solve uses.
+    op_meta = tuple(plant._parse_operating(operating))
     n_op = len(op_meta)
-
-    J_y = jax.jacfwd(lambda y: F(y, params))(y_star)
-
     chosen = ("forward" if (n_wrt + n_op) <= m else "reverse") if mode == "auto" else mode
-    if chosen == "forward":
-        # Differentiate only the selected parameters: k forward passes, not
-        # n_params. (k == n_params when wrt is None.)
-        def F_sub(theta_sub):
-            return F(y_star, params.at[wrt_idx].set(theta_sub))
-
-        J_theta = jax.jacfwd(F_sub)(params[wrt_idx])  # (n, n_wrt)
-        S = jnp.linalg.solve(J_y, -J_theta)  # (n, n_wrt)
-        dgdth = G @ S  # (m, n_wrt)
-    elif chosen == "reverse":
-        # Each output's adjoint returns the sensitivity to every parameter;
-        # select the requested subset afterwards.
-        J_yT = J_y.T
-        _, vjp_F = jax.vjp(lambda p: F(y_star, p), params)
-
-        def _row(g_i):
-            lam = jnp.linalg.solve(J_yT, -g_i)  # adjoint
-            return vjp_F(lam)[0][wrt_idx]  # (n_wrt,)
-
-        dgdth = jax.vmap(_row)(G)  # (m, n_wrt)
-    else:
+    if chosen not in ("forward", "reverse"):
         raise ValueError(f"mode must be 'auto', 'forward', or 'reverse'; got {mode!r}.")
-
-    # Append the operating-condition columns: the same IFT, with
-    # ``dF/d(scale)`` taken through the influent ``design`` override, in the
-    # chosen AD direction. The constant influent is sampled at ``t=0`` (the
-    # derivative's evaluation time).
     if n_op:
         plant._build_state_layout()
         plant._build_parameter_layout()
-        t0 = jnp.asarray(0.0)
-        op0 = jnp.ones(n_op)
-        pf = plant._coerce_params(params)
 
-        def F_op(op_vals):
-            return plant._rhs(t0, y_star, pf, design=plant._operating_design(op_meta, op_vals))
-
-        if chosen == "forward":
-            J_op = jax.jacfwd(F_op)(op0)  # (n, n_op)
-            dg_op = G @ jnp.linalg.solve(J_y, -J_op)  # (m, n_op)
-        else:
-            _, vjp_op = jax.vjp(F_op, op0)
-            dg_op = jax.vmap(lambda g_i: vjp_op(jnp.linalg.solve(J_y.T, -g_i))[0])(G)
-        dgdth = jnp.concatenate([dgdth, dg_op], axis=1)  # (m, n_wrt+n_op)
-
-    if elasticity:
-        theta_all = jnp.concatenate([params[wrt_idx], jnp.ones(n_op)]) if n_op else params[wrt_idx]
-        dgdth = dgdth * (theta_all[None, :] / g0[:, None])
+    kernel = _steady_sensitivity_kernel(plant, chosen, op_meta, bool(elasticity))
+    dgdth, J_y = kernel(y_star, params, G, g0, wrt_idx)
     if return_jacobian:
         return dgdth, J_y
     return dgdth
+
+
+def _steady_sensitivity_kernel(plant, chosen: str, op_meta: tuple, elasticity: bool):
+    """The compiled IFT step of :func:`steady_state_sensitivity`, cached on the plant.
+
+    Run eagerly, the plant-RHS ``jacfwd``, the linear solve and the
+    ``vjp`` / ``vmap`` are traced and compiled afresh on every call (about 15 s
+    on BSM2 for about 0.01 s of work). The jitted kernel is kept in
+    ``plant._solve_cache`` under the ``"jit"`` store, so a repeat call -- a
+    figure regenerated, a DGSM sample, a calibration step -- reuses it, and a
+    condition or structure change drops it with the other compiled solves.
+    Array shapes (outputs, selected parameters) are left to ``jax.jit``'s own
+    per-shape cache, so the key holds only the trace-time choices.
+
+    Parameters
+    ----------
+    plant : Plant
+        The plant whose right-hand side is differentiated.
+    chosen : {"forward", "reverse"}
+        The AD direction.
+    op_meta : tuple
+        The parsed operating-condition specs (``plant._parse_operating``).
+    elasticity : bool
+        Whether to scale the result to the dimensionless elasticity.
+
+    Returns
+    -------
+    callable
+        ``kernel(y_star, params, G, g0, wrt_idx) -> (dgdth, J_y)``: the
+        ``(m, k)`` sensitivity and the steady-state Jacobian ``dF/dy``.
+    """
+    key = ("steady_state_sensitivity", chosen, op_meta, elasticity, plant._recycle.cache_flags())
+    kernel = plant._solve_cache.get("jit", key)
+    if kernel is None:
+        kernel = jax.jit(_steady_sensitivity_ift(plant, chosen, op_meta, elasticity))
+        plant._solve_cache.put("jit", key, kernel)
+    return kernel
+
+
+def _steady_sensitivity_ift(plant, chosen: str, op_meta: tuple, elasticity: bool):
+    """The IFT sensitivity at a steady state, as a function of arrays only.
+
+    Parameters
+    ----------
+    plant : Plant
+        The plant whose right-hand side is differentiated.
+    chosen : {"forward", "reverse"}
+        The AD direction.
+    op_meta : tuple
+        The parsed operating-condition specs.
+    elasticity : bool
+        Whether to scale the result to the dimensionless elasticity.
+
+    Returns
+    -------
+    callable
+        ``ift(y_star, params, G, g0, wrt_idx) -> (dgdth, J_y)``, see
+        :func:`_steady_sensitivity_kernel`.
+    """
+    n_op = len(op_meta)
+
+    def F(y, p):
+        return plant.derivative(y, params=p)
+
+    def ift(y_star, params, G, g0, wrt_idx):
+        J_y = jax.jacfwd(lambda y: F(y, params))(y_star)
+        if chosen == "forward":
+            # Differentiate only the selected parameters: k forward passes, not
+            # n_params. (k == n_params when wrt is None.)
+            def F_sub(theta_sub):
+                return F(y_star, params.at[wrt_idx].set(theta_sub))
+
+            J_theta = jax.jacfwd(F_sub)(params[wrt_idx])  # (n, n_wrt)
+            S = jnp.linalg.solve(J_y, -J_theta)  # (n, n_wrt)
+            dgdth = G @ S  # (m, n_wrt)
+        else:
+            # Each output's adjoint returns the sensitivity to every parameter;
+            # select the requested subset afterwards.
+            J_yT = J_y.T
+            _, vjp_F = jax.vjp(lambda p: F(y_star, p), params)
+
+            def _row(g_i):
+                lam = jnp.linalg.solve(J_yT, -g_i)  # adjoint
+                return vjp_F(lam)[0][wrt_idx]  # (n_wrt,)
+
+            dgdth = jax.vmap(_row)(G)  # (m, n_wrt)
+
+        # Append the operating-condition columns: the same IFT, with
+        # ``dF/d(scale)`` taken through the influent ``design`` override, in
+        # the chosen AD direction. The constant influent is sampled at ``t=0``
+        # (the derivative's evaluation time).
+        if n_op:
+            t0 = jnp.asarray(0.0)
+            op0 = jnp.ones(n_op)
+            pf = plant._coerce_params(params)
+
+            def F_op(op_vals):
+                return plant._rhs(t0, y_star, pf, design=plant._operating_design(op_meta, op_vals))
+
+            if chosen == "forward":
+                J_op = jax.jacfwd(F_op)(op0)  # (n, n_op)
+                dg_op = G @ jnp.linalg.solve(J_y, -J_op)  # (m, n_op)
+            else:
+                _, vjp_op = jax.vjp(F_op, op0)
+                dg_op = jax.vmap(lambda g_i: vjp_op(jnp.linalg.solve(J_y.T, -g_i))[0])(G)
+            dgdth = jnp.concatenate([dgdth, dg_op], axis=1)  # (m, n_wrt+n_op)
+
+        if elasticity:
+            theta = params[wrt_idx]
+            theta_all = jnp.concatenate([theta, jnp.ones(n_op)]) if n_op else theta
+            dgdth = dgdth * (theta_all[None, :] / g0[:, None])
+        return dgdth, J_y
+
+    return ift
 
 
 def steady_state_dgsm(

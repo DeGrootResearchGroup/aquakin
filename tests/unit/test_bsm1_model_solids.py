@@ -182,6 +182,30 @@ def test_build_bsm1_explicit_solids(use_takacs):
         assert clar.tss_factors == {sp: (ASM1_TSS_FACTOR if sp in tss else 0.0) for sp in settling}
 
 
+@pytest.mark.parametrize("name", ["asm2d", "asm3"])
+def test_build_bsm1_weighs_a_lumped_tss_models_solids_by_its_own_factors(name):
+    """On a model that tracks its TSS as a state, the BSM1 settler weighs each
+    particulate by the model's own iTSS / iSS parameter (the TSS state at 0, a
+    g TSS precipitate at 1), as build_a2o does, not ASM1's 0.75 per g COD with
+    stored phosphate at 0. Given ``tss_species``, the 0.75 weighting stands."""
+    model = aquakin.load_model(name)
+    tss_state, factors = TSS_FACTOR_PARAMS[name]
+    p = dict(zip(model.parameters, map(float, model.default_parameters()), strict=True))
+    aer = {f"tank{i}": Aeration(kla=240.0, species="SO2") for i in (3, 4, 5)}
+    clar = build_bsm1(model, aeration=aer).units["clarifier"]
+    expected = {sp: p[f] for sp, f in factors.items()} | {tss_state: 0.0}
+    expected |= dict.fromkeys(set(clar.particulate_species) - set(expected), 1.0)
+    assert set(clar.tss_factors) == set(clar.particulate_species)
+    for sp, w in expected.items():
+        assert clar.tss_factors[sp] == pytest.approx(w, rel=1e-12, abs=1e-12), sp
+
+    given = ("XI", "XS")
+    explicit = build_bsm1(model, aeration=aer, tss_species=given).units["clarifier"]
+    assert explicit.tss_factors == {
+        sp: (ASM1_TSS_FACTOR if sp in given else 0.0) for sp in clar.particulate_species
+    }
+
+
 def test_build_bsm1_tss_must_settle():
     with pytest.raises(ValueError, match="not settling species"):
         build_bsm1(settling_species=("XS", "XI"), tss_species=("XS", "XB_H"))
