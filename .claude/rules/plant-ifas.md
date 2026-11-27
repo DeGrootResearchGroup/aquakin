@@ -3,11 +3,21 @@ paths:
   - "aquakin/plant/ifas.py"
   - "aquakin/integrate/biofilm.py"
   - "aquakin/integrate/biofilm_growth.py"
+  - "aquakin/integrate/finite_volume.py"
 ---
 
 # Rules — the IFAS / MBBR biofilm unit
 
 Split out of `.claude/rules/plant.md`.
+
+**1-D transport goes through `integrate/finite_volume.py`.** The biofilm
+diffusion and growth-advection operators build only their boundary face fluxes
+and take the interior fluxes, the upwind flux and the divergence from it; a new
+1-D operator does the same and does not hand-write another face-flux loop, so
+conservation and upwinding have one implementation. Its arithmetic order is
+load-bearing: the operators' RHS, Jacobian and reverse-mode gradients are
+bit-identical to the hand-written versions they replaced, and a reordering that
+is equal only to round-off breaks that.
 
 **IFAS / MBBR biofilm (`plant/ifas.py`).** Three things about this unit are
 load-bearing and easy to get wrong.

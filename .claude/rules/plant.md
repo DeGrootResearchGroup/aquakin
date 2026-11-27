@@ -21,7 +21,7 @@ it on demand when a change elsewhere touches the topic):
 | `plant-solve.md` | `plant.py`, `dynamic_solve.py`, `steady_solve.py`, `recycle.py`, `colored.py`, `solve_cache.py`, `steady.py` | the coloured Jacobian, the parameter-slice and compiled-solve caches, recycle resolution and the cached recycle / flow maps |
 | `plant-analysis.md` | `calibrate.py`, `identifiability.py`, `measures.py`, `sensitivity.py` | `Plant.calibrate`, Fisher / profile / sensor ranking, measured channels and measure expressions |
 | `plant-audits.md` | `units_check.py`, `balance.py`, `metrics.py` | `plant.check_units()` and `plant.mass_balance()` |
-| `plant-ifas.md` | `ifas.py`, `integrate/biofilm*.py` | the IFAS / MBBR biofilm unit |
+| `plant-ifas.md` | `ifas.py`, `integrate/biofilm*.py`, `integrate/finite_volume.py` | the IFAS / MBBR biofilm unit |
 | `plant-settling.md` | `takacs.py`, `settling.py`, the clarifier / separator modules | the Takács clarifier (soluble holdup, composition mode, interface flux), shared separator helpers |
 | `plant-spec.md` | `spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | time expressions, influent records / patterns, the unit catalogue, the flowsheet spec |
 

@@ -49,7 +49,7 @@ Claude-facing files** at the end.
 | `.claude/rules/plant-solve.md` | `plant/plant.py`, `dynamic_solve.py`, `steady_solve.py`, `recycle.py`, `colored.py`, `solve_cache.py`, `steady.py`, `integrate/steady.py` | coloured Jacobian, solve caches, recycle resolution and the cached recycle / flow maps |
 | `.claude/rules/plant-analysis.md` | `plant/calibrate.py`, `identifiability.py`, `measures.py`, `sensitivity.py` | plant calibration, Fisher / profile / sensor ranking, measured channels |
 | `.claude/rules/plant-audits.md` | `plant/units_check.py`, `balance.py`, `metrics.py` | `plant.check_units()`, `plant.mass_balance()` |
-| `.claude/rules/plant-ifas.md` | `plant/ifas.py`, `integrate/biofilm*.py` | the IFAS / MBBR biofilm unit |
+| `.claude/rules/plant-ifas.md` | `plant/ifas.py`, `integrate/biofilm*.py`, `integrate/finite_volume.py` | the IFAS / MBBR biofilm unit |
 | `.claude/rules/plant-settling.md` | `plant/takacs.py`, `settling.py`, clarifier / separator modules | the Takács clarifier, shared separator helpers |
 | `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
 | `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog and the schema rules |
