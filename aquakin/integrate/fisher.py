@@ -804,6 +804,30 @@ class _FisherSetup:
             self._theta(p, C0_list)
         )
 
+    def outputs(self, p, tobs_list, C0_list):
+        """Noise-scaled predictions ``Sigma^{-1/2} y`` at ``(p, tobs_list,
+        C0_list)``, stacked over the experiments in the row order of
+        :meth:`jacobian` (an unmeasured entry is exactly 0). Pure JAX."""
+        return self._scaled_outputs(self._theta(p, C0_list), p, tobs_list, C0_list)
+
+    def outputs_and_jacobian(self, p, tobs_list, C0_list):
+        """:meth:`outputs` and :meth:`jacobian` from one forward-mode pass.
+
+        Returns
+        -------
+        y : jnp.ndarray, shape (n_rows,)
+            The noise-scaled predictions.
+        J : jnp.ndarray, shape (n_rows, n)
+            Their Jacobian with respect to the unconstrained coordinates.
+        """
+
+        def both(theta):
+            y = self._scaled_outputs(theta, p, tobs_list, C0_list)
+            return y, y
+
+        J, y = jax.jacfwd(both, has_aux=True)(self._theta(p, C0_list))
+        return y, J
+
     def information(self, p, tobs_list, C0_list):
         """Fisher information ``J^T J`` at ``(p, tobs_list, C0_list)``. Pure JAX."""
         J = self.jacobian(p, tobs_list, C0_list)

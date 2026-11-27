@@ -10,14 +10,13 @@ paths:
   - "aquakin/integrate/identifiability.py"
   - "aquakin/integrate/experiment_design.py"
   - "aquakin/integrate/candidate_design.py"
+  - "aquakin/integrate/discrimination.py"
   - "aquakin/integrate/_transforms.py"
   - "aquakin/plant/calibrate.py"
   - "aquakin/plant/identifiability.py"
 ---
 
 # Rules — calibration internals (`aquakin/integrate/calibrate.py`, `calibration/`, and their consumers)
-
-Split out of `.claude/rules/integration.md`.
 
 ### Module layout
 
@@ -188,6 +187,13 @@ SLSQP on `(value, jacfwd)` of the criterion over a [0, 1]-scaled design vector
 (`param_draws` `vmap`ped). That program is held in `cached_jitted_solver` under
 `_FisherSetup.structure_key()`: anything new `_FisherSetup.information` bakes
 in must join that key, or a repeat call reuses a stale program.
+`discrimination.py` (`optimize_discrimination`) shares that driver
+(`_design_window`, `_start_design`, `_slsqp_design`, `_designed_experiments`)
+and builds one `_FisherSetup` per model in its fit's coordinates, both scaled
+by one common noise, so `outputs_and_jacobian` gives `Sigma^{-1/2}`-scaled
+predictions and sensitivities; its programs are keyed on both setups'
+`structure_key()`. The fit's noise is `sigma_estimate`, else
+`_CalibrationProblem.fit_sigma` (the `sigma` given, kept out of `struct_key`).
 `fisher_information_from_fn` (in `fisher.py`) is the matrix-only path for a
 forward model that is not a reactor: AD Jacobian of `fn(theta)`, the same
 transforms and `FisherInformation` result, and `groups=` returning
@@ -221,9 +227,8 @@ sigma to `inf` in `_FisherSetup` and is part of the design `_structure_key`; it 
 `_CalibrationProblem` (and part of `struct_key`), so plant calibration, which
 builds its own problem, is unaffected. `CalibrationResult.posterior_draws(model, ...)`
 is the single Laplace sampler; `predictive_band` propagates its rows (or the given
-`draws=`). MCMC (`sample_posterior`) is in `integration-sampling.md`. All are unit-tested directly in
-`tests/unit/test_calibrate_internals.py` (no fit/solve). **The forward-solve is a
-seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
+`draws=`). MCMC (`sample_posterior`) is in `integration-sampling.md`.
+**The forward-solve is a seam**: `_ReactorForwardModel` is the *only* piece that touches the fitted object
 — it turns `(params, C0)` into an observed-species trajectory (via the reactor's
 diffrax `solve`, or the cap-free ESDIRK adjoint on `gradient="stable_adjoint"`),
 and exposes `solve_trajectory` + `with_dtmax`. Everything else is generic over
@@ -233,10 +238,7 @@ that contract. A `Plant` has a different solve contract (flat assembled state,
 ([`plant/calibrate.py`](aquakin/plant/calibrate.py)) supplies a
 `_PlantForwardModel` (`plant.solve` + stream reconstruction) and a
 `_PlantParamNamespace` adapter, and reuses `_build_objective` / `_run_multistart`
-/ `_laplace_posterior` unchanged — the payoff of the seam. Behaviour equivalence
-of the decomposition to the old monolith is pinned by the full-fit suite
-(`tests/integration/test_calibrate.py`, `test_profile.py`); the plant path by
-`test_plant_calibrate.py`. **Solve failures
+/ `_laplace_posterior` unchanged — the payoff of the seam. **Solve failures
 mid-fit:** `_run_multistart` treats a start whose forward solve raises at runtime
 as a failed start. `_is_solve_failure` recognizes these: equinox's runtime error,
 or a JAX runtime / `ValueError` carrying the host-callback failure that
@@ -245,6 +247,4 @@ or a JAX runtime / `ValueError` carrying the host-callback failure that
 `RuntimeError` with the `param_halfwidth` / initial-guess / `free_ic`-bounds
 remedies is raised, chained to the first failure. Any other exception still
 propagates unchanged. `_check_start_gradient` turns a solve failure at the
-starting guess into a similar error. Both reach `Plant.calibrate` through the
-shared functions. Tested in `test_calibrate.py` (a fake forward
-model that raises through `equinox.error_if` past a rate threshold).
+starting guess into a similar error; both are shared with `Plant.calibrate`.
