@@ -104,7 +104,7 @@ def bsm1_plant(model):
         for i, kla in enumerate(BSM1_KLA)
         if kla > 0
     }
-    plant = build_bsm1(model, aeration=aeration)
+    plant = build_bsm1(model, aeration=aeration, use_takacs=False)
     plant.add_influent(
         "feed",
         model.influent(carry_over(model, BSM1_INFLUENT), Q=BSM1_Q_AVG),

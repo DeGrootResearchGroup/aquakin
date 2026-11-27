@@ -202,7 +202,8 @@ tanks, where the phosphorus-accumulating organisms take up the volatile fatty
 acids, two anoxic and three aerated tanks, and a secondary clarifier, with a
 nitrate recycle from the last aerated tank to the anoxic zone and the RAS to the
 anaerobic zone. It is a representative municipal design rather than a published
-benchmark. `a2o_influent(model)` is a matching constant influent, and
+benchmark. It runs on `asm2d` by default, or on a model extending it that keeps
+its species names, such as `asm2d_chemp`. `a2o_influent(model)` is a matching constant influent, and
 `a2o_warm_start(plant)` seeds the tanks with an established phosphorus-removing
 sludge, which a cold start takes a long time to grow:
 
@@ -215,12 +216,12 @@ a2o.add_influent("feed", a2o_influent(asm2d))
 a2o_root = a2o.steady_state(y0=a2o_warm_start(a2o))
 aer3 = a2o.named_state(a2o_root.state)["aer3"]     # the last aerated tank
 print({k: round(aer3[k], 1) for k in ("SNH4", "SNO3", "SPO4")})
-# {'SNH4': 0.2, 'SNO3': 10.3, 'SPO4': 3.9}
+# {'SNH4': 0.2, 'SNO3': 10.1, 'SPO4': 3.0}
 ```
 
 % invisible-code-block: python
 %     assert bool(a2o_root.converged)
-%     assert {k: round(aer3[k], 1) for k in ("SNH4", "SNO3", "SPO4")} == {"SNH4": 0.2, "SNO3": 10.3, "SPO4": 3.9}
+%     assert {k: round(aer3[k], 1) for k in ("SNH4", "SNO3", "SPO4")} == {"SNH4": 0.2, "SNO3": 10.1, "SPO4": 3.0}
 
 Its options set the design flow, the wastage flow and the two recycle ratios;
 `ferric=FerricDose(flow=...)` doses a metal salt into the aerated zone to

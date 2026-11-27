@@ -1005,12 +1005,14 @@ starts from healthy bio-P sludge rather than the slow, seed-sensitive cold-start
 PAO establishment. The default config (ten-layer Takács settler) reaches a
 feasible steady state with full nitrification (effluent SNH4 ≈ 0.2 g N/m³),
 partial denitrification (effluent SNO3 ≈ 10 g N/m³ from 25 g N/m³ influent
-ammonia) and **partial biological P removal** (effluent SPO4 ≈ 3.9 g P/m³ from 8;
+ammonia) and **partial biological P removal** (effluent SPO4 ≈ 3.0 g P/m³ from 8;
 clear anaerobic release and aerobic uptake). The settler reads its solids as
-TSS through the `asm2d` `iTSS` factors (MLSS ≈ 4750 g TSS/m³ in the last
-aerated tank); at that loading the sludge blanket reaches the eighth of its ten
-layers and the effluent carries ≈ 54 g TSS/m³. With `use_takacs=False` the ideal
-clarifier gives SNH4 ≈ 0.1, SNO3 ≈ 10 and SPO4 ≈ 5. A 200-day dynamic solve to
+TSS through the `asm2d` `iTSS` factors (MLSS ≈ 3960 g TSS/m³ in the last
+aerated tank, wastage 250 m³/d, SRT ≈ 11 d); the sludge blanket stays in the
+bottom three of its ten layers and the effluent carries ≈ 14 g TSS/m³ (the
+clarifier analysis below explains the wastage). With `use_takacs=False` the
+ideal clarifier gives the same effluent nutrients (SNH4 ≈ 0.2, SNO3 ≈ 10,
+SPO4 ≈ 3.0), since the Takács blanket no longer reaches the weir. A 200-day dynamic solve to
 that steady state takes ~1 min with either settler (60 s Takács, 51 s ideal,
 compile included, on a 4-core machine; under a concurrent load the Takács solve
 took 3 min), and `Plant.steady_state` from `a2o_warm_start` ~40 s against
@@ -1031,6 +1033,58 @@ the A²O viability test (`tests/integration/test_a2o.py`) is the regression guar
 the COD/N/P continuity suite could not be (each broken coefficient still
 conserves mass). It is the substrate for the chemical-P (ferric/alum dosing)
 demonstration.
+
+**A²O secondary clarifier: overloaded by too little wastage, not too little
+area** (2026-11-26, at the earlier wastage of 120 m³/d; the shipped
+`A2O_WASTAGE_FLOW` is now 250 m³/d as a result; `scripts/probe_a2o_clarifier.py`, 200-day dynamic solves
+from `a2o_warm_start`, `asm2d`, 20 °C, constant `a2o_influent`; last-10-day
+drift of effluent TSS ≤ 0.03 g/m³). The checks, against the settler's own
+Takács curve (the BSM1 parameters, `X_min = fns·MLSS`), for the earlier design
+(area 1500 m², `Q_r = 0.75·Q`, `Q_w = 120 m³/d`):
+
+- **Hydraulics are fine.** Surface overflow rate 12.2 m/d (typical average
+  design 16–28 m/d); the settling velocity at the feed TSS, 31 m/d, is far above
+  it, so the clarification criterion holds.
+- **Thickening is at its limit.** Solids loading `MLSS·(Q + Q_r)/A` = 102
+  kg/(m²·d) against a state-point limiting flux of 107 kg/(m²·d) at the
+  underflow velocity 9.3 m/d (95 %); the underflow reaches 10.9 kg/m³, near the
+  limit `G_L/u` ≈ 11.5 kg/m³. The loading itself is ordinary (typical average
+  design 4–6 kg/(m²·h), i.e. 96–144 kg/(m²·d)); the BSM settling curve makes it
+  limiting at this MLSS.
+- **The cause is the wastage.** At that underflow, `Q_w = 120 m³/d` removes
+  1.3 t TSS/d, but the plant grows 2.3 t/d; the rest (1.0 t/d, 43 % of the
+  solids leaving) goes over the weir once the blanket has filled the settler
+  (8 of 10 layers, holding 53 % of the system's solids). The design's 25-day
+  sludge age (`reactor solids / (Q_w·X_u)`) is not realized: counting the
+  effluent solids it is 14.5 days. A larger area or RAS flow raises the limiting
+  flux, but with a fixed wastage flow the MLSS grows until the blanket fills the
+  settler again, so neither clears the effluent.
+
+| design | MLSS g/m³ | SRT d | blanket (layers ≥ 1000 g/m³) | eff. TSS | SNH4 | SNO3 | SPO4 | SLR / G_L |
+|---|---|---|---|---|---|---|---|---|
+| earlier: A 1500, RAS 0.75, Q_w 120 | 4751 | 14.5 | 8 | 54.0 | 0.17 | 10.26 | 3.89 | 0.95 |
+| A 2000 | 5008 | 15.6 | 8 | 46.7 | 0.16 | 10.30 | 4.16 | 0.95 |
+| A 2500 | 5206 | 16.6 | 8 | 41.3 | 0.15 | 10.34 | 4.37 | 0.95 |
+| RAS 1.0 | 5235 | 17.3 | 8 | 48.0 | 0.16 | 9.52 | 5.20 | 0.95 |
+| Q_w 200 | 4535 | 13.5 | 5 | 14.7 | 0.18 | 10.21 | 3.66 | 0.90 |
+| Q_w 200, A 2000 | 4582 | 13.7 | 4 | 13.0 | 0.18 | 10.22 | 3.71 | 0.87 |
+| Q_w 200, RAS 1.0 | 4859 | 15.5 | 4 | 15.4 | 0.17 | 9.46 | 4.87 | 0.88 |
+| **Q_w 250 (shipped)** | 3957 | 11.0 | 3 | 13.7 | 0.23 | 10.06 | 3.01 | 0.79 |
+| Q_w 250, A 2500 | 4011 | 11.2 | 2 | 11.0 | 0.22 | 10.08 | 3.07 | 0.73 |
+| Q_w 300 | 3523 | 9.3 | 2 | 12.9 | 0.29 | 9.92 | 2.53 | 0.70 |
+
+(A in m², Q_w in m³/d, concentrations in g/m³; SRT counts the effluent
+solids; SLR / G_L is the solids loading over the state-point limiting flux.)
+Raising the wastage is the lever: `Q_w = 250 m³/d` gives a typical A²O operating
+point (SRT ≈ 11 d, MLSS ≈ 4000 g TSS/m³, RAS 75 %), a blanket in the bottom
+three layers, effluent TSS ≈ 14 g/m³ (the settler's clarification floor, as in
+BSM1), still full nitrification, and better phosphorus removal (SPO4 3.9 → 3.0,
+more P-rich sludge wasted). A higher RAS ratio returns more nitrate to the
+anaerobic zone and loses bio-P (SPO4 5.2); a larger area alone raises the MLSS.
+`Q_w = 300` (SRT 9 d) works too at 20 °C but leaves less nitrification margin
+for winter. The shipped `A2O_WASTAGE_FLOW` is now 250 m³/d, and
+`A2O_WARM_REACTOR_COMPOSITION` was re-derived from that operating point (a
+200-day solve; `Plant.steady_state` from it converges to the same state).
 
 **BSM2 — open-loop plant (Gernaey et al. 2014 / Jeppsson et al. 2007).**
 `aquakin.plant.bsm.build_bsm2()` wraps the BSM1 activated-sludge core with the

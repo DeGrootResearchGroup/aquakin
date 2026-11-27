@@ -1022,7 +1022,7 @@ def _flattened(ref, name: str, base_dir: Path) -> str:
     """A model's YAML with its whole ``extends`` chain merged in."""
     from importlib.resources import files
 
-    from aquakin.schema.loader import _resolve_inheritance
+    from aquakin.schema.loader import _resolve_inheritance, parse_model_yaml
 
     if ref["source"] == "shipped":
         text = (files("aquakin.models") / f"{name}.yaml").read_text()
@@ -1031,7 +1031,7 @@ def _flattened(ref, name: str, base_dir: Path) -> str:
         path = Path(ref["source"])
         path = path if path.is_absolute() else base_dir / path
         text, base = path.read_text(), path.parent
-    data = _resolve_inheritance(yaml.safe_load(text), name, base, seen=())
+    data = _resolve_inheritance(parse_model_yaml(text), name, base, seen=())
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
