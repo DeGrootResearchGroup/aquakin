@@ -1,4 +1,4 @@
-"""One-dimensional finite-volume building blocks: face fluxes and divergence.
+"""One-dimensional finite-volume building blocks: grid, face fluxes, divergence.
 
 A conservative finite-volume operator on a line of cells is three pieces: a
 flux at every face (the interior faces from the neighbouring cells, the two
@@ -8,10 +8,11 @@ difference of face fluxes is what makes it conservative: every interior flux
 leaves one cell and enters its neighbour, so the volume-weighted total changes
 only by what crosses the two boundary faces.
 
-The functions here supply the interior diffusive flux, the upwind advective flux
-and the divergence. Each operator built on them keeps its own boundary physics -- a
-mass-transfer film, an impermeable wall, an inflow -- and builds the boundary
-face fluxes itself.
+The functions here supply the grid, the interior diffusive flux, the
+first-order upwind advective flux, the limited second-order upwind flux (with
+its Green--Gauss cell gradient and van Albada slope) and the divergence. Each
+operator built on them keeps its own boundary physics -- a mass-transfer film,
+an impermeable wall, an inflow -- and builds the boundary face fluxes itself.
 
 Conventions
 -----------
@@ -31,7 +32,103 @@ Conventions
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import jax.numpy as jnp
+import numpy as np
+
+
+@dataclass(frozen=True, eq=False)
+class Grid1D:
+    """A line of cells given by its cell edges.
+
+    The geometry is fixed when the operator is built, so it is held as NumPy
+    arrays: constants of any program that closes over it.
+
+    Parameters
+    ----------
+    edges : array-like
+        Cell edges, shape ``(n_cells + 1,)``, strictly increasing.
+
+    Raises
+    ------
+    ValueError
+        If ``edges`` is not a 1-D array of at least two strictly increasing,
+        finite values.
+    """
+
+    edges: np.ndarray
+
+    def __post_init__(self):
+        edges = np.asarray(self.edges, dtype=float)
+        if edges.ndim != 1 or edges.size < 2:
+            raise ValueError(
+                f"edges must be a 1-D array of at least two values, got shape {edges.shape}."
+            )
+        if not np.all(np.isfinite(edges)) or not np.all(np.diff(edges) > 0):
+            raise ValueError("edges must be finite and strictly increasing.")
+        object.__setattr__(self, "edges", edges)
+
+    @classmethod
+    def uniform(cls, length: float, n_cells: int, start: float = 0.0) -> Grid1D:
+        """``n_cells`` equal cells over ``[start, start + length]``.
+
+        Parameters
+        ----------
+        length : float
+            Total length, positive.
+        n_cells : int
+            Number of cells, at least 1.
+        start : float, optional
+            Position of the left edge.
+
+        Returns
+        -------
+        Grid1D
+
+        Raises
+        ------
+        ValueError
+            If ``length`` is not positive or ``n_cells`` is below 1.
+        """
+        if int(n_cells) != n_cells or n_cells < 1:
+            raise ValueError(f"n_cells must be a positive integer, got {n_cells}.")
+        if not length > 0:
+            raise ValueError(f"length must be positive, got {length}.")
+        return cls(np.linspace(start, start + length, int(n_cells) + 1))
+
+    @property
+    def n_cells(self) -> int:
+        """Number of cells."""
+        return self.edges.size - 1
+
+    @property
+    def widths(self) -> np.ndarray:
+        """Cell widths, shape ``(n_cells,)``."""
+        return np.diff(self.edges)
+
+    @property
+    def centres(self) -> np.ndarray:
+        """Cell centres, shape ``(n_cells,)``."""
+        return 0.5 * (self.edges[:-1] + self.edges[1:])
+
+    @property
+    def nodes(self) -> np.ndarray:
+        """The left edge, the cell centres and the right edge, shape ``(n_cells + 2,)``.
+
+        The points either side of every face: a boundary face's outer
+        neighbour is the boundary itself, where a boundary value is given.
+        """
+        return np.concatenate([self.edges[:1], self.centres, self.edges[-1:]])
+
+    @property
+    def face_spacing(self) -> np.ndarray:
+        """Distance between the two nodes either side of each face, shape ``(n_cells + 1,)``.
+
+        Interior faces span two cell centres; a boundary face spans half its
+        cell, from the centre to the boundary.
+        """
+        return np.diff(self.nodes)
 
 
 def _per_row(values):
@@ -125,5 +222,125 @@ def upwind_flux(cells, velocity, left, right):
     """
     from_right = jnp.concatenate([cells, right[None, :]], axis=0)
     from_left = jnp.concatenate([left[None, :], cells], axis=0)
+    v = velocity[:, None]
+    return jnp.where(v > 0, v * from_left, v * from_right)
+
+
+def green_gauss_gradient(cells, grid: Grid1D, left, right):
+    """Green--Gauss gradient in each cell.
+
+    The gradient is the difference of the two face values over the cell width,
+    ``g_i = (C_(i+1/2) - C_(i-1/2)) / dx_i``. An interior face value is
+    interpolated linearly between the two cell centres; a boundary face takes
+    the given boundary value. On a uniform grid this is the central difference
+    ``(C_(i+1) - C_(i-1)) / (2 dx)``.
+
+    Parameters
+    ----------
+    cells : jnp.ndarray
+        Cell concentrations, shape ``(n_cells, n_species)``.
+    grid : Grid1D
+        The cells.
+    left, right : jnp.ndarray
+        Values on the left (face 0) and right (face ``n_cells``) boundary
+        faces, shape ``(n_species,)``.
+
+    Returns
+    -------
+    jnp.ndarray
+        Gradient ``dC/dx`` in each cell, shape ``(n_cells, n_species)``.
+    """
+    centres = grid.centres
+    # Weight of the left cell at each interior face: its distance to the right centre.
+    weight = (centres[1:] - grid.edges[1:-1]) / np.diff(centres)
+    interior = _per_row(weight) * cells[:-1] + _per_row(1.0 - weight) * cells[1:]
+    faces = jnp.concatenate([left[None, :], interior, right[None, :]], axis=0)
+    return (faces[1:] - faces[:-1]) / _per_row(grid.widths)
+
+
+def van_albada_slope(a, b, epsilon):
+    """The van Albada limited slope of two one-sided gradients.
+
+    ``s = [a (b^2 + eps^2) + b (a^2 + eps^2)] / (a^2 + b^2 + 2 eps^2)``: equal
+    to both gradients where they agree, falling toward zero where they differ
+    in sign, and the central mean ``(a + b) / 2`` where both are small against
+    ``eps``. Where ``|a|, |b| >> eps`` it is the van Albada limiter ``phi(r) =
+    (r^2 + r) / (r^2 + 1)``, ``r = a / b``, applied to ``b``.
+
+    ``eps`` is what makes the slope differentiable at ``a = b = 0``. A limiter
+    with no constant is homogeneous of degree one in ``(a, b)``, and such a
+    function is differentiable at the origin only if it is linear, which a
+    limiter is not. Its Jacobian at a flat region (every uniform initial
+    profile) is then wrong, and the Newton iteration of an implicit solver
+    stalls there.
+
+    Parameters
+    ----------
+    a, b : jnp.ndarray
+        The upwind-side and downwind-side gradients, the same shape.
+    epsilon : float or jnp.ndarray
+        Positive gradient scale below which a gradient counts as flat,
+        broadcastable to ``a``.
+
+    Returns
+    -------
+    jnp.ndarray
+        The limited slope, the shape of ``a``.
+    """
+    eps2 = epsilon * epsilon
+    return (a * (b * b + eps2) + b * (a * a + eps2)) / (a * a + b * b + 2.0 * eps2)
+
+
+def limited_upwind_flux(cells, velocity, grid: Grid1D, left, right, gradient, epsilon):
+    """Second-order upwind advective flux at every face, van Albada limited.
+
+    The face value is reconstructed from the upwind cell ``C`` as ``C_f = C_C
+    + s (x_f - x_C)``, where ``s`` is the :func:`van_albada_slope` of the
+    gradient toward the downwind node, ``b = (C_D - C_C) / (x_D - x_C)``, and
+    the upwind-side gradient recovered from the cell's Green--Gauss gradient,
+    ``a = 2 g_C - b``. On a uniform grid ``a`` is the backward difference
+    ``(C_C - C_U) / dx``, and the scheme is the classical limited
+    second-order upwind (MUSCL) scheme: second order where the solution is
+    smooth and monotone, falling toward first order at extrema and steep
+    fronts, so it does not oscillate (gradients below ``epsilon`` are taken
+    as flat and reconstructed centrally, which can over- or undershoot by no
+    more than about ``epsilon`` times the cell width). A face whose upwind side is a boundary
+    carries the boundary value.
+
+    Parameters
+    ----------
+    cells : jnp.ndarray
+        Cell concentrations, shape ``(n_cells, n_species)``.
+    velocity : jnp.ndarray
+        Velocity at every face, shape ``(n_cells + 1,)``, positive toward
+        increasing index.
+    grid : Grid1D
+        The cells.
+    left, right : jnp.ndarray
+        Values on the left and right boundary faces, shape ``(n_species,)``.
+    gradient : jnp.ndarray
+        Cell gradients, shape ``(n_cells, n_species)``, normally
+        :func:`green_gauss_gradient` with the same boundary values.
+    epsilon : float or jnp.ndarray
+        The limiter's flat-gradient scale in each cell, broadcastable to
+        ``(n_cells, n_species)`` and positive (see :func:`van_albada_slope`).
+
+    Returns
+    -------
+    jnp.ndarray
+        Face fluxes, shape ``(n_cells + 1, n_species)``, positive toward
+        increasing index, ready for :func:`divergence`.
+    """
+    nodes = jnp.concatenate([left[None, :], cells, right[None, :]], axis=0)
+    # Gradient across each face, from the node on its left to the one on its right.
+    across = (nodes[1:] - nodes[:-1]) / _per_row(grid.face_spacing)
+    # Reconstructed from the cell on the left of faces 1..n (flow toward +x) ...
+    toward_right = van_albada_slope(2.0 * gradient - across[1:], across[1:], epsilon)
+    from_left = cells + toward_right * _per_row(grid.edges[1:] - grid.centres)
+    # ... and from the cell on the right of faces 0..n-1 (flow toward -x).
+    toward_left = van_albada_slope(2.0 * gradient - across[:-1], across[:-1], epsilon)
+    from_right = cells + toward_left * _per_row(grid.edges[:-1] - grid.centres)
+    from_left = jnp.concatenate([left[None, :], from_left], axis=0)
+    from_right = jnp.concatenate([from_right, right[None, :]], axis=0)
     v = velocity[:, None]
     return jnp.where(v > 0, v * from_left, v * from_right)
