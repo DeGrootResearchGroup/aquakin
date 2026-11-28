@@ -14,7 +14,7 @@ in excess), at 20 C. Checked:
   sludge age; Liu et al. 2019: none at DO 0.3), and BSM1's last tank runs at
   about 0.2-0.5 g O2/m3.
 
-This level leaves 1.68 g N/m3 of ammonium, 0.08 of nitrite and 11.76 of
+This level leaves 1.51 g N/m3 of ammonium, 0.08 of nitrite and 11.91 of
 nitrate (the core: 1.11 and 11.02); its AOB decay is the measured 0.17 1/d
 (the core's ASM2d autotrophs: 0.15).
 
@@ -55,7 +55,7 @@ def nitrite_bsm1():
 def test_plant_conserves_nitrogen_phosphorus_and_cod(nitrite_bsm1):
     """Each balance to 1e-9 of the inflow: the plant is at steady state, the
     fluxes are integrated over 11 saved times, and the solve's rtol is 1e-8.
-    The N balance counts the denitrified N leaving as stripped N2 (26.8% of
+    The N balance counts the denitrified N leaving as stripped N2 (26.9% of
     the influent N at 20 C)."""
     _, _, result, solution = nitrite_bsm1
     assert bool(result["steady"].converged)

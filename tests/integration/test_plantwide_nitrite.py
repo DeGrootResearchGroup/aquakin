@@ -111,12 +111,13 @@ def _rates_at(model, state, T, pH):
 def test_nitrifier_growth_is_monod_on_ammonium_and_nitrite_inhibited_by_fa_and_fna(nitrite, T, pH):
     """AOB and NOB growth written out by hand: AOB 0.9 1/d (Jones et al. 2005),
     NOB 0.78 1/d (Hiatt & Grady 2008), with the growth thetas fitted to Kaelin
-    et al.'s (2009) net growth (1.103899434 and 1.075318211, as generated); Monod on total ammonium (0.6, Mannucci et al. 2020)
-    and total nitrite (0.1); apparent floc oxygen half-saturations 0.65 and
-    0.23 (Daebel et al. 2007); free ammonia and free nitrous acid from Hiatt &
-    Grady's eqs 2-5, inhibiting with their constants (AOB: FA 1.0, FNA 0.1;
-    NOB: FA 0.2, FNA 0.04). The nutrient terms are the core's. All in closed
-    form, hence rel=1e-10."""
+    et al.'s (2009) net growth (1.103899434 and 1.075318211, as generated);
+    Monod on total ammonium (0.6, Mannucci et al. 2020) and total nitrite
+    (0.1); apparent floc oxygen half-saturations 0.65 and 0.23 (Daebel et al.
+    2007); free ammonia and free nitrous acid from Hiatt & Grady's eqs 2-5. AOB
+    are inhibited by free nitrous acid only (0.2, Hellinga et al. 1998), NOB by
+    free ammonia (0.2) and free nitrous acid (0.04, Hiatt & Grady). The
+    nutrient terms are the core's. All in closed form, hence rel=1e-10."""
     state = dict(SO2=1.5, SNH4=30.0, SNO2=8.0, SPO4=5.0, XAOB=100.0, XNOB=50.0)
     rates = _rates_at(nitrite, state, T, pH)
     p = {k: float(nitrite.default_parameters()[i]) for k, i in nitrite.param_index.items()}
@@ -126,7 +127,7 @@ def test_nitrifier_growth_is_monod_on_ammonium_and_nitrite_inhibited_by_fa_and_f
     mu_nob = 0.78 * 1.075318211 ** (T - 293.15)
     p_limit = 5.0 / (p["KP_H"] + 5.0)
     aob = (
-        mu_aob * 30.0 / (0.6 + 30.0) * 1.5 / (0.65 + 1.5) * 1.0 / (1.0 + fa) * 0.1 / (0.1 + fna)
+        mu_aob * 30.0 / (0.6 + 30.0) * 1.5 / (0.65 + 1.5) * 0.2 / (0.2 + fna)
         * p_limit * 100.0
     )  # fmt: skip
     nob = (
@@ -187,7 +188,7 @@ def _net_max_growth(nitrite, T):
     """Maximum net growth (growth minus aerobic decay, 1/d) of AOB and NOB at
     ``T``: every substrate saturating and the FA / FNA inhibition removed."""
     p = nitrite.default_parameters()
-    for name in ("KI_FA_AOB", "KI_FNA_AOB", "KI_FA_NOB", "KI_FNA_NOB"):
+    for name in ("KI_FNA_AOB", "KI_FA_NOB", "KI_FNA_NOB"):
         p = p.at[nitrite.param_index[name]].set(1e12)
     big = 1e9
     state = dict(SO2=big, SNH4=big, SNO2=big, SPO4=big, XAOB=1.0, XNOB=1.0)

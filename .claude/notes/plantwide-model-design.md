@@ -237,9 +237,10 @@ kept equal by putting the organic-N difference in ammonium.
 
 17. **`plantwide_nitrite`'s nitrifier and anammox kinetics come from papers**
     (owner, 2026-11-27, revised the same day after the NOB literature):
-    AOB and NOB grow on total ammonium and total nitrite, with free ammonia
-    and free nitrous acid as inhibitors only (Hiatt & Grady 2008's constants,
-    Anthonisen et al. 1976's equilibria); oxygen half-saturations are apparent
+    AOB and NOB grow on total ammonium and total nitrite; AOB are inhibited by
+    free nitrous acid only (0.2 g N/m3, Hellinga et al. 1998, who found no
+    ammonia inhibition of AOB), NOB by free ammonia and free nitrous acid
+    (Hiatt & Grady 2008's constants; Anthonisen et al. 1976's equilibria); oxygen half-saturations are apparent
     floc values, AOB 0.65 and NOB 0.23 (Daebel et al. 2007), since a model
     without diffusion takes apparent values (Picioreanu et al. 2016); growth
     AOB growth and decay are the WERF pair, 0.9 and 0.17 1/d (Jones et al.
@@ -558,7 +559,7 @@ free nitrous acid:
 | decay (1/d), theta | 0.17, 1.029 | 0.089, 1.036 | WERF via Friedrich et al. 2017; Friedrich et al. (NOB activity loss) |
 | substrate half-saturation (g N/m3) | NH4 0.6 | NO2 0.1 | Mannucci et al. 2020 (batch); Mehrani et al. 2021 (measured 0.06-0.14) |
 | oxygen half-saturation (g/m3), apparent | 0.65 | 0.23 | Daebel et al. 2007, conventional sludge, 20 C |
-| FA / FNA inhibition (g N/m3) | 1.0 / 0.1 | 0.2 / 0.04 | Hiatt & Grady 2008 |
+| FA / FNA inhibition (g N/m3) | none / 0.2 | 0.2 / 0.04 | Hellinga et al. 1998; Hiatt & Grady 2008 |
 | yield (g COD/g N) | 0.18 | 0.06 | Hiatt & Grady 2008 |
 
 `FA = SNH4 10^pH / (exp(6344/T) + 10^pH)`, `FNA = SNO2 / (exp(-2300/T)
@@ -634,7 +635,10 @@ ASMN's free-ammonia inhibition of AOB (1.0 g N/m3) the level loses AOB and
 NOB in that reactor at 35 C (fixed pH 7.4, continuous aeration); without it,
 AOB stay and NOB wash out (nitrite 565, ammonium 408 g N/m3), and at 20 C both
 wash out, as Hellinga et al.'s minimum sludge ages say. The AOB inhibition
-constant is the owner's decision (2026-11-27, open).
+constant was the owner's decision (2026-11-28): no free-ammonia inhibition of
+AOB and Hellinga et al.'s 0.2 for free nitrous acid.
+`examples/plantwide/sharon` runs the reactor;
+`tests/validation/test_plantwide_nitrite_sharon.py` checks it.
 
 Temperature (NOB): Blackburne et al.'s Nitrospira activity 0.44 e^(0.055 (T - 15))
 (theta 1.057, 15-30 C, enriched culture, short-term) against Mehrani et al.'s
@@ -680,8 +684,8 @@ check is clean. Checked (`tests/integration/test_plantwide_nitrite.py`,
 - the AOB and NOB rates equal the forms above written out by hand, at 20 C /
   pH 7 and 15 C / pH 7.8; anammox equals Hao et al.'s at 30 and 20 C;
 - anammox: 1.32 NO2 and 0.26 NO3 per NH4, N2 1.02 (Strous);
-- on BSM1, tank 5 (g N/m3): at 20 C ammonium 1.68, nitrite 0.08, nitrate
-  11.76; at 15 C 17.41, 0.30 and 4.33; 26.8% of the influent N leaves as N2
+- on BSM1, tank 5 (g N/m3): at 20 C ammonium 1.51, nitrite 0.08, nitrate
+  11.91; at 15 C 13.98, 0.25 and 5.42; 26.9% of the influent N leaves as N2
   at 20 C. The heterotroph nitrite half-saturation 0.05 (Latimer et al. 2009;
   ASMN's 0.2 left 13.21 nitrate at 20 C and 0.61 nitrite in anoxic tank 2). With ASMN's NOB oxygen half-saturation (1.2) instead, nitrite 5.40 at
   20 C and NOB washout at 15 C. The published BSM1 steady state (ASM1, 15 C)

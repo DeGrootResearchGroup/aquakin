@@ -174,9 +174,11 @@ def parameters() -> dict:
     # back to nitrate and over-predict a full-scale plant's effluent N; the
     # revised 0.05 (with NOB 0.1) matched it.
     add("KNO2_H", 0.05, "g_N/m3", bounds=(0.005, 2.0))
-    # Nitrifiers (decision 17), at 20 C, on total ammonium and total nitrite,
-    # with free ammonia and free nitrous acid as inhibitors (Hiatt & Grady
-    # 2008's inhibition constants, as N). Oxygen half-saturations are apparent
+    # Nitrifiers (decision 17), at 20 C, on total ammonium and total nitrite.
+    # AOB are inhibited by free nitrous acid only, 0.2 g HNO2-N/m3: Hellinga et
+    # al. (1998) found no ammonia inhibition of AOB up to 6000 g NH4-N/m3 at
+    # pH 7 and 40 C. NOB are inhibited by free ammonia and free nitrous acid
+    # (Hiatt & Grady 2008's constants, as N). Oxygen half-saturations are apparent
     # floc values, measured together on conventional activated sludge at 20 C
     # (Daebel et al. 2007): a model without diffusion takes apparent values,
     # for which AOB's exceeds NOB's (Picioreanu et al. 2016).
@@ -194,8 +196,7 @@ def parameters() -> dict:
     add("muAOB", 0.9, "1/d", bounds=(0.2, 3.0), theta=aob_theta)
     add("bAOB", 0.17, "1/d", bounds=(0.02, 0.5), theta=1.029)
     add("KNH4_AOB", 0.6, "g_N/m3", bounds=(0.05, 5.0))
-    add("KI_FA_AOB", 1.0, "g_N/m3", bounds=(0.1, 10.0))
-    add("KI_FNA_AOB", 0.1, "g_N/m3", bounds=(0.01, 1.0))
+    add("KI_FNA_AOB", 0.2, "g_N/m3", bounds=(0.02, 2.0))
     add("KO2_AOB", 0.65, "g_O2/m3", bounds=(0.05, 2.0))
     add("YAOB", 0.18, "g_COD/g_N", bounds=(0.05, 0.4))
     add("muNOB", 0.78, "1/d", bounds=(0.1, 3.0), theta=nob_theta)
@@ -272,7 +273,7 @@ def autotroph_reactions() -> list[dict]:
             description="Nitritation: ammonium to nitrite.",
             rate=(
                 "muAOB * monod([SNH4], KNH4_AOB) * monod([SO2], KO2_AOB) "
-                "* monod_inh(free_ammonia, KI_FA_AOB) * monod_inh(free_nitrous_acid, KI_FNA_AOB) "
+                "* monod_inh(free_nitrous_acid, KI_FNA_AOB) "
                 f"* {p_limit} * [XAOB]"
             ),
             stoichiometry={"XAOB": 1.0, "SNO2": "1 / YAOB", **closures},
@@ -326,8 +327,8 @@ def build() -> dict:
             description=(
                 "Nitrite level of the plant-wide model: plantwide_bio_p with nitrite as an "
                 "intermediate. Ammonia- and nitrite-oxidizing bacteria replace the one-step "
-                "nitrifiers, growing on ammonium and nitrite, inhibited by free ammonia and free "
-                "nitrous acid (Hiatt & Grady 2008), with oxygen affinities measured on activated "
+                "nitrifiers, growing on ammonium and nitrite, AOB inhibited by free nitrous acid "
+                "(Hellinga et al. 1998), NOB by free ammonia and free nitrous acid (Hiatt & Grady 2008), with oxygen affinities measured on activated "
                 "sludge (Daebel et al. 2007), AOB growth and decay from WERF measurements (Jones et al. "
                 "2005; Friedrich et al. 2017) and NOB temperature dependence from Mehrani et al. (2021); anammox oxidizes ammonium with nitrite, with the kinetics of "
                 "Hao et al. (2002) and the stoichiometry of Strous et al. (1998); and every group "
