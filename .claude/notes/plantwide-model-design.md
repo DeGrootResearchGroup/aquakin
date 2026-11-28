@@ -925,7 +925,7 @@ paper itself before citing it in a model file.
   Inhibition of nitrification by ammonia and nitrous acid. *J. Water Pollut.
   Control Fed.* 48(5), 835–852 (no DOI).
 - Blackburne, R., Vadivelu, V.M., Yuan, Z. & Keller, J. (2007). Kinetic
-  characterisation of an enriched Nitrospira culture with comparison to
+  `characterisation` of an enriched Nitrospira culture with comparison to
   Nitrobacter. *Water Res.* 41(14), 3033–3042. doi:10.1016/j.watres.2007.01.043
 - Barat, R. et al. (2013). Biological Nutrient Removal Model No. 2 (BNRM2): a
   general model for wastewater treatment plants. *Water Sci. Technol.* 67(7).
