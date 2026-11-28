@@ -3,7 +3,7 @@
 The core's aerobic and anoxic processes are ASM2d's; its own choices are
 fermentation as heterotroph growth, slower heterotroph decay without oxygen or
 nitrate, and a lower anaerobic hydrolysis factor (``etafe``). Both models run
-on ``build_bsm1`` (open loop, BSM1's kLa, ideal clarifier) with BSM1's
+on ``build_bsm1`` (open loop, BSM1's kLa, Takács settler) with BSM1's
 constant dry-weather influent, carried into each model's species:
 
 - readily biodegradable substrate ``SS`` as fermentable ``SF``, inert products
@@ -50,6 +50,12 @@ BSM1_INFLUENT = {
 ASM1_I_XB, ASM1_I_XP = 0.086, 0.06
 SALK_TO_SIC = 12.0  # g C per mol of alkalinity (bicarbonate)
 EXCESS = 1.0e6  # ASM2d's phosphate and alkalinity, far above their half-saturations
+# Phosphate for the plant-wide levels that carry it: BSM1's influent has none,
+# and 10 g P/m3 keeps growth unlimited by it (half-saturation 0.01 g P/m3).
+PLANTWIDE_PO4 = 10.0
+# AOB share of ASM1's nitrifiers, by the two groups' yields in the nitrite
+# level (Hiatt & Grady 2008: 0.18 and 0.06 g COD/g N).
+AOB_SHARE = 0.18 / (0.18 + 0.06)
 
 
 def asm1_total_n(values):
@@ -61,20 +67,32 @@ def asm1_total_n(values):
 
 
 def carry_over(model, values):
-    """An ASM1 composition in ``model``'s species (``plantwide_core`` or
-    ``asm2d``), its total N kept by putting the difference in ammonium."""
+    """An ASM1 composition in ``model``'s species (a plant-wide level or
+    ``asm2d``), its total N kept by putting the difference in ammonium.
+
+    A level with two-step nitrification gets ASM1's nitrifiers as AOB and NOB
+    in the ratio of their yields; a level with phosphate but no alkalinity
+    state (from the bio-P level on) gets phosphate at a non-limiting
+    ``PLANTWIDE_PO4``."""
     out = {
         "SF": values["SS"], "SI": values["SI"], "XS": values["XS"], "XH": values["XB_H"],
-        "XAUT": values["XB_A"], "XI": values["XI"] + values["XP"], "SO2": values["SO"],
-        "SNO3": values["SNO"],
+        "XI": values["XI"] + values["XP"], "SO2": values["SO"], "SNO3": values["SNO"],
     }  # fmt: skip
+    if "XAUT" in model.species_index:
+        out["XAUT"] = values["XB_A"]
+    else:
+        out["XAOB"] = AOB_SHARE * values["XB_A"]
+        out["XNOB"] = (1.0 - AOB_SHARE) * values["XB_A"]
     if "SIC" in model.species_index:
         out["SIC"] = values["SALK"] * SALK_TO_SIC
+        if "SPO4" in model.species_index:
+            out["SPO4"] = PLANTWIDE_PO4
     else:
         out["SALK"] = EXCESS
         out["SPO4"] = EXCESS
     comp = model.composition()
-    organic_n = sum(comp.get(s, {}).get("N", 0.0) * v for s, v in out.items() if s != "SNO3")
+    oxidized = ("SNO3", "SNO2")
+    organic_n = sum(comp.get(s, {}).get("N", 0.0) * v for s, v in out.items() if s not in oxidized)
     out["SNH4"] = asm1_total_n(values) - organic_n - values["SNO"]
     return out
 
@@ -123,8 +141,8 @@ def run(model, params=None):
 
 
 def summary(result):
-    """Tank 5 and the effluent at the steady state (the ideal clarifier passes
-    the solubles through, so tank 5's solubles are the effluent's)."""
+    """Tank 5 at the steady state (the settler reacts nothing, so at steady
+    state tank 5's solubles are the effluent's)."""
     plant, model = result["plant"], result["model"]
     tank5 = plant.states_by_unit(result["steady"].state)["tank5"]
 
