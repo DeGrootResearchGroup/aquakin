@@ -221,7 +221,9 @@ def _nitrifier_batch(nitrite):
     p = nitrite.default_parameters().at[nitrite.param_index["muAMX"]].set(0.0)
     c = _vector(nitrite, dict(SO2=8.0, SNH4=40.0, SNO3=1.0, SIC=500.0, SPO4=50.0, XAOB=30.0, XNOB=20.0))
     reactor = aquakin.BatchReactor(
-        nitrite, aquakin.SpatialConditions.uniform(T=T20, pH=PH), rtol=1e-10, atol=1e-10
+        nitrite,
+        aquakin.SpatialConditions.uniform(T=T20, pH=PH),
+        settings=aquakin.SolverSettings(rtol=1e-10, atol=1e-10),
     )
     return reactor, c, p
 
