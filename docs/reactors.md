@@ -2,7 +2,8 @@
 
 A **reactor** couples a compiled model to a spatial context and integrates it.
 `aquakin` ships reactors for the well-mixed batch (0-D), plug flow (1-D),
-Lagrangian particle tracks, and a depth-resolved biofilm. They share one
+dispersed flow and tanks in series (non-ideal 1-D), Lagrangian particle
+tracks, and a depth-resolved biofilm. They share one
 contract:
 
 - Construct once from a model and its spatial context: operating conditions
@@ -91,9 +92,11 @@ end.t        # [600.]
 % invisible-code-block: python
 %     assert end.t.tolist() == [600.0]
 
-Useful construction options (all keyword-only):
+Every reactor takes its solver configuration as one keyword-only value,
+`settings=aquakin.SolverSettings(...)`, with four fields:
 
-- `rtol`, `atol` — solver tolerances. `atol` may be a per-species array (use
+- `rtol`, `atol` — solver tolerances (defaults `1e-6` and a per-species floor
+  scaled to the model's concentrations). `atol` may be a per-species array (use
   `model.atol({...})` to build one) when trace intermediates sit orders of
   magnitude below the bulk species.
 - `integrator=IntegratorConfig(...)` — the ESDIRK order, step caps, and Jacobian
@@ -103,6 +106,14 @@ Useful construction options (all keyword-only):
   anaerobic digestion model ADM1, the WATS sewer models) a reverse-mode gradient
   through a reactor solve needs a step cap; see
   [Differentiating a solve](sensitivity_and_calibration.md#differentiating-a-solve).
+
+```python
+settings = aquakin.SolverSettings(rtol=1e-8, atol=model.atol({"OH": 1e-20}, default=1e-12))
+tight = aquakin.BatchReactor(model, conditions, settings=settings)
+```
+
+The same value works for every reactor, so one configuration can be built once
+and passed to several.
 
 ## Plug-flow reactor (1-D)
 
@@ -122,6 +133,136 @@ sol.C        # (n_points, n_species) profile
 The conditions passed here are the pH gradient built above: a
 `SpatialConditions` with `n_points` locations describes a temperature or pH
 that changes down the channel.
+
+## Dispersed flow and tanks in series (non-ideal 1-D)
+
+Real contactors, columns and channels fall between plug flow and a stirred
+tank: the flow carries the water forward, and eddies and velocity differences
+spread it along the axis. Two reactors model this, solving in time on a line of
+cells, with the reaction in every cell.
+
+- `DispersedFlowReactor` adds axial dispersion to plug flow,
+  `dC/dt = -u dC/dx + D d²C/dx² + R(C)`. Give the dispersion as a coefficient,
+  `dispersion=D`, or as the dispersion number `dispersion_number=D/(uL)` (the
+  reciprocal of the Péclet number), not both. A dispersion number near 0 is plug
+  flow; a large one is a stirred tank.
+- `TanksInSeries` is `N` equal stirred tanks, each feeding the next, with a
+  residence time for the whole train. One tank is a CSTR; many approach plug
+  flow.
+
+The examples use a contactor model in minutes: free chlorine decaying at first
+order, and an inert tracer.
+
+```yaml
+# contactor.yaml
+model:
+  name: contactor
+  version: "1.0"
+  description: "First-order free-chlorine decay, and an inert tracer."
+  references: []
+
+species:
+  - name: HOCl
+    description: "Free chlorine"
+    units: mg/L
+    default_concentration: 0.0
+  - name: Tracer
+    description: "Inert tracer"
+    units: mg/L
+    default_concentration: 0.0
+
+reactions:
+  - name: decay
+    description: "First-order chlorine decay."
+    rate: "k * [HOCl]"
+    parameters:
+      k:
+        value: 0.02
+        units: 1/min
+    stoichiometry:
+      HOCl: -1
+```
+
+A 30 m contactor with a mean velocity of 0.5 m/min holds the water for 60
+minutes. With a dispersion number of 0.05 its steady outlet chlorine is:
+
+```python
+contactor = aquakin.load_model_from_file("contactor.yaml")
+basin = aquakin.DispersedFlowReactor(
+    contactor, aquakin.SpatialConditions.uniform(),
+    length=30.0, velocity=0.5, n_cells=40, dispersion_number=0.05,
+)
+steady = basin.steady_state({"HOCl": 2.0})
+steady.C_named("HOCl")[0]      # 0.64 mg/L at the outlet
+steady.profile_named("HOCl")   # (1, n_cells): the profile along the basin
+```
+
+% invisible-code-block: python
+%     assert round(float(steady.C_named("HOCl")[0]), 2) == 0.64
+
+The inlet is a mapping of species to values, and a species left out enters at
+zero; a full vector of every species works too. A value may also be an
+expression of time `t`, in the model's time unit, written in the language of
+[influent expressions](influents.md). `solve` integrates in time from an initial
+profile `C0` (one value per species, or one row per cell). Here a 5-minute tracer
+dose enters a basin full of clean water:
+
+```python
+t = jnp.linspace(0.0, 240.0, 241)
+dose = basin.solve(
+    jnp.zeros(2), (0.0, 240.0), t,
+    inlet={"Tracer": "step(t) - step(t - 5)"},
+)
+dose.C_named("Tracer")         # the outlet response, one value per time in t
+dose.profile.shape             # (241, 40, 2): every cell at every time
+```
+
+`sol.C` and the by-name readers give the **outlet**, which is what a tracer
+test measures; `sol.profile` holds every cell, and `sol.x` the cell centres.
+
+The scheme is cell-centred finite volume, second order in space: advection is
+upwinded from a limited reconstruction (van Albada), so a sharp front does not
+oscillate, and the dispersion is a central difference. The inlet is the
+Danckwerts condition and the outlet has zero gradient. Use more cells
+(`n_cells`, 50 by default) to resolve sharp fronts at a high Péclet number.
+
+`TanksInSeries` takes the number of tanks and the residence time of the train,
+and the same `solve` and `steady_state`:
+
+```python
+train = aquakin.TanksInSeries(
+    contactor, aquakin.SpatialConditions.uniform(), n_tanks=4, residence_time=60.0,
+)
+train.steady_state({"HOCl": 2.0}).C_named("HOCl")[0]   # 2 / (1 + 0.02*60/4)**4 = 0.70
+```
+
+% invisible-code-block: python
+%     out = float(train.steady_state({"HOCl": 2.0}).C_named("HOCl")[0])
+%     assert abs(out - 2.0 / (1 + 0.02 * 60 / 4) ** 4) < 1e-6 and round(out, 2) == 0.70
+
+### Fitting a tracer test
+
+`fit_dispersion(t, C)` and `fit_tanks_in_series(t, C)` turn the outlet
+response to a short tracer pulse into the dispersion number or the number of
+tanks, which go straight into the reactors above. Both match the spread of the
+curve, its variance over the squared mean residence time: for tanks in series
+it is `1/N`, and for a dispersed vessel with these inlet and outlet conditions
+`2d - 2d²(1 - exp(-1/d))`. The curve must return to baseline before the record
+ends (a cut-off tail is warned about), and a noisy tail should be
+baseline-corrected first, since the variance weighs it heavily. A pulse
+response simulated in the basin above fits back close to its 0.05:
+
+```python
+pulse = basin.solve(
+    jnp.zeros(2), (0.0, 240.0), t, inlet={"Tracer": "exp(-(t/0.5)**2)"},
+)
+aquakin.fit_dispersion(t, pulse.C_named("Tracer"))       # 0.05
+aquakin.fit_tanks_in_series(t, pulse.C_named("Tracer"))  # 11
+```
+
+% invisible-code-block: python
+%     assert round(aquakin.fit_dispersion(t, pulse.C_named("Tracer")), 2) == 0.05
+%     assert aquakin.fit_tanks_in_series(t, pulse.C_named("Tracer")) == 11
 
 ## Biofilm reactor (1-D over depth)
 
@@ -237,7 +378,8 @@ solution is the single point where the solve stopped.
 ## Choosing the integrator
 
 The integrator is configured with one value object, `aquakin.IntegratorConfig`,
-passed as `integrator=` to a reactor or to `plant.solve`. Its defaults are:
+passed as `integrator=` to `plant.solve`, or to a reactor inside its
+`SolverSettings`. Its defaults are:
 
 ```python
 aquakin.IntegratorConfig(order=3, factormax=3.0, colored_jacobian="auto",
@@ -263,7 +405,7 @@ aquakin.IntegratorConfig(order=3, factormax=3.0, colored_jacobian="auto",
 - `max_steps`: the step budget; `solver` overrides `order` with an explicit
   Diffrax solver.
 
-`rtol` and `atol` stay separate arguments of the reactor and of `plant.solve`.
+`rtol` and `atol` are separate fields of `SolverSettings` and separate arguments of `plant.solve`.
 For faster plant solves, including `forward_fast`, see
 [Plant-wide simulation](plants.md#faster-dynamic-solves).
 

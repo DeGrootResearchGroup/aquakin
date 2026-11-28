@@ -58,11 +58,14 @@ SHARED_INTERNALS: dict[str, frozenset[str]] = {
         {
             "_build_state_layout",
             "_is_concentration_unit",
+            "_named_positions",
             "_ordered_models",
             "_state_layout",
             "_unit_or_raise",
         }
     ),
+    # Sludge metrics read the reactors' model parameters for the BOD load.
+    "plant/design.py": frozenset({"_params_for_unit"}),
     "plant/identifiability.py": frozenset({"_parse_endpoint"}),
     # The coloured Jacobian maps the sparsity pattern onto the state layout.
     "plant/colored.py": frozenset(

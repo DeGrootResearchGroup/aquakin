@@ -16,9 +16,9 @@ from aquakin_ui.app import Editor
 from aquakin_ui.document import edge_id
 from aquakin_ui.settings import Settings
 from aquakin_ui.worker import WorkerError
+from tests.conftest import study_project as _study_project
 
 from .conftest import PROJECTS
-from .conftest import study_project as _study_project
 from .inprocess import InProcessWorker
 
 
@@ -385,6 +385,39 @@ def test_studies_follow_the_spec_that_is_open(tmp_path, in_process_runs):
             "description": "kept",
             "streams": ["tank.out"],
         }
+    finally:
+        ed.stop_runs()
+        ed.worker.stop()
+
+
+def test_a_reactor_study_is_listed_but_not_edited_or_simulated(tmp_path):
+    """The dialog shows a flowsheet study's fields, so it does not open on a study
+    of a batch reactor (saving would drop the reactor); nor does Simulate run one
+    that has the simulation's name."""
+    project = _study_project(tmp_path)
+    reactor = (
+        "study:\n  kind: fisher\n  reactor: {model: asm1}\n"
+        "  experiments: [{initial: {SNH: 20.0}}]\n  observed: [SNH]\n"
+        "  free: [asm1.muA]\n  t_obs: [0.5]\n  sigma: 0.1\n"
+    )
+    for name in ("batch", "simulation"):
+        (project / "studies" / name).mkdir()
+        (project / "studies" / name / "study.yaml").write_text(reactor)
+    server = get_server(name="aquakin-ui-reactor-test", client_type="vue3")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "flowsheet.yaml")
+    try:
+        ed.refresh_studies()
+        batch = ed._study("batch")
+        assert batch["reactor"] == "asm1" and batch["flowsheet"] is None
+        ed.edit_study("batch")
+        assert ed.state.message == "batch studies a reactor: edit its study.yaml to change it"
+        assert not ed.state.study_dialog_open
+        ed.simulate()
+        assert ed.state.message == (
+            "could not set up the simulation: study simulation studies a reactor, not the "
+            "flowsheet"
+        )
+        assert not ed._runs
     finally:
         ed.stop_runs()
         ed.worker.stop()
@@ -832,4 +865,28 @@ def test_errors_reach_the_page_without_class_names_and_simulate_reports_a_broken
         assert "ValidationError" not in ed.state.message and "simulation" not in ed._runs
     finally:
         ed.stop_runs()
+        ed.worker.stop()
+
+
+def test_a_posterior_study_from_the_dialog_names_no_flowsheet(tmp_path):
+    """A posterior study runs on its calibrate study's plant: the dialog does not
+    give it the open spec, which aquakin would refuse, while other kinds get it."""
+    project = _study_project(tmp_path)
+    (project / "second.yaml").write_text((project / "flowsheet.yaml").read_text())
+    server = get_server(name="aquakin-ui-posterior-dialog-test", client_type="vue3")
+    ed = Editor(server, worker=InProcessWorker(), path=project / "second.yaml")
+    try:
+        ed.new_study()
+        # A design studies only a batch reactor, which the dialog cannot set up.
+        offered = {k["value"] for k in ed.state.study_kinds}
+        assert "posterior" in offered and "simulate" in offered and "design" not in offered
+        ed.save_study_dialog("post", "posterior", {"fit": "short", "n_draws": "200"})
+        assert ed.state.study_error == ""
+        settings = yaml.safe_load((project / "studies" / "post" / "study.yaml").read_text())
+        assert settings["study"] == {"kind": "posterior", "fit": "short", "n_draws": 200}
+        ed.new_study()
+        ed.save_study_dialog("sim", "simulate", {"streams": ["tank.out"]})
+        sim = yaml.safe_load((project / "studies" / "sim" / "study.yaml").read_text())
+        assert sim["study"]["flowsheet"] == "../../second.yaml"
+    finally:
         ed.worker.stop()

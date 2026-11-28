@@ -1,7 +1,8 @@
 """The ``aquakin`` command line.
 
 ``aquakin catalog`` prints the unit catalogue (see :mod:`aquakin.plant.catalog`)
-as JSON. ``aquakin serve`` answers requests from a front end, one JSON object
+as JSON. ``aquakin mcp`` serves aquakin's tools to an AI assistant over the
+Model Context Protocol (see :mod:`aquakin.mcp`). ``aquakin serve`` answers requests from a front end, one JSON object
 per line on standard input, one reply per line on standard output::
 
     {"id": 1, "command": "catalog"}
@@ -9,7 +10,16 @@ per line on standard input, one reply per line on standard output::
 
 Commands: ``ping``, ``catalog``, ``models`` (the shipped kinetic models),
 ``model`` (``name``, optional ``path`` of a model file: one model's species
-and conditions), ``check_unit`` (``kind``, ``name``, ``settings``, optional
+and conditions), ``model_document`` (``name``, optional ``path``: its reactions
+and parameters as text, for editing), ``check_expression`` (``expression``,
+``model``, optional ``path``, ``kind`` ``rate`` or ``stoichiometry``,
+``reaction``, ``parameters`` the edit adds: ``ok``, ``error`` and its
+``position``, the names it ``references`` and the ``unknown`` ones),
+``check_model_edits`` (``model``, optional ``path``, ``edits``: ``ok`` and the
+``errors`` by field), ``save_model_edits`` (``spec``, ``path`` of the
+flowsheet, ``model``, ``edits``, optional ``name`` for a model made from a
+shipped one, ``sha256``, ``base_dir``, ``dry_run``; see
+:mod:`aquakin.plant.model_edit`), ``check_unit`` (``kind``, ``name``, ``settings``, optional
 ``model_files`` and ``base_dir``: build a unit and report its real ports or
 the constructor's error), ``check_spec`` (``spec``, optional ``base_dir`` for
 model file paths: build the whole plant from a flowsheet spec and report
@@ -20,7 +30,8 @@ file read as YAML 1.2, see :func:`~aquakin.plant.spec.load_spec_file`) and
 :func:`~aquakin.plant.spec.write_spec`, returning what was written),
 ``list_studies`` (``project``: every study of a project folder with its
 status), ``freeze_study`` / ``unfreeze_study`` (``path``, ``discard_results``)
-``copy_study`` (``path``, ``name``), ``study_form`` (every study setting, for a
+``copy_study`` (``path``, ``name``), ``cancel_study`` (``path``: stop its run at
+the next checkpoint, whichever program started it), ``study_form`` (every study setting, for a
 form), ``plant_choices`` (``spec``, ``base_dir``: the streams, parameters and
 channels a study of it may name), ``read_study`` (``path``), ``create_study``
 (``project``, ``name``, ``study``), ``update_study`` (``path``, ``study``),
@@ -34,8 +45,10 @@ no ``type`` for a request that is not JSON or names no known command) and the
 worker keeps serving. Each study listed carries its ``state`` (one of
 :data:`aquakin.study.study.STATES`, or ``"unreadable"``), ``has_results``, its
 folder (``path``) and the spec it builds its plant from (``flowsheet``: the
-snapshot's for a frozen study), so a front end never rebuilds study paths or
-decides from a state's name what it implies.
+snapshot's for a frozen study; ``None`` for a study of a batch reactor, whose
+``reactor`` is then its model (a design study always is one), and for a
+posterior study, which runs on its calibrate study's), so a front end never
+rebuilds study paths or decides from a state's name what it implies.
 Standard output carries replies only; anything else goes to standard error.
 """
 
@@ -47,49 +60,8 @@ import json
 import os
 import sys
 
-#: The state of a listed study whose ``study.yaml`` cannot be read (beside
-#: :data:`aquakin.study.study.STATES`, which a readable study is in).
-UNREADABLE = "unreadable"
-
-
-def _list_studies(project) -> list[dict]:
-    """Every study under ``<project>/studies/`` with where it stands."""
-    from pathlib import Path
-
-    from aquakin import study as st
-    from aquakin.plant.errors import error_reply
-    from aquakin.study.study import STUDIES_DIR, STUDY_FILE, _flowsheet
-
-    out = []
-    folder = Path(project) / STUDIES_DIR
-    for path in sorted(folder.glob(f"*/{STUDY_FILE}")) if folder.is_dir() else []:
-        entry = {"name": path.parent.name, "path": str(path.parent)}
-        try:
-            spec = st.load_study(path.parent)
-            status = st.check_study(path.parent)
-            entry |= {
-                "kind": spec.kind,
-                "description": spec.description or "",
-                "state": status.state,
-                "has_results": status.has_results,
-                "frozen": status.frozen,
-                "flowsheet": str(_flowsheet(path.parent, spec)),
-                "reasons": status.reasons,
-                "notes": status.notes,
-            }
-        except Exception as exc:  # one broken study is listed as such, not the listing lost
-            entry |= {
-                "kind": "",
-                "description": "",
-                "state": UNREADABLE,
-                "has_results": False,
-                "frozen": False,
-                "flowsheet": None,
-                "reasons": [error_reply(exc)["error"]],
-                "notes": [],
-            }
-        out.append(entry)
-    return out
+# Named here too: the worker's replies carry it, and its protocol test reads it here.
+from aquakin.study.form import UNREADABLE as UNREADABLE
 
 
 def _study_module():
@@ -108,6 +80,12 @@ def _study_call(function: str, req: dict, **kwargs):
     )
 
 
+def _model_edit():
+    from aquakin.plant import model_edit
+
+    return model_edit
+
+
 def _handlers():
     from aquakin import __version__
     from aquakin.plant import catalog as cat
@@ -118,14 +96,37 @@ def _handlers():
         "catalog": lambda req: cat.catalog(),
         "models": lambda req: cat.shipped_models(),
         "model": lambda req: cat.model_info(req["name"], req.get("path")),
+        "model_document": lambda req: _model_edit().model_document(req["name"], req.get("path")),
+        "check_expression": lambda req: _model_edit().check_expression(
+            req["expression"],
+            model=req["model"],
+            path=req.get("path"),
+            kind=req.get("kind", "rate"),
+            reaction=req.get("reaction"),
+            parameters=req.get("parameters", ()),
+        ),
+        "check_model_edits": lambda req: _model_edit().check_model_edits(
+            req["model"], req.get("path"), req["edits"]
+        ),
+        "save_model_edits": lambda req: _model_edit().save_model_edits(
+            req["spec"],
+            req["path"],
+            model=req["model"],
+            edits=req["edits"],
+            name=req.get("name"),
+            sha256=req.get("sha256"),
+            base_dir=req.get("base_dir"),
+            dry_run=bool(req.get("dry_run")),
+        ),
         "check_spec": lambda req: check_spec(req["spec"], base_dir=req.get("base_dir")),
         "read_spec": lambda req: load_spec_file(req["path"]),
-        "list_studies": lambda req: _list_studies(req["project"]),
+        "list_studies": lambda req: _study_module().list_studies(req["project"]),
         "freeze_study": lambda req: _study_call("freeze_study", req),
         "unfreeze_study": lambda req: _study_call(
             "unfreeze_study", req, discard_results=bool(req.get("discard_results"))
         ),
         "copy_study": lambda req: str(_study_call("copy_study", req, name=req["name"])),
+        "cancel_study": lambda req: _study_call("cancel_study", req),
         "study_form": lambda req: _study_module().study_form(),
         "plant_choices": lambda req: _study_module().plant_choices(
             req["spec"], base_dir=req.get("base_dir")
@@ -295,6 +296,10 @@ def _study_command(args) -> int:
         elif args.action == "copy":
             print(st.copy_study(args.path, args.name))
             return 0
+        elif args.action == "cancel":
+            st.cancel_study(args.path)
+            print("asked to stop at its next checkpoint")
+            return 0
         else:
             status = st.check_study(args.path)
     except st.StudyError as exc:
@@ -302,6 +307,9 @@ def _study_command(args) -> int:
         return 2
     frozen = ", frozen" if status.frozen else ""
     print(f"{status.state}{frozen}")
+    if status.running is not None:
+        progress = status.running["progress"] or {}
+        print(f"  running since {status.running['started']}: {progress.get('message', '')}")
     for line in status.reasons:
         print(f"  - {line}")
     for line in status.notes:
@@ -315,6 +323,16 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve", help="answer JSON-line requests from a front end")
     sub.add_parser("catalog", help="print the unit catalogue as JSON")
+    mcp = sub.add_parser(
+        "mcp",
+        help='serve aquakin\'s tools to an AI assistant over MCP (needs the "mcp" extra)',
+    )
+    mcp.add_argument(
+        "--allow-python",
+        action="store_true",
+        help="also let the assistant run Python scripts it writes (each run is approved "
+        "in the assistant's app)",
+    )
     study = sub.add_parser("study", help="run, check, freeze, unfreeze or copy a study")
     action = study.add_subparsers(dest="action", required=True)
     run = action.add_parser("run", help="run a study and write its results")
@@ -337,12 +355,20 @@ def main(argv=None) -> int:
     unfreeze.add_argument(
         "--discard-results", action="store_true", help="agree to delete the study's results"
     )
+    cancel = action.add_parser(
+        "cancel", help="stop a study's run at its next checkpoint, whatever started it"
+    )
+    cancel.add_argument("path", help="the study folder")
     copy = action.add_parser("copy", help="copy a study, results included")
     copy.add_argument("path", help="the study folder")
     copy.add_argument("name", help="the copy's name")
     args = parser.parse_args(argv)
     if args.command == "serve":
         serve()
+    elif args.command == "mcp":
+        from aquakin.mcp.server import main as serve_mcp
+
+        serve_mcp(allow_python=args.allow_python)
     elif args.command == "study":
         return _study_command(args)
     else:

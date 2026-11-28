@@ -44,10 +44,10 @@ sensitivity preamble (`prepare_sensitivity`, `resolve_sens_indices`) lives in
 sensitivity (`diffrax.RecursiveCheckpointAdjoint`) is the default for parameter
 estimation — memory-efficient for the long integration times of reactors.
 
-**Adjoint choice and forward-mode AD.** A reactor takes no `adjoint=`
-argument: its diffrax adjoint comes from `diff=DifferentiationConfig(...)`
-(`DifferentiationConfig.reactor_adjoint`). The default `RecursiveCheckpointAdjoint`
-is **reverse-mode only** (it registers a `custom_vjp`, so `jax.jvp`/`jacfwd` are
+**Adjoint choice and forward-mode AD.** A reactor takes one `settings=SolverSettings(...)`
+(not loose `rtol=`/`atol=`/`integrator=`/`diff=`, nor `adjoint=`); its diffrax adjoint
+comes from `settings.diff` (`reactor_adjoint`). The default `RecursiveCheckpointAdjoint` is
+**reverse-mode only** (it registers a `custom_vjp`, so `jax.jvp`/`jacfwd` are
 rejected); `mode="forward", method="through_solve"` gives the reactor
 `DirectAdjoint` (`aquakin.forward_adjoint()`), differentiable in both modes at
 the cost of memory. `calibrate` and `sensitivity` build the forward adjoint
@@ -55,9 +55,9 @@ internally from `diff.mode`; `dgsm` cannot (its `fn` builds the reactor).
 **Advice to users names the real keyword arguments.** Every error message or
 docstring that tells a user how to switch AD direction or adjoint uses the
 constants in `integrate/_config.py` (`FORWARD_DIFF`, `FORWARD_THROUGH_SOLVE_DIFF`,
-`STABLE_REVERSE_DIFF`, `FORWARD_REACTOR_REMEDY`); do not write the spelling out
-again, and do not name removed keywords (`ad_mode=`, `gradient=`, a reactor
-`adjoint=`), which once survived the API change in every remedy.
+`STABLE_REVERSE_DIFF`, `FORWARD_REACTOR_REMEDY`, `DTMAX_REACTOR_SETTINGS`); do
+not write the spelling out again, and do not name removed keywords (`ad_mode=`,
+`gradient=`, a reactor `adjoint=` / `diff=`), which once survived every remedy.
 `tests/unit/test_user_hints.py` fails on a message or public docstring that names
 a keyword the API does not take. A non-finite
 reverse gradient a user takes by hand through `reactor.solve` is guarded by

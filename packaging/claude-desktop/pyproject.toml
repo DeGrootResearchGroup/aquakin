@@ -1,0 +1,8 @@
+# The environment Claude Desktop builds for the extension (the MCPB "uv"
+# server type). scripts/build_mcpb.py stamps the version and the aquakin pin.
+[project]
+name = "aquakin-claude-desktop"
+version = "0.0.0"
+description = "aquakin's MCP server for Claude Desktop"
+requires-python = ">=3.11"
+dependencies = ["aquakin[mcp]"]

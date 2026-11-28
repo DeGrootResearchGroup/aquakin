@@ -82,7 +82,9 @@ def test_ferric_precipitates_phosphate_conserving_P(net):
     def final(fe):
         C0 = net.concentrations({**_MIXED_LIQUOR, "S_Fe3": fe}, base="zero")
         r = aquakin.BatchReactor(
-            net, cond, integrator=aquakin.IntegratorConfig(dtmax=1e-3))
+            net, cond, settings=aquakin.SolverSettings(
+                integrator=aquakin.IntegratorConfig(dtmax=1e-3),
+            ))
         sol = r.solve(C0, t_span=(0.0, 0.3), t_eval=jnp.array([0.3]))
         return (float(sol.C_named("SPO4")[-1]),
                 float(sol.C_named("X_FePO4")[-1]),

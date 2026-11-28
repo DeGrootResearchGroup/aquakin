@@ -20,11 +20,15 @@ chosen initial state), ``fisher`` (the Fisher information of a sensor design),
 ``calibrate`` (a fit to observations in a data table), ``profile`` (the profile
 likelihood of one parameter) and ``rank`` (sensor sets ranked by the
 information they give).
+
+A ``calibrate``, ``profile`` or ``fisher`` study can instead study a batch
+reactor, given by a ``reactor:`` block in place of the flowsheet
+(:mod:`aquakin.study.reactor`): the runners dispatch on the target, and the
+results, their staleness and freezing work as for a plant.
 """
 
 from __future__ import annotations
 
-import datetime as _dt
 import hashlib
 import json
 import shutil
@@ -33,13 +37,72 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 
-from aquakin.study.files import (
+from aquakin.integrate.calibration.saved import fit_summary, write_fit_files
+from aquakin.study.analysis import (
+    _fit_options,
+    _flattened,
+    _read_observations,
+    _sampler,
+    _write_fisher_files,
+    _write_posterior_files,
+    _write_profile_files,
+)
+
+# Re-exported: the tests and the worker take them from here.
+from aquakin.study.analysis import _fit_sigma as _fit_sigma
+from aquakin.study.common import (
+    _STRICT,
+    ATTEMPT_FILE,
+    CANCEL_FILE,
+    FINAL_STATE_FILE,
+    FIT_SNAPSHOT,
+    FITTED_FILE,
+    FROZEN_FILE,
+    KINDS,
+    MEASURED_FILE,
+    MEASURED_STEADY_FILE,
+    PARAMETERS_FILE,
+    PARTIAL,
+    RANKING_FILE,
+    RESULT_STATES,
+    RESULTS,
+    RUN_FILE,
+    RUNNING_FILE,
+    SNAPSHOT,
+    SPEC_FILE,
+    STREAMS_FILE,
+    STREAMS_STEADY_FILE,
+    STUDY_FILE,
+    StudyError,
+    _Grid,
+    _now,
+    _times,
+    _to_float,
+)
+from aquakin.study.common import COVARIANCE_FILE as COVARIANCE_FILE
+from aquakin.study.common import FISHER_FILE as FISHER_FILE
+from aquakin.study.common import FISHER_SUMMARY_FILE as FISHER_SUMMARY_FILE
+from aquakin.study.common import FIT_FILE as FIT_FILE
+from aquakin.study.common import PROFILE_FILE as PROFILE_FILE
+from aquakin.study.common import PROFILE_SUMMARY_FILE as PROFILE_SUMMARY_FILE
+from aquakin.study.common import STATES as STATES
+from aquakin.study.common import STUDIES_DIR as STUDIES_DIR
+from aquakin.study.reactor import REQUIRED as REACTOR_REQUIRED
+from aquakin.study.reactor import (
+    check_reactor_study,
+    freeze_reactor,
+    reactor_inputs,
+    run_reactor_study,
+    sample_reactor_fit,
+)
+from aquakin.study.running import RunLock, refuse_while_running, run_state
+from aquakin.utils.result_files import (
     read_named_values,
-    write_matrix,
     write_named_values,
     write_trajectory,
+    write_yaml,
 )
 
 __all__ = [
@@ -53,85 +116,9 @@ __all__ = [
     "unfreeze_study",
 ]
 
-#: The folder of a project that holds its studies, one folder each.
-STUDIES_DIR = "studies"
-STUDY_FILE = "study.yaml"
-#: The spec file a study follows unless its ``flowsheet:`` names another (and the
-#: name of the spec inside a frozen study's snapshot).
-SPEC_FILE = "flowsheet.yaml"
-RUN_FILE = "run.yaml"
-FROZEN_FILE = "frozen.yaml"
-RESULTS = "results"
-#: Where a run writes; it becomes ``results`` only when the run succeeds.
-PARTIAL = "results.partial"
-#: A run that failed or was cancelled while earlier results stood: they are kept.
-ATTEMPT_FILE = "last_attempt.yaml"
-SNAPSHOT = "snapshot"
-
-# Result files, inside ``results/``. Their names are part of the stored format:
-# a project written by an earlier aquakin must still read.
-PARAMETERS_FILE = "parameters.yaml"
-FINAL_STATE_FILE = "final_state.yaml"
-# simulate at steady state
-STREAMS_STEADY_FILE = "streams.yaml"
-MEASURED_STEADY_FILE = "measured.yaml"
-# simulate in time
-STREAMS_FILE = "streams.csv"
-MEASURED_FILE = "measured.csv"
-# fisher
-FISHER_FILE = "fisher.csv"
-FISHER_SUMMARY_FILE = "summary.yaml"
-# calibrate
-FIT_FILE = "fit.yaml"
-FITTED_FILE = "fitted.csv"
-COVARIANCE_FILE = "covariance.csv"
-# profile
-PROFILE_FILE = "profile.csv"
-PROFILE_SUMMARY_FILE = "profile.yaml"
-# rank
-RANKING_FILE = "ranking.csv"
-
-#: The kinds of study. Each has a runner (``_RUNNERS``), required fields
-#: (``_REQUIRED``), a form entry and a result reader (:mod:`aquakin.study.form`).
-KINDS = ("simulate", "fisher", "calibrate", "profile", "rank")
-#: Every state :func:`check_study` can report (see :class:`StudyStatus`).
-STATES = ("not run", "fresh", "stale", "damaged", "failed", "cancelled")
-#: The states of a study whose last run finished, so it has results to show or replace.
-RESULT_STATES = ("fresh", "stale", "damaged")
-
-
-class StudyError(ValueError):
-    """A study that cannot be read, run, frozen or unfrozen as asked."""
-
-
 # ---------------------------------------------------------------------------
 # What a study runs (study.yaml)
 # ---------------------------------------------------------------------------
-
-_STRICT = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
-
-
-def _to_float(v):
-    return float(v) if isinstance(v, int) and not isinstance(v, bool) else v
-
-
-class _Grid(BaseModel):
-    """Evenly spaced times: ``num`` points from ``start`` to ``stop``."""
-
-    model_config = _STRICT
-    start: float
-    stop: float
-    num: int
-
-    _floats = field_validator("start", "stop", mode="before")(_to_float)
-
-
-def _times(value) -> list[float]:
-    if isinstance(value, _Grid):
-        import numpy as np
-
-        return [float(x) for x in np.linspace(value.start, value.stop, value.num)]
-    return [float(x) for x in value]
 
 
 class _Measure(BaseModel):
@@ -205,12 +192,68 @@ class _Candidate(BaseModel):
         return [_to_float(x) for x in v] if isinstance(v, list) else _to_float(v)
 
 
+def _float_values(v):
+    return {k: _to_float(x) for k, x in v.items()} if isinstance(v, dict) else v
+
+
+class _Integrator(BaseModel):
+    """A reactor study's integrator settings; each left out keeps the reactor's own."""
+
+    model_config = _STRICT
+    rtol: float | None = None
+    atol: float | None = None
+    order: Literal[3, 5] | None = None
+    dtmax: float | None = None
+    max_steps: int | None = None
+
+    _floats = field_validator("rtol", "atol", "dtmax", mode="before")(_to_float)
+
+
+class _Reactor(BaseModel):
+    """The batch reactor a reactor study runs: its model (a model file relative
+    to the study folder, or a shipped model's name), its conditions by name, and
+    its integrator settings."""
+
+    model_config = _STRICT
+    model: str
+    conditions: dict[str, float] = {}
+    integrator: _Integrator = _Integrator()
+
+    _conditions = field_validator("conditions", mode="before")(_float_values)
+
+
+class _Experiment(BaseModel):
+    """One batch of a reactor study: its initial concentrations by species, and
+    the table of its observations (relative to the study folder) for a fit, or
+    its sampling times (``t_obs``, the study's when not given) for a Fisher
+    information or a design."""
+
+    model_config = _STRICT
+    data: str | None = None
+    initial: dict[str, float] = {}
+    t_obs: _Grid | list[float] | None = None
+
+    _initial = field_validator("initial", mode="before")(_float_values)
+
+    @field_validator("t_obs", mode="before")
+    @classmethod
+    def _int_times(cls, v):
+        return [_to_float(x) for x in v] if isinstance(v, list) else v
+
+
 class _Study(BaseModel):
     model_config = _STRICT
     kind: Literal[KINDS]
     description: str | None = None
     # The flowsheet, relative to the study folder (a live study's plant).
     flowsheet: str = f"../../{SPEC_FILE}"
+    # In place of the flowsheet: a batch reactor (calibrate, profile, fisher,
+    # design), its experiments and the species observed in them.
+    reactor: _Reactor | None = None
+    experiments: list[_Experiment] = []
+    # design: experiments already run, counted in the information, not changed.
+    base_experiments: list[_Experiment] = []
+    observed: list[str] = []
     # Plant parameters changed from the flowsheet's, "<model>.<param>": value.
     parameters: dict[str, float] = {}
     # "default" (each unit's own), "steady" (the steady state at the
@@ -252,6 +295,21 @@ class _Study(BaseModel):
     candidates: list[_Candidate] = []
     base: _Candidate | None = None
     criterion: Literal["D", "A", "E", "modified_E"] = "D"
+    # posterior: the calibrate study of the same project whose fit is sampled
+    # (by name), and the sampler's settings.
+    fit: str | None = None
+    n_chains: int = 4
+    n_draws: int = 1000
+    n_warmup: int = 500
+    seed: int = 0
+    prior_space: Literal["transformed", "physical"] = "transformed"
+    # design (with criterion, transforms and max_iter): what is optimized, and
+    # the quantities the criterion scores (all free ones when empty).
+    subset: list[str] = []
+    optimize_times: bool = True
+    time_bounds: tuple[float, float] | None = None
+    min_spacing: float = 0.0
+    initial_bounds: dict[str, tuple[float, float]] = {}
 
     @field_validator("grid", mode="before")
     @classmethod
@@ -259,6 +317,22 @@ class _Study(BaseModel):
         return [_to_float(x) for x in v] if isinstance(v, list) else v
 
     _delta = field_validator("delta", mode="before")(_to_float)
+    _spacing = field_validator("min_spacing", mode="before")(_to_float)
+
+    @field_validator("time_bounds", mode="before")
+    @classmethod
+    def _int_bounds(cls, v):
+        return tuple(_to_float(x) for x in v) if isinstance(v, (list, tuple)) else v
+
+    @field_validator("initial_bounds", mode="before")
+    @classmethod
+    def _int_initial_bounds(cls, v):
+        if not isinstance(v, dict):
+            return v
+        return {
+            k: tuple(_to_float(x) for x in b) if isinstance(b, (list, tuple)) else b
+            for k, b in v.items()
+        }
 
     @field_validator("parameters", mode="before")
     @classmethod
@@ -288,21 +362,65 @@ _REQUIRED = {
     "calibrate": ("free", "observables", "data"),
     "profile": ("free", "observables", "data", "profile", "grid"),
     "rank": ("free", "candidates", "t_obs"),
+    "posterior": ("fit",),
+    # A design optimizes a batch reactor's experiments: it has no flowsheet form.
+    "design": ("reactor",),
 }
 
 
+def _check_target(study: _Study, where: str) -> None:
+    """A study studies the flowsheet (by default the project's) or a reactor."""
+    if study.reactor is not None:
+        if "flowsheet" in study.model_fields_set:
+            raise StudyError(f"{where}: give a flowsheet or a reactor to study, not both")
+        check_reactor_study(study, where)
+    elif study.experiments or study.base_experiments or study.observed:
+        raise StudyError(
+            f"{where}: experiments and observed are the settings of a reactor study; "
+            f"give the reactor (its model and conditions) in a reactor: block"
+        )
+
+
+def _check_posterior(study: _Study, where: str) -> None:
+    """A posterior study samples its calibrate study's fit, on that study's own
+    plant or reactor: it names no target of its own."""
+    if study.fit is None or study.fit == "":
+        raise StudyError(f"{where}: a posterior study needs fit")
+    if study.reactor is not None or "flowsheet" in study.model_fields_set:
+        raise StudyError(
+            f"{where}: a posterior study samples the fit of its calibrate study, on "
+            f"that study's plant or reactor; it takes no flowsheet or reactor of its own"
+        )
+    if "/" in study.fit or "\\" in study.fit or study.fit in (".", ".."):
+        raise StudyError(
+            f"{where}: fit names a calibrate study of this project by its name "
+            f"(the folder under studies/), not {study.fit!r}"
+        )
+    try:
+        _sampler(study)  # its settings are refused when read, not only when run
+    except ValueError as exc:
+        raise StudyError(f"{where}: {exc}") from None
+
+
 def _check_kind(study: _Study, where: str) -> None:
+    if study.kind == "posterior":
+        _check_posterior(study, where)
+        return
+    _check_target(study, where)
     if study.kind == "simulate":
         if not study.streams and not study.observables:
             raise StudyError(f"{where}: a simulate study saves at least one stream or observable")
         return
+    required = _REQUIRED[study.kind] if study.reactor is None else REACTOR_REQUIRED[study.kind]
     missing = [
         name
-        for name in _REQUIRED[study.kind]
+        for name in required
         if getattr(study, name) is None or getattr(study, name) == [] or getattr(study, name) == ""
     ]
     if missing:
         raise StudyError(f"{where}: a {study.kind} study needs {', '.join(missing)}")
+    if study.kind == "fisher" and study.reactor is not None:
+        _check_sigma_count(study, where)
     if study.kind in ("calibrate", "profile"):
         if any(o.channels is None for o in study.observables):
             raise StudyError(
@@ -316,12 +434,23 @@ def _check_kind(study: _Study, where: str) -> None:
                 f"{where}: a {study.kind} study fits the likelihood of the data, so give "
                 f"the measurement error (sigma) or estimate it (estimate_sigma)"
             )
-        n_channels = sum(len(_channel_names(_channels(o))) for o in study.observables)
-        if isinstance(study.sigma, list) and len(study.sigma) != n_channels:
-            raise StudyError(
-                f"{where}: sigma gives {len(study.sigma)} errors for {n_channels} measured "
-                f"channel{'s' if n_channels != 1 else ''}; give one for all, or one per channel"
-            )
+        _check_sigma_count(study, where)
+
+
+def _check_sigma_count(study: _Study, where: str) -> None:
+    """A ``sigma`` list gives one error per measured channel (observed species)."""
+    if not isinstance(study.sigma, list):
+        return
+    n_channels = (
+        len(study.observed)
+        if study.reactor is not None
+        else sum(len(_channel_names(_channels(o))) for o in study.observables)
+    )
+    if len(study.sigma) != n_channels:
+        raise StudyError(
+            f"{where}: sigma gives {len(study.sigma)} errors for {n_channels} measured "
+            f"channel{'s' if n_channels != 1 else ''}; give one for all, or one per channel"
+        )
 
 
 def load_study(path) -> _Study:
@@ -381,10 +510,6 @@ def _study_fingerprint(folder: Path, study: _Study) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _now() -> str:
-    return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
-
-
 def _read_yaml(path: Path) -> dict | None:
     if not path.is_file():
         return None
@@ -392,15 +517,24 @@ def _read_yaml(path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _write_yaml(path: Path, data: dict) -> None:
-    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
-
-
 def _flowsheet(folder: Path, study: _Study) -> Path:
     """The spec the study builds its plant from: the snapshot when frozen."""
     if (folder / FROZEN_FILE).is_file():
         return folder / SNAPSHOT / SPEC_FILE
     return (folder / study.flowsheet).resolve()
+
+
+def _inputs(folder: Path, study: _Study) -> tuple[dict[str, str], str]:
+    """What the study's target simulates: its inputs' fingerprints by name (the
+    flowsheet, each model and table), and one fingerprint of them all."""
+    from aquakin.plant.spec import spec_fingerprint, spec_inputs
+
+    if study.kind == "posterior":
+        return _posterior_inputs(folder, study)
+    if study.reactor is not None:
+        return reactor_inputs(folder, study, frozen=(folder / FROZEN_FILE).is_file())
+    spec = _flowsheet(folder, study)
+    return spec_inputs(spec), spec_fingerprint(spec)
 
 
 # ---------------------------------------------------------------------------
@@ -426,12 +560,18 @@ class StudyStatus:
         Why the study is stale, damaged or failed.
     notes : list of str
         What changed without making it stale (the aquakin version).
+    running : dict or None
+        ``None``, or the run in progress, whichever program started it: when it
+        started and its latest progress (see
+        :func:`aquakin.study.running.run_state`). ``state`` is meanwhile that of
+        the results the study had before the run.
     """
 
     state: str
     frozen: bool
     reasons: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    running: dict | None = None
 
     @property
     def has_results(self) -> bool:
@@ -452,10 +592,18 @@ def _changed_inputs(before: dict, now: dict) -> list[str]:
 
 
 def _describe(key: str) -> str:
+    if key.startswith(_FIT_KEY):
+        rest = key[len(_FIT_KEY) :]
+        what = {"results": "the fit", "settings": "the setup"}.get(rest) or _describe(rest)
+        return f"{what} of the calibrate study it samples"
     if key == "flowsheet":
         return "the flowsheet"
     kind, _, name = key.partition(":")
-    return f"model '{name}'" if kind == "model" else f"the influent table of '{name}'"
+    if kind == "model":
+        return f"model '{name}'"
+    if kind == "data":
+        return f"data table '{name}'"
+    return f"the influent table of '{name}'"
 
 
 def check_study(path) -> StudyStatus:
@@ -470,15 +618,16 @@ def check_study(path) -> StudyStatus:
     -------
     StudyStatus
     """
-    from aquakin.plant.spec import aquakin_version, spec_inputs
+    from aquakin.plant.spec import aquakin_version
 
     folder = _folder(path)
     study = load_study(folder)
     frozen = _read_yaml(folder / FROZEN_FILE)
     run = _read_yaml(folder / RUN_FILE)
+    running = run_state(folder)
     if run is None:
-        return StudyStatus("not run", frozen is not None)
-    status = StudyStatus("fresh", frozen is not None)
+        return StudyStatus("not run", frozen is not None, running=running)
+    status = StudyStatus("fresh", frozen is not None, running=running)
     attempt = _read_yaml(folder / ATTEMPT_FILE)
     if attempt is not None:
         what = "was cancelled" if attempt.get("outcome") == "cancelled" else "failed"
@@ -513,11 +662,18 @@ def check_study(path) -> StudyStatus:
         if run.get("spec_fingerprint") != frozen.get("spec_fingerprint"):
             status.reasons.append("the study was frozen on another plant than its results'")
     else:
+        target = (
+            "calibrate study it samples"
+            if study.kind == "posterior"
+            else "flowsheet"
+            if study.reactor is None
+            else "reactor's model or data"
+        )
         try:
-            now = spec_inputs(_flowsheet(folder, study))
+            now = _inputs(folder, study)[0]
         except Exception as exc:
             now = None
-            status.reasons.append(f"the flowsheet cannot be read: {exc}")
+            status.reasons.append(f"the {target} cannot be read: {exc}")
         if now is not None:
             status.reasons.extend(_changed_inputs(run.get("spec_inputs") or {}, now))
     if status.reasons:
@@ -655,7 +811,6 @@ def _run_simulate(
 def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path, progress) -> list[Path]:
     import numpy as np
 
-    from aquakin import design_criterion
     from aquakin.plant import plant_fisher_information
 
     observables = [_channels(o) for o in study.observables]
@@ -674,86 +829,51 @@ def _run_fisher(plant, folder: Path, study: _Study, params, y0, out: Path, progr
         time_unit=study.time_unit,
         progress=progress,
     )
-    criteria = {}
-    for c in ("D", "A", "E", "modified_E"):
-        try:
-            criteria[c] = float(design_criterion(fim, c))
-        except (np.linalg.LinAlgError, ValueError):
-            criteria[c] = None
-    try:
-        std = fim.std()
-    except np.linalg.LinAlgError:
-        std = None
-    summary = {
-        "values": dict(fim.values),
-        "transforms": dict(zip(fim.names, fim.transforms)),
-        "std": std,
-        "criteria": criteria,
-    }
-    path = out / FISHER_SUMMARY_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _write_yaml(path, summary)
-    return [
-        write_matrix(out / FISHER_FILE, fim.matrix, fim.names),
-        path,
-        write_named_values(out / PARAMETERS_FILE, _named_parameters(plant, params)),
-    ]
+    return _write_fisher_files(out, fim, _named_parameters(plant, params))
 
 
 def _observations(folder: Path, study: _Study):
     """``(t, observations (n_t, n_channels), channel names)`` from the study's data table."""
-    import numpy as np
-
-    from aquakin.study.files import read_trajectory
-
-    path = folder / study.data
-    if not path.is_file():
-        raise StudyError(f"data: {path} does not exist")
-    try:
-        t, columns = read_trajectory(path)
-    except ValueError as exc:
-        raise StudyError(f"data: {exc}") from None
     names = [
         f"{o.stream}.{name}" for o in study.observables for name in _channel_names(_channels(o))
     ]
-    missing = [n for n in names if n not in columns]
-    if missing:
-        raise StudyError(
-            f"data: {path.name} has no column {', '.join(missing)} (its columns: "
-            f"{', '.join(columns) or 'none'})"
-        )
-    return t, np.stack([columns[n] for n in names], axis=1), names
-
-
-def _fit_sigma(study: _Study):
-    """The fit's ``sigma``: ``"estimate"``, one error for every observation, or an
-    array of one per channel (broadcast over the times; a list would mean one
-    per dataset)."""
-    import numpy as np
-
-    if study.estimate_sigma:
-        return "estimate"
-    if isinstance(study.sigma, list):
-        return np.asarray(study.sigma, dtype=float)
-    return study.sigma
+    t, observations = _read_observations(folder / study.data, names, "data")
+    return t, observations, names
 
 
 def _fit_arguments(plant, study: _Study, params, y0, progress) -> dict:
-    from aquakin import OptimizerConfig
-
     return dict(
         observables=[_channels(o) for o in study.observables],
         t_span=study.t_span,
         y0=y0,
         params=params,
-        transforms=dict(study.transforms) or None,
-        loss="nll",
-        sigma=_fit_sigma(study),
-        use_priors=study.use_priors,
-        optimizer=OptimizerConfig(n_starts=study.n_starts, max_iter=study.max_iter),
         time_unit=study.time_unit,
         progress=progress,
+        **_fit_options(study),
     )
+
+
+def _fit_plant(plant, folder: Path, study: _Study, params, y0, progress, start=None):
+    """A calibrate study's fit of its plant: ``(result, t, channel names)``.
+
+    With ``start`` (the saved optimum), it re-enters the fit there, with a
+    Laplace posterior whatever the study asks, for a posterior study to sample.
+    """
+    from aquakin.plant import calibrate_plant
+
+    t, observations, names = _observations(folder, study)
+    arguments = _fit_arguments(plant, study, params, y0, progress)
+    if start is not None:
+        arguments.update(_fit_options(study, start))
+    result = calibrate_plant(
+        plant,
+        observations,
+        t,
+        list(study.free),
+        laplace=study.laplace or start is not None,
+        **arguments,
+    )
+    return result, t, names
 
 
 def _run_calibrate(
@@ -761,43 +881,11 @@ def _run_calibrate(
 ) -> list[Path]:
     import numpy as np
 
-    from aquakin.plant import calibrate_plant
-
-    t, observations, names = _observations(folder, study)
-    result = calibrate_plant(
-        plant,
-        observations,
-        t,
-        list(study.free),
-        laplace=study.laplace,
-        **_fit_arguments(plant, study, params, y0, progress),
-    )
+    result, t, names = _fit_plant(plant, folder, study, params, y0, progress)
     fitted = np.asarray(result.params)
-    summary = {
-        "fitted": {n: float(result.params_named[n]) for n in study.free},
-        "std": None
-        if result.params_named_std is None
-        else {n: float(v) for n, v in result.params_named_std.items()},
-        "loss": float(result.loss),
-        "converged": bool(result.converged),
-        "message": str(result.message),
-        "iterations": int(result.n_iter),
-        "at_bound": dict(result.at_bound),
-        "sigma_estimate": None
-        if result.sigma_estimate is None
-        else dict(zip(names, (float(v) for v in np.ravel(result.sigma_estimate)))),
-    }
-    written = [write_named_values(out / PARAMETERS_FILE, _named_parameters(plant, fitted))]
-    path = out / FIT_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _write_yaml(path, summary)
-    written.append(path)
-    if result.posterior_cov is not None:
-        written.append(
-            write_matrix(
-                out / COVARIANCE_FILE, np.asarray(result.posterior_cov), result.parameter_names
-            )
-        )
+    written = write_fit_files(
+        out, result, fit_summary(result, names), _named_parameters(plant, fitted)
+    )
     # The fitted plant's channels at the observation times, beside the data.
     span = study.t_span or (0.0, float(t[-1]))
     sol = plant.solve(span, t_eval=t, params=fitted, y0=y0, time_unit=study.time_unit)
@@ -814,7 +902,6 @@ def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, prog
     import numpy as np
 
     from aquakin.plant import plant_profile_likelihood
-    from aquakin.study.files import write_table
 
     t, observations, _ = _observations(folder, study)
     arguments = _fit_arguments(plant, study, params, y0, progress)
@@ -828,27 +915,7 @@ def _run_profile(plant, folder: Path, study: _Study, params, y0, out: Path, prog
         delta=study.delta,
         **arguments,
     )
-    written = [
-        write_table(
-            out / PROFILE_FILE,
-            {
-                study.profile: list(prof.grid),
-                "loss": [None if not np.isfinite(v) else v for v in prof.loss],
-                "delta_loss": [None if not np.isfinite(v) else v for v in prof.delta_loss],
-            },
-        )
-    ]
-    lo, hi = prof.ci
-    summary = {
-        "parameter": study.profile,
-        "mle": None if not np.isfinite(prof.mle) else float(prof.mle),
-        "ci": [None if lo is None else float(lo), None if hi is None else float(hi)],
-        "delta": study.delta,
-    }
-    path = out / PROFILE_SUMMARY_FILE
-    _write_yaml(path, summary)
-    written.append(path)
-    return written
+    return _write_profile_files(out, study, prof)
 
 
 def _sensor_set(candidate: _Candidate):
@@ -867,7 +934,7 @@ def _run_rank(plant, folder: Path, study: _Study, params, y0, out: Path, progres
     import numpy as np
 
     from aquakin.plant import plant_rank_sensor_sets
-    from aquakin.study.files import write_table
+    from aquakin.utils.result_files import write_table
 
     ranked = plant_rank_sensor_sets(
         plant,
@@ -898,7 +965,9 @@ def _run_rank(plant, folder: Path, study: _Study, params, y0, out: Path, progres
     return written
 
 
-_RUNNERS = {
+#: Each flowsheet kind's analysis of the plant the study builds,
+#: ``(plant, folder, study, params, y0, out, progress) -> files``.
+_PLANT_RUNNERS = {
     "simulate": _run_simulate,
     "fisher": _run_fisher,
     "calibrate": _run_calibrate,
@@ -912,6 +981,138 @@ def _named_parameters(plant, params) -> dict[str, float]:
 
     values = np.asarray(params, dtype=float)
     return {name: float(values[plant.parameter_index(name)]) for name in plant.parameter_names()}
+
+
+def _plant_set_up(folder: Path, study: _Study):
+    """A flowsheet study's plant, parameters and initial state."""
+    import numpy as np
+
+    from aquakin.plant import Plant
+
+    plant = Plant.from_spec(_flowsheet(folder, study))
+    params = plant.parameter_values(study.parameters) if study.parameters else None
+    params = plant.default_parameters() if params is None else params
+    return plant, params, np.asarray(_initial_state(plant, folder, study, params))
+
+
+def _on_plant(analysis):
+    """A flowsheet kind's analysis as its run: build the study's plant from its
+    flowsheet, then analyze it."""
+
+    def run(folder: Path, study: _Study, out: Path, progress) -> list[Path]:
+        from aquakin.progress import report
+
+        report(progress, "setup", 0, None, "building the plant")
+        plant, params, y0 = _plant_set_up(folder, study)
+        return analysis(plant, folder, study, params, y0, out, progress)
+
+    return run
+
+
+# ---------------------------------------------------------------------------
+# Posterior: sampling a calibrate study's fit
+# ---------------------------------------------------------------------------
+
+#: The prefix of a posterior study's inputs that are its fit's (``fit/model:x``).
+_FIT_KEY = "fit/"
+
+
+def _fit_of(folder: Path, study: _Study) -> tuple[Path, _Study]:
+    """A posterior study's calibrate study: its folder (the frozen copy in the
+    snapshot when the posterior study is frozen) and its settings.
+
+    Raises
+    ------
+    StudyError
+        If there is no such study, or it is not a calibrate study.
+    """
+    if (folder / FROZEN_FILE).is_file():
+        fit_folder = folder / SNAPSHOT / FIT_SNAPSHOT
+    else:
+        fit_folder = folder.parent / study.fit
+    if not (fit_folder / STUDY_FILE).is_file():
+        raise StudyError(f"fit: this project has no study {study.fit!r}")
+    fit_study = load_study(fit_folder)
+    if fit_study.kind != "calibrate":
+        raise StudyError(
+            f"fit: {study.fit!r} is a {fit_study.kind} study; a posterior study samples "
+            f"the fit of a calibrate study"
+        )
+    return fit_folder, fit_study
+
+
+def _posterior_inputs(
+    folder: Path, study: _Study, fit_folder: Path | None = None
+) -> tuple[dict[str, str], str]:
+    """A posterior study's inputs: its calibrate study's own (its flowsheet or
+    reactor), its settings, and the results it sampled, each named ``fit/...``,
+    so redoing the fit, or changing what it fits, makes the samples stale.
+    ``fit_folder`` reads them from that copy of the fit (a snapshot being made)."""
+    if fit_folder is None:
+        fit_folder, fit_study = _fit_of(folder, study)
+    else:
+        fit_study = load_study(fit_folder)
+    fit_inputs, _ = _inputs(fit_folder, fit_study)
+    run = _read_yaml(fit_folder / RUN_FILE) or {}
+    results = json.dumps(run.get("results") or {}, sort_keys=True)
+    inputs = {_FIT_KEY + key: value for key, value in fit_inputs.items()}
+    inputs[_FIT_KEY + "settings"] = _study_fingerprint(fit_folder, fit_study)
+    inputs[_FIT_KEY + "results"] = hashlib.sha256(results.encode()).hexdigest()
+    text = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+    return inputs, hashlib.sha256(text.encode()).hexdigest()
+
+
+def _fresh_fit(folder: Path, study: _Study) -> tuple[Path, _Study]:
+    """The calibrate study to sample, refused unless its results are fresh and
+    no run of it is in progress (it would replace them while they are read)."""
+    fit_folder, fit_study = _fit_of(folder, study)
+    status = check_study(fit_folder)
+    if status.state != "fresh":
+        why = "; ".join(status.reasons)
+        raise StudyError(
+            f"fit: the calibrate study {study.fit!r} is {status.state}"
+            + (f" ({why})" if why else "")
+            + "; run it, so its results are fresh, before sampling its fit"
+        )
+    if run_state(fit_folder) is not None:
+        raise StudyError(f"fit: the calibrate study {study.fit!r} is running; sample it after")
+    return fit_folder, fit_study
+
+
+def _run_posterior(folder: Path, study: _Study, out: Path, progress) -> list[Path]:
+    """Sample a calibrate study's fit: re-enter its fit at the saved optimum
+    (the same plant or reactor, data and settings, so the same objective) for
+    the fit record the sampler needs, then sample that posterior."""
+    from aquakin import load_calibration
+    from aquakin.progress import report
+
+    fit_folder, fit_study = _fresh_fit(folder, study)
+    if fit_study.reactor is not None:
+        start = load_calibration(fit_folder / RESULTS).params
+        result, samples = sample_reactor_fit(fit_folder, fit_study, start, study, progress)
+    else:
+        report(progress, "setup", 0, None, "building the plant")
+        plant, params, y0 = _plant_set_up(fit_folder, fit_study)
+        # A plant fit saves every plant parameter by name, the fitted ones at the optimum.
+        start = plant.parameter_values(read_named_values(fit_folder / RESULTS / PARAMETERS_FILE))
+        report(progress, "fit", 0, 1, "re-entering the fit at its optimum")
+        result, _, _ = _fit_plant(plant, fit_folder, fit_study, params, y0, progress, start)
+        samples = plant.sample_posterior(
+            result, config=_sampler(study), prior_space=study.prior_space, progress=progress
+        )
+    return _write_posterior_files(out, study, samples, result)
+
+
+#: Each kind's run of a study that has no reactor, ``(folder, study, out,
+#: progress) -> files``: the flowsheet kinds on the study's plant, and the
+#: posterior on its calibrate study's plant or reactor. A reactor study of any
+#: kind runs through :func:`~aquakin.study.reactor.run_reactor_study`, the only
+#: run of a design (which always has one).
+_RUNNERS = {
+    **{kind: _on_plant(analysis) for kind, analysis in _PLANT_RUNNERS.items()},
+    "posterior": _run_posterior,
+    "design": run_reactor_study,
+}
 
 
 def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
@@ -928,7 +1129,10 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     progress : callable, optional
         Passed to the analysis (see :mod:`aquakin.progress`); raising
         :class:`aquakin.Cancelled` from it stops the run, which is then
-        recorded as cancelled.
+        recorded as cancelled. Whatever is passed, the run also holds
+        ``running.yaml`` in the study folder, so a second run of the study is
+        refused, any program can follow its progress (:func:`check_study`'s
+        ``running``) and cancel it (:func:`aquakin.study.cancel_study`).
 
     Returns
     -------
@@ -938,16 +1142,27 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     Raises
     ------
     StudyError
-        If the study has results and ``replace`` is not set, or cannot be read.
-        A failure during the run itself is recorded in ``run.yaml`` and
+        If the study has results and ``replace`` is not set, is already
+        running, or cannot be read. A failure during the run itself is recorded in ``run.yaml`` and
         re-raised.
     """
-    import numpy as np
-
-    from aquakin.plant import Plant
-    from aquakin.plant.spec import aquakin_version, spec_fingerprint, spec_inputs
-
     folder = _folder(path)
+    load_study(folder)  # a folder that is no study is refused before anything is written
+    with RunLock(folder) as run:
+
+        def report(p):
+            run.report(p)  # records it, and stops a run cancelled from elsewhere
+            if progress is not None:
+                progress(p)
+
+        _run_held(folder, replace, report)
+    return check_study(folder)  # once released: the run is no longer in progress
+
+
+def _run_held(folder: Path, replace: bool, progress) -> None:
+    """:func:`run_study`'s run, once it holds the study's :class:`RunLock`."""
+    from aquakin.plant.spec import aquakin_version
+
     study = load_study(folder)
     out = folder / RESULTS
     previous = _read_yaml(folder / RUN_FILE)
@@ -957,12 +1172,11 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
             f"study {folder.name} already has results; run it with replace=True to replace "
             f"them (copy the study first to keep them)"
         )
-    spec_path = _flowsheet(folder, study)
-    inputs = spec_inputs(spec_path)
+    inputs, fingerprint = _inputs(folder, study)
     record: dict[str, Any] = {
         "started": _now(),
         "aquakin": aquakin_version(),
-        "spec_fingerprint": spec_fingerprint(spec_path),
+        "spec_fingerprint": fingerprint,
         "spec_inputs": inputs,
         "study": _study_fingerprint(folder, study),
     }
@@ -972,15 +1186,10 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     if partial.exists():
         shutil.rmtree(partial)  # left by a run that was killed
     try:
-        from aquakin.progress import report
-
-        report(progress, "setup", 0, None, "building the plant")
-        plant = Plant.from_spec(spec_path)
-        params = plant.parameter_values(study.parameters) if study.parameters else None
-        params = plant.default_parameters() if params is None else params
-        y0 = _initial_state(plant, folder, study, params)
-        runner = _RUNNERS[study.kind]
-        written = runner(plant, folder, study, params, np.asarray(y0), partial, progress)
+        if study.reactor is not None:
+            written = run_reactor_study(folder, study, partial, progress)
+        else:
+            written = _RUNNERS[study.kind](folder, study, partial, progress)
     except BaseException as exc:
         from aquakin.progress import Cancelled
 
@@ -992,11 +1201,11 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
         }
         shutil.rmtree(partial, ignore_errors=True)
         if has_results:
-            _write_yaml(folder / ATTEMPT_FILE, record)  # the results stand
+            write_yaml(folder / ATTEMPT_FILE, record)  # the results stand
         else:
             if out.exists():
                 shutil.rmtree(out)  # files no finished run recorded
-            _write_yaml(folder / RUN_FILE, record)
+            write_yaml(folder / RUN_FILE, record)
         raise
     digests = {
         (Path(RESULTS) / p.relative_to(partial)).as_posix(): hashlib.sha256(
@@ -1009,8 +1218,7 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
     partial.rename(out)
     (folder / ATTEMPT_FILE).unlink(missing_ok=True)
     record |= {"finished": _now(), "outcome": "finished", "results": digests}
-    _write_yaml(folder / RUN_FILE, record)
-    return check_study(folder)
+    write_yaml(folder / RUN_FILE, record)
 
 
 # ---------------------------------------------------------------------------
@@ -1018,31 +1226,55 @@ def run_study(path, *, replace: bool = False, progress=None) -> StudyStatus:
 # ---------------------------------------------------------------------------
 
 
-def _flattened(ref, name: str, base_dir: Path) -> str:
-    """A model's YAML with its whole ``extends`` chain merged in."""
-    from importlib.resources import files
+def _freeze_plant(folder: Path, study: _Study, snapshot: Path) -> None:
+    """Write the flowsheet into ``snapshot`` with every model flattened."""
+    from aquakin.plant.spec import _located, load_spec_file, write_spec
 
-    from aquakin.schema.loader import _resolve_inheritance
+    source = (folder / study.flowsheet).resolve()
+    spec = load_spec_file(source)
+    (snapshot / "models").mkdir(parents=True)
+    models = {}
+    for name, ref in (spec.get("models") or {}).items():
+        flat = snapshot / "models" / f"{name}.yaml"
+        if ref.get("source", "shipped") != "shipped":
+            ref = {**ref, "source": str(_located(ref["source"], source.parent, name))}
+        flat.write_text(_flattened(ref, name, source.parent))
+        models[name] = {"source": str(flat)}
+        if ref.get("source", "shipped") == "shipped":
+            models[name]["copy_of"] = "shipped"
+    write_spec(dict(spec, models=models), snapshot / SPEC_FILE, base_dir=source.parent)
 
-    if ref["source"] == "shipped":
-        text = (files("aquakin.models") / f"{name}.yaml").read_text()
-        base = None
-    else:
-        path = Path(ref["source"])
-        path = path if path.is_absolute() else base_dir / path
-        text, base = path.read_text(), path.parent
-    data = _resolve_inheritance(yaml.safe_load(text), name, base, seen=())
-    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+
+def _freeze_posterior(folder: Path, study: _Study, snapshot: Path) -> None:
+    """Put a frozen copy of a posterior study's calibrate study, results included,
+    in its snapshot (``snapshot/fit/``), so the samples keep the fit, and what
+    it was fitted on, they were drawn from. The copy is frozen beside the
+    original first, where its relative paths still resolve."""
+    fit_folder, _ = _fit_of(folder, study)
+    beside = folder.parent / f".{folder.name}.{FIT_SNAPSHOT}"
+    shutil.rmtree(beside, ignore_errors=True)
+    shutil.copytree(
+        fit_folder, beside, ignore=shutil.ignore_patterns(PARTIAL, RUNNING_FILE, CANCEL_FILE)
+    )
+    try:
+        if not (beside / FROZEN_FILE).is_file():
+            freeze_study(beside)
+        snapshot.mkdir(parents=True)
+        shutil.move(beside, snapshot / FIT_SNAPSHOT)
+    finally:
+        shutil.rmtree(beside, ignore_errors=True)
 
 
 def freeze_study(path) -> dict:
-    """Freeze a study on a snapshot of its plant as the flowsheet is now.
+    """Freeze a study on a snapshot of what it studies as that is now.
 
-    The snapshot (``snapshot/``) holds the flowsheet, every influent table, and
-    every model flattened (its ``extends`` chain merged in, shipped models
-    included), so neither an edit to the project nor an aquakin upgrade can
-    change the plant the study runs. Results already there stay, and stay fresh
-    only if they were computed on the same plant.
+    The snapshot (``snapshot/``) of a flowsheet study holds the flowsheet, every
+    influent table, and every model flattened (its ``extends`` chain merged in,
+    shipped models included); that of a reactor study, its model flattened and
+    its data tables; that of a posterior study, a frozen copy of the calibrate
+    study it samples, results included (``snapshot/fit/``). Neither an edit to
+    the project nor an aquakin upgrade can then change what the study runs. Results already there stay, and stay fresh
+    only if they were computed on the same plant or reactor.
 
     Parameters
     ----------
@@ -1059,47 +1291,41 @@ def freeze_study(path) -> dict:
     StudyError
         If the study is already frozen.
     """
-    from aquakin.plant.spec import (
-        _located,
-        aquakin_version,
-        load_spec_file,
-        spec_fingerprint,
-        spec_inputs,
-        write_spec,
-    )
+    from aquakin.plant.spec import aquakin_version, spec_fingerprint, spec_inputs
 
     folder = _folder(path)
+    refuse_while_running(folder, "freeze")
     study = load_study(folder)
     if (folder / FROZEN_FILE).exists():
         raise StudyError(f"study {folder.name} is already frozen")
-    source = (folder / study.flowsheet).resolve()
-    spec = load_spec_file(source)
     snapshot = folder / SNAPSHOT
     if snapshot.exists():
         shutil.rmtree(snapshot)
     try:
-        (snapshot / "models").mkdir(parents=True)
-        models = {}
-        for name, ref in (spec.get("models") or {}).items():
-            flat = snapshot / "models" / f"{name}.yaml"
-            if ref.get("source", "shipped") != "shipped":
-                ref = {**ref, "source": str(_located(ref["source"], source.parent, name))}
-            flat.write_text(_flattened(ref, name, source.parent))
-            models[name] = {"source": str(flat)}
-            if ref.get("source", "shipped") == "shipped":
-                models[name]["copy_of"] = "shipped"
-        write_spec(dict(spec, models=models), snapshot / SPEC_FILE, base_dir=source.parent)
+        if study.kind == "posterior":
+            _freeze_posterior(folder, study, snapshot)
+            origin = study.fit
+            inputs, fingerprint = _posterior_inputs(folder, study, snapshot / FIT_SNAPSHOT)
+        elif study.reactor is not None:
+            freeze_reactor(folder, study, snapshot)
+            origin = study.reactor.model
+            inputs, fingerprint = reactor_inputs(folder, study, frozen=True)
+        else:
+            _freeze_plant(folder, study, snapshot)
+            origin = study.flowsheet
+            inputs = spec_inputs(snapshot / SPEC_FILE)
+            fingerprint = spec_fingerprint(snapshot / SPEC_FILE)
         record = {
             "frozen": _now(),
             "aquakin": aquakin_version(),
-            "from": study.flowsheet,
-            "spec_fingerprint": spec_fingerprint(snapshot / SPEC_FILE),
-            "spec_inputs": spec_inputs(snapshot / SPEC_FILE),
+            "from": origin,
+            "spec_fingerprint": fingerprint,
+            "spec_inputs": inputs,
         }
     except BaseException:
         shutil.rmtree(snapshot, ignore_errors=True)
         raise
-    _write_yaml(folder / FROZEN_FILE, record)
+    write_yaml(folder / FROZEN_FILE, record)
     return record
 
 
@@ -1124,6 +1350,7 @@ def unfreeze_study(path, *, discard_results: bool = False) -> None:
         not set.
     """
     folder = _folder(path)
+    refuse_while_running(folder, "unfreeze")
     load_study(folder)
     if not (folder / FROZEN_FILE).exists():
         raise StudyError(f"study {folder.name} is not frozen")
@@ -1174,5 +1401,5 @@ def copy_study(path, name: str) -> Path:
     dest = folder.parent / name
     if dest.exists():
         raise StudyError(f"{dest} already exists")
-    shutil.copytree(folder, dest, ignore=shutil.ignore_patterns(PARTIAL))
+    shutil.copytree(folder, dest, ignore=shutil.ignore_patterns(PARTIAL, RUNNING_FILE, CANCEL_FILE))
     return dest

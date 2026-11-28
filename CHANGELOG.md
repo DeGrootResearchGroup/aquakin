@@ -21,6 +21,182 @@ Granular per-change logging (Changed / Fixed / Deprecated / Removed, relative to
 
 <!-- towncrier release notes start -->
 
+## [0.4.0] - 2026-11-27
+
+This release lets an AI assistant work with aquakin, through `aquakin mcp`, a
+Claude Code plugin and a Claude Desktop extension. Studies gain a batch-reactor
+target, posterior sampling of a fit and experiment design, run once at a time
+from any program; the flowsheet editor follows changes other programs make and
+gains a Model tab for a model's reactions and parameters. New reactors model
+non-ideal flow from a tracer test, fits can be saved and loaded, and
+experiments can be designed to tell two models apart. Posterior sampling now
+samples the density the fit describes by default, and the A²O plant wastes more
+sludge.
+
+### Added
+
+- Experiment design for telling two fitted models apart:
+  `aquakin.optimize_discrimination` optimizes sampling times and initial
+  concentrations, and `aquakin.rank_discrimination` ranks candidate experiments,
+  for two models given as `(reactor, CalibrationResult)` pairs. The default
+  Buzzi-Ferraris (Box-Hill) criterion weighs the gap between the two models'
+  predictions by the measurement noise and each model's prediction uncertainty
+  under its Laplace posterior; `criterion="hunter_reiner"` weighs it by the
+  noise alone. The design controls are grouped in the new `aquakin.DesignConfig`. ([#688](https://github.com/DeGrootResearchGroup/aquakin/issues/688))
+- Two reactors for non-ideal flow, and fits that build them from a tracer test.
+  `aquakin.DispersedFlowReactor` solves one-dimensional advection, axial
+  dispersion and reaction in time (a Danckwerts inlet, a zero-gradient outlet,
+  second-order in space), with the dispersion given as a coefficient or as a
+  dispersion number; `aquakin.TanksInSeries` is a train of equal stirred tanks
+  in one solve. Both take each species' inlet as a number or an expression of
+  time, and have `solve` and a differentiable `steady_state`; their tolerances
+  are grouped in the new `aquakin.SolverSettings`. `aquakin.fit_dispersion` and
+  `aquakin.fit_tanks_in_series` fit the dispersion number and the number of
+  tanks to a measured tracer curve by its moments. ([#690](https://github.com/DeGrootResearchGroup/aquakin/issues/690))
+- `CalibrationResult.save(folder)` writes a fit to a folder of plain files, and
+  `aquakin.load_calibration(folder)` reads it back with every number exact: the
+  fitted values and their standard deviations, the covariance and Hessian
+  matrices, fitted initial pools, the noise estimate and the counts the
+  information criteria use, so `aic`, `bic` and `compare_models` work on a loaded
+  fit as on the original. The files are those a calibration study writes
+  (`fit.yaml`, `parameters.yaml`, `covariance.csv`), with the model's fingerprint
+  and the aquakin version recorded. ([#691](https://github.com/DeGrootResearchGroup/aquakin/issues/691))
+- A calibration, profile-likelihood or Fisher-information study can study a
+  batch reactor instead of the flowsheet: a `reactor:` block in `study.yaml`
+  names the model (a project file or a shipped model) and its conditions, and
+  `experiments` the batches, each with its initial concentrations and, for a
+  fit, a data table of the observed species. The results are those of a
+  flowsheet study (a reactor fit is saved so `aquakin.load_calibration` reads
+  it), the study is marked stale when the model, a data table or a setting
+  changes, and freezing copies the model and the data into the study. ([#691](https://github.com/DeGrootResearchGroup/aquakin/issues/691))
+- The flowsheet editor has a **Model** tab for a model's reactions and
+  parameters: edit a rate or a stoichiometric coefficient, with aquakin's parse
+  errors shown under the text at their position, and edit a parameter's value,
+  units and description or add one (a rate naming an unknown parameter offers to
+  add it). Apply saves the edits only once the edited model loads and compiles:
+  into the project's own model file, or, for a shipped model, as a new project
+  model that `extends:` it, used by every unit that used the shipped one. A
+  parameter in a model file may now carry a `description:`, and a rate
+  expression's `ParseError` carries the `position` of the character it is about. ([#694](https://github.com/DeGrootResearchGroup/aquakin/issues/694))
+- A `posterior` study kind samples a calibrate study's fit with the Metropolis
+  sampler: name the calibrate study with `fit:`, and the study writes the draws
+  (`draws.csv`) and each parameter's mean, standard deviation, 5 / 50 / 95 %
+  quantiles, R-hat and effective sample size (`posterior.yaml`). It goes stale
+  when the fit is redone or its settings change, and freezing it keeps a frozen
+  copy of the fit. The editor shows its histograms, and `aquakin mcp` can create
+  and run it. `sample_posterior` and `Plant.sample_posterior` take `progress=`,
+  as the other long analyses do, and a cancel stops them. ([#932](https://github.com/DeGrootResearchGroup/aquakin/issues/932))
+- A `design` study kind optimizes a batch reactor's experiments with
+  `optimize_experiment`: their sampling times (within `time_bounds`, at least
+  `min_spacing` apart) and, for the species in `initial_bounds`, their initial
+  concentrations, for the D, A, E or modified-E criterion, counting any
+  `base_experiments` already run. It writes `design.yaml`: the optimized
+  experiments as an `experiments:` list to paste into a `fisher` or `calibrate`
+  study, the criterion before and after, and each parameter's standard deviation
+  at the start and at the optimum. A reactor study's experiments may now give
+  their own sampling times (`t_obs`), which a `fisher` study uses in place of the
+  study's. ([#933](https://github.com/DeGrootResearchGroup/aquakin/issues/933))
+- `aquakin mcp` lets an AI assistant work with aquakin on your computer, under
+  the assistant's own account: Claude Desktop, Claude Code, or any app that
+  speaks the Model Context Protocol. The assistant can list and describe the
+  shipped models and unit kinds, read model files, build and check a flowsheet,
+  search and read the user guide and API reference of the installed version,
+  write a flowsheet file, and create, run (in the background, with progress and
+  cancel), read, copy, freeze and unfreeze studies. It keeps the editor's
+  safeguards: a flowsheet file or a study's results are replaced only when the
+  assistant asks for that explicitly, and a run is a process of its own that
+  goes on after the assistant's app closes. `aquakin mcp --allow-python` adds a
+  tool that runs Python scripts the assistant writes in the project folder
+  (`run_python`), with a timeout, for apps that cannot run code themselves.
+  Install with `pip install "aquakin[mcp]"`; see "Using aquakin from an AI
+  assistant" in the documentation. `aquakin.study.list_studies` lists a
+  project's studies with where each stands.
+- A Claude Code plugin, `/plugin install aquakin --marketplace
+  DeGrootResearchGroup/aquakin`, starts `aquakin mcp` through uv with the
+  plugin's own aquakin release and adds skills for building a flowsheet,
+  running a study, writing a model and analyzing in Python. Each GitHub release
+  also carries `aquakin.mcpb`, a Claude Desktop extension that installs the
+  same tools in one step; its settings hold the switch for running Python
+  scripts.
+- A study runs once at a time, whichever program starts it. While it runs, its
+  folder holds `running.yaml` with when the run started and its progress, so
+  `aquakin study check`, `aquakin.study.check_study` (`StudyStatus.running`) and
+  the flowsheet editor all show a run in progress, wherever it was started. A
+  second run of the study is refused, and so are freezing, unfreezing and
+  editing it. `aquakin study cancel` (and `aquakin.study.cancel_study`) stops a
+  run at its next checkpoint from any program; the editor's Cancel works on runs
+  other programs started. A run that crashes or is killed leaves no lock behind.
+  Studies an AI assistant runs through `aquakin mcp` are separate processes and
+  go on after the assistant's app closes.
+- The flowsheet editor follows the project folder as other programs change it,
+  such as an AI assistant through `aquakin mcp`, a text editor or another window.
+  A flowsheet whose file changes is shown again, keeping the view; with unsaved
+  edits the editor asks first, and Save still refuses to write over the other
+  version. Studies added, edited or finished elsewhere appear in the Studies tab.
+
+### Changed
+
+- `sample_posterior` and `Plant.sample_posterior` now sample, by default, the
+  density that `calibrate` fits and its Laplace approximation describes: for a
+  rate with a `positive_log` or `logit` transform the prior is flat in the
+  transformed coordinate (in `log k`), times any rate prior you gave. MCMC,
+  Laplace and profile-likelihood intervals are then directly comparable, and a
+  difference between them shows a genuinely non-Gaussian posterior rather than
+  a different prior. The draws for log- or logit-transformed rates move down
+  slightly compared with 0.3.0, most for poorly determined rates (by about the
+  variance of `log k` on the log scale). Pass `prior_space="physical"` for the
+  0.3.0 behaviour, a prior flat in the physical value `k`. ([#686](https://github.com/DeGrootResearchGroup/aquakin/issues/686))
+- A model YAML file that repeats a key in a mapping, such as a species listed
+  twice in one reaction's stoichiometry, is now refused at load with an error
+  naming the key and both lines. YAML loaders otherwise keep the last value
+  without a word, so a mistyped or pasted entry went unnoticed. The shipped
+  `asm2d` listed `XMeOH` and `XMeP` twice (with equal values, so its results do
+  not change).
+- The A²O plant (`build_a2o`) now wastes 250 m³/d of sludge by default, up from
+  120 m³/d (`A2O_WASTAGE_FLOW`). At 120 m³/d the plant grew more sludge than it
+  wasted, so the clarifier's sludge blanket filled eight of its ten layers and
+  the effluent carried about 54 g TSS/m³; the sludge age was about 14.5 d rather
+  than the intended 25 d. At 250 m³/d the sludge age is about 11 d, the MLSS
+  about 4000 g TSS/m³, the blanket stays in the bottom three layers and the
+  effluent carries about 14 g TSS/m³. Biological phosphorus removal improves
+  (effluent phosphate 3.9 → 3.0 g P/m³) with nitrification unchanged (ammonia
+  about 0.2 g N/m³). `A2O_WARM_REACTOR_COMPOSITION` is re-derived from the new
+  operating point. Pass `wastage_flow=120.0` to recover the earlier design.
+- `build_a2o` now runs any activated-sludge model whose particulates carry an
+  `X` prefix and whose oxygen is `SO2`, not only ASM2d: the secondary clarifier
+  settles the model's own particulates rather than ASM2d's fixed list. ASM2d
+  plants are unchanged.
+- `build_bsm1` on a model that tracks its suspended solids as a state (the ASM2d
+  and ASM3 families, such as `asm3_2step_n2o`) weighs the settler's solids by the
+  model's own TSS factors (`iTSS_*` / `iSS_*`), as `build_a2o` does, instead of
+  ASM1's 0.75 g TSS per g COD with stored polyphosphate and precipitates at 0.
+  Such a plant's steady state moves slightly: on the default BSM1 configuration
+  the effluent TSS falls by 4–7 % and the sludge age rises by 2–3 %. Pass
+  `tss_species=` to keep the ASM1 weighting. ASM1 plants are unchanged.
+
+### Fixed
+
+- `plant.steady_state_sensitivity` keeps its compiled implicit-function-theorem
+  step between calls instead of compiling it again each time. On BSM2, a repeat
+  call for all 112 parameters drops from about 15 s to about 0.02 s, even when a
+  new `output_fn` is passed, and the first call is about twice as fast.
+  `steady_state_dgsm`, which calls it once per sample, benefits the same way. ([#920](https://github.com/DeGrootResearchGroup/aquakin/issues/920))
+- `build_a2o` and `a2o_warm_start` run on `asm2d_chemp`, the `asm2d` extension
+  with iron chemistry, which failed on the warm start's metal-precipitate entries
+  (`XMeOH` / `XMeP`, which that model does not have). With no metal dosed it gives
+  the same plant as `asm2d`.
+- `plant.sludge_age` and `sludge_metrics` work on ASM2d and ASM3-family plants
+  such as `build_a2o`: the default `substrate="BOD"` raised `KeyError: 'SS'`, and
+  `substrate="COD"` counted only the COD species named as in ASM1 (`SI`, `XI`,
+  `XS` on ASM2d), so the F:M ratio was too low. `derived_COD` now sums every
+  species that carries COD according to the model's composition (or its declared
+  units), and `derived_BOD` takes 0.25 × the biodegradable COD, with each
+  species' inert share read from the model's stoichiometry; it accepts `params=`
+  so the share follows a calibrated `fXI`. A model whose stoichiometry does not
+  fix that share raises and points to `substrate="COD"`. ASM1, BSM1 and BSM2
+  results are unchanged.
+
+
 ## [0.3.0] - 2026-11-26
 
 This release lets a plant be saved, edited and analyzed outside Python:
@@ -1374,6 +1550,7 @@ functions integrated with [Diffrax](https://github.com/patrick-kidger/diffrax).
   sensitivity & calibration), the YAML model-authoring reference, a catalog of
   every shipped model, and an API reference generated from the public surface.
 
+[0.4.0]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/DeGrootResearchGroup/aquakin/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DeGrootResearchGroup/aquakin/releases/tag/v0.1.0

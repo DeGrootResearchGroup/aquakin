@@ -81,7 +81,7 @@ def test_check_gradient_finite_remedy_depends_on_dtmax(simple_model):
 
     capped = aquakin.BatchReactor(
         simple_model, cond,
-        integrator=aquakin.IntegratorConfig(dtmax=1e-3))
+        settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(dtmax=1e-3)))
     with pytest.raises(RuntimeError, match="already caps dtmax"):
         capped.check_gradient_finite(nan)
 

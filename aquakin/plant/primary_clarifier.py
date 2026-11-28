@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 
+from aquakin.core.time_expr import is_time_expression
 from aquakin.plant._constants import (
     ASM1_SETTLING_SPECIES,
     EPS_Q,
@@ -49,7 +50,6 @@ from aquakin.plant.flow_setpoint import (
     build_setpoints,
 )
 from aquakin.plant.streams import Stream, mixed_feed, mixed_scalars, total_flow
-from aquakin.plant.time_expr import is_time_expression
 from aquakin.utils.units import conversion_factor
 
 if TYPE_CHECKING:  # pragma: no cover

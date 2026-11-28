@@ -14,6 +14,7 @@ paths:
   - "docs/influents.md"
   - "docs/plant_files.md"
   - "docs/installing_the_editor.md"
+  - "docs/ai_assistants.md"
   - "docs/analysis_concepts.md"
   - "docs/sensitivity_and_calibration.md"
   - "docs/calibration.md"

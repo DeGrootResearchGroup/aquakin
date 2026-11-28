@@ -437,17 +437,127 @@ def _profile_view(results: dict, summary: dict, lines: list, tables: list, chart
         )
 
 
+#: The diagnostics a posterior's draws should meet before they are used: R-hat
+#: below this (the chains agree), and at least this many effective draws.
+R_HAT_LIMIT, ESS_FLOOR = 1.01, 100
+
+
+def _posterior_view(results: dict, summary: dict, lines: list, tables: list, charts: list) -> None:
+    """A posterior: each parameter's summary and diagnostics, a warning for any
+    that fail them, and a histogram of each parameter's draws."""
+    parameters = summary.get("parameters") or {}
+    lines.append(
+        f"{summary.get('n_chains')} chains of {summary.get('n_draws')} draws each, sampling "
+        f"the fit of {summary.get('fit')} (prior flat in the {summary.get('prior_space')} "
+        f"coordinates). Acceptance rate per chain: "
+        + ", ".join(fmt(a) for a in summary.get("acceptance_rate") or [])
+        + "."
+    )
+    unmixed = [n for n, p in parameters.items() if (p.get("r_hat") or 0) > R_HAT_LIMIT]
+    few = [n for n, p in parameters.items() if (p.get("ess_bulk") or 0) < ESS_FLOOR]
+    problems = []
+    if unmixed:
+        problems.append(f"R-hat above {R_HAT_LIMIT} for {', '.join(unmixed)}")
+    if few:
+        problems.append(f"fewer than {ESS_FLOOR} effective draws for {', '.join(few)}")
+    if problems:
+        lines.append(
+            "Not enough to rely on yet: " + "; ".join(problems) + ". Run it again with more draws."
+        )
+    tables.append(
+        _table(
+            "Parameters",
+            ["parameter", "optimum", "mean", "std", "5 %", "median", "95 %", "R-hat", "ESS"],
+            [
+                [
+                    n,
+                    *(
+                        fmt(p.get(k))
+                        for k in (
+                            "optimum",
+                            "mean",
+                            "std",
+                            "q05",
+                            "q50",
+                            "q95",
+                            "r_hat",
+                            "ess_bulk",
+                        )
+                    ),
+                ]
+                for n, p in parameters.items()
+            ],
+        )
+    )
+    for name, hist in (results.get("histograms") or {}).items():
+        edges, counts = hist["edges"], hist["counts"]
+        centres = [(a + b) / 2 for a, b in zip(edges[:-1], edges[1:])]
+        charts.append(
+            {
+                "channel": name,
+                "svg": xy_chart(
+                    title=f"Posterior of {name}",
+                    label=f"histogram of the draws of {name}",
+                    x_name=name,
+                    line=list(zip(centres, counts)),
+                    x_axis=name,
+                ),
+            }
+        )
+
+
 #: The kind of study shown by the editor's own tables and charts (a steady state
 #: or a run in time), not by :func:`analysis_view`.
 SIMULATE = "simulate"
 
+
 #: Each other kind's view; ``tests/ui/test_protocol.py`` pins that these and
 #: :data:`SIMULATE` are exactly aquakin's study kinds.
+def _design_view(results: dict, summary: dict, lines: list, tables: list, charts: list) -> None:
+    """A design: the criterion before and after, the optimized experiments, and
+    each parameter's standard deviation at the start and at the optimum."""
+    scored = ", ".join(summary.get("subset") or []) or "every free parameter"
+    state = "converged" if summary.get("converged") else "did not converge"
+    lines.append(
+        f"{summary.get('criterion')} criterion, scoring {scored}: {fmt(summary.get('start'))} "
+        f"at the start, {fmt(summary.get('optimum'))} at the optimum. The optimizer "
+        f"{state} after {summary.get('iterations')} iterations ({summary.get('message')})."
+    )
+    tables.append(
+        _table(
+            "Optimized experiments",
+            ["experiment", "initial concentrations", "sampling times"],
+            [
+                [
+                    str(i + 1),
+                    ", ".join(f"{s} {fmt(v)}" for s, v in (e.get("initial") or {}).items()),
+                    ", ".join(fmt(t) for t in e.get("t_obs") or []),
+                ]
+                for i, e in enumerate(summary.get("experiments") or [])
+            ],
+        )
+    )
+    std = summary.get("std") or {}
+    tables.append(
+        _table(
+            "Standard deviations",
+            ["parameter", "at the start", "at the optimum"],
+            [[n, fmt(s.get("start")), fmt(s.get("optimum"))] for n, s in std.items()],
+        )
+    )
+    lines.append(
+        "The experiments are written in design.yaml as an experiments: list, to paste into "
+        "a fisher or calibrate study."
+    )
+
+
 ANALYSIS_VIEWS = {
     "fisher": _fisher_view,
     "rank": _rank_view,
     "calibrate": _calibrate_view,
     "profile": _profile_view,
+    "posterior": _posterior_view,
+    "design": _design_view,
 }
 
 

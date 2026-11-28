@@ -19,10 +19,8 @@ import jax.numpy as jnp
 
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
-    DifferentiationConfig,
     ExportableSolutionMixin,
     GradientCheckMixin,
-    IntegratorConfig,
     PlottableSolutionMixin,
     _HasNamedSpecies,
     _interp_fields_to_scalar,
@@ -34,6 +32,7 @@ from aquakin.integrate._common import (
     solve_chemistry,
     validate_C0_params,
 )
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate._solver import check_solve_result
 
 
@@ -106,20 +105,13 @@ class ParticleTrackReactor(GradientCheckMixin):
     n_save : int, optional
         Number of times at which to record the solution between ``t[0]`` and
         ``t[-1]``. Defaults to the number of track sample points.
-    rtol : float, optional
-        Relative tolerance for the ODE solver.
-    atol : float or jnp.ndarray, optional
-        Absolute tolerance, scalar or shape ``(n_species,)``. Defaults to
-        ``None`` -> a per-component noise floor scaled off the model reference
-        concentrations (see :class:`~aquakin.BatchReactor`).
-    integrator : IntegratorConfig, optional
-        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
-        ``dtmax``, ``max_steps``, an explicit ``solver``). See
-        :class:`~aquakin.BatchReactor`. Set ``dtmax`` for reverse-mode
-        differentiation of a stiff model.
-    diff : DifferentiationConfig, optional
-        Autodiff configuration (``mode``, ``method``). See
-        :class:`~aquakin.BatchReactor`.
+    settings : SolverSettings, optional
+        Tolerances and solver configuration (``rtol``, ``atol``, ``integrator``,
+        ``diff``); see :class:`~aquakin.BatchReactor` for each field. ``atol``
+        is a scalar or shape ``(n_species,)``; ``None`` (default) uses a
+        per-component noise floor scaled off the model reference
+        concentrations. Set ``integrator=IntegratorConfig(dtmax=...)`` for
+        reverse-mode differentiation of a stiff model.
     """
 
     def __init__(
@@ -128,10 +120,7 @@ class ParticleTrackReactor(GradientCheckMixin):
         track: Track,
         *,
         n_save: int | None = None,
-        rtol: float = 1e-6,
-        atol=None,
-        integrator: IntegratorConfig = IntegratorConfig(),
-        diff: DifferentiationConfig = DifferentiationConfig(),
+        settings: SolverSettings = SolverSettings(),
     ) -> None:
         missing = sorted(set(model.conditions_required) - set(track.fields))
         if missing:
@@ -139,12 +128,12 @@ class ParticleTrackReactor(GradientCheckMixin):
                 f"Track is missing required condition fields: {missing}. "
                 f"Provided: {sorted(track.fields)}"
             )
-        init_solver_settings(self, model, rtol=rtol, integrator=integrator, diff=diff)
+        init_solver_settings(self, model, settings)
         self.track = track
         self.n_save = int(n_save) if n_save is not None else track.n_points
         if self.n_save < 2:
             raise ValueError(f"n_save must be >= 2, got {self.n_save}")
-        self.atol = resolve_state_atol(model, atol)
+        self.atol = resolve_state_atol(model, settings.atol)
 
     def solve(self, C0: jnp.ndarray, *, params: jnp.ndarray | None = None) -> TrackSolution:
         """
@@ -233,11 +222,8 @@ def integrate_ensemble(
     C0_fn,
     params: jnp.ndarray,
     *,
-    rtol: float = 1e-6,
-    atol=None,
     n_save: int | None = None,
-    integrator: IntegratorConfig = IntegratorConfig(),
-    diff: DifferentiationConfig = DifferentiationConfig(),
+    settings: SolverSettings = SolverSettings(),
 ) -> dict[int, TrackSolution]:
     """
     Integrate the model along an ensemble of particle tracks.
@@ -252,9 +238,9 @@ def integrate_ensemble(
         ``lambda pid: model.default_concentrations()``.
     params : jnp.ndarray
         Flat parameter vector shared across all particles.
-    rtol, atol, n_save, integrator, diff : passed through to each
-        :class:`ParticleTrackReactor`. ``integrator`` / ``diff`` let an ensemble
-        of stiff tracks be differentiated the same way a single track can.
+    n_save, settings : passed through to each :class:`ParticleTrackReactor`.
+        ``settings`` (its ``integrator`` / ``diff``) lets an ensemble of stiff
+        tracks be differentiated the same way a single track can.
 
     Returns
     -------
@@ -267,10 +253,7 @@ def integrate_ensemble(
             model,
             track,
             n_save=n_save,
-            rtol=rtol,
-            atol=atol,
-            integrator=integrator,
-            diff=diff,
+            settings=settings,
         )
         results[pid] = reactor.solve(C0_fn(pid), params=params)
     return results

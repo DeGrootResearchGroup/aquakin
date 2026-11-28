@@ -60,7 +60,7 @@ from aquakin.integrate.calibrate import (
 )
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
 from aquakin.integrate.calibration.config import SamplerConfig
-from aquakin.integrate.calibration.result import PosteriorSamples
+from aquakin.integrate.calibration.result import PosteriorSamples, load_calibration
 from aquakin.integrate.calibration.sampling import sample_posterior
 from aquakin.integrate.calibration.criteria import (
     ModelComparison,
@@ -70,6 +70,11 @@ from aquakin.integrate.calibration.criteria import (
     compare_models,
 )
 from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
+from aquakin.integrate.discrimination import (
+    DesignConfig,
+    optimize_discrimination,
+    rank_discrimination,
+)
 from aquakin.integrate.experiment_design import (
     CandidateScore,
     ExperimentDesignResult,
@@ -104,6 +109,12 @@ from aquakin.integrate._common import (
     IntegratorConfig,
     check_finite_gradient,
     forward_adjoint,
+)
+from aquakin.integrate._config import SolverSettings
+from aquakin.integrate.dispersed_flow import (
+    AxialFlowSolution,
+    DispersedFlowReactor,
+    TanksInSeries,
 )
 from aquakin.integrate.forward_sensitivity import (
     ForwardSensitivityResult,
@@ -229,6 +240,8 @@ from aquakin.utils import (
     check_nitrogen,
     composition_table,
     conversion_factor,
+    fit_dispersion,
+    fit_tanks_in_series,
     parse_units,
     units_match,
 )
@@ -240,6 +253,7 @@ __all__ = [
     "AerationDesignPoint",
     "AerationSystem",
     "AlgebraicTemperature",
+    "AxialFlowSolution",
     "BSM1Evaluation",
     "BSM2Evaluation",
     "BatchReactor",
@@ -260,7 +274,9 @@ __all__ = [
     "Constraint",
     "CostFactors",
     "DGSMResult",
+    "DesignConfig",
     "DifferentiationConfig",
+    "DispersedFlowReactor",
     "EigenDirection",
     "Event",
     "EventedResult",
@@ -307,10 +323,12 @@ __all__ = [
     "SetpointSplitter",
     "SludgeMetrics",
     "SobolResult",
+    "SolverSettings",
     "SpatialConditions",
     "SpeciationUnitsWarning",
     "StateTranslator",
     "Stream",
+    "TanksInSeries",
     "TemperatureModel",
     "ThresholdSplitter",
     "Track",
@@ -365,6 +383,8 @@ __all__ = [
     "fisher_information",
     "fisher_information_from_fn",
     "fit",
+    "fit_dispersion",
+    "fit_tanks_in_series",
     "forward_adjoint",
     "forward_sensitivity",
     "fractionate",
@@ -373,6 +393,7 @@ __all__ = [
     "implicit_euler_adjoint_solve",
     "integrate_ensemble",
     "kpi_comparison",
+    "load_calibration",
     "load_model",
     "load_model_from_file",
     "mass_balance",
@@ -384,12 +405,14 @@ __all__ = [
     "operational_cost_index",
     "operational_cost_index_bsm2",
     "optimize_design",
+    "optimize_discrimination",
     "optimize_experiment",
     "parse_rate_expression",
     "parse_units",
     "profile_likelihood",
     "pumping_energy",
     "pumping_energy_bsm2",
+    "rank_discrimination",
     "rank_experiments",
     "read_influent_csv",
     "register_rate_function",
@@ -411,4 +434,4 @@ __all__ = [
     "uv_log_inactivation",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

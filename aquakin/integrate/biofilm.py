@@ -55,10 +55,8 @@ import numpy as np
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
-    DifferentiationConfig,
     ExportableSolutionMixin,
     GradientCheckMixin,
-    IntegratorConfig,
     PlottableSolutionMixin,
     _HasNamedSpecies,
     _run_diffeqsolve,
@@ -70,7 +68,9 @@ from aquakin.integrate._common import (
     to_native_time,
     validate_t_eval,
 )
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate._solver import check_solve_result
+from aquakin.integrate.finite_volume import diffusive_flux, divergence
 from aquakin.integrate.steady import solve_steady_state
 
 
@@ -167,19 +167,20 @@ def _diffusion_transport(C, D, kL, dz, area_per_volume, n_species):
     Pure function (no reactor ``self``) so it can be closed over by a jit-compiled
     solve without leaking trace-created state. ``C[0]`` is the bulk; ``C[1:]`` the
     layers (surface..wall). Particulate columns are zero where ``D == 0``. Uses
-    the conservative finite-volume (face-flux) form: only first-order face
-    differences, so the volume-weighted total is conserved exactly.
+    the conservative finite-volume (face-flux) form of
+    :mod:`aquakin.integrate.finite_volume`, so the volume-weighted total is
+    conserved exactly. The boundary faces are this operator's own: a Robin
+    mass-transfer flux from the bulk at the surface, no flux at the wall.
     """
     bulk = C[0]  # (n_species,)
     layers = C[1:]  # (n_layers, n_species)
     # Internal interface fluxes between layer j and j+1 (positive toward the wall).
-    f_internal = D[None, :] * (layers[:-1] - layers[1:]) / dz  # (n_layers-1, n_species)
+    f_internal = diffusive_flux(layers, D, dz)  # (n_layers-1, n_species)
     # Bulk <-> surface flux across the boundary layer (positive into the film).
     f_bs = kL * (bulk - layers[0])  # (n_species,)
-    flux_in = jnp.concatenate([f_bs[None, :], f_internal], axis=0)
-    zero = jnp.zeros((1, n_species))
-    flux_out = jnp.concatenate([f_internal, zero], axis=0)  # wall: no flux out
-    d_layers = (flux_in - flux_out) / dz  # (n_layers, n_species)
+    zero = jnp.zeros((1, n_species))  # wall: no flux out
+    faces = jnp.concatenate([f_bs[None, :], f_internal, zero], axis=0)
+    d_layers = divergence(faces, dz)  # (n_layers, n_species)
     d_bulk = -area_per_volume * f_bs  # bulk loses surface flux
     return jnp.concatenate([d_bulk[None, :], d_layers], axis=0)
 
@@ -291,24 +292,21 @@ class BiofilmReactor(GradientCheckMixin):
         carry the suspended biomass ``[X_BH]`` or are abiotic. This separation,
         not a zeroed biomass state, is what keeps the two phases from leaking
         into each other.
-    rtol : float
-        Relative solver tolerance, applied across the whole layered state.
-    atol : float or jnp.ndarray, optional
-        Absolute solver tolerance. ``None`` (default) uses the per-component
-        :func:`~aquakin.integrate._common.default_atol` noise floor scaled off the
-        model's reference concentrations, tiled across every compartment (so g/m3
-        ASM/ADM states get a sensible floor instead of a fixed scalar ~9 orders
-        too tight). A scalar broadcasts to the whole state; a ``(n_species,)``
-        array is tiled across the ``n_layers+1`` compartments.
-    integrator : IntegratorConfig, optional
-        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
-        ``dtmax``, ``max_steps``, an explicit ``solver``); see
-        :class:`~aquakin.integrate.batch.BatchReactor`. A stiff per-layer-biomass
-        model with a tight ``dtmax`` can exceed the default ``max_steps``; raise
-        it if the solve raises a max-steps error.
-    diff : DifferentiationConfig, optional
-        Autodiff configuration (``mode``, ``method``); see
-        :class:`~aquakin.integrate.batch.BatchReactor`.
+    settings : SolverSettings, optional
+        Tolerances and solver configuration; see
+        :class:`~aquakin.integrate.batch.BatchReactor` for each field. Here:
+
+        - ``rtol`` is applied across the whole layered state.
+        - ``atol`` ``None`` (default) uses the per-component
+          :func:`~aquakin.integrate._common.default_atol` noise floor scaled off
+          the model's reference concentrations, tiled across every compartment
+          (so g/m3 ASM/ADM states get a sensible floor instead of a fixed scalar
+          ~9 orders too tight). A scalar broadcasts to the whole state; a
+          ``(n_species,)`` array is tiled across the ``n_layers+1``
+          compartments.
+        - ``integrator``: a stiff per-layer-biomass model with a tight
+          ``dtmax`` can exceed the default ``max_steps``; raise it if the solve
+          raises a max-steps error.
 
     Notes
     -----
@@ -366,17 +364,14 @@ class BiofilmReactor(GradientCheckMixin):
         feed=None,
         dilution_rate: float = 0.0,
         biofilm_reactions=None,
-        rtol: float = 1e-6,
-        atol=None,
-        integrator: IntegratorConfig = IntegratorConfig(),
-        diff: DifferentiationConfig = DifferentiationConfig(),
+        settings: SolverSettings = SolverSettings(),
     ) -> None:
         conditions.validate_required(model.conditions_required)
         if n_layers < 1:
             raise ValueError(f"n_layers must be >= 1; got {n_layers}.")
         if not (thickness > 0 and boundary_layer > 0 and area_per_volume > 0):
             raise ValueError("thickness, boundary_layer and area_per_volume must be positive.")
-        init_solver_settings(self, model, rtol=rtol, integrator=integrator, diff=diff)
+        init_solver_settings(self, model, settings)
         self.conditions = conditions
         self.n_layers = int(n_layers)
         self.thickness = float(thickness)
@@ -389,7 +384,7 @@ class BiofilmReactor(GradientCheckMixin):
         # diffrax's error test wants, so the multi-compartment state is no
         # obstacle -- a single scalar floor was ~9 orders too tight for g/m3
         # ASM/ADM states.
-        self.atol = resolve_layered_atol(model, atol, self.n_layers + 1)
+        self.atol = resolve_layered_atol(model, settings.atol, self.n_layers + 1)
 
         n = model.n_species
         if soluble_mask is None:

@@ -1,0 +1,12 @@
+{
+  "name": "aquakin",
+  "description": "aquakin's plugin for Claude Code: reactive transport and wastewater treatment modelling",
+  "owner": { "name": "DeGroot Research Group" },
+  "plugins": [
+    {
+      "name": "aquakin",
+      "source": "./plugins/aquakin",
+      "description": "aquakin's MCP server (models, flowsheets, studies, the user guide and API reference) and skills for building plants, running studies, writing models and analyzing them in Python"
+    }
+  ]
+}

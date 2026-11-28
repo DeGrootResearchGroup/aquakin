@@ -18,7 +18,9 @@ shipped model is: `docs/model_catalog.md`.
 
 ## Loading
 
-- Load YAML with `yaml.safe_load()` only, everywhere.
+- Parse a model YAML with `parse_model_yaml` (`schema/loader.py`, a safe loader
+  that refuses a repeated mapping key, which `yaml.safe_load` keeps silently as
+  the last value); any other YAML with `yaml.safe_load()`. Never a full loader.
 - Quote a species name YAML could read as a non-string (`"NO"`, `"ON"`).
 - `default_concentration` is a reference value, not an initial condition; do
   not tune it to make a particular experiment work (users pass `C0`).

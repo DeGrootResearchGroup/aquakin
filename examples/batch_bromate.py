@@ -13,7 +13,7 @@ def main() -> None:
 
     # Per-species absolute tolerance: OH lives at ~1e-12 M, others at ~1e-4 M.
     atol = model.atol({"OH": 1e-20}, default=1e-12)
-    reactor = aquakin.BatchReactor(model, conditions, atol=atol)
+    reactor = aquakin.BatchReactor(model, conditions, settings=aquakin.SolverSettings(atol=atol))
 
     C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
 

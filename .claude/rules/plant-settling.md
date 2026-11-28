@@ -83,7 +83,8 @@ warning). So a non-ASM1 model must name its own `settling_species` /
 **A model that tracks its TSS as a state (`XTSS` / `XSS`, the ASM2d and ASM3
 families) takes its settler `tss_factors` from `_constants.lumped_tss_weights`**
 (solved from the stoichiometry: each particulate at its `iTSS` factor, the TSS
-state at 0), as `build_a2o` and `design.sludge_metrics` do; the Takács
+state at 0), as `build_a2o`, `build_bsm1` (unless given `tss_species`) and
+`design.sludge_metrics` do; the Takács
 `tss_factors.get(sp, 1.0)` fallback otherwise adds COD, g P and the TSS state
 together into the TSS that sets the settling velocity. A shipped composition
 for such a model sets the TSS state with `with_lumped_tss`, never by hand. TSS

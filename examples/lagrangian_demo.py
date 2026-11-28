@@ -65,7 +65,7 @@ def main() -> None:
         loaded,
         C0_fn=C0_fn,
         params=model.default_parameters(),
-        atol=atol,
+        settings=aquakin.SolverSettings(atol=atol),
     )
 
     print()

@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from aquakin.integrate._common import native_time_factor
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate._transforms import from_unconstrained, to_unconstrained
 from aquakin.integrate.calibration.coords import (
     _resolve_ic_coords,
@@ -108,10 +109,12 @@ class _ReactorForwardModel:
         rctr = type(self.reactor)(
             self.reactor.model,
             self.reactor.conditions,
-            rtol=self.reactor.rtol,
-            atol=self.reactor.atol,
-            integrator=replace(self.reactor.integrator, dtmax=dtmax),
-            diff=self.reactor.diff,
+            settings=SolverSettings(
+                rtol=self.reactor.rtol,
+                atol=self.reactor.atol,
+                integrator=replace(self.reactor.integrator, dtmax=dtmax),
+                diff=self.reactor.diff,
+            ),
         )
         return _ReactorForwardModel(
             rctr, self.gradient, self.stable_adjoint_max_steps, self.stable_adjoint_low_memory
@@ -199,6 +202,11 @@ class _CalibrationProblem:
     is_likelihood: bool = False
     n_observations: int = 0
     observations_key: str = ""
+    # The ``sigma`` the fit was given (in model units), as given: an array, a
+    # per-dataset list, ``"estimate"`` or ``None``. Read only by
+    # model-discrimination design for the fit's noise level; the loss closures
+    # hold their own copy, so it is not part of :meth:`struct_key`.
+    fit_sigma: object = None
 
     @property
     def m_ic_theta(self) -> int:
@@ -646,6 +654,7 @@ def _resolve_problem(
         data_key=(loss, _array_digest(*data.digest_parts)),
         rate_bounds=rate_bounds,
         data_mean_square=data.data_mean_square,
+        fit_sigma=sigma,
         **_observation_record(loss, data.n_seen_per_output, data.obs_parts),
     )
 

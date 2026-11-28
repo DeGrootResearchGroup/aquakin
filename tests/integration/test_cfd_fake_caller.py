@@ -29,7 +29,7 @@ def cfd_setup():
     # Per-species absolute tolerance: OH lives at ~1e-12 M.
     atol = np.full(model.n_species, 1e-12)
     atol[model.species_index["OH"]] = 1e-20
-    reactor = aquakin.CFDReactor(model, atol=jnp.asarray(atol))
+    reactor = aquakin.CFDReactor(model, settings=aquakin.SolverSettings(atol=jnp.asarray(atol)))
 
     # Initial cell state: identical inlet concentration across cells.
     C0 = np.zeros((n_cells, model.n_species), dtype=np.float64)
@@ -149,7 +149,9 @@ def test_matches_per_cell_BatchReactor(cfd_setup):
         # Same per-species atol as the CFD reactor.
         atol = np.full(model.n_species, 1e-12)
         atol[model.species_index["OH"]] = 1e-20
-        br = aquakin.BatchReactor(model, sc, atol=jnp.asarray(atol))
+        br = aquakin.BatchReactor(model, sc, settings=aquakin.SolverSettings(
+            atol=jnp.asarray(atol),
+        ))
         sol = br.solve(
             jnp.asarray(C0[i]),
             t_span=(0.0, dt),

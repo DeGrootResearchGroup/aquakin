@@ -9,6 +9,7 @@ import aquakin
 from . import mem_watchdog
 
 FIXTURES = Path(__file__).parent / "fixtures"
+EXAMPLES = Path(__file__).parent.parent / "examples"
 
 # Each shipped model with a TSS state: that state's name and, per particulate,
 # the parameter converting it to TSS (iTSS_* in ASM2d, iSS_* in ASM3).
@@ -249,3 +250,77 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if _SLOW_PLANT_FIXTURES.intersection(getattr(item, "fixturenames", ())):
             item.add_marker(slow)
+
+
+def study_project(tmp_path):
+    """A one-tank project with one simulate study, written with aquakin."""
+    import aquakin
+    from aquakin.plant import CSTRUnit, InfluentSeries, Plant
+
+    m = aquakin.load_model("asm1")
+    p = Plant("tank")
+    p.add_unit(CSTRUnit("tank", m, 1000.0, ["in"], conditions={"T": 293.15}))
+    p.add_influent("feed", InfluentSeries.constant(m, Q=2000.0, SS=60.0, SNH=30.0), to="tank.in")
+    project = tmp_path / "project"
+    p.to_spec(project / "flowsheet.yaml")
+    study = project / "studies" / "short"
+    study.mkdir(parents=True)
+    (study / "study.yaml").write_text(
+        "study:\n  kind: simulate\n  description: half a day\n"
+        "  time: {t_span: [0, 0.5], t_eval: {start: 0, stop: 0.5, num: 3}}\n"
+        "  streams: [tank]\n"
+    )
+    return project
+
+
+#: A second program that holds a study's run lock until its input closes,
+#: reporting progress at each line it reads ("cancelled" once it is stopped).
+_HOLD = """
+import sys
+from pathlib import Path
+from aquakin.progress import Cancelled, Progress
+from aquakin.study.running import RunLock
+with RunLock(Path(sys.argv[1])) as run:
+    run.report(Progress("fit", 3, 10, "step 3"))
+    print("held", flush=True)
+    for line in sys.stdin:
+        try:
+            run.report(Progress("fit", 4, 10, "step 4"))
+        except Cancelled:
+            print("cancelled", flush=True)
+            break
+        print("reported", flush=True)
+"""
+
+
+@pytest.fixture
+def hold_run():
+    """``hold_run(folder) -> Popen``: another process holding a study's run lock
+    (``aquakin/study/running.py``) at a first progress report, "step 3".
+
+    Each line written to its input makes it report again: it answers
+    "reported", or "cancelled" once the study was cancelled (and then ends).
+    Closing its input ends the run. Every holder is ended at the test's end.
+    """
+    import subprocess
+    import sys
+
+    started = []
+
+    def hold(folder):
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _HOLD, str(folder)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        started.append(proc)
+        assert proc.stdout.readline() == "held\n"
+        return proc
+
+    yield hold
+    for proc in started:
+        if not proc.stdin.closed:
+            proc.stdin.close()  # ends a holder still running; a closed one has gone
+        proc.wait(60)
+        proc.stdout.close()

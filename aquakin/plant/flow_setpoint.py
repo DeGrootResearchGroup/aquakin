@@ -17,7 +17,7 @@ the fixed default, so a unit constructed on its own behaves exactly as a plain
 float setpoint.
 
 A setpoint may instead be written as an expression of the plant clock
-(``"385 + 75*sin(2*pi*t)"``, see :mod:`aquakin.plant.time_expr`): an
+(``"385 + 75*sin(2*pi*t)"``, see :mod:`aquakin.core.time_expr`): an
 :class:`ExpressionSetpoint`, resolved through the same ``resolve(flow_params, t)``
 call. It takes no slot in the parameter vector, and its value is clipped into
 the setpoint's range (a flow to ``>= 0``, a fraction to ``[0, 1]``) as it is
@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 
 import jax.numpy as jnp
 
-from aquakin.plant.time_expr import compile_time_expression, is_time_expression
+from aquakin.core.time_expr import compile_time_expression, is_time_expression
 
 #: The range a flow setpoint is clipped into when it is an expression.
 FLOW_RANGE = (0.0, math.inf)
@@ -95,7 +95,7 @@ class ExpressionSetpoint:
     Attributes
     ----------
     expression : str
-        The expression of ``t`` (see :mod:`aquakin.plant.time_expr`), on the
+        The expression of ``t`` (see :mod:`aquakin.core.time_expr`), on the
         plant's clock: ``t`` in the plant's time unit and a flow in m³ per that
         unit, never converted.
     value_range : tuple of float

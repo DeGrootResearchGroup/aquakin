@@ -48,6 +48,7 @@ PAGE_CSS = """
 .ak-pal-icon { width: 20px; height: 20px; flex: none; display: inline-flex; }
 .ak-pal-icon svg { width: 20px; height: 20px; }
 .ak-sel-icon svg { width: 28px; height: 28px; }
+.ak-pointer { font-family: monospace; white-space: pre; overflow-x: auto; margin: 0; }
 """
 
 
@@ -57,6 +58,7 @@ def _build(self: Editor) -> None:
     # back: Python's last rows stay what a redraw is compared with, so an
     # unchanged background redraw still leaves the typing alone.
     self.state.client_only("sel_rows")
+    self.state.client_only("model_draft")  # the same, for the model panel's draft
     with SinglePageWithDrawerLayout(self.server, theme=("dark ? 'dark' : 'light'",)) as layout:
         layout.title.set_text("aquakin · {{ plant_name }}")
         layout.footer.hide()
@@ -84,6 +86,7 @@ def _build(self: Editor) -> None:
             self._study_settings_dialog()
             self._results_dialog()
             self._unsaved_dialog()
+            self._model_dialog()
             v3.VSnackbar(
                 "{{ message }}",
                 v_model=("show_message",),
@@ -189,12 +192,15 @@ def _side_panel(self: Editor) -> None:
                 "Checks ({{ errors.length }})", value="checks", classes="text-none", min_width=0
             )
             v3.VTab("Studies", value="studies", classes="text-none", min_width=0)
+            v3.VTab("Model", value="model", classes="text-none", min_width=0)
             v3.VTab("Spec", value="spec", classes="text-none", min_width=0)
         with v3.VWindow(v_model=("panel",)):
             with v3.VWindowItem(value="studies", classes="pa-3"):
                 self._studies_panel()
             with v3.VWindowItem(value="properties", classes="pa-3"):
                 self._unit_form()
+            with v3.VWindowItem(value="model", classes="pa-3"):
+                self._model_panel()
             with v3.VWindowItem(value="checks", classes="pa-3"):
                 html.Div("Errors", classes="text-overline")
                 with html.Div(v_if="checking", classes="d-flex align-center ga-2 mb-2"):

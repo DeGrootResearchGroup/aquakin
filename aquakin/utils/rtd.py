@@ -178,3 +178,105 @@ def morrill_index(t, C) -> jnp.ndarray:
     return percentile_time(t, C, 0.9, _warn_truncated=False) / percentile_time(
         t, C, 0.1, _warn_truncated=False
     )
+
+
+def _normalized_variance(t, C) -> float:
+    """``sigma^2 / tau^2`` of a tracer response, the dimensionless spread."""
+    t, C = _ensure_1d(t, C)
+    _warn_if_truncated(C, stacklevel=4)
+    tau = float(mean_residence_time(t, C))
+    return float(variance(t, C)) / tau**2
+
+
+def closed_vessel_variance(dispersion_number):
+    """``sigma^2 / tau^2`` of a closed vessel with axial dispersion.
+
+    For an axially dispersed vessel with Danckwerts (closed--closed)
+    boundaries, ``sigma_theta^2 = 2 d - 2 d^2 (1 - exp(-1/d))`` with ``d = D /
+    (u L)`` (van der Laan 1958). It rises from ``0`` (plug flow) toward ``1``
+    (a stirred tank).
+
+    Parameters
+    ----------
+    dispersion_number : float or array-like
+        ``d = D / (u L)``, positive.
+
+    Returns
+    -------
+    jnp.ndarray
+        The normalized variance.
+    """
+    d = jnp.asarray(dispersion_number, dtype=float)
+    return 2.0 * d + 2.0 * d * d * jnp.expm1(-1.0 / d)
+
+
+def fit_dispersion(t, C) -> float:
+    """Dispersion number ``D / (u L)`` of a measured tracer pulse.
+
+    By the method of moments: the normalized variance ``sigma^2 / tau^2`` of
+    the response is matched to :func:`closed_vessel_variance`, the exact
+    variance of the axial-dispersion model with the Danckwerts boundaries
+    :class:`~aquakin.DispersedFlowReactor` uses, so the fitted number drops
+    straight into it. The relation is monotonic, and is inverted by bisection
+    on ``log d``.
+
+    The moments are integrals of the whole curve, so the response must wash
+    out within the record (a truncated tail biases the variance low, and is
+    warned about) and should be baseline-corrected: a long noisy tail weighs
+    heavily in the second moment.
+
+    Parameters
+    ----------
+    t, C : array-like
+        Outlet tracer response to an impulse at the inlet, as for
+        :func:`E_curve`.
+
+    Returns
+    -------
+    float
+        The dispersion number ``d``.
+
+    Raises
+    ------
+    ValueError
+        If the response is wider than a single stirred tank
+        (``sigma^2 / tau^2 >= 1``), which no dispersion number reproduces.
+    """
+    target = _normalized_variance(t, C)
+    if not target < 1.0:
+        raise ValueError(
+            f"The tracer response has sigma^2/tau^2 = {target:.3g} >= 1, wider than a "
+            "stirred tank; no dispersion number reproduces it."
+        )
+    # log10 d. Beyond d = 1e6 the variance is within 3e-7 of 1 and its formula
+    # loses digits to cancellation, so the search stops there.
+    low, high = -8.0, 6.0
+    for _ in range(100):
+        middle = 0.5 * (low + high)
+        if float(closed_vessel_variance(10.0**middle)) < target:
+            low = middle
+        else:
+            high = middle
+    return float(10.0 ** (0.5 * (low + high)))
+
+
+def fit_tanks_in_series(t, C) -> int:
+    """Number of equal tanks in series that reproduces a measured tracer pulse.
+
+    By the method of moments: ``N`` tanks have the Erlang (gamma) RTD, whose
+    normalized variance is ``1 / N``, so ``N = tau^2 / sigma^2`` rounded to
+    the nearest integer (at least 1). The unrounded value is the shape of the
+    gamma distribution with the same mean and variance. The caveats of
+    :func:`fit_dispersion` on truncated or noisy tails apply.
+
+    Parameters
+    ----------
+    t, C : array-like
+        Outlet tracer response to an impulse at the inlet.
+
+    Returns
+    -------
+    int
+        The number of tanks, ``N >= 1``.
+    """
+    return max(1, round(1.0 / _normalized_variance(t, C)))

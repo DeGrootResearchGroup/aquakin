@@ -45,6 +45,7 @@ from aquakin.plant._constants import (
     EPS_Q,
     HOURS_PER_DAY,
     SECONDS_PER_DAY,
+    cod_content,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -180,29 +181,130 @@ def derived_TSS(C, model: CompiledModel | None = None) -> jnp.ndarray:
 
 
 def derived_COD(C, model: CompiledModel | None = None) -> jnp.ndarray:
-    """Total COD = SI + SS + XI + XS + XB_H + XB_A + XP.
+    """Total COD: every COD-bearing species weighted by its COD content.
 
-    ``C`` may be a concentration array (with ``model``) or a ``StreamSeries``.
+    The species and their content come from the model (:func:`cod_content`:
+    its composition, else its declared units), on the lab-COD convention, so
+    for ASM1 this is ``SI + SS + XI + XS + XB_H + XB_A + XP`` and for ASM2d
+    ``SF + SA + SI + XI + XS + XH + XPAO + XPHA + XAUT``. ``C`` may be a
+    concentration array (with ``model``) or a ``StreamSeries``.
+
+    Raises
+    ------
+    ValueError
+        If the model does not say which of its species carry COD.
     """
     C, model = _conc_model(C, model)
-    species = ("SI", "SS", "XI", "XS", "XB_H", "XB_A", "XP")
-    return jnp.sum(C[..., _species_idx(model, species)], axis=-1)
+    cod = cod_content(model)
+    w = jnp.asarray(list(cod.values()))
+    return jnp.sum(C[..., _species_idx(model, cod)] * w, axis=-1)
 
 
-def derived_BOD(C, model: CompiledModel | None = None, *, f_P: float | None = None) -> jnp.ndarray:
-    """BOD₅ proxy = 0.25 × (SS + XS + (1 - f_P) × (XB_H + XB_A)), Copp 2002.
+def _biodegradable_weights(model: CompiledModel, params=None) -> list[tuple[float, list[int]]]:
+    """The biodegradable COD of each species, grouped by weight.
 
-    ``f_P`` defaults to the model's declared inert-fraction (the standard ASM1
-    0.08 when undeclared). ``C`` may be a concentration array (with ``model``)
-    or a ``StreamSeries``.
+    A COD-bearing species that no reaction consumes is inert (``SI``, ``XI``,
+    ``XP``). Every other one is biodegradable, less the share of its COD that
+    the reactions consuming it turn into inert COD -- the inert fraction a
+    decaying biomass leaves (``f_P`` in ASM1, ``fXI`` in ASM2d and ASM3) or
+    that hydrolysis releases (``fSI``) -- read from the stoichiometry at
+    ``params``. This is the generalization of the Copp (2002) BOD weights
+    ``SS + XS + (1 - f_P)(XB_H + XB_A)``.
+
+    Returns
+    -------
+    list of (float, list of int)
+        ``(weight, species indices)`` per distinct weight, in model
+        order of first appearance, so ASM1 sums ``SS + XS`` and
+        ``XB_H + XB_A`` before weighting, as the Copp expression does.
+
+    Raises
+    ------
+    ValueError
+        If the reactions consuming a species leave different inert fractions,
+        so its biodegradable share is not one number.
+    """
+    import numpy as np
+
+    cod = cod_content(model, params)
+    S = np.asarray(model.compute_stoich(model.default_parameters() if params is None else params))
+    col = model.species_index
+    inert = [s for s in cod if not np.any(S[:, col[s]] < 0.0)]
+    degradable = [s for s in cod if s not in inert]
+    groups: dict[float, list[int]] = {}
+    for s in degradable:
+        ratios = []
+        for r in np.flatnonzero(S[:, col[s]] < 0.0):
+            consumed = sum(-cod[d] * float(S[r, col[d]]) for d in degradable if S[r, col[d]] < 0.0)
+            produced = sum(cod[i] * float(S[r, col[i]]) for i in inert)
+            ratios.append(produced / consumed)
+        if max(ratios) - min(ratios) > 1e-9:
+            raise ValueError(
+                f"model '{model.name}': the reactions consuming {s} leave different inert "
+                'fractions, so its BOD cannot be determined; use substrate="COD" '
+                "(derived_COD) instead."
+            )
+        groups.setdefault((1.0 - ratios[0]) * cod[s], []).append(col[s])
+    return list(groups.items())
+
+
+def derived_BOD(
+    C, model: CompiledModel | None = None, *, f_P: float | None = None, params=None
+) -> jnp.ndarray:
+    """BOD₅ proxy: 0.25 × the biodegradable COD (Copp 2002).
+
+    The biodegradable COD is every COD-bearing species the model's reactions
+    consume, less the inert COD those reactions leave, read from the model's
+    stoichiometry. For ASM1 it is the Copp (2002) expression
+    ``0.25 × (SS + XS + (1 - f_P) × (XB_H + XB_A))``; for ASM2d,
+    ``0.25 × (SF + SA + XPHA + (1 - fSI) XS + (1 - fXI)(XH + XPAO + XAUT))``.
+
+    Parameters
+    ----------
+    C : jnp.ndarray or StreamSeries
+        Concentrations, shape ``(..., n_species)``, or a stream (its ``C`` and
+        model are used).
+    model : CompiledModel, optional
+        The model of ``C``; taken from the stream when one is passed.
+    f_P : float, optional
+        Overrides the model's ``f_P`` parameter (the inert fraction of decayed
+        ASM1 biomass).
+    params : jnp.ndarray, optional
+        Model parameter vector whose stoichiometry gives the inert fractions
+        (the composition the simulation used); the model defaults if omitted.
+
+    Returns
+    -------
+    jnp.ndarray
+        BOD₅, scalar for a 1-D ``C``, a leading-axis vector for a 2-D one.
+
+    Raises
+    ------
+    ValueError
+        If ``f_P`` is given for a model without an ``f_P`` parameter, if the
+        model does not say which species carry COD, or if its stoichiometry
+        does not determine a species' biodegradable share (use
+        :func:`derived_COD` then).
     """
     C, model = _conc_model(C, model)
-    if f_P is None:
-        _, _, f_P = _composition(model)
-    i = model.species_index
-    return 0.25 * (
-        C[..., i["SS"]] + C[..., i["XS"]] + (1.0 - f_P) * (C[..., i["XB_H"]] + C[..., i["XB_A"]])
-    )
+    if f_P is not None:
+        if "f_P" not in model.param_index:
+            raise ValueError(
+                f"model '{model.name}' has no f_P parameter; its inert fractions come from "
+                "its stoichiometry, so pass params= instead of f_P=."
+            )
+        base = model.default_parameters() if params is None else jnp.asarray(params)
+        params = base.at[model.param_index["f_P"]].set(f_P)
+    # Sum each weight's species before weighting them, adding in model order,
+    # so ASM1 evaluates exactly the Copp expression.
+    total = jnp.zeros(jnp.shape(C)[:-1])
+    for k, (weight, cols) in enumerate(_biodegradable_weights(model, params)):
+        group = C[..., cols[0]]
+        for c in cols[1:]:
+            group = group + C[..., c]
+        term = group if weight == 1.0 else weight * group
+        total = term if k == 0 else total + term
+    return 0.25 * total
 
 
 def derived_TKN(
@@ -263,7 +365,7 @@ def effluent_averages(
         Time-averaged COD, BOD, TSS, TKN, SNH, SNO (g/m³).
     """
     t, C_traj, Q_traj, model = _effluent_args(stream_or_t, C_traj, Q_traj, model)
-    i_XB, i_XP, f_P = _composition(model, params)
+    i_XB, i_XP, _ = _composition(model, params)
     t = jnp.asarray(t)
     single_point = t.shape[0] <= 1
     # Use trapezoidal integration over time.
@@ -283,7 +385,7 @@ def effluent_averages(
     return {
         "TSS": time_avg(derived_TSS(C_traj, model)),
         "COD": time_avg(derived_COD(C_traj, model)),
-        "BOD": time_avg(derived_BOD(C_traj, model, f_P=f_P)),
+        "BOD": time_avg(derived_BOD(C_traj, model, params=params)),
         "TKN": time_avg(derived_TKN(C_traj, model, i_XB=i_XB, i_XP=i_XP)),
         "SNH": time_avg(C_traj[:, model.species_index["SNH"]]),
         "SNO": time_avg(C_traj[:, model.species_index["SNO"]]),
@@ -312,10 +414,10 @@ def effluent_quality_index(
     -- or the explicit ``(t, C_traj, Q_traj, model)`` form.
     """
     t, C_traj, Q_traj, model = _effluent_args(stream_or_t, C_traj, Q_traj, model)
-    i_XB, i_XP, f_P = _composition(model, params)
+    i_XB, i_XP, _ = _composition(model, params)
     TSS_t = derived_TSS(C_traj, model)
     COD_t = derived_COD(C_traj, model)
-    BOD_t = derived_BOD(C_traj, model, f_P=f_P)
+    BOD_t = derived_BOD(C_traj, model, params=params)
     TKN_t = derived_TKN(C_traj, model, i_XB=i_XB, i_XP=i_XP)
     SNO_t = C_traj[:, model.species_index["SNO"]]
 

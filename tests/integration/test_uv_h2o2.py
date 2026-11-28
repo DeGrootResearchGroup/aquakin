@@ -19,7 +19,9 @@ def _solve(model, *, fluence_rate, t_end=600.0, n=61):
     conditions = aquakin.SpatialConditions.uniform(
         1, fluence_rate=fluence_rate, OH_scavenging=5.0e4
     )
-    reactor = aquakin.BatchReactor(model, conditions, atol=_atol_for(model))
+    reactor = aquakin.BatchReactor(model, conditions, settings=aquakin.SolverSettings(
+        atol=_atol_for(model),
+    ))
     return reactor.solve(
         model.default_concentrations(),
         params=model.default_parameters(),

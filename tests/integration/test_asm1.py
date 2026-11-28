@@ -14,7 +14,10 @@ def model():
 
 def _build(model, *, t_end=1.0, **C0_overrides):
     conditions = model.default_conditions()
-    reactor = aquakin.BatchReactor(model, conditions, rtol=1e-6, atol=1e-9)
+    reactor = aquakin.BatchReactor(model, conditions, settings=aquakin.SolverSettings(
+        rtol=1e-6,
+        atol=1e-9,
+    ))
     C0 = model.concentrations(C0_overrides)
     sol = reactor.solve(
         C0,

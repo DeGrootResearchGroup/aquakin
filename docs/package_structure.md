@@ -8,7 +8,7 @@ aquakin/
 │
 ├── aquakin/
 │   ├── __init__.py                  # public API + jax x64 config
-│   ├── __main__.py                  # `aquakin` command: `catalog`, `serve` (JSON lines)
+│   ├── __main__.py                  # `aquakin` command: `catalog`, `serve` (JSON lines), `mcp`, `study`
 │   │
 │   ├── core/
 │   │   ├── nodes.py                 # ASTNode base class + all node types
@@ -52,7 +52,7 @@ aquakin/
 │   ├── integrate/
 │   │   ├── _common.py               # re-exports (via __all__) every name of the four
 │   │   │                            #   modules below; existing imports go through it
-│   │   ├── _config.py               # IntegratorConfig, DifferentiationConfig, forward_adjoint /
+│   │   ├── _config.py               # IntegratorConfig, DifferentiationConfig, SolverSettings, forward_adjoint /
 │   │   │                            #   with_adjoint, check_finite_gradient + GradientCheckMixin;
 │   │   │                            #   Reactor & ConditionedReactor Protocols (the latter adds
 │   │   │                            #   `conditions`; sensitivity requires it. CFDReactor has
@@ -71,6 +71,13 @@ aquakin/
 │   │   │                            #   friendly_solve_errors
 │   │   ├── batch.py                 # BatchReactor, BatchSolution
 │   │   ├── biofilm.py               # BiofilmReactor (layered 1-D diffusion-reaction)
+│   │   ├── finite_volume.py         # the shared 1-D finite-volume core:
+│   │   │                            #   Grid1D, diffusive_flux, upwind_flux, divergence,
+│   │   │                            #   green_gauss_gradient + van_albada_slope +
+│   │   │                            #   limited_upwind_flux; the biofilm operators and
+│   │   │                            #   the axial-flow reactors use it
+│   │   ├── dispersed_flow.py        # DispersedFlowReactor, TanksInSeries,
+│   │   │                            #   AxialFlowSolution (method of lines on the core)
 │   │   ├── steady.py                # pseudo-transient continuation steady solver +
 │   │   │                            #   continuation / arclength drivers, generic in the RHS
 │   │   │                            #   (Plant.steady_state, BiofilmReactor.steady_state;
@@ -142,6 +149,9 @@ aquakin/
 │   │   ├── candidate_design.py      # design_from_candidates(): budgeted choice from a
 │   │   │                            #   pool of per-candidate Fisher matrices (relaxed,
 │   │   │                            #   greedy, exchange, exhaustive)
+│   │   ├── discrimination.py        # optimize_discrimination(), rank_discrimination(),
+│   │   │                            #   DesignConfig: design to tell two fitted models
+│   │   │                            #   apart (Buzzi-Ferraris / Hunter-Reiner)
 │   │   ├── events.py                # Event + solve_with_events: located events
 │   │   │                            #   (time / state root-crossing) + AD-safe state
 │   │   │                            #   resets / mode switches, via a segmented solve
@@ -168,6 +178,8 @@ aquakin/
 │   │   ├── calibrate.py             # Plant.calibrate
 │   │   ├── posterior.py             # Plant.sample_posterior
 │   │   ├── spec.py                  # Plant.from_spec / to_spec: the flowsheet spec
+│   │   ├── model_edit.py            # a model's reactions / parameters edited from the
+│   │   │                            #   editor: read, check, save (with the flowsheet)
 │   │   ├── recycle.py               # RecycleResolver: recycle flows / concentrations
 │   │   ├── colored.py               # ColoredJacobianManager: sparse plant Jacobians
 │   │   ├── solve_cache.py           # SolveCache: the compiled-solve caches
@@ -204,6 +216,14 @@ aquakin/
 │   │   ├── precipitation_metal_phosphate_equilibrium.yaml  # mode: equilibrium (algebraic projection, differentiable)
 │   │   └── precipitation_metal_phosphate_bounded.yaml      # supersaturation_form: bounded (differentiable dynamics)
 │   │
+│   ├── mcp/                         # `aquakin mcp`: tools for an AI assistant (`mcp` extra)
+│   │   ├── server.py                # the reading tools (thin wrappers) and the MCPServer serving all
+│   │   ├── projects.py              # tools that write a flowsheet and create / edit / run studies
+│   │   ├── runs.py                  # starts a study run as a detached `aquakin study run` process
+│   │   ├── docs.py                  # the published guide pages: list / read / search (stdlib only,
+│   │   │                            #   loaded by setup.py, which bundles them into guide/)
+│   │   └── api.py                   # the public API's names, signatures and docstrings
+│   │
 │   ├── utils/
 │   │   ├── latex.py                 # AST -> LaTeX rate expressions
 │   │   ├── balance.py               # mass / electron (COD) conservation checks
@@ -211,12 +231,22 @@ aquakin/
 │   │   │                            #   expressions (model.check_units) and the
 │   │   │                            #   scale-aware units_match; distinct from
 │   │   │                            #   core/units.py, which only formats units
-│   │   └── rtd.py                   # RTD analysis (E-curve, Morrill index)
+│   │   ├── rtd.py                   # RTD analysis (E-curve, Morrill index) and the
+│   │   │                            #   moment fits fit_dispersion / fit_tanks_in_series
+│   │   └── result_files.py          # result files keyed by name (YAML / CSV),
+│   │                                #   read back bit for bit (studies, saved fits)
 │   │
 │   └── study/                       # studies: analyses saved in a project
+│       ├── common.py                # file names, kinds, states, StudyError, time grids
 │       ├── study.py                 # study.yaml schema, run / check / freeze /
 │       │                            #   unfreeze / copy (`aquakin study ...`)
-│       └── files.py                 # result files keyed by name (YAML / CSV)
+│       ├── running.py               # the run in progress: running.yaml under an OS lock,
+│       │                            #   its progress, cancel; one run of a study at a time
+│       ├── reactor.py               # the reactor: target (a batch reactor in place
+│       │                            #   of the flowsheet): inputs, freeze, runners
+│       ├── analysis.py              # what both targets share: fit settings, data
+│       │                            #   reading, the Fisher and profile writers
+│       └── form.py                  # setting a study up and reading its results
 │
 ├── aquakin_ui/                         # browser flowsheet editor `aquakin-ui` (`ui` extra)
 │   ├── app.py                          # Editor: its state, drawing, undo, canvas events,
@@ -225,7 +255,10 @@ aquakin/
 │   ├── repeated.py                     # lists of records edited on the page (study dialog, unit form)
 │   ├── checks.py                       # aquakin's background checks of units and plant
 │   ├── files.py                        # open / save the spec, unsaved-edit questions
+│   ├── disk.py                         # follows the project folder: reload a changed spec, relist studies
 │   ├── unit_form.py                    # unit-form choices that redraw it; resending its rows
+│   ├── model_panel.py / model_page.py  # the Model tab: edits checked and saved; its page
+│   ├── model_form.py                   # the model panel's draft and its edits (pure)
 │   ├── studies.py                      # list / run / freeze studies, Simulate, results
 │   ├── document.py                     # the flowsheet document (pure)
 │   ├── forms.py                        # unit form from the catalogue (pure)

@@ -39,7 +39,7 @@ _LEAF_TYPES = (ConstantNode, SpeciesNode, ConditionNode, ParamNode)
 _ALLOWED_STOICH_NODES = (ConstantNode, ParamNode, NegateNode, _BinaryNode)
 
 
-def _validate_stoich_ast(ast: ASTNode, rxn_name: str, species: str) -> None:
+def validate_stoich_ast(ast: ASTNode, rxn_name: str, species: str) -> None:
     """Reject stoich ASTs that reference state, conditions, or functions.
 
     Generic over the AST via ``children()``: an allowed node's children are
@@ -55,7 +55,7 @@ def _validate_stoich_ast(ast: ASTNode, rxn_name: str, species: str) -> None:
             f"(arrhenius, pH_switch, monod, ...) are not allowed."
         )
     for child in ast.children():
-        _validate_stoich_ast(child, rxn_name, species)
+        validate_stoich_ast(child, rxn_name, species)
 
 
 def _collect_param_refs(node: ASTNode) -> set[str]:
@@ -536,14 +536,16 @@ class CompiledModel:
         ``default=None`` (the default) starts from the per-component noise floor
         :func:`~aquakin.core.tolerance.default_atol` scaled off the model's
         reference concentrations -- the same floor a reactor built with
-        ``atol=None`` uses -- rather than a fixed scalar, which is ~9 orders too
-        tight for g/m3 ASM/ADM states. Pass an explicit scalar ``default=`` for a
+        ``SolverSettings(atol=None)`` uses -- rather than a fixed scalar, which is
+        ~9 orders too tight for g/m3 ASM/ADM states. Pass an explicit scalar ``default=`` for a
         uniform floor.
 
         Examples
         --------
-        >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}))
-        >>> reactor = BatchReactor(net, conds, atol=net.atol({"OH": 1e-20}, default=1e-12))
+        >>> settings = SolverSettings(atol=net.atol({"OH": 1e-20}))
+        >>> reactor = BatchReactor(net, conds, settings=settings)
+        >>> settings = SolverSettings(atol=net.atol({"OH": 1e-20}, default=1e-12))
+        >>> reactor = BatchReactor(net, conds, settings=settings)
         """
         base = (
             default_atol(self.default_concentrations())
@@ -1471,7 +1473,7 @@ def _compile_reaction(rxn, species_index, param_index, condition_fields, express
             raise ValueError(
                 f"Failed to parse stoichiometric coefficient '{rxn.name}'/{sp_name!r}: {exc}"
             ) from exc
-        _validate_stoich_ast(raw_stoich_ast, rxn.name, sp_name)
+        validate_stoich_ast(raw_stoich_ast, rxn.name, sp_name)
         bad = _unresolved_params(raw_stoich_ast, rxn.name, param_index)
         if bad:
             raise KeyError(

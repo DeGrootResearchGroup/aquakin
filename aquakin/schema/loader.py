@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from importlib.resources import files
 from pathlib import Path
 
@@ -15,6 +16,56 @@ from aquakin.schema.inheritance import (
     pop_inheritance_keys,
 )
 from aquakin.schema.model_spec import ModelSpec
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """PyYAML's safe loader, refusing a mapping that repeats a key.
+
+    The safe loader keeps the last of two equal keys without a word, so a
+    stoichiometry that names a species twice, or a reaction block pasted twice,
+    loads as whichever came last.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        if isinstance(node, yaml.MappingNode):
+            seen: dict = {}
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue  # ``<<:`` merges are overridden by explicit keys by design
+                key = self.construct_object(key_node, deep=True)
+                if not isinstance(key, Hashable):
+                    continue  # the safe loader refuses an unhashable key itself
+                if key in seen:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping",
+                        node.start_mark,
+                        f"found duplicate key {key!r} (first given on line {seen[key].line + 1})",
+                        key_node.start_mark,
+                    )
+                seen[key] = key_node.start_mark
+        return super().construct_mapping(node, deep=deep)
+
+
+def parse_model_yaml(text: str):
+    """Parse a model YAML document with the safe loader, refusing duplicate keys.
+
+    Parameters
+    ----------
+    text : str
+        The YAML text.
+
+    Returns
+    -------
+    object
+        The parsed document (a mapping for a model file).
+
+    Raises
+    ------
+    yaml.YAMLError
+        If the text is not valid YAML, or a mapping in it repeats a key (the
+        message names the key and both lines).
+    """
+    return yaml.load(text, Loader=_UniqueKeyLoader)  # a SafeLoader subclass
 
 
 def _read_base(extends: str, base_dir, source: str):
@@ -61,7 +112,7 @@ def _resolve_inheritance(data: dict, source: str, base_dir, seen: tuple) -> dict
         raise ValueError(f"{source}: cyclic 'extends' chain: {' -> '.join(seen + (extends,))}.")
     base_text, base_base_dir = _read_base(extends, base_dir, source)
     try:
-        base_data = yaml.safe_load(base_text)
+        base_data = parse_model_yaml(base_text)
     except yaml.YAMLError as exc:
         raise ValueError(f"{source}: failed to parse base '{extends}': {exc}") from exc
     if not isinstance(base_data, dict):
@@ -73,6 +124,38 @@ def _resolve_inheritance(data: dict, source: str, base_dir, seen: tuple) -> dict
     if remove is not None:
         merged = apply_remove(merged, remove, source)
     return merged
+
+
+def resolve_model_data(text: str, source: str, base_dir=None) -> dict:
+    """A model YAML's mapping with its ``extends`` chain merged in, not yet validated.
+
+    Parameters
+    ----------
+    text : str
+        The model YAML.
+    source : str
+        A name for messages.
+    base_dir : str or Path, optional
+        The directory a relative ``extends:`` path is read from.
+
+    Returns
+    -------
+    dict
+        The whole model as one mapping, as :class:`ModelSpec` validates it.
+
+    Raises
+    ------
+    ValueError
+        If the text is not a YAML mapping, or its ``extends`` chain cannot be
+        resolved.
+    """
+    try:
+        data = parse_model_yaml(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Failed to parse YAML from {source}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Top-level YAML in {source} must be a mapping, got {type(data).__name__}")
+    return _resolve_inheritance(data, source, base_dir, seen=())
 
 
 def model_fingerprint(text: str, source: str, base_dir=None) -> str:
@@ -99,19 +182,13 @@ def model_fingerprint(text: str, source: str, base_dir=None) -> str:
     import hashlib
     import json
 
-    data = _resolve_inheritance(yaml.safe_load(text), source, base_dir, seen=())
+    data = _resolve_inheritance(parse_model_yaml(text), source, base_dir, seen=())
     canonical = json.dumps(data, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _yaml_to_spec(text: str, source: str, *, base_dir=None) -> ModelSpec:
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Failed to parse YAML from {source}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError(f"Top-level YAML in {source} must be a mapping, got {type(data).__name__}")
-    data = _resolve_inheritance(data, source, base_dir, seen=())
+    data = resolve_model_data(text, source, base_dir)
     try:
         return ModelSpec.model_validate(data)
     except ValidationError as exc:

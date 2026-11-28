@@ -15,6 +15,7 @@ from aquakin.integrate._common import (
     check_finite_gradient,
     forward_adjoint,
 )
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate.batch import BatchReactor, BatchSolution
 from aquakin.integrate.biofilm import BiofilmReactor, BiofilmSolution
 from aquakin.integrate.calibrate import (
@@ -27,6 +28,11 @@ from aquakin.integrate.calibrate import (
 )
 from aquakin.integrate.cfd import CFDReactor
 from aquakin.integrate.design import Constraint, OptimizeResult, optimize_design
+from aquakin.integrate.dispersed_flow import (
+    AxialFlowSolution,
+    DispersedFlowReactor,
+    TanksInSeries,
+)
 from aquakin.integrate.discrete_adjoint import (
     esdirk_adjoint_solve,
     implicit_euler_adjoint_solve,
@@ -48,7 +54,7 @@ from aquakin.integrate.particle import (
 from aquakin.integrate.pfr import PFRSolution, PlugFlowReactor
 from aquakin.integrate.profile import ProfileResult, profile_likelihood
 from aquakin.integrate.calibration.config import SamplerConfig
-from aquakin.integrate.calibration.result import PosteriorSamples
+from aquakin.integrate.calibration.result import PosteriorSamples, load_calibration
 from aquakin.integrate.calibration.sampling import sample_posterior
 from aquakin.integrate.calibration.criteria import (
     ModelComparison,
@@ -58,6 +64,11 @@ from aquakin.integrate.calibration.criteria import (
     compare_models,
 )
 from aquakin.integrate.candidate_design import CandidateDesign, design_from_candidates
+from aquakin.integrate.discrimination import (
+    DesignConfig,
+    optimize_discrimination,
+    rank_discrimination,
+)
 from aquakin.integrate.experiment_design import (
     CandidateScore,
     ExperimentDesignResult,
@@ -91,6 +102,7 @@ from aquakin.integrate.variance_sensitivity import (
 )
 
 __all__ = [
+    "AxialFlowSolution",
     "BatchReactor",
     "BatchSolution",
     "BiofilmReactor",
@@ -102,7 +114,9 @@ __all__ = [
     "CandidateScore",
     "Constraint",
     "DGSMResult",
+    "DesignConfig",
     "DifferentiationConfig",
+    "DispersedFlowReactor",
     "EigenDirection",
     "Event",
     "EventedResult",
@@ -130,6 +144,8 @@ __all__ = [
     "ScenarioComparison",
     "SensitivityResult",
     "SobolResult",
+    "SolverSettings",
+    "TanksInSeries",
     "Track",
     "TrackSolution",
     "aic",
@@ -152,10 +168,13 @@ __all__ = [
     "implicit_euler_adjoint_solve",
     "integrate_ensemble",
     "kpi_comparison",
+    "load_calibration",
     "monte_carlo",
     "optimize_design",
+    "optimize_discrimination",
     "optimize_experiment",
     "profile_likelihood",
+    "rank_discrimination",
     "rank_experiments",
     "sample_posterior",
     "sensitivity",

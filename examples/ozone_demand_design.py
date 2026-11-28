@@ -66,7 +66,8 @@ def run_example():
     # [setup]
     # The model file sits next to this script.
     model = aquakin.load_model_from_file(Path(__file__).parent / "ozone_demand.yaml")
-    reactor = aquakin.BatchReactor(model, model.default_conditions(), rtol=1e-8, atol=1e-8)
+    settings = aquakin.SolverSettings(rtol=1e-8, atol=1e-8)
+    reactor = aquakin.BatchReactor(model, model.default_conditions(), settings=settings)
 
     # The true composition of the sample, in umol/L, with a 50 umol/L ozone
     # dose. The synthetic data in step 4 are generated from these values.

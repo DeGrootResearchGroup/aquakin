@@ -153,9 +153,10 @@ weighted sum of your own; see
 [A channel of your own](plant_calibration.md#a-channel-of-your-own).
 
 Besides `simulate`, a study can be a `fisher` information of a sensor design, a
-`calibrate` fit to observations, a `profile` likelihood of one parameter, or a
+`calibrate` fit to observations, a `profile` likelihood of one parameter, a
 `rank` of candidate sensor sets (the methods are described in
-[Designing experiments](experiment_design.md)).
+[Designing experiments](experiment_design.md)), or a `posterior` sample of a
+calibration's uncertainty (below).
 A fit reads its observations from a CSV table in the study folder, a `t` column
 and one `<stream>.<channel>` column per measured channel. Because it fits the
 likelihood of the data, it needs each channel's measurement error: `sigma`, one
@@ -173,6 +174,28 @@ study:
   laplace: true
 ```
 
+A `posterior` study draws from the posterior of a `calibrate` study's fit by
+Markov chain Monte Carlo ([Sampling the posterior](fit_uncertainty.md#sampling-the-posterior)),
+on that study's plant or reactor, data and settings. It names the calibrate
+study of the same project, whose results must be fresh:
+
+```yaml
+study:
+  kind: posterior
+  fit: calibration        # the calibrate study, studies/calibration
+  n_chains: 4
+  n_draws: 1000
+  n_warmup: 500
+```
+
+It writes every draw (`draws.csv`) and, per parameter, the optimum, mean,
+standard deviation, 5 / 50 / 95 % quantiles, R-hat and effective sample size
+(`posterior.yaml`). Check that every R-hat is below about 1.01 and the
+effective sample sizes are large enough before using the draws; the editor
+flags those that are not. The study goes stale when its calibrate study is run
+again or changed, and freezing it keeps a frozen copy of the calibrate study,
+results included.
+
 A study follows the flowsheet: once a setting, a connection, a model or an
 influent table it was run on changes, `check` reports it **stale** and names
 what changed. A newer aquakin is noted but does not make a result stale; read
@@ -181,6 +204,14 @@ results replaces them only when asked (`--replace`); `aquakin study copy` keeps
 a copy first. The new results take the old ones' place only when the run
 succeeds: a run that fails or is cancelled leaves the earlier results as they
 were, and `check` notes the attempt.
+
+A study runs once at a time. While it runs, its folder holds `running.yaml`
+with when the run started and how far it has got, so every program sees it:
+`check` and the editor show the run's progress, a second run of the study
+(from the editor, the command line, an AI assistant or a script) is refused,
+and so are freezing, unfreezing and editing it. `aquakin study cancel` stops
+the run at its next checkpoint, whatever started it. A run that crashes or is
+killed leaves no lock behind; the next run starts as usual.
 
 `aquakin study freeze` instead pins a study to a snapshot of its plant, taken
 inside the study folder with every model flattened (shipped models too) and
@@ -193,6 +224,92 @@ From Python, `aquakin.study.create_study(project, name, settings)` and
 `update_study(path, settings)` write a `study.yaml`, checking the settings as a
 run would read them; `plant_choices(spec)` lists what a study of that flowsheet
 may name, and `study_results(path)` reads a study's results back.
+
+### A study of a batch reactor
+
+A `calibrate`, `profile` or `fisher` study can study a batch reactor instead of
+the flowsheet: a `reactor:` block gives its model and conditions, and
+`experiments` the batches it is run on. The other settings are those of a
+flowsheet study of the same kind:
+
+```yaml
+# studies/ozone_fit/study.yaml
+study:
+  kind: calibrate
+  reactor:
+    model: ../../models/ozone_demand.yaml   # a model file, or a shipped model's name
+    conditions: {T: 293.15, pH: 7.5}
+    integrator: {rtol: 1.0e-6}              # optional
+  experiments:
+    - {data: run1.csv, initial: {O3: 1.0, D: 12.0, M: 800.0}}
+    - {data: run2.csv, initial: {O3: 2.0, D: 12.0, M: 800.0}}
+  observed: [O3]
+  free: [fast.k1, slow.k2]
+  estimate_sigma: true
+```
+
+A model file's path is read from the study folder, like `flowsheet:`;
+`create_study` also takes one from the project folder (`models/ozone_demand.yaml`)
+and stores it that way. Each experiment starts from its `initial`
+concentrations (the model's defaults for the species it does not name). Its
+data table holds a `t` column and one column per observed species; the
+experiments are fitted together, sharing the parameters, and are named by their
+tables (`run1`, `run2`). The integrator settings are `rtol`, `atol`, `order`,
+`dtmax` and `max_steps` (see
+[Choosing the integrator](reactors.md#choosing-the-integrator)), and
+`time_unit` gives the unit of the data's times when it is not the model's.
+
+The results are those of a flowsheet study: the fit is saved as
+[`CalibrationResult.save`](fit_uncertainty.md#saving-a-fit) saves one, so
+`aquakin.load_calibration("studies/ozone_fit/results")` reads it back, and
+`fitted.csv` holds the fitted reactor's observed species at the data's times,
+in columns such as `run1.O3`. A `profile` study takes one experiment. A
+`fisher` study's experiments give only their initial concentrations and, when
+they differ from the study's `t_obs`, their own sampling times (`t_obs`);
+`sigma` is the measurement error.
+
+The study is stale once the model (with any model it `extends`), a data table
+or its settings change, and `check` names which. Freezing copies the model,
+flattened, and the data tables into the study's snapshot. A shipped model is
+copied too.
+
+### Designing a batch experiment
+
+A `design` study optimizes a batch reactor's experiments for the information
+they give about the `free` parameters
+([Designing experiments](experiment_design.md)): it moves their sampling times
+within `time_bounds`, at least `min_spacing` apart, and, for each species in
+`initial_bounds`, their initial concentrations within its range. Experiments
+already run go in `base_experiments`: they count, but do not move.
+
+```yaml
+# studies/next_run/study.yaml
+study:
+  kind: design
+  reactor: {model: ../../models/ozone_demand.yaml, conditions: {T: 293.15, pH: 7.5}}
+  base_experiments:
+    - {initial: {O3: 1.0, D: 12.0, M: 800.0}, t_obs: [5, 10, 20, 40]}
+  experiments:
+    - {initial: {O3: 2.0, D: 12.0, M: 800.0}, t_obs: [5, 10, 20, 40]}
+  observed: [O3]
+  free: [fast.k1, slow.k2]
+  sigma: 0.02
+  time_unit: min
+  criterion: D               # or A, E, modified_E; subset: [...] scores only some
+  time_bounds: [1, 60]
+  min_spacing: 2
+  initial_bounds: {O3: [0.5, 3.0]}
+```
+
+The experiments start the search and keep their number of samples. The study
+writes `design.yaml`: the optimized experiments as an `experiments:` list, in
+the study's time unit, ready to paste into a `fisher` or `calibrate` study (add
+each run's `data:` once it is made); the criterion at the start and at the
+optimum; and each parameter's standard deviation at both.
+
+The `simulate` and `rank` kinds do not take a reactor yet. The editor lists a
+reactor study and runs it, but its dialog edits only flowsheet studies; change a
+reactor study in its `study.yaml`.
 
 ## The flowsheet editor
 
@@ -215,6 +332,13 @@ you edit and lists any errors.
   `extends:`) or influent table from outside the project folder into it. Save
   refuses to overwrite a flowsheet that changed on disk since the window opened
   it, so two windows cannot silently undo each other's work.
+- The editor follows the project folder as other programs change it (an
+  [AI assistant](ai_assistants.md), a text editor, another window). When the
+  open flowsheet's file changes, the editor shows the new version, keeping your
+  view. If you have unsaved edits it asks first: discard them for the new
+  version, or keep them (Save then refuses to write over the file; save under
+  another name). When a study is added, edited or finishes, the Studies tab is
+  updated.
 - Opening another file while the flowsheet has unsaved edits asks first (save
   them, or discard them). **Undo** takes back the last edits: a removed unit or
   wire, a move, a new unit or wire, or an applied form. Delete removes the
@@ -227,6 +351,23 @@ you edit and lists any errors.
   move it up or down, or remove it. Its settling model is a choice of kind,
   after which that model's arguments appear.
 
+The **Model** tab shows a model the flowsheet uses: each reaction's rate and
+stoichiometric coefficients, and each parameter's value, units and description,
+all editable, and **Add a parameter**. As you leave a field aquakin reads the
+edit: an error appears under it with a caret at the character it is about, and
+an edited expression lists the species, parameters and conditions it uses. A
+rate naming a parameter the model lacks offers to add it. Reactions, species,
+conditions and the model's other blocks are edited in its YAML file.
+
+**Apply** first loads and compiles the whole edited model, and writes nothing
+unless it is valid. A model of the project is edited in its own file (written
+again without its comments), holding only the changed fields when it
+`extends:` another. A model shipped with aquakin is never changed: Apply asks
+for a name (`asm1_bsm1` for `asm1` in a flowsheet named BSM1, say) and saves
+the edits as `models/<name>.yaml`, which `extends:` the shipped model, and
+every unit that used it switches to the new model. The flowsheet file is saved
+in the same step, so it always names the model as saved.
+
 **Simulate** saves the flowsheet, creates a study called `simulation` the first
 time (`simulation_<file name>` for a file not named `flowsheet.yaml`, so each
 flowsheet in a folder has its own), runs the plant to steady state, and shows a
@@ -238,7 +379,7 @@ runs in time shows a chart per channel of the stream you pick. From Python,
 
 The **Studies** tab lists the project's studies and their status (fresh, stale
 and why, not run, failed, cancelled). From it you can run a study and watch its
-progress or cancel it; freeze, unfreeze or copy it; and open **Results**: a
+progress or cancel it, including a run another program started; freeze, unfreeze or copy it; and open **Results**: a
 simulation's streams, a Fisher study's standard deviations, design criteria and
 information matrix, a ranking of sensor sets, a calibration's fitted parameters
 with the data against the fit, or a profile's curve and interval. Running a
@@ -264,11 +405,13 @@ Installing aquakin installs two commands:
 |---|---|
 | `aquakin study run <study> [--replace]` | runs a study and writes its results; a study that has results is run again only with `--replace` |
 | `aquakin study run <study> --json` | the same, reporting progress as JSON lines for a program that drives it; a line `cancel` on standard input, or closing it, stops the run at its next checkpoint |
-| `aquakin study check <study>` | prints whether the results are fresh, stale (and why), not run, failed or cancelled; exits with 0 when fresh or not run, 1 otherwise |
+| `aquakin study check <study>` | prints whether the results are fresh, stale (and why), not run, failed or cancelled, and the run in progress; exits with 0 when fresh or not run, 1 otherwise |
+| `aquakin study cancel <study>` | stops the study's run at its next checkpoint, whichever program started it |
 | `aquakin study freeze <study>` | pins the study to a snapshot of its plant |
 | `aquakin study unfreeze <study> --discard-results` | makes it follow the flowsheet again and deletes its results |
 | `aquakin study copy <study> <name>` | copies the study, results included, beside it under `<name>`, and prints the new folder |
 | `aquakin catalog` | prints every unit kind a flowsheet file may use, with its settings and ports, as JSON |
+| `aquakin mcp [--allow-python]` | serves aquakin's tools to an AI assistant; `--allow-python` also lets it run Python scripts it writes (see [Using aquakin from an AI assistant](ai_assistants.md)) |
 | `aquakin-ui [<flowsheet>] [--port <n>] [--no-browser]` | opens the editor; `--port` serves it on a fixed port (by default a free one), and `--no-browser` prints the address instead of opening a browser |
 
 `<study>` is the study's folder, such as `studies/effluent`. A command that

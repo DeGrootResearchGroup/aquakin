@@ -2,7 +2,7 @@
 paths:
   - "aquakin/plant/spec.py"
   - "aquakin/plant/catalog.py"
-  - "aquakin/plant/time_expr.py"
+  - "aquakin/core/time_expr.py"
   - "aquakin/plant/influent.py"
   - "aquakin/__main__.py"
 ---
@@ -11,7 +11,7 @@ paths:
 
 Split out of `.claude/rules/plant.md`.
 
-**Expressions of time (`plant/time_expr.py`).** An operating value that varies on
+**Expressions of time (`core/time_expr.py`).** An operating value that varies on
 a schedule — an influent's flow, a setpoint — may be written as a function of the
 plant clock (`"18446 + 4000*sin(2*pi*t)"`). `compile_time_expression(value,
 time_scale=, what=)` reads one into a callable; a plain number compiles to a
@@ -86,7 +86,11 @@ class or changing a unit's ports**, add or update its kind:
 rule-derived ports with the built unit's, and fails if an exported unit class
 has no kind. `aquakin serve` (`aquakin/__main__.py`) is a JSON-lines worker
 (`catalog`, `models`, `model`, `check_unit`, `check_spec`, `fingerprint`,
-`read_spec`, `write_spec`, `ping`).
+`read_spec`, `write_spec`, `ping`, and the model panel's `model_document`,
+`check_expression`, `check_model_edits`, `save_model_edits` from
+`plant/model_edit.py`, which validates an edit by loading and compiling the
+exact text it would write, and saves through `_plan_model` / `_check_writes` /
+`write_spec` so the model file and the flowsheet are written together).
 Replies go to a private duplicate of the process's stdout and descriptor 1 is
 pointed at stderr while serving (plus a Python-level redirect per handler), so
 no other output can corrupt a reply; a failed request, or a reply that is not

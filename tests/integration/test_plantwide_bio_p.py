@@ -80,7 +80,10 @@ def _anaerobic_batch(biop, acetate):
                      SA=acetate).items():
         C0 = C0.at[biop.species_index[s]].set(v)
     reactor = aquakin.BatchReactor(
-        biop, aquakin.SpatialConditions.uniform(T=T20, pH=PH), rtol=1e-10, atol=1e-10
+        biop, aquakin.SpatialConditions.uniform(T=T20, pH=PH), settings=aquakin.SolverSettings(
+            rtol=1e-10,
+            atol=1e-10,
+        )
     )
     return reactor, C0
 

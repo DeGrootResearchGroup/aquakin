@@ -144,3 +144,83 @@ def test_each_analysis_is_shown_as_tables_and_charts():
         )["lines"][0]
     )
     assert analysis_view({"kind": "calibrate"}) == {"lines": [], "tables": [], "charts": []}
+
+
+def test_a_posterior_shows_its_parameters_diagnostics_and_histograms():
+    from aquakin_ui.results import ESS_FLOOR, R_HAT_LIMIT, analysis_view
+
+    parameter = {
+        "optimum": 2.0,
+        "mean": 2.01,
+        "std": 0.05,
+        "q05": 1.92,
+        "q50": 2.01,
+        "q95": 2.09,
+        "r_hat": 1.002,
+        "ess_bulk": 840.0,
+    }
+    summary = {
+        "fit": "fit",
+        "n_chains": 4,
+        "n_draws": 1000,
+        "prior_space": "transformed",
+        "acceptance_rate": [0.3, 0.25],
+        "parameters": {"m.a": parameter},
+    }
+    view = analysis_view(
+        {
+            "kind": "posterior",
+            "summary": summary,
+            "histograms": {"m.a": {"edges": [1.9, 2.0, 2.1], "counts": [3, 7]}},
+        }
+    )
+    assert view["lines"] == [
+        "4 chains of 1000 draws each, sampling the fit of fit (prior flat in the transformed "
+        "coordinates). Acceptance rate per chain: 0.3000, 0.2500."
+    ]
+    assert view["tables"][0]["columns"][0] == "parameter"
+    assert view["tables"][0]["rows"] == [
+        ["m.a", "2.000", "2.010", "0.05000", "1.920", "2.010", "2.090", "1.002", "840.0"]
+    ]
+    (chart,) = view["charts"]
+    assert chart["channel"] == "m.a" and "Posterior of m.a" in chart["svg"]
+
+    # Draws that fail the diagnostics are flagged, naming each parameter.
+    poor = {**parameter, "r_hat": R_HAT_LIMIT + 0.05, "ess_bulk": ESS_FLOOR - 1}
+    flagged = analysis_view(
+        {"kind": "posterior", "summary": {**summary, "parameters": {"m.a": poor, "m.b": parameter}}}
+    )
+    assert flagged["lines"][1] == (
+        "Not enough to rely on yet: R-hat above 1.01 for m.a; fewer than 100 effective draws "
+        "for m.a. Run it again with more draws."
+    )
+    assert flagged["charts"] == []
+
+
+def test_a_design_shows_its_criterion_experiments_and_standard_deviations():
+    from aquakin_ui.results import NO_VALUE, analysis_view
+
+    summary = {
+        "criterion": "D",
+        "subset": [],
+        "start": 10.8,
+        "optimum": 13.2,
+        "converged": True,
+        "message": "Optimization terminated successfully",
+        "iterations": 8,
+        "std": {"r.k": {"start": 0.0045, "optimum": 0.00136}, "r.k2": {"start": None, "optimum": 0.2}},
+        "experiments": [{"initial": {"A": 2.0, "B": 0.5}, "t_obs": [0.1667, 1.0]}],
+    }
+    view = analysis_view({"kind": "design", "summary": summary})
+    assert view["lines"][0] == (
+        "D criterion, scoring every free parameter: 10.80 at the start, 13.20 at the optimum. "
+        "The optimizer converged after 8 iterations (Optimization terminated successfully)."
+    )
+    experiments, std = view["tables"]
+    assert experiments["rows"] == [["1", "A 2.000, B 0.5000", "0.1667, 1.000"]]
+    assert std["rows"] == [["r.k", "0.004500", "0.001360"], ["r.k2", NO_VALUE, "0.2000"]]
+    scored = analysis_view(
+        {"kind": "design", "summary": {**summary, "subset": ["r.k"], "converged": False}}
+    )
+    assert scored["lines"][0].startswith("D criterion, scoring r.k: ")
+    assert "did not converge" in scored["lines"][0]

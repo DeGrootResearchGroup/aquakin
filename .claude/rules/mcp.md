@@ -1,0 +1,106 @@
+---
+paths:
+  - "aquakin/mcp/**"
+  - "setup.py"
+  - "MANIFEST.in"
+  - "plugins/**"
+  - ".claude-plugin/**"
+  - "packaging/claude-desktop/**"
+  - "scripts/build_mcpb.py"
+---
+
+# Rules — `aquakin/mcp/` (`aquakin mcp`)
+
+The MCP server an AI assistant starts on the user's computer. The user guide
+page is `docs/ai_assistants.md`; the editor shows the assistant's changes by
+following the project folder (`aquakin_ui/disk.py`, `.claude/rules/ui.md`).
+
+## A tool is a thin wrapper
+
+- **Each tool calls the function the editor's `aquakin serve` worker calls**
+  (`aquakin.plant.catalog`, `aquakin.plant.spec`, `aquakin.study`), never a
+  copy of its logic, so the assistant and the editor cannot disagree about a
+  flowsheet. If a tool needs behaviour the worker lacks, add it to the shared
+  function, not to `server.py`.
+- **A tool is a plain function in `server.py` listed in `TOOLS`**, with a NumPy
+  docstring: the whole docstring is the description the assistant reads, so its
+  Parameters section is how the model learns each argument.
+- **Every tool is registered through `_reported`**. The SDK replaces any
+  exception other than its `ToolError` with a bare "Error executing tool", so
+  without it the assistant never sees aquakin's message.
+- **Return plain data** (dicts, lists, strings of JSON-able values). The SDK
+  serializes it; a JAX array or a `Plant` does not cross the protocol.
+- **Keep tools small in what they return.** A whole catalogue or every model's
+  full description in one answer costs the user's context window: list names
+  and summaries, and describe one item on request.
+
+## Reading versus writing
+
+- **Every tool declares its effect in `TOOLS`** (`server.py` for the readers,
+  `projects.py` for the rest): `"read"`, `"write"` (adds files or records) or
+  `"overwrite"` (may replace or delete, given its `replace` /
+  `discard_results`). The effect sets the MCP hints the user's app shows and
+  asks on; a tool that can replace anything is `"overwrite"` even when the
+  default call cannot.
+- **Keep aquakin's refusals.** Writing goes through the functions the editor
+  uses (`write_spec`, `aquakin.study`) and never past their guards: results are
+  replaced only with `replace`, a frozen study with results unfrozen only with
+  `discard_results`, and an existing flowsheet file written over only with
+  `replace` (the editor's Save refuses it outright).
+- **A study run is a detached `aquakin study run` process** (`runs.py`,
+  `start_run`), never a thread of the server: it must outlive the assistant's
+  app. Follow and cancel it through the study folder (`aquakin.study.running`:
+  `check_study`'s `running`, `cancel_study`), never through the process, so
+  the editor and the command line see the same run. `run_study` returns once
+  the run holds its study (its own pid in `running.yaml`); the assistant polls
+  `study_status`.
+
+## The script tool (`scripts.py`)
+
+- **`run_python` is offered only with `aquakin mcp --allow-python`**
+  (`build_server(allow_python=True)`), and is `"overwrite"`: it runs any code.
+  Never add it to `TOOLS`, and never let another tool run code on its behalf.
+- Run a script in a subprocess with `sys.executable` (so `aquakin` imports),
+  in the project folder, with a timeout and `MPLBACKEND=Agg`; return its output
+  bounded (`OUTPUT_LIMIT`) and the files it wrote. Never write over a file to
+  keep the script (`save_as`), and never outside the project.
+
+## The Claude Code plugin (`plugins/aquakin/`, `.claude-plugin/marketplace.json`)
+
+- **The plugin starts the release it is versioned as**: `plugin.json`'s
+  `version` and the `uvx --from aquakin[mcp]==<version>` pin in `.mcp.json`
+  equal `aquakin.__version__` (`tests/unit/test_claude_plugin.py`). Never pin
+  a range: a plugin and the server it starts are tested together.
+- **Skills point at the tools and the guide; they do not restate them.** Name
+  only tools the server has and guide pages that exist (the same test), and
+  tell the assistant to look an API up with `describe_api` rather than
+  writing signatures into a skill, which would go stale.
+- Never put a `plugin.json` at the repository root (the repository would load
+  as a plugin). Check with `claude plugin validate ./plugins/aquakin` and
+  `claude plugin validate .` after changing either.
+
+## The Claude Desktop extension (`packaging/claude-desktop/`)
+
+- **The template carries no version**: `scripts/build_mcpb.py` stamps the
+  release's version, the `aquakin[mcp]==<version>` requirement and the tool
+  list (read from `TOOLS`) into a copy, and the release workflow packs that
+  after PyPI has the release. Never edit a version or a tool into the
+  template.
+- It uses the MCPB `uv` server type: Claude Desktop builds the environment
+  from `pyproject.toml`. Never bundle packages into it (JAX's wheels are
+  platform-specific).
+
+## Imports and packaging
+
+- **Only `server.py` imports `mcp`, and only inside `build_server`**, so
+  `aquakin.mcp.docs` and `aquakin.mcp.api` work and are tested without the
+  `mcp` extra.
+- **`docs.py` imports only the standard library**: `setup.py` loads it by path
+  while building, before aquakin is importable, to bundle the published pages
+  into the wheel (the `BUNDLE` folder beside `docs.py`). Which pages are
+  published is decided only by `docs/conf.py`'s `exclude_patterns`; do not
+  keep a second list.
+- **A new published page needs nothing here**; a new docs *file type* the
+  guide tools should serve needs `MANIFEST.in` (the sdist) and `setup.py`
+  (the wheel) together, because `python -m build` builds the wheel from the
+  sdist.

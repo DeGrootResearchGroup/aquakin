@@ -58,12 +58,16 @@ sub-expression (see
 |---|---|
 | Integrate a well-mixed batch (0-D) | `BatchReactor` |
 | Integrate a plug-flow profile (1-D) | `PlugFlowReactor` |
+| Integrate a non-ideal flow reactor in time (1-D) | `DispersedFlowReactor`, `TanksInSeries` → `AxialFlowSolution` |
+| Fit a dispersion number or a number of tanks to a tracer test | `fit_dispersion`, `fit_tanks_in_series` |
 | Integrate along a Lagrangian particle track | `ParticleTrackReactor`, `Track` |
 | Resolve a biofilm over depth (1-D) | `BiofilmReactor` |
 | React inside a CFD operator split | `CFDReactor` |
 | Handle pumps / dosing / phase switches | `Event`, `solve_with_events` → `EventedResult` |
+| Set a reactor's tolerances, integrator and differentiation | `SolverSettings` (`settings=` on every reactor) |
 
-Solutions (`BatchSolution`, `PFRSolution`, `TrackSolution`, `BiofilmSolution`)
+Solutions (`BatchSolution`, `PFRSolution`, `TrackSolution`, `BiofilmSolution`,
+`AxialFlowSolution`)
 share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 `to_dataframe`, `to_csv`, `plot`.
 
@@ -138,6 +142,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Profile-likelihood interval of one parameter or pool | `profile_likelihood` → `ProfileResult` |
 | Identifiability report from a fit or a Fisher matrix | `identifiability` → `IdentifiabilityResult` (`EigenDirection`) |
 | Compare model structures fitted to the same data (AIC, AICc, BIC, Akaike weights) | `aic`, `aicc`, `bic` of a `CalibrationResult`; `compare_models` → `ModelComparison` |
+| Save a fit to a folder and read it back | `CalibrationResult.save`; `load_calibration` |
 
 ## Experiment design
 
@@ -149,6 +154,7 @@ share by-name accessors: `C_named`, `C_named_many`, `final_named`, `final`,
 | Choose between candidate experiments | `rank_experiments` → `CandidateScore` |
 | Choose the best set of measurements from a candidate pool under a budget | `design_from_candidates` → `CandidateDesign` |
 | Optimize sampling times and initial concentrations | `optimize_experiment` → `ExperimentDesignResult` |
+| Design an experiment that tells two fitted models apart (Buzzi-Ferraris, Hunter-Reiner) | `optimize_discrimination` (configured by `DesignConfig`) → `ExperimentDesignResult`; `rank_discrimination` → `CandidateScore` |
 
 ## Calibrating a plant
 

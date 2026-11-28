@@ -5,13 +5,25 @@ paths:
   - "tests/unit/test_study_files.py"
   - "tests/integration/test_study_form.py"
   - "tests/ui/test_study_form.py"
+  - "aquakin/utils/result_files.py"
 ---
 
 # Rules — `aquakin/study/` (studies)
 
 A study is one analysis of a flowsheet project, saved in the project with its
-results. The design and the owner's decisions are in
+results; a `calibrate`, `profile` or `fisher` study may instead study a batch
+reactor (`reactor:`, below), a `design` study always does, and a `posterior`
+study samples another study's fit (`fit:`, below). The design and the owner's decisions are in
 `.claude/notes/studies-design.md`; this file is how the code realizes them.
+
+## Modules
+
+`common.py` (file names, kinds, states, `StudyError`, time grids) <
+`running.py` (the run in progress) <
+`analysis.py` (what both targets share) < `reactor.py` (the reactor target) <
+`study.py` (schema, run, check, freeze) < `form.py`. A lower module never
+imports a higher one; `study.py` re-exports the names tests and the worker
+take from it.
 
 ## Files of a study (`<project>/studies/<name>/`)
 
@@ -19,11 +31,13 @@ results. The design and the owner's decisions are in
 |---|---|---|
 | `study.yaml` | the user / the editor, **never rewritten by the runner** | `study:` inputs, validated strictly (`_Study`, Pydantic, `allow_inf_nan=False`) |
 | `run.yaml` | `run_study` | the run record: times, aquakin version, `spec_fingerprint`, `spec_inputs`, the study's own fingerprint (`_study_fingerprint`: settings + any file they read), outcome / error, `results: {path: sha256}` |
-| `results/` | `run_study` | result files (`files.py`), every value keyed by name |
+| `results/` | `run_study` | result files (`aquakin/utils/result_files.py`), every value keyed by name |
 | `results.partial/` | `run_study` | where a run writes; renamed to `results/` only on success (a killed run leaves it; the next run deletes it, copies leave it out) |
+| `running.yaml` | `run_study` (`RunLock`) | present while a run is in progress, **held under an OS lock** (`flock` / `msvcrt.locking`): when it started, its pid, its latest progress; removed at the end; one nobody holds (a killed run) is ignored |
+| `cancel` | `cancel_study` | asks the run in progress to stop at its next checkpoint; cleared when a run starts and ends |
 | `last_attempt.yaml` | `run_study` | the record of a run that failed or was cancelled while earlier results stood (they are kept; `check_study` notes it; a success removes it) |
 | `frozen.yaml` | `freeze_study` | its presence means frozen; the snapshot's fingerprint and `spec_inputs` at freeze time (never recomputed: a spec from an older aquakin may not read through the current catalogue) |
-| `snapshot/` | `freeze_study` | `flowsheet.yaml`, `models/` (every model **flattened**: its `extends` chain merged in, shipped models included as `copy_of: shipped`), `data/` |
+| `snapshot/` | `freeze_study` | `flowsheet.yaml`, `models/` (every model **flattened**: its `extends` chain merged in, shipped models included as `copy_of: shipped`), `data/`; a reactor study's: `models/<model's file stem>.yaml` (flattened) and `data/` (its experiments' tables) |
 
 ## Rules
 
@@ -59,8 +73,9 @@ results. The design and the owner's decisions are in
   when changing `aquakin/utils/composition.py`, or measured channels (TN, COD)
   break in frozen studies.
 - **A kind is one entry in each registry**, all keyed by `KINDS` (which
-  `_Study.kind` accepts): its runner in `_RUNNERS` (`_run_<kind>(plant, folder,
-  study, params, y0, out, progress)`), its required fields in `_REQUIRED`
+  `_Study.kind` accepts): its runner in `_RUNNERS` (`(folder, study, out,
+  progress) -> files`; a flowsheet kind's is its `_PLANT_RUNNERS` analysis
+  wrapped by `_on_plant`, which builds the plant), its required fields in `_REQUIRED`
   (`simulate`'s are `()`: it needs streams or observables, checked in
   `_check_kind`), its form entry in `form._KINDS`, its result reader in
   `form._READERS`, and its view in `aquakin_ui/results.py` (`ANALYSIS_VIEWS`, or
@@ -68,10 +83,12 @@ results. The design and the owner's decisions are in
   `tests/ui/test_protocol.py` pin that each registry holds exactly `KINDS`. Never
   dispatch on a kind with an if / elif whose last branch assumes one: an unknown
   kind raises (`form._reader`, `results.analysis_view`).
-- **Result file names are the module constants** in `study.py`
+- **Result file names are the module constants** in `common.py` (re-exported by `study.py`)
   (`PARAMETERS_FILE`, `FISHER_FILE`, `FIT_FILE`, ...; `STUDIES_DIR`,
   `STUDY_FILE`, `SPEC_FILE`), used by both the runner that writes a file and the
-  reader that reads it; never a bare literal. The names on disk are the stored
+  reader that reads it; never a bare literal. `PARAMETERS_FILE`, `FIT_FILE` and
+  `COVARIANCE_FILE` are a saved fit's, defined in
+  `aquakin/integrate/calibration/saved.py` and re-exported by `common.py`. The names on disk are the stored
   format and do not change (a test pins their spelling). Kinds and their files:
   - `simulate`: no `time` → steady state (`streams.yaml`, `measured.yaml`);
     with `time` → `streams.csv` / `measured.csv`; always `final_state.yaml`
@@ -80,16 +97,82 @@ results. The design and the owner's decisions are in
     when singular, the four design criteria), `parameters.yaml`.
   - `calibrate`: observations from `data:` (a `write_trajectory` table, one
     `<stream>.<channel>` column per channel, so channels must be named);
-    `fit.yaml`, `parameters.yaml` (the fitted vector), `fitted.csv` (the
-    fitted plant's channels at the data times), `covariance.csv` with
-    `laplace`. Priors are on by default (`use_priors`), as in `Plant.calibrate`.
+    `fit.yaml`, `parameters.yaml` (the fitted vector) and, with `laplace`,
+    `covariance.csv`, all written by `write_fit_files` (the files of
+    `CalibrationResult.save`, so one implementation; the study's `fit.yaml` is
+    `fit_summary` alone), and `fitted.csv` (the fitted plant's channels at the
+    data times). Priors are on by default (`use_priors`), as in `Plant.calibrate`.
   - `profile`: the calibrate fields plus `profile` and `grid`; `profile.csv`
     (`write_table`) and `profile.yaml` (MLE, interval).
   - `rank`: `candidates` (named sensor sets) and optional `base`;
     `ranking.csv`.
+  - `posterior`: `fit` (a calibrate study's name) and the sampler's settings;
+    `draws.csv` (one column per fitted parameter, the chains stacked),
+    `posterior.yaml` (per parameter optimum, mean, std, quantiles, R-hat, ESS).
+  - `design` (reactor only): `design.yaml`, the optimized experiments as an
+    `experiments:` list (the stored layout of `study.yaml`, owner's decision on
+    #933, so it pastes into a fisher or calibrate study), the criterion at the
+    start and at the optimum, and each parameter's std at both.
   Data and initial-state files are part of the study's fingerprint.
   A new kind adds a runner, its required fields, a form entry, a reader, a view
   in `aquakin_ui`, and a test in `tests/integration/test_study.py`.
+
+## The reactor target (`reactor.py`, owner's decisions on #691)
+
+- **`reactor:` (`model`, `conditions`, `integrator`), `experiments` (`data`,
+  `initial`) and `observed` replace the flowsheet.** `flowsheet:` and `reactor:`
+  are exclusive (`_check_target`; `flowsheet` counts as given when it is in
+  `model_fields_set`); with neither the study is the default flowsheet's, and
+  `experiments` / `observed` without a reactor are refused. Batch reactors only.
+- **Kinds**: `reactor.REQUIRED` lists the kinds that take a reactor and their
+  required fields; any other kind is refused by message ("the simulate kind
+  does not take a reactor target yet"). A flowsheet-only setting given to a
+  reactor study is refused (`_FLOWSHEET_ONLY`), never silently ignored.
+- **Planned experiments** (`fisher`, `design`: `reactor._PLANNED`) read no
+  data; each takes its own `t_obs` or the study's (`_check_planned`), built by
+  the one `reactor._planned`, which passes `time_unit` to `Experiment` so times
+  and `time_bounds` stay in the study's unit. A fit's experiments take their
+  times from their data and refuse a `t_obs`. Experiments already run are
+  `base_experiments` (owner's decision; `base` is the plant rank's sensor set).
+  A design has no flowsheet form (`study_form` gives it no `fields`, so the
+  editor's dialog does not offer it), and `_RUNNERS["design"]` is
+  `run_reactor_study`.
+- **Every other setting is shared by name** with the plant kinds (`free`,
+  `parameters`, `sigma`, `estimate_sigma`, `transforms`, `laplace`, `profile`,
+  `grid`, `t_obs`, `time_unit`, ...). Share the analysis code: the fit options,
+  the data reading and the Fisher / profile writers are `analysis.py`'s, called
+  by both targets' runners; never copy a plant runner for the reactor.
+- **Dispatch on the target in one place**: `_run_held` calls
+  `run_reactor_study` for a reactor study and `_RUNNERS[kind]` otherwise, and `_inputs` gives either
+  target's `spec_inputs` / `spec_fingerprint` (the reactor's: `model:<reactor.model>`
+  and `data:<file name>`), so `run.yaml`, staleness, `results.partial/` and
+  `frozen.yaml` are the same code for both.
+- An experiment is named by its data table's stem (unique, checked), and its
+  results are keyed `<experiment>.<species>` (`fitted.csv` on the union of the
+  experiments' times, `nan` where one has no sample). `calibrate` writes its fit
+  with `CalibrationResult.save`, so `aquakin.load_calibration` reads it.
+- A model reference is a file when `plant.spec._is_file_base` says so (the
+  `extends:` rule), relative to the study folder; `create_study` /
+  `update_study` store a project-relative or absolute one relative to it and
+  copy each experiment's table in. A frozen study reads the snapshot's model and
+  tables (`frozen=` on the `reactor.py` functions).
+## The posterior kind (owner's decisions on #932)
+
+- **A posterior study samples a calibrate study, named by `fit:`**, and has no
+  target of its own (`study_form` marks it `flowsheet: false`; `list_studies`
+  gives `flowsheet: None`). It refuses a fit that is not fresh or is running
+  (`_fresh_fit`).
+- **Its run re-enters the fit at the saved optimum** (`OptimizerConfig` with
+  that one start, Laplace on) through the calibrate study's own fit code
+  (`_fit_plant`, `reactor._fit`), because the sampler needs the fit record a
+  saved calibration lacks. Never rebuild the objective a second way.
+- **Its inputs are the fit's** (`_posterior_inputs`: the calibrate study's
+  inputs, settings and results hash under `fit/`), so refitting or editing the
+  calibrate study makes the posterior stale. Freezing puts a frozen copy of the
+  calibrate study, results included, in `snapshot/fit/` (`_freeze_posterior`).
+
+## Running
+
 - **A run builds its plant with `Plant.from_spec`** and never keeps a `Plant`
   between runs: rebuilt plants of one spec share their compiled solves
   (`.claude/rules/plant-solve.md`), so a repeat run compiles nothing, while a
@@ -98,10 +181,25 @@ results. The design and the owner's decisions are in
 - **Progress and cancel** (`aquakin/progress.py`): `run_study(progress=)` passes
   the callable to the analysis; `Cancelled` (a `BaseException`) stops it and
   the run is recorded with outcome `cancelled` (state `"cancelled"`).
+- **One run of a study at a time, from any program** (`running.py`):
+  `run_study` takes `RunLock` before anything else it writes, and every
+  report goes through `RunLock.report` (records progress, raises `Cancelled`
+  when `cancel` exists) before the caller's callback. A run in progress is a
+  **field** (`StudyStatus.running`, `list_studies`' `running`), not a state:
+  `state` stays that of the results it had. Anything that changes what a run
+  reads (`freeze_study`, `unfreeze_study`, `update_study`) calls
+  `refuse_while_running`; `copy_study` leaves both files out. Never decide
+  "running" from a process handle or a pid alone: `run_state` asks the lock.
+  Rewrite `running.yaml` in place (the lock is on that file; replacing it
+  would release it), and remove it before releasing the lock.
 - **Setting a study up** (`form.py`): `study_form()` describes every `_Study`
   field (type, label, help, default) and each kind's fields and required ones
-  (`_REQUIRED`); a test pins that it covers every field but `kind` and
-  `flowsheet`, so a new setting needs an entry. `plant_choices(spec)` gives the
+  (`_REQUIRED`), and its `reactor_fields` / `reactor_required` (`_REACTOR_FIELDS`,
+  `reactor.REQUIRED`); a test pins that it covers every field but `kind` and
+  `flowsheet`, so a new setting needs an entry. The editor's dialog shows only
+  `fields`, so it refuses to edit a reactor study (saving would drop the
+  reactor), and `list_studies` gives a reactor study `flowsheet: None` and
+  `reactor: <model>`. `plant_choices(spec)` gives the
   streams (named, then every `unit.port`), parameters and per-stream channels.
   `create_study` / `update_study` validate exactly as a run reads (`_Study` +
   `_check_kind`) and copy a data or initial-state file from elsewhere into the
@@ -122,7 +220,7 @@ results. The design and the owner's decisions are in
   answers all of them.
 - **States**: `STATES` lists every state `check_study` reports (and
   `RESULT_STATES` those with results, `StudyStatus.has_results`); the worker adds
-  `UNREADABLE` (`aquakin/__main__.py`) for a listed study whose `study.yaml`
+  `UNREADABLE` (`list_studies`, `aquakin/study/form.py`) for a listed study whose `study.yaml`
   cannot be read. A new state goes in `STATES` and in `aquakin_ui`'s
   `STATE_COLOURS` (`tests/ui/test_protocol.py` pins the match). Front ends read
   `has_results` rather than deciding from a state's name.

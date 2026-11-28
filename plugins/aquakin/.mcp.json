@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "aquakin": {
+      "command": "uvx",
+      "args": ["--from", "aquakin[mcp]==0.4.0", "aquakin", "mcp"]
+    }
+  }
+}

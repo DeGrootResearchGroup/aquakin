@@ -258,6 +258,21 @@ class _PlantParamNamespace:
     def parameters(self) -> list[str]:
         return list(self.param_index)
 
+    @property
+    def species_index(self) -> dict[str, int]:
+        """The flat plant state by ``"<unit>.<state name>"``, as a reactor's
+        model indexes its species, so a fitted initial state is saved by name."""
+        return {
+            f"{unit}.{name}": i
+            for unit, entries in self.plant._named_positions().items()
+            for name, i in entries.items()
+        }
+
+    @property
+    def models(self) -> list:
+        """The plant's models, each once, so a saved fit records their fingerprints."""
+        return list(self.plant._ordered_models())
+
     def default_parameters(self) -> jnp.ndarray:
         return self.plant.default_parameters()
 

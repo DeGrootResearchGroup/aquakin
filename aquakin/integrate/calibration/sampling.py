@@ -2,17 +2,23 @@
 
 A random-walk Metropolis sampler over the unconstrained coordinates the fit ran
 in (the rate parameters through their transforms, then the logs of the fitted
-initial pools). The target is the posterior the MAP fit maximized, built from
-the same objective (:func:`_objective_fn`), so the data term, the priors and the
-transforms are one function shared with the fit:
+initial pools). The target is built from the objective the MAP fit minimized
+(:func:`_objective_fn`), so the data term, the priors and the transforms are one
+function shared with the fit. Which density ``exp(-objective)`` is taken to be
+is the ``prior_space`` choice:
 
-    log p(theta) = -objective(theta) + sum_i log |d p_i / d theta_i|
+- ``"transformed"`` (the default): ``log p(theta) = -objective(theta)``, a
+  density in the transformed coordinates. This is the density the fit's mode
+  and its Laplace approximation describe, so the draws are directly comparable
+  with the Laplace posterior and the profile likelihood. Beyond any stated
+  rate prior, the prior is flat in ``theta`` (in ``log k`` for a
+  ``positive_log`` rate).
+- ``"physical"``: ``log p(theta) = -objective(theta) + sum_i log |d p_i / d
+  theta_i|``, a density in the physical values carried over to ``theta`` by
+  the Jacobian of the rate transforms. Beyond any stated rate prior, the prior
+  is flat in the physical value ``k``.
 
-The second term is the Jacobian of the rate transforms. The fit does not need it
-(it moves the mode of a density, not the maximum of a likelihood times a prior
-on the physical values), but a sampler does: without it the draws would follow
-a density on ``theta`` that assumes a flat prior on ``theta`` instead of on the
-physical value. The pools carry no such term: their prior is defined on their
+The pools carry no Jacobian in either mode: their prior is defined on their
 log coordinates already.
 
 Each chain proposes ``theta + s L z`` with ``L L^T`` the Laplace covariance of
@@ -48,6 +54,7 @@ from aquakin.integrate.calibration.multistart import _is_solve_failure, _optimiz
 from aquakin.integrate.calibration.objective import _objective_fn
 from aquakin.integrate.calibration.problem import _ReactorForwardModel
 from aquakin.integrate.calibration.result import PosteriorSamples
+from aquakin.progress import report
 
 if TYPE_CHECKING:
     from aquakin.integrate._common import Reactor
@@ -62,6 +69,8 @@ _ADAPT_EXPONENT = 0.6
 # A Laplace eigenvalue below this fraction of the largest is a direction the
 # Hessian does not see (null, or held on a bound); see _proposal_factor.
 _NULL_EIG_RTOL = 1e-12
+# The spaces the sampled density can be a density in; see the module docstring.
+_PRIOR_SPACES = ("transformed", "physical")
 
 
 def _target_acceptance(d: int) -> float:
@@ -102,9 +111,26 @@ def _log_jacobian(problem: _CalibrationProblem, rate_thetas):
     return jnp.sum(jnp.stack(terms))
 
 
-def _log_density(problem: _CalibrationProblem, fm):
+def _check_prior_space(prior_space: str) -> None:
+    """Refuse a ``prior_space`` that is not one of :data:`_PRIOR_SPACES`.
+
+    Raises
+    ------
+    ValueError
+        If ``prior_space`` is not ``"transformed"`` or ``"physical"``.
+    """
+    if prior_space not in _PRIOR_SPACES:
+        raise ValueError(
+            f"prior_space must be 'transformed' (a prior flat in the coordinates "
+            f"the fit ran in, as Laplace assumes) or 'physical' (flat in the "
+            f"physical rate values); got {prior_space!r}."
+        )
+
+
+def _log_density(problem: _CalibrationProblem, fm, prior_space: str):
     """The log posterior density of the unconstrained coordinates, up to a
-    constant: ``-objective(theta) + log |J(theta)|``.
+    constant: ``-objective(theta)``, plus ``log |J(theta)|`` of the rate
+    transforms when ``prior_space="physical"``.
 
     Parameters
     ----------
@@ -112,6 +138,9 @@ def _log_density(problem: _CalibrationProblem, fm):
         The resolved problem, with ``loss="nll"``.
     fm : forward model
         The forward-solve seam.
+    prior_space : {"transformed", "physical"}
+        The space the density ``exp(-objective)`` is a density in; see the
+        module docstring.
 
     Returns
     -------
@@ -121,9 +150,15 @@ def _log_density(problem: _CalibrationProblem, fm):
     """
     objective = _objective_fn(problem, fm)
     data = problem.data
+    if prior_space == "transformed":
 
-    def log_p(theta):
-        return -objective(theta, *data) + _log_jacobian(problem, theta[: problem.n_rate])
+        def log_p(theta):
+            return -objective(theta, *data)
+
+    else:
+
+        def log_p(theta):
+            return -objective(theta, *data) + _log_jacobian(problem, theta[: problem.n_rate])
 
     return log_p
 
@@ -203,7 +238,7 @@ def _start_points(density, theta_map, L, config: SamplerConfig, rng):
     return starts, log_p
 
 
-def _metropolis(density, theta_map, L, config: SamplerConfig):
+def _metropolis(density, theta_map, L, config: SamplerConfig, progress=None):
     """Run the chains.
 
     Parameters
@@ -216,6 +251,9 @@ def _metropolis(density, theta_map, L, config: SamplerConfig):
         The proposal factor from :func:`_proposal_factor`, ``(d, d)``.
     config : SamplerConfig
         Chains, draws, warm-up and seed.
+    progress : callable, optional
+        Called with an :class:`aquakin.Progress` after each step (stage
+        ``"sample"``); raising :class:`aquakin.Cancelled` from it stops the run.
 
     Returns
     -------
@@ -245,6 +283,8 @@ def _metropolis(density, theta_map, L, config: SamplerConfig):
         else:
             chains[:, step - config.n_warmup] = current
             accepted += accept
+        phase = "warm-up" if step < config.n_warmup else "drawing"
+        report(progress, "sample", step + 1, config.n_warmup + config.n_draws, phase)
     return chains, accepted / config.n_draws
 
 
@@ -411,7 +451,9 @@ def _samples_result(problem, params, chains, acceptance) -> PosteriorSamples:
     )
 
 
-def _run_sampler(result: CalibrationResult, fm, config: SamplerConfig) -> PosteriorSamples:
+def _run_sampler(
+    result: CalibrationResult, fm, config: SamplerConfig, prior_space: str, progress=None
+) -> PosteriorSamples:
     """Sample the posterior of a fitted result through the forward model ``fm``.
 
     Shared by :func:`sample_posterior` and :meth:`Plant.sample_posterior`,
@@ -419,17 +461,37 @@ def _run_sampler(result: CalibrationResult, fm, config: SamplerConfig) -> Poster
     the Laplace covariance come from ``result``, which
     :func:`_check_sampling_result` has accepted.
 
+    Parameters
+    ----------
+    result : CalibrationResult
+        The fit to sample.
+    fm : forward model
+        The forward-solve seam the density solves through.
+    config : SamplerConfig
+        Chains, draws, warm-up and seed.
+    prior_space : {"transformed", "physical"}
+        The space the sampled density is a density in (see
+        :func:`sample_posterior`).
+    progress : callable, optional
+        As for :func:`sample_posterior`.
+
     Returns
     -------
     PosteriorSamples
+
+    Raises
+    ------
+    ValueError
+        If ``prior_space`` is not ``"transformed"`` or ``"physical"``.
     """
+    _check_prior_space(prior_space)
     problem = result._fit_record.problem
     theta_map = np.asarray(result._fit_record.theta_map, dtype=float)
     cov = result.joint_cov if problem.m_ic else result.posterior_cov
     _bounds, lb, ub, _ls, _has = _optimizer_bounds(problem, problem.rate_theta0())
-    density = _BatchDensity(_log_density(problem, fm), lb, ub)
+    density = _BatchDensity(_log_density(problem, fm, prior_space), lb, ub)
     L = _proposal_factor(np.asarray(cov, dtype=float))
-    chains, acceptance = _metropolis(density, theta_map, L, config)
+    chains, acceptance = _metropolis(density, theta_map, L, config, progress)
     return _samples_result(problem, result.params, chains, acceptance)
 
 
@@ -438,15 +500,35 @@ def sample_posterior(
     reactor: Reactor,
     *,
     config: SamplerConfig = SamplerConfig(),
+    prior_space: str = "transformed",
+    progress=None,
 ) -> PosteriorSamples:
     """Draw from the posterior of a calibration by Markov chain Monte Carlo.
 
     The Laplace posterior of :func:`aquakin.calibrate` is a Gaussian at the
     MAP; this samples the posterior itself, so a curved, skewed or bounded
-    posterior is represented as it is. The density is the one the fit
-    maximized (the same likelihood, priors and transforms), plus the
-    Jacobian of the parameter transforms, over the coordinates the fit ran in.
-    Fitted initial pools are sampled jointly with the rates.
+    posterior is represented as it is. The density is built from the objective
+    the fit minimized (the same likelihood, priors and transforms), over the
+    coordinates the fit ran in. Fitted initial pools are sampled jointly with
+    the rates.
+
+    A transformed rate (``positive_log`` or ``logit``) needs one more choice:
+    the space in which the posterior is a density, which fixes the prior the
+    data are combined with. ``prior_space="transformed"`` (the default) takes
+    the prior to be flat in the coordinates the fit ran in (in ``log k`` for a
+    ``positive_log`` rate), times any rate prior given to the fit. This is the
+    density the MAP and its Laplace approximation describe, so the draws, the
+    Laplace posterior and :func:`aquakin.profile_likelihood` answer the same
+    question: where the posterior is near Gaussian in those coordinates the
+    three intervals agree, and a difference shows a genuinely non-Gaussian
+    posterior. ``prior_space="physical"`` takes the prior to be flat in the
+    physical value ``k`` instead, times any rate prior: the sampled density
+    gains the Jacobian ``|dk / d log k| = k`` of the transform, which moves
+    the draws of a poorly determined rate upwards (by about the variance of
+    ``log k`` on the log scale). Choose it when the prior you mean is uniform
+    in ``k``; a Gaussian rate prior (``priors=``) is stated on the physical
+    value in both modes. Untransformed rates and the fitted initial pools (whose
+    prior is defined on their logarithms) are sampled the same way in both.
 
     The sampler is a random-walk Metropolis with several chains started near
     the MAP. Proposals are Gaussian with the Laplace covariance, scaled by
@@ -471,6 +553,17 @@ def sample_posterior(
         the same model with other solver settings.
     config : SamplerConfig, optional
         Chains, draws, warm-up and seed. Default ``SamplerConfig()``.
+    prior_space : {"transformed", "physical"}, optional
+        The space in which the posterior is a density: ``"transformed"`` for a
+        prior flat in the transformed coordinates of the rates (the density
+        the fit and its Laplace approximation use), ``"physical"`` for a prior
+        flat in the physical rate values (the behaviour of aquakin 0.3.0).
+        Either is multiplied by any rate prior of the fit. Default
+        ``"transformed"``.
+    progress : callable, optional
+        Called with an :class:`aquakin.Progress` after each step of the chains
+        (stage ``"sample"``, ``total`` the warm-up plus the draws); raising
+        :class:`aquakin.Cancelled` from it stops the sampling.
 
     Returns
     -------
@@ -484,7 +577,8 @@ def sample_posterior(
     ------
     ValueError
         If ``result`` did not come from a reactor fit with ``loss="nll"`` and a
-        Laplace posterior, or ``reactor`` is on another model.
+        Laplace posterior, ``reactor`` is on another model, or ``prior_space``
+        is not ``"transformed"`` or ``"physical"``.
     """
     _check_sampling_result(result)
     problem = result._fit_record.problem
@@ -497,4 +591,4 @@ def sample_posterior(
             "reactor is on a different model from the one the result was calibrated on."
         )
     fm = _ReactorForwardModel(reactor, "jax_adjoint", 0, False)
-    return _run_sampler(result, fm, config)
+    return _run_sampler(result, fm, config, prior_space, progress)

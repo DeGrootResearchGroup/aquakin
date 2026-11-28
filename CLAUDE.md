@@ -44,16 +44,18 @@ Claude-facing files** at the end.
 | `.claude/rules/integration-calibrate.md` | `calibrate.py`, the `integrate/calibration/` subpackage, `integrate/seam.py`, the Fisher / profile / experiment-design modules, `plant/calibrate.py`, `plant/identifiability.py` | `calibrate()`'s internal structure and the helpers `Plant.calibrate` shares |
 | `.claude/rules/integration-sampling.md` | `integrate/calibration/sampling.py`, `plant/posterior.py` | `sample_posterior` / `Plant.sample_posterior`: the sampled density is the fit's objective plus the transform Jacobian, the fit record it reads, the diagnostics |
 | `.claude/rules/integration-differentiation.md` | `integrate/_common.py` / `_config.py` / `_solver.py`, the adjoint / forward-sensitivity modules, `plant/sensitivity.py`, `plant/dynamic_solve.py`, `plant/colored.py` | differentiating stiff models (`dtmax`, adjoints, discrete adjoint, forward sensitivities) |
+| `.claude/rules/integration-transport.md` | `integrate/finite_volume.py`, `integrate/dispersed_flow.py` | the one 1-D finite-volume core, the axial-flow reactors' reaction term, the advection scheme and its limiter |
 | `.claude/rules/schema.md` | `aquakin/schema/**`, model `*.yaml` (shipped, fixtures, examples) | YAML model format + Pydantic schema rules (stoichiometry expressions, `extends:`, `auto`, `composition:`, `speciation:`, `precipitation:`) |
 | `.claude/rules/plant.md` | `aquakin/plant/**` | plant-wide simulation: the `Unit` contract, wiring, the plant clock, introspection, shipped units, shared helpers and constants |
 | `.claude/rules/plant-solve.md` | `plant/plant.py`, `dynamic_solve.py`, `steady_solve.py`, `recycle.py`, `colored.py`, `solve_cache.py`, `steady.py`, `integrate/steady.py` | coloured Jacobian, solve caches, recycle resolution and the cached recycle / flow maps |
 | `.claude/rules/plant-analysis.md` | `plant/calibrate.py`, `identifiability.py`, `measures.py`, `sensitivity.py` | plant calibration, Fisher / profile / sensor ranking, measured channels |
 | `.claude/rules/plant-audits.md` | `plant/units_check.py`, `balance.py`, `metrics.py` | `plant.check_units()`, `plant.mass_balance()` |
-| `.claude/rules/plant-ifas.md` | `plant/ifas.py`, `integrate/biofilm*.py` | the IFAS / MBBR biofilm unit |
+| `.claude/rules/plant-ifas.md` | `plant/ifas.py`, `integrate/biofilm*.py`, `integrate/finite_volume.py` | the IFAS / MBBR biofilm unit |
 | `.claude/rules/plant-settling.md` | `plant/takacs.py`, `settling.py`, clarifier / separator modules | the Takács clarifier, shared separator helpers |
-| `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
+| `.claude/rules/plant-spec.md` | `plant/spec.py`, `catalog.py`, `core/time_expr.py`, `influent.py`, `aquakin/__main__.py` | flowsheet spec, unit catalogue, time expressions, influent records / patterns |
 | `.claude/rules/models.md` | `aquakin/models/**` | model authoring: pointers to the catalog and the schema rules |
-| `.claude/rules/study.md` | `aquakin/study/**` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
+| `.claude/rules/study.md` | `aquakin/study/**`, `utils/result_files.py` | studies: the study folder layout, results keyed by name, staleness, freezing / unfreezing, the `aquakin study` command |
+| `.claude/rules/mcp.md` | `aquakin/mcp/**`, `setup.py`, `MANIFEST.in`, `plugins/**`, `.claude-plugin/**`, `packaging/claude-desktop/**`, `scripts/build_mcpb.py` | `aquakin mcp`, the tools for an AI assistant: tools as thin wrappers of the editor worker's functions, errors that reach the assistant, each tool's declared effect and aquakin's refusals, study runs as detached processes, the opt-in script tool, the Claude Code plugin, the Claude Desktop extension, the guide bundled into the wheel |
 | `.claude/rules/ui.md` | `aquakin_ui/**`, `tests/ui/**`, `tests/browser/**`, `ui-widget/**`, `installers/**` | the browser flowsheet editor `aquakin-ui`: the independence rule (never imports aquakin or JAX), the `aquakin serve` worker, the document / forms / page split, the Vue Flow widget and its sync rules, the uv installers |
 
 **On-demand docs (read when needed):**
@@ -244,7 +246,7 @@ codebase something; the examples are real.
 - **Two paths that must agree call one function**, they are not "kept in step"
   by a comment. Reactor and plant calibration, the scalar and vectorized rate
   evaluators, the rate-expression and time-expression languages, a spec reader
-  and its writer: when you change one, find the other. (`plant/time_expr.py`
+  and its writer: when you change one, find the other. (`core/time_expr.py`
   once bound `sqrt` / `log` to the bare `jnp` functions while the rate language
   used the guarded ones in `core/kernels.py`, and three tokenizers were written
   before `core/lexer.py` replaced them.)

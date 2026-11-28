@@ -496,7 +496,7 @@ def test_laplace_dtmax_reconstructs_tighter_reactor(simple_model):
     reactor = aquakin.BatchReactor(
         simple_model,
         aquakin.SpatialConditions.uniform(1, T=293.15),
-        integrator=aquakin.IntegratorConfig(dtmax=0.5),
+        settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(dtmax=0.5)),
     )
     C0 = jnp.asarray([1.0, 0.0])
     tp = simple_model.default_parameters().at[0].set(0.25)
@@ -1766,7 +1766,9 @@ def test_gauss_newton_forward_mode_with_direct_adjoint(simple_model):
     reactor = aquakin.BatchReactor(
         simple_model,
         aquakin.SpatialConditions.uniform(1, T=293.15),
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        settings=aquakin.SolverSettings(
+            diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        ),
     )
     C0 = jnp.asarray([1.0, 0.0])
     true_k = 0.25

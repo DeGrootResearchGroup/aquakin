@@ -49,14 +49,14 @@ def refresh_studies(self: Editor) -> None:
     """List the project's studies with where each stands (off the page's thread)."""
     project = self._project()
     if project is None:
-        self.state.studies = []
+        self._list([])
         return
 
     def done(studies):
         if isinstance(studies, Exception):
             self.say(f"could not list the studies: {studies}")
             return
-        self.state.studies = [{**st, "running": st["name"] in self._runs} for st in studies]
+        self._list(studies)
 
     self._off_page(lambda: self.worker.request("list_studies", project=str(project)), done)
 
@@ -172,6 +172,8 @@ def _run_simulation(self: Editor, spec: Path) -> None:
                 name=name,
                 study={**settings, "flowsheet": str(spec)},
             )
+        elif study.get("reactor"):
+            raise ValueError(f"study {name} studies a reactor, not the flowsheet")
         elif study["flowsheet"] is None:  # its study.yaml cannot be read
             raise ValueError("; ".join(study["reasons"]))
         elif not study["frozen"] and Path(study["flowsheet"]).resolve() != spec.resolve():
@@ -187,7 +189,7 @@ def _run_simulation(self: Editor, spec: Path) -> None:
         if isinstance(studies, Exception):
             self.say(f"could not set up the simulation: {studies}")
             return
-        self.state.studies = [{**st, "running": st["name"] in self._runs} for st in studies]
+        self._list(studies)
         self.state.panel = "studies"
         if (self._study(name) or {}).get("frozen"):
             self.say(
@@ -285,6 +287,7 @@ def _open_study_dialog(
         s.study_kinds = [
             {"title": k["label"], "value": k["kind"], "summary": k["summary"]}
             for k in form["kinds"]
+            if k["fields"]  # a kind with none studies only a reactor, which the form cannot
         ]
         s.study_choices = choices
         s.study_kind = kind
@@ -331,6 +334,10 @@ def edit_study(self: Editor, name: str) -> None:
     """Open the dialog on a study's settings."""
     study = self._study(name)
     if study is None:
+        return
+    if study.get("reactor"):
+        # The dialog shows a flowsheet study's fields; saving would drop the reactor's.
+        self.say(f"{name} studies a reactor: edit its study.yaml to change it")
         return
 
     def opened(settings):
@@ -393,7 +400,9 @@ def _write_study(self: Editor, form: dict, name: str, kind: str, draft: dict) ->
             study["flowsheet"] = self._study_flowsheet
         work = lambda: self.worker.request("update_study", path=editing, study=study)
     else:
-        study["flowsheet"] = str(self._spec_file())
+        # Only a kind that runs on a flowsheet names one (a posterior runs on its fit's).
+        if next((k for k in form["kinds"] if k["kind"] == kind), {}).get("flowsheet", True):
+            study["flowsheet"] = str(self._spec_file())
         project = str(self._project())
         work = lambda: self.worker.request("create_study", project=project, name=name, study=study)
 
@@ -472,6 +481,8 @@ def _start_run(self: Editor, study: dict, *, replace: bool) -> None:
 
 
 def cancel_run(self: Editor, name: str) -> None:
+    """Stop a study's run: this editor's own through its process, one another
+    program started through the worker (it stops at its next checkpoint)."""
     run = self._runs.get(name)
     if run is not None:
         run.cancel()
@@ -479,6 +490,12 @@ def cancel_run(self: Editor, name: str) -> None:
             **self.state.study_progress,
             name: {**self.state.study_progress.get(name, {}), "message": "cancelling"},
         }
+        return
+    study = self._study(name)
+    if study is not None and study.get("run"):
+        self._worker_study(
+            "cancel_study", study, then=lambda: self.say(f"{name}: cancelling", error=False)
+        )
 
 
 def _on_run_event(self: Editor, name: str, event: dict) -> None:
@@ -513,8 +530,19 @@ def _apply_run_event(self: Editor, name: str, event: dict) -> None:
         self.refresh_studies()
 
 
+def _list(self: Editor, studies: list[dict]) -> None:
+    """Show the worker's ``list_studies``: each study ``running`` when this
+    editor runs it or the worker reports a run in progress (``run``: when it
+    started and its progress, from whichever program)."""
+    self._listed = studies
+    self._mark_running()
+
+
 def _mark_running(self: Editor) -> None:
-    self.state.studies = [{**st, "running": st["name"] in self._runs} for st in self.state.studies]
+    self.state.studies = [
+        {**st, "run": st["running"], "running": st["name"] in self._runs or bool(st["running"])}
+        for st in self._listed
+    ]
     self.state.simulating = self._simulation() in self._runs
 
 

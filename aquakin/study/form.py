@@ -19,15 +19,16 @@ from pathlib import Path
 
 import yaml
 
-from aquakin.study.files import read_matrix, read_named_values, read_table, read_trajectory
-from aquakin.study.study import (
-    _REQUIRED,
+from aquakin.study.common import (
+    DESIGN_FILE,
+    DRAWS_FILE,
     FISHER_FILE,
     FISHER_SUMMARY_FILE,
     FIT_FILE,
     FITTED_FILE,
     MEASURED_FILE,
     MEASURED_STEADY_FILE,
+    POSTERIOR_FILE,
     PROFILE_FILE,
     PROFILE_SUMMARY_FILE,
     RANKING_FILE,
@@ -37,6 +38,12 @@ from aquakin.study.study import (
     STUDIES_DIR,
     STUDY_FILE,
     StudyError,
+)
+from aquakin.study.reactor import REQUIRED as REACTOR_REQUIRED
+from aquakin.study.reactor import experiment_names, observed_data
+from aquakin.study.running import refuse_while_running
+from aquakin.study.study import (
+    _REQUIRED,
     _channel_names,
     _channels,
     _check_kind,
@@ -46,9 +53,12 @@ from aquakin.study.study import (
     check_study,
     load_study,
 )
+from aquakin.utils.result_files import read_matrix, read_named_values, read_table, read_trajectory
 
 __all__ = [
+    "UNREADABLE",
     "create_study",
+    "list_studies",
     "plant_choices",
     "read_study",
     "simulation_study",
@@ -60,6 +70,68 @@ __all__ = [
 _COMMON = ("description", "parameters", "initial_state")
 _FIT = ("free", "observables", "data", "t_span", "sigma", "estimate_sigma")
 _FIT_OPTIONS = ("transforms", "use_priors", "n_starts", "max_iter", "time_unit")
+
+#: The fields a kind shows when it studies a batch reactor (``reactor:``) in place
+#: of the flowsheet; a kind not listed takes no reactor.
+_REACTOR_FIELDS = {
+    "fisher": (
+        "description",
+        "reactor",
+        "experiments",
+        "observed",
+        "parameters",
+        "free",
+        "t_obs",
+        "sigma",
+        "time_unit",
+    ),
+    "design": (
+        "description",
+        "reactor",
+        "experiments",
+        "observed",
+        "base_experiments",
+        "parameters",
+        "free",
+        "t_obs",
+        "sigma",
+        "time_unit",
+        "criterion",
+        "subset",
+        "optimize_times",
+        "time_bounds",
+        "min_spacing",
+        "initial_bounds",
+        "transforms",
+        "max_iter",
+    ),
+    "calibrate": (
+        "description",
+        "reactor",
+        "experiments",
+        "observed",
+        "parameters",
+        "free",
+        "sigma",
+        "estimate_sigma",
+        *_FIT_OPTIONS,
+        "laplace",
+    ),
+    "profile": (
+        "description",
+        "reactor",
+        "experiments",
+        "observed",
+        "parameters",
+        "free",
+        "sigma",
+        "estimate_sigma",
+        "profile",
+        "grid",
+        "delta",
+        *_FIT_OPTIONS,
+    ),
+}
 
 _KINDS = {
     "simulate": (
@@ -93,6 +165,12 @@ _KINDS = {
         "Fit the other parameters at each value of one, to see how well the data fix it.",
         (*_COMMON, *_FIT, "profile", "grid", "delta", *_FIT_OPTIONS),
     ),
+    "posterior": (
+        "Posterior sampling",
+        "Draw from the posterior of a calibration by Markov chain Monte Carlo, to see "
+        "the full uncertainty of the fitted parameters.",
+        ("description", "fit", "n_chains", "n_draws", "n_warmup", "seed", "prior_space"),
+    ),
     "rank": (
         "Sensor ranking",
         "Rank candidate sensor sets by the information they give.",
@@ -108,16 +186,60 @@ _KINDS = {
             "time_unit",
         ),
     ),
+    # A batch reactor's experiments only: no fields of a flowsheet study.
+    "design": (
+        "Experiment design",
+        "Optimize a batch reactor's sampling times and initial concentrations for the "
+        "information they give about chosen parameters.",
+        (),
+    ),
 }
+
+#: The kinds that run on no flowsheet: a posterior on its calibrate study's
+#: plant or reactor, a design on a batch reactor.
+_NO_FLOWSHEET = ("posterior", "design")
 
 # (type, label, help, default). Types: text, number, integer, boolean, choice
 # (with choices), span (two numbers), times (an even grid or a list of times),
 # run_time (a span, output times and their unit), numbers (one number or one per
 # channel), parameter / parameters (plant parameter names), parameter_values
 # (name -> number), transforms (name -> choice), streams, observables (list of
-# {stream, channels}), candidates / candidate (named sensor sets), file, initial_state.
+# {stream, channels}), candidates / candidate (named sensor sets), file, initial_state,
+# reactor ({model, conditions, integrator}), experiments (list of {data, initial,
+# t_obs}), species (species names), bounds (species -> [low, high]).
 _FIELDS = {
     "description": ("text", "Description", "What the study is for.", None),
+    "reactor": (
+        "reactor",
+        "Reactor",
+        "A batch reactor to study in place of the flowsheet: its model (a model file, "
+        "or a shipped model's name), its conditions by name, and optionally its "
+        "integrator settings (rtol, atol, order, dtmax, max_steps).",
+        None,
+    ),
+    "experiments": (
+        "experiments",
+        "Experiments",
+        "The reactor's batch experiments: each its initial concentrations by species "
+        "(the model's defaults for the others) and, for a fit, a CSV table with a t "
+        "column and one column per observed species, copied into the study; for a "
+        "Fisher information or a design, its sampling times t_obs when they are not "
+        "the study's.",
+        [],
+    ),
+    "base_experiments": (
+        "experiments",
+        "Experiments already run",
+        "Experiments whose information a design counts but does not change, each its "
+        "initial concentrations and sampling times.",
+        [],
+    ),
+    "observed": (
+        "species",
+        "Observed species",
+        "The species measured in the reactor's experiments.",
+        [],
+    ),
     "parameters": (
         "parameter_values",
         "Parameters",
@@ -265,6 +387,30 @@ _FIELDS = {
         "Sensors already installed; each candidate is scored as an addition to them.",
         None,
     ),
+    "fit": (
+        "text",
+        "Calibration",
+        "The calibrate study whose fit is sampled, by its name in this project. Its "
+        "results must be fresh; the samples go stale when it is run again.",
+        None,
+    ),
+    "n_chains": ("integer", "Chains", "Independent chains (at least 2, for R-hat).", 4),
+    "n_draws": ("integer", "Draws", "Draws kept per chain, after the warm-up.", 1000),
+    "n_warmup": (
+        "integer",
+        "Warm-up",
+        "Steps per chain discarded while the proposal adapts.",
+        500,
+    ),
+    "seed": ("integer", "Seed", "The same seed gives the same draws.", 0),
+    "prior_space": (
+        "choice",
+        "Prior space",
+        "transformed: the prior is flat in the coordinates the fit ran in (log k for "
+        "a log-transformed rate), the density the fit and its uncertainty describe; "
+        "physical: flat in the parameter's own value.",
+        "transformed",
+    ),
     "criterion": (
         "choice",
         "Criterion",
@@ -272,10 +418,39 @@ _FIELDS = {
         "modified_E (conditioning).",
         "D",
     ),
+    "subset": (
+        "parameters",
+        "Scored parameters",
+        "The parameters the criterion scores; the other free ones are estimated too but "
+        "not scored. Empty scores them all.",
+        [],
+    ),
+    "optimize_times": ("boolean", "Optimize the times", "Move the sampling times.", True),
+    "time_bounds": (
+        "span",
+        "Time window",
+        "Where the sampling times may go, in the study's time unit (by default, from 0 "
+        "to the latest starting time).",
+        None,
+    ),
+    "min_spacing": (
+        "number",
+        "Minimum spacing",
+        "The least time between two samples of an experiment, in the study's time unit.",
+        0.0,
+    ),
+    "initial_bounds": (
+        "bounds",
+        "Initial concentrations",
+        "The initial concentrations to optimize, each species with its range [low, high]; "
+        "every experiment's starting value must lie in it.",
+        {},
+    ),
 }
 
 _CHOICES = {
     "sensitivity": ["forward", "reverse"],
+    "prior_space": ["transformed", "physical"],
     "criterion": ["D", "A", "E", "modified_E"],
     "transforms": ["none", "positive_log", "logit"],
     "initial_state": ["default", "steady"],
@@ -288,9 +463,16 @@ def study_form() -> dict:
     Returns
     -------
     dict
-        ``{"kinds": [{"kind", "label", "summary", "fields", "required"}],
-        "fields": {name: {"type", "label", "help", "default", "choices"}}}``.
-        ``fields`` of a kind are in the order a form shows them.
+        ``{"kinds": [{"kind", "label", "summary", "fields", "required",
+        "reactor_fields", "reactor_required", "flowsheet"}], "fields": {name:
+        {"type", "label", "help", "default", "choices"}}}``. ``fields`` of a
+        kind are those of a study of the flowsheet, in the order a form shows
+        them; ``reactor_fields`` those of a study of a batch reactor (empty for
+        a kind that takes no reactor); ``flowsheet`` whether a study of the
+        kind runs on a flowsheet it names (``false`` for a posterior study,
+        which runs on its calibrate study's, and a design, which runs on a batch
+        reactor), so a front end sends the spec it has open only to a kind that
+        takes one, and offers a kind with no ``fields`` only for a reactor.
     """
 
     kinds = [
@@ -300,6 +482,9 @@ def study_form() -> dict:
             "summary": summary,
             "fields": list(fields),
             "required": list(_REQUIRED.get(kind, ())),
+            "reactor_fields": list(_REACTOR_FIELDS.get(kind, ())),
+            "reactor_required": list(REACTOR_REQUIRED.get(kind, ())),
+            "flowsheet": kind not in _NO_FLOWSHEET,
         }
         for kind, (label, summary, fields) in _KINDS.items()
     ]
@@ -476,6 +661,75 @@ def _measure_units(species_units) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
+#: The state of a listed study whose ``study.yaml`` cannot be read (beside
+#: :data:`aquakin.study.study.STATES`, which a readable study is in).
+UNREADABLE = "unreadable"
+
+
+def list_studies(project) -> list[dict]:
+    """Every study of a project with where it stands, for a front end to list.
+
+    Parameters
+    ----------
+    project : str or pathlib.Path
+        The project folder (the one holding ``studies/``).
+
+    Returns
+    -------
+    list of dict
+        One entry per ``studies/<name>/study.yaml``, sorted by name:
+        ``"name"``, ``"path"`` (the study folder), ``"kind"``,
+        ``"description"``, ``"state"`` (one of
+        :data:`~aquakin.study.study.STATES`, or :data:`UNREADABLE` when the
+        study cannot be read), ``"has_results"``, ``"frozen"``,
+        ``"flowsheet"`` (the spec its plant is built from: the snapshot's for a
+        frozen study; ``None`` for a reactor or posterior study, or when unreadable),
+        ``"reactor"`` (a reactor study's model, else ``None``), ``"running"``
+        (the run in progress, from whichever program, as
+        :class:`~aquakin.study.StudyStatus` gives it, else ``None``),
+        ``"reasons"`` and ``"notes"``.
+        An unreadable study's ``reasons`` holds why.
+    """
+    from aquakin.plant.errors import error_reply
+
+    out = []
+    folder = Path(project) / STUDIES_DIR
+    for path in sorted(folder.glob(f"*/{STUDY_FILE}")) if folder.is_dir() else []:
+        entry = {"name": path.parent.name, "path": str(path.parent)}
+        try:
+            spec = load_study(path.parent)
+            status = check_study(path.parent)
+            entry |= {
+                "kind": spec.kind,
+                "description": spec.description or "",
+                "state": status.state,
+                "has_results": status.has_results,
+                "frozen": status.frozen,
+                "flowsheet": None
+                if spec.reactor is not None or spec.kind == "posterior"
+                else str(_flowsheet(path.parent, spec)),
+                "reactor": None if spec.reactor is None else spec.reactor.model,
+                "running": status.running,
+                "reasons": status.reasons,
+                "notes": status.notes,
+            }
+        except Exception as exc:  # one broken study is listed as such, not the listing lost
+            entry |= {
+                "kind": "",
+                "description": "",
+                "state": UNREADABLE,
+                "has_results": False,
+                "frozen": False,
+                "flowsheet": None,
+                "reactor": None,
+                "running": None,
+                "reasons": [error_reply(exc)["error"]],
+                "notes": [],
+            }
+        out.append(entry)
+    return out
+
+
 def study_results(path) -> dict:
     """A study's results as plain data, for a front end to show.
 
@@ -585,26 +839,38 @@ def _read_rank(folder: Path, study, out: Path) -> dict:
 
 
 def _read_calibrate(folder: Path, study, out: Path) -> dict:
-    """The fit's summary, and the fitted and the observed channels by stream."""
+    """The fit's summary, and the fitted and the observed channels by stream (by
+    experiment, for a reactor)."""
     found: dict = {"summary": _yaml_file(out / FIT_FILE)}
-    names = [f"{o.stream}.{n}" for o in study.observables for n in _channel_names(_channels(o))]
-    streams = [o.stream for o in study.observables]
+    if study.reactor is not None:
+        streams = experiment_names(study)
+        observed = observed_data(folder, study)
+    else:
+        streams = [o.stream for o in study.observables]
+        observed = _plant_data(folder, study)
     if (out / FITTED_FILE).is_file():
         t, columns = read_trajectory(out / FITTED_FILE)
         found["fitted"] = {
             "t": _finite(list(t)),
             "values": _by_stream({n: _finite(list(v)) for n, v in columns.items()}, streams),
         }
-    data = folder / (study.data or "")
-    if study.data and data.is_file():
-        t, columns = read_trajectory(data)
+    if observed is not None:
+        t, columns = observed
         found["data"] = {
             "t": _finite(list(t)),
-            "values": _by_stream(
-                {n: _finite(list(v)) for n, v in columns.items() if n in names}, streams
-            ),
+            "values": _by_stream({n: _finite(list(v)) for n, v in columns.items()}, streams),
         }
     return found
+
+
+def _plant_data(folder: Path, study):
+    """The measured channels of a flowsheet study's data table, or ``None``."""
+    data = folder / (study.data or "")
+    if not (study.data and data.is_file()):
+        return None
+    names = [f"{o.stream}.{n}" for o in study.observables for n in _channel_names(_channels(o))]
+    t, columns = read_trajectory(data)
+    return t, {n: v for n, v in columns.items() if n in names}
 
 
 def _read_profile(folder: Path, study, out: Path) -> dict:
@@ -617,12 +883,44 @@ def _read_profile(folder: Path, study, out: Path) -> dict:
 
 #: Each kind's result reader, ``(folder, study, results folder) -> dict``; one per
 #: entry of :data:`~aquakin.study.study.KINDS`, like ``_RUNNERS``.
+#: Bins of each parameter's histogram of draws (:func:`_read_posterior`).
+HISTOGRAM_BINS = 30
+
+
+def _read_posterior(folder: Path, study, out: Path) -> dict:
+    """The posterior's summary (each parameter's optimum, mean, standard
+    deviation, quantiles, R-hat and effective sample size, and the chains'
+    acceptance rates), and each parameter's histogram of draws: ``{parameter:
+    {"edges": [...], "counts": [...]}}`` over :data:`HISTOGRAM_BINS` bins."""
+    import numpy as np
+
+    found: dict = {"summary": _yaml_file(out / POSTERIOR_FILE)}
+    if (out / DRAWS_FILE).is_file():
+        table = read_table(out / DRAWS_FILE)
+        histograms = {}
+        for name, values in table.items():
+            if name in ("chain", "draw"):
+                continue
+            counts, edges = np.histogram(np.asarray(values, dtype=float), HISTOGRAM_BINS)
+            histograms[name] = {"edges": _finite(edges.tolist()), "counts": counts.tolist()}
+        found["histograms"] = histograms
+    return found
+
+
+def _read_design(folder: Path, study, out: Path) -> dict:
+    """The design: the optimized experiments, the criterion at the start and at
+    the optimum, and the standard deviations at both."""
+    return {"summary": _yaml_file(out / DESIGN_FILE)}
+
+
 _READERS = {
     "simulate": _read_simulate,
     "fisher": _read_fisher,
     "calibrate": _read_calibrate,
     "profile": _read_profile,
     "rank": _read_rank,
+    "posterior": _read_posterior,
+    "design": _read_design,
 }
 
 
@@ -648,6 +946,13 @@ def _bring_in(folder: Path, study: dict, key: str, project: Path) -> None:
     value = study.get(key)
     if not value or (key == "initial_state" and value in ("default", "steady")):
         return
+    study[key] = _bring_in_file(folder, value, key, project)
+
+
+def _bring_in_file(folder: Path, value: str, key: str, project: Path) -> str:
+    """Copy the file ``value`` into the study folder, keeping its name, and
+    return that name. A relative path is read from the study folder, else the
+    project."""
     source = Path(value)
     if not source.is_absolute():
         inside = folder / source
@@ -660,7 +965,40 @@ def _bring_in(folder: Path, study: dict, key: str, project: Path) -> None:
             raise StudyError(f"{key}: the study already holds another {source.name}")
         folder.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, dest)
-    study[key] = source.name
+    return source.name
+
+
+def _reactor_files(folder: Path, study: dict, project: Path) -> None:
+    """Copy each experiment's data table into the study, and store a model file
+    relative to the study folder (an absolute one, or one relative to the
+    project), as a run reads it."""
+    from aquakin.plant.spec import _is_file_base
+
+    experiments = []
+    for i, experiment in enumerate(study.get("experiments") or []):
+        experiment = dict(experiment)
+        if experiment.get("data"):
+            experiment["data"] = _bring_in_file(
+                folder, experiment["data"], f"experiments[{i}].data", project
+            )
+        experiments.append(experiment)
+    if experiments:
+        study["experiments"] = experiments
+    reactor = study.get("reactor")
+    if not reactor or not _is_file_base(reactor.get("model", "")):
+        return
+    model = Path(reactor["model"])
+    if not model.is_absolute():
+        if (folder / model).is_file():
+            return
+        model = project / model
+    if not model.is_file():
+        raise StudyError(f"reactor.model: {reactor['model']} does not exist")
+    try:
+        relative = Path(os.path.relpath(model.resolve(), folder.resolve())).as_posix()
+    except ValueError:  # another drive (Windows): keep the absolute path
+        relative = str(model)
+    study["reactor"] = {**reactor, "model": relative}
 
 
 def _relative_flowsheet(folder: Path, study: dict) -> None:
@@ -695,6 +1033,7 @@ def _write(folder: Path, study: dict, project: Path) -> Path:
     _check_kind(checked, "the study")
     for key in ("data", "initial_state"):
         _bring_in(folder, study, key, project)
+    _reactor_files(folder, study, project)
     _relative_flowsheet(folder, study)
     folder.mkdir(parents=True, exist_ok=True)
     text = yaml.safe_dump({"study": study}, sort_keys=False, allow_unicode=True)
@@ -772,6 +1111,7 @@ def update_study(path, study: dict) -> Path:
     """
     folder = _folder(path)
     load_study(folder)  # it is a study
+    refuse_while_running(folder, "edit")
     return _write(folder, study, folder.parent.parent)
 
 

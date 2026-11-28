@@ -77,6 +77,7 @@ parameters:               # model-level (shared) parameters
   <name>:
     value: <float>
     units: <str>                  # also sets the model's time unit (see below)
+    description: <str>            # optional: what the parameter is
     bounds: [<low>, <high>]
     transform: <str>              # "none" (default) | "positive_log" | "logit"
     prior: {mean: <float>, std: <float>}   # or {range: [<low>, <high>]}
@@ -716,6 +717,9 @@ reason:
 
 - Species names that YAML might otherwise interpret as non-strings (e.g.
   `NO`, `ON`) must be quoted in YAML.
+- A mapping may not repeat a key: a species listed twice in one
+  stoichiometry, or a key given twice in any other block, is an error that
+  names the key and both lines, rather than the last value silently winning.
 - `default_concentration` is a reference value, not an experimental initial
   condition. Override at runtime via the `C0` argument to `solve()`.
 - `references` and `reference` keys are free-form and should cite the source

@@ -113,7 +113,26 @@ posterior mean is about its standard deviation over `sqrt(ess_bulk)`. A larger
 `r_hat` means the chains disagree; run them longer.
 
 The sampled density is the one `calibrate` maximized, so the likelihood, the
-priors and the transforms are the same. It needs `loss="nll"` (the other
+priors and the transforms are the same. For a rate fitted through a transform
+(`positive_log` or `logit`) there is one more choice, the prior the data are
+combined with, set by `prior_space`:
+
+- `prior_space="transformed"` (the default) takes the prior to be flat in the
+  coordinate the fit ran in: in `log k` for a `positive_log` rate, so every
+  factor of ten in `k` is equally likely beforehand. This is the density whose
+  peak `calibrate` found and which the Laplace posterior approximates, so the
+  MCMC, Laplace and profile-likelihood intervals answer the same question.
+  Where the posterior is close to Gaussian in `log k` the three agree; where
+  they differ, the posterior really is curved or skewed.
+- `prior_space="physical"` takes the prior to be flat in `k` itself, so every
+  equal step in `k` is equally likely beforehand. That puts more weight on
+  large values, and moves a poorly determined rate's draws up, on the log
+  scale by about the variance of `log k`. Use it when a uniform prior on `k`
+  is what you mean; it is what aquakin 0.3.0 sampled.
+
+A prior you give with `priors=` is a Gaussian on the physical value in both
+modes, and multiplies the flat one. Rates without a transform and fitted
+initial pools are sampled the same way in both. It needs `loss="nll"` (the other
 losses are not likelihoods) and a Laplace posterior, which supplies the
 starting points and the proposal. Fitted initial pools are sampled together
 with the rates, which needs `LaplaceConfig(include_ic=True)`. With
@@ -128,7 +147,10 @@ covariance, adapting their size during the warm-up. Each step costs one
 forward solve per chain and no gradient, so it suits a stiff model, but a few
 thousand solves add up: a plant, or a model whose posterior is far from the
 Laplace shape, needs patience. A plant fit is sampled with
-`plant.sample_posterior(result)`, through the plant's own solves.
+`plant.sample_posterior(result)`, through the plant's own solves. Both take
+`progress=` to follow a long run, as `calibrate` does. To keep the draws with
+the project, and know when they are out of date, sample a calibrate study's
+fit with a [posterior study](plant_files.md#studies).
 
 The draws plug into what takes Laplace draws:
 
@@ -206,6 +228,40 @@ draws, `np.percentile(samples.params_named[name], [2.5, 97.5])`.
 [Which interval to report](analysis_concepts.md#which-interval-to-report) says
 when each is the right one; say which you used, with the noise model and any
 priors.
+
+## Saving a fit
+
+`result.save(folder)` writes a fit to a folder of plain files, and
+`aquakin.load_calibration(folder)` reads it back, every number exactly as it
+was:
+
+```python
+joint.save("ozone_fit")
+saved = aquakin.load_calibration("ozone_fit")
+saved.params_named == joint.params_named     # True
+```
+
+% invisible-code-block: python
+%     assert saved.params_named == joint.params_named
+%     assert saved.ic_named == joint.ic_named
+%     assert np.array_equal(saved.joint_cov, joint.joint_cov)
+
+The folder holds `fit.yaml` (the fitted values and their standard deviations,
+the loss and the optimizer's status, the transforms and priors, the fitted
+initial pools, the counts the information criteria use, a fingerprint of the
+model and the aquakin version), `parameters.yaml` (the full parameter vector
+by name) and, when the fit has them, the covariance and Hessian matrices and
+the fitted initial states as CSV tables with named rows and columns. A
+calibration study writes its `fit.yaml`, `parameters.yaml` and
+`covariance.csv` the same way, and a
+[study of a batch reactor](plant_files.md#a-study-of-a-batch-reactor) saves its
+whole fit with `save`. `save` refuses a folder that already holds a saved fit.
+
+A loaded fit works wherever only its numbers are needed: the information
+criteria and `compare_models` (it still knows which observations it was fitted
+to), `posterior_draws(model)` and `predictive_band(reactor, ...)`. The model
+the fit ran on is not saved, so `aquakin.sample_posterior` needs the result
+`calibrate` returned.
 
 ## Identifiability report
 

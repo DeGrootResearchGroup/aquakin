@@ -11,10 +11,8 @@ import jax.numpy as jnp
 from aquakin.core.conditions import SpatialConditions
 from aquakin.core.model import CompiledModel
 from aquakin.integrate._common import (
-    DifferentiationConfig,
     ExportableSolutionMixin,
     GradientCheckMixin,
-    IntegratorConfig,
     PlottableSolutionMixin,
     _HasNamedSpecies,
     _interp_fields_to_scalar,
@@ -26,6 +24,7 @@ from aquakin.integrate._common import (
     solve_chemistry,
     validate_C0_params,
 )
+from aquakin.integrate._config import SolverSettings
 from aquakin.integrate._solver import check_solve_result
 from aquakin.integrate.forward_sensitivity import prepare_sensitivity, run_forward_sensitivity
 
@@ -87,19 +86,13 @@ class PlugFlowReactor(GradientCheckMixin):
         Reactor length.
     velocity : float
         Bulk velocity through the reactor.
-    rtol : float, optional
-        Relative tolerance for the ODE solver.
-    atol : float or jnp.ndarray, optional
-        Absolute tolerance, scalar or shape ``(n_species,)``. Defaults to
-        ``None`` -> a per-component noise floor scaled off the model reference
-        concentrations (see :class:`BatchReactor` for the per-species rationale).
-    integrator : IntegratorConfig, optional
-        Integrator / step-size configuration (ESDIRK ``order``, ``factormax``,
-        ``dtmax``, ``max_steps``, an explicit ``solver``). See
-        :class:`BatchReactor`. Set ``dtmax`` for reverse-mode differentiation of
-        a stiff model.
-    diff : DifferentiationConfig, optional
-        Autodiff configuration (``mode``, ``method``). See :class:`BatchReactor`.
+    settings : SolverSettings, optional
+        Tolerances and solver configuration (``rtol``, ``atol``, ``integrator``,
+        ``diff``); see :class:`BatchReactor` for each field. ``atol`` is a
+        scalar or shape ``(n_species,)``; ``None`` (default) uses a
+        per-component noise floor scaled off the model reference
+        concentrations. Set ``integrator=IntegratorConfig(dtmax=...)`` for
+        reverse-mode differentiation of a stiff model.
     """
 
     def __init__(
@@ -110,10 +103,7 @@ class PlugFlowReactor(GradientCheckMixin):
         length: float,
         velocity: float,
         *,
-        rtol: float = 1e-6,
-        atol=None,
-        integrator: IntegratorConfig = IntegratorConfig(),
-        diff: DifferentiationConfig = DifferentiationConfig(),
+        settings: SolverSettings = SolverSettings(),
     ) -> None:
         conditions.validate_required(model.conditions_required)
         if n_points < 2:
@@ -122,12 +112,12 @@ class PlugFlowReactor(GradientCheckMixin):
             raise ValueError(f"length must be positive, got {length}")
         if velocity <= 0:
             raise ValueError(f"velocity must be positive, got {velocity}")
-        init_solver_settings(self, model, rtol=rtol, integrator=integrator, diff=diff)
+        init_solver_settings(self, model, settings)
         self.conditions = conditions
         self.n_points = int(n_points)
         self.length = float(length)
         self.velocity = float(velocity)
-        self.atol = resolve_state_atol(model, atol)
+        self.atol = resolve_state_atol(model, settings.atol)
 
         self.n_locations = max(conditions.n_locations, 1)
         if self.n_locations == 1:

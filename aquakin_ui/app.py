@@ -19,7 +19,18 @@ from pathlib import Path
 import yaml
 from trame.app import asynchronous
 
-from aquakin_ui import checks, files, forms, page, studies, study_page, unit_form
+from aquakin_ui import (
+    checks,
+    disk,
+    files,
+    forms,
+    model_page,
+    model_panel,
+    page,
+    studies,
+    study_page,
+    unit_form,
+)
 from aquakin_ui.catalog import Catalog
 from aquakin_ui.document import Flowsheet, edge_id
 from aquakin_ui.icons import CATEGORY_LABELS, COLOURS, ICONS, SVG, icon_name
@@ -57,14 +68,18 @@ class Editor:
         self.catalog = Catalog(self.worker.request("catalog"), self.worker.request("models"))
         self.doc = Flowsheet(self.catalog)
         self._model_info: dict = {}
+        self._model = model_panel.ModelPanel()  # the model panel's Python side
         self._unit_checks: dict[str, tuple[str, str | None]] = {}
         self._plant_check: tuple[str | None, dict | None] = (None, None)
         self._check_task: asyncio.Task | None = None
         self._pending_rows = None
         self._runs: dict[str, StudyRun] = {}
+        self._listed: list[dict] = []  # the worker's list_studies, as last asked
         self._loop: asyncio.AbstractEventLoop | None = None
         # The file opened, and its sha256 (None when it had gone by the time it was read).
         self._opened: tuple[Path, str | None] | None = None
+        self._declined_digest: str | None = None  # a version on disk the user kept edits over
+        self._project_seen: tuple | None = None  # the project folder and its files, last look
         self._study_action: tuple[str, str] | None = None
         self._study_form: dict | None = None  # the worker's study_form, asked once
         self._saved: str | None = None  # the document as last opened or saved
@@ -80,6 +95,9 @@ class Editor:
             self.open(path, quiet=True)
         self.publish(checks=False)
         self.server.controller.on_server_ready.add(lambda **_: self.schedule_checks())
+        self.server.controller.on_server_ready.add(
+            lambda **_: asynchronous.create_task(self.watch_disk())
+        )
         self._build()
 
     # -- drawing ------------------------------------------------------------
@@ -135,6 +153,7 @@ class Editor:
         self.state.products = [f"{uid}.{p}" for uid, ps in dangling.items() for p in ps]
         self.state.n_recycles = len(back)
         self.state.plant_name = self.doc.meta.get("name", "plant")
+        self.refresh_model_choices()
         self._publish_spec()
         self.refresh_selection()
         if checks:
@@ -462,6 +481,7 @@ class Editor:
             }
             for cat in self.catalog.categories
         ]
+        model_panel.init_model_state(self)
         s.change("panel")(lambda **_: self._publish_spec())
 
         @s.change("panel")
@@ -491,6 +511,20 @@ class Editor:
     _results_dialog = study_page._results_dialog
     _study_dialog = study_page._study_dialog
 
+    # -- the model panel (model_panel.py, model_page.py) -------------------
+
+    _model_panel = model_page._model_panel
+    _model_dialog = model_page._model_dialog
+    refresh_model_choices = model_panel.refresh_model_choices
+    open_model = model_panel.open_model
+    discard_model_edits = model_panel.discard_model_edits
+    model_edited = model_panel.model_edited
+    add_model_parameter = model_panel.add_model_parameter
+    run_model_checks = model_panel.run_model_checks
+    apply_model = model_panel.apply_model
+    plan_model_name = model_panel.plan_model_name
+    answer_model_dialog = model_panel.answer_model_dialog
+
     # -- aquakin's checks (checks.py) --------------------------------------
 
     model_info = checks.model_info
@@ -517,6 +551,12 @@ class Editor:
     answer_unsaved = files.answer_unsaved
     save = files.save
     _save_refusal = files._save_refusal
+    reload_if_changed = files.reload_if_changed
+
+    # -- other programs' changes to the project (disk.py) -------------------
+
+    follow_disk = disk.follow_disk
+    watch_disk = disk.watch_disk
 
     # -- the project's studies (studies.py) --------------------------------
 
@@ -548,5 +588,6 @@ class Editor:
     cancel_run = studies.cancel_run
     _on_run_event = studies._on_run_event
     _apply_run_event = studies._apply_run_event
+    _list = studies._list
     _mark_running = studies._mark_running
     stop_runs = studies.stop_runs

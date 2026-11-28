@@ -1583,3 +1583,25 @@ def test_time_aware_observation_fn_sees_t_obs_exactly(simple_model):
         simple_model, C0, obs, t_user * 60.0, ["A_to_B.k"], observation_fn=fn, time_unit=None
     )
     assert other.struct_key("reverse") != prob.struct_key("reverse")
+
+
+def test_laplace_dtmax_rebuild_keeps_every_solver_setting(simple_model):
+    """``with_dtmax`` rebuilds the reactor through its constructor for the
+    Laplace Hessian: the clone must carry the original tolerances, integrator
+    and differentiation settings, changing only ``dtmax``. The full calibrate
+    path through it is only a slow test, so this pins the rebuild in the fast
+    tier: a constructor change that this rebuild misses fails here."""
+    integrator = aquakin.IntegratorConfig(order=5, dtmax=0.5, max_steps=1234)
+    diff = DifferentiationConfig(mode="forward", method="through_solve")
+    reactor = aquakin.BatchReactor(
+        simple_model,
+        aquakin.SpatialConditions.uniform(1, T=293.15),
+        settings=aquakin.SolverSettings(rtol=1e-9, atol=1e-11, integrator=integrator, diff=diff),
+    )
+    fm = _ReactorForwardModel(reactor, "jax_adjoint", 1, False)
+    assert fm.with_dtmax(0.5) is fm
+    tight = fm.with_dtmax(0.05).reactor
+    assert type(tight) is aquakin.BatchReactor
+    assert (tight.rtol, tight.order, tight.dtmax, tight.max_steps) == (1e-9, 5, 0.05, 1234)
+    assert tight.diff is diff
+    assert jnp.all(jnp.asarray(tight.atol) == jnp.asarray(reactor.atol))

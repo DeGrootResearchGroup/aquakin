@@ -181,9 +181,12 @@ def test_max_steps_is_enforced(net, cond):
     p = net.default_parameters()
     assert _reactor(
         net, cond,
-        integrator=aquakin.IntegratorConfig(max_steps=7)).max_steps == 7
+        settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(max_steps=7)),
+    ).max_steps == 7
 
-    r_tight = _reactor(net, cond, integrator=aquakin.IntegratorConfig(max_steps=4))
+    r_tight = _reactor(net, cond, settings=aquakin.SolverSettings(
+        integrator=aquakin.IntegratorConfig(max_steps=4),
+    ))
     capped = False
     try:
         sol = r_tight.solve(C0, params=p, t_span=(0.0, 5.0))     # no t_eval path
@@ -194,7 +197,7 @@ def test_max_steps_is_enforced(net, cond):
 
     sol = _reactor(
         net, cond,
-        integrator=aquakin.IntegratorConfig(max_steps=100_000)
+        settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(max_steps=100_000)),
     ).solve(C0, params=p, t_span=(0.0, 5.0))
     assert np.all(np.isfinite(np.asarray(sol.C)))
 

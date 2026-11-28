@@ -29,7 +29,10 @@ def _cstr_A(t):
 @pytest.fixture(scope="module")
 def reactor(simple_model):
     return aquakin.BatchReactor(
-        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15), rtol=1e-10, atol=1e-12
+        simple_model, aquakin.SpatialConditions.uniform(1, T=293.15), settings=aquakin.SolverSettings(
+            rtol=1e-10,
+            atol=1e-12,
+        )
     )
 
 

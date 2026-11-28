@@ -39,7 +39,11 @@ Run from a clean, green `main`.
 On a release-prep branch:
 
 - [ ] **Version** — set `__version__ = "X.Y.Z"` in `aquakin/__init__.py` (already
-      `0.1.0` for the first release; bump for later ones).
+      `0.1.0` for the first release; bump for later ones), and the same version
+      in the Claude Code plugin: `version` in
+      `plugins/aquakin/.claude-plugin/plugin.json` and the `aquakin[mcp]==X.Y.Z`
+      pin in `plugins/aquakin/.mcp.json` (`tests/unit/test_claude_plugin.py`
+      fails until they match).
 - [ ] **CHANGELOG.md** — the unreleased changes are the fragments in
       `changelog.d/` (one file per entry; see `changelog.d/README.md`). Build
       them into the release's section with towncrier, from the `release` extra:
@@ -105,6 +109,10 @@ On a release-prep branch:
       install `X.Y.Z` with the `constraints.txt` of tag `vX.Y.Z`. Check that
       both are listed under the Release's assets: the user guide's download
       links (`releases/latest/download/…`) serve them.
+- [ ] The **`desktop-extension`** job attaches `aquakin.mcpb`, the Claude
+      Desktop extension of `X.Y.Z` (`scripts/build_mcpb.py`). Check it is listed
+      under the Release's assets, then install it in Claude Desktop (Settings →
+      Extensions → Install Extension) and ask it to list aquakin's models.
 
 ### 5. Post-release verification
 
@@ -119,13 +127,14 @@ On a release-prep branch:
 - [ ] The PyPI page shows the version, the README as the description, and the
       provenance attestations.
 
-### 6. Zenodo DOI (post-release, once minted)
+### 6. Zenodo DOI (nothing to update)
 
-The Zenodo webhook mints a DOI when the GitHub Release is published. Once it
-exists:
+The Zenodo webhook mints a DOI for each release when its GitHub Release is
+published. `CITATION.cff` and the `README.md` badge and citation carry the
+**concept DOI** (`10.5281/zenodo.21268513`, "cite all versions"), which always
+resolves to the latest release, so a release needs no DOI follow-up.
 
-- [ ] Add it to `CITATION.cff` (`doi: 10.5281/zenodo.XXXXXXX`) and add a DOI
-      badge to `README.md`. This is a small follow-up PR after the release.
+- [ ] Check the new version appears on Zenodo under that concept DOI.
 
 ---
 

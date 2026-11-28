@@ -115,7 +115,7 @@ from aquakin.plant.settling import (
 )
 from aquakin.plant.steady import PTCResult, ptc_forward, solve_steady_state
 from aquakin.plant.storage import StorageTank
-from aquakin.plant.time_expr import (
+from aquakin.core.time_expr import (
     TimeExpressionError,
     compile_time_expression,
 )

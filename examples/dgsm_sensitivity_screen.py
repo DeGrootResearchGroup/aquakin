@@ -27,8 +27,10 @@ def main() -> None:
     atol = model.atol({"OH": 1e-20}, default=1e-12)
     # forward mode so the *forward*-mode screen works (finite at any step).
     reactor = aquakin.BatchReactor(
-        model, conditions, atol=atol,
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))
+        model, conditions, settings=aquakin.SolverSettings(
+            atol=atol,
+            diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        ))
 
     C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
     base = model.default_parameters()

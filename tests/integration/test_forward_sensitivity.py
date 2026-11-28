@@ -38,7 +38,10 @@ def test_analytic_decay_sensitivity_exact(simple_model):
     # First-order decay A -> B: A(t) = A0 e^{-kt}, so dA/dk = -t A0 e^{-kt} and
     # dB/dk = +t A0 e^{-kt} in closed form.
     cond = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(simple_model, cond, rtol=1e-11, atol=1e-13)
+    reactor = aquakin.BatchReactor(simple_model, cond, settings=aquakin.SolverSettings(
+        rtol=1e-11,
+        atol=1e-13,
+    ))
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_model.default_parameters()
     k = float(p[0])
@@ -68,7 +71,9 @@ def test_matches_jacfwd_multi_param():
 
     ref = aquakin.BatchReactor(
         net, cond,
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"))
+        settings=aquakin.SolverSettings(
+            diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        ))
 
     def Cfn(pp):
         return ref.solve(C0, (0.0, 5.0), t_eval, params=pp).C
@@ -101,8 +106,9 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_model):
     cond = aquakin.SpatialConditions.uniform(T=293.15)
     kw = dict(
         n_layers=4, thickness=8e-4, area_per_volume=50.0,
-        diffusivity=1e-4, boundary_layer=1e-4, rtol=1e-9, atol=1e-11,
+        diffusivity=1e-4, boundary_layer=1e-4,
     )
+    tol = dict(rtol=1e-9, atol=1e-11)
     n = simple_model.n_species
     C0 = jnp.zeros((5, n)).at[0, simple_model.species_index["A"]].set(1.0)
     p = simple_model.default_parameters()
@@ -110,7 +116,9 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_model):
 
     ref = aquakin.BiofilmReactor(
         simple_model, cond,
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        settings=aquakin.SolverSettings(
+            **tol, diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        ),
         **kw,
     )
 
@@ -119,7 +127,7 @@ def test_biofilm_sensitivity_matches_jacfwd(simple_model):
 
     J = jax.jacfwd(bulkC)(p)[:, :, 0]
 
-    r = aquakin.BiofilmReactor(simple_model, cond, **kw)
+    r = aquakin.BiofilmReactor(simple_model, cond, settings=aquakin.SolverSettings(**tol), **kw)
     sol, S = r.solve_sensitivity(
         C0, (0.0, 5.0), t_eval, params=p, sens_params=["A_to_B.k"]
     )
@@ -136,7 +144,7 @@ def test_pfr_sensitivity_matches_jacfwd(simple_model):
 
     ref = aquakin.PlugFlowReactor(
         simple_model, cond, n_points=6, length=10.0, velocity=1.0,
-        rtol=1e-10, atol=1e-12,
+        settings=aquakin.SolverSettings(rtol=1e-10, atol=1e-12),
     )
     # The PFR uses the default (reverse-mode) adjoint, so the reference Jacobian
     # is taken with jacrev; the augmented forward solve must reproduce it.
@@ -205,7 +213,10 @@ def test_shared_factor_matches_dense_single_param(simple_model):
     # The simultaneous corrector solves the same Newton system as the dense
     # path, so shared_factor=True must reproduce shared_factor=False exactly.
     cond = aquakin.SpatialConditions.uniform(T=293.15)
-    reactor = aquakin.BatchReactor(simple_model, cond, rtol=1e-11, atol=1e-13)
+    reactor = aquakin.BatchReactor(simple_model, cond, settings=aquakin.SolverSettings(
+        rtol=1e-11,
+        atol=1e-13,
+    ))
     C0 = jnp.asarray([1.0, 0.0])
     p = simple_model.default_parameters()
     k = float(p[0])
@@ -313,8 +324,10 @@ def test_stiff_uncapped_finite_and_matches_capped_jacfwd(stiff_sewer_model):
     # Capped jacfwd reference (finite, the current workaround).
     capped = aquakin.BatchReactor(
         net, cond,
-        integrator=aquakin.IntegratorConfig(dtmax=3e-3),
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        settings=aquakin.SolverSettings(
+            integrator=aquakin.IntegratorConfig(dtmax=3e-3),
+            diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        ),
     )
 
     # jacfwd over the compared parameters only (the rest held at p).
@@ -382,8 +395,10 @@ def test_state_derived_ph_jvp_flows_and_matches():
 
     capped = aquakin.BatchReactor(
         net, cond,
-        integrator=aquakin.IntegratorConfig(dtmax=1e-3),
-        diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        settings=aquakin.SolverSettings(
+            integrator=aquakin.IntegratorConfig(dtmax=1e-3),
+            diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+        ),
     )
 
     # jacfwd over the one compared parameter only (the rest held at p), not

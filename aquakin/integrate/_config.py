@@ -29,13 +29,14 @@ class IntegratorConfig:
 
     A single frozen value object centralising the per-step solver settings that
     used to be scattered as loose keyword arguments on ``Plant.solve`` and the
-    reactor constructors. Passed as ``integrator=IntegratorConfig(...)``; the
+    reactor constructors. Passed as ``integrator=IntegratorConfig(...)`` to
+    ``Plant.solve``, and to a reactor inside its :class:`SolverSettings`; the
     default flips the public solve stack to the fast configuration (Kvaerno3 +
     a capped step-growth factor + an auto colored Jacobian).
 
     ``rtol`` / ``atol`` are deliberately **not** here -- they stay separate
-    arguments of ``Plant.solve`` / the reactor constructors (a tolerance is the
-    accuracy contract, not the integrator machinery).
+    arguments of ``Plant.solve`` and separate fields of :class:`SolverSettings`
+    (a tolerance is the accuracy contract, not the integrator machinery).
 
     Parameters
     ----------
@@ -77,7 +78,8 @@ class DifferentiationConfig:
 
     A single frozen value object replacing the old AD selectors (``adjoint=``,
     ``gradient=``, ``ad_mode=``, ``check_finite=``, ``stable_adjoint_max_steps=``).
-    Passed as ``diff=DifferentiationConfig(...)``.
+    Passed as ``diff=DifferentiationConfig(...)`` to ``Plant.solve`` and the
+    analysis entry points, and to a reactor inside its :class:`SolverSettings`.
 
     Parameters
     ----------
@@ -212,9 +214,50 @@ FORWARD_THROUGH_SOLVE_DIFF = (
 STABLE_REVERSE_DIFF = 'diff=aquakin.DifferentiationConfig(method="stable")'
 #: How to make a solve the user builds forward-mode differentiable.
 FORWARD_REACTOR_REMEDY = (
-    f"build the reactor with {FORWARD_THROUGH_SOLVE_DIFF} (or pass that diff= to "
-    "Plant.solve), which gives the solve a forward-capable adjoint"
+    f"build the reactor with settings=aquakin.SolverSettings({FORWARD_THROUGH_SOLVE_DIFF}) "
+    "(or pass that diff= to Plant.solve), which gives the solve a forward-capable adjoint"
 )
+#: How to cap a reactor's step for a reverse-mode gradient through a stiff solve.
+DTMAX_REACTOR_SETTINGS = (
+    "settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(dtmax=...))"
+)
+
+
+@dataclass(frozen=True)
+class SolverSettings:
+    """The tolerances and solver configuration of a reactor, in one value.
+
+    Every reactor takes its solver configuration as one ``settings=`` value
+    (:class:`~aquakin.BatchReactor`, :class:`~aquakin.PlugFlowReactor`,
+    :class:`~aquakin.BiofilmReactor`, :class:`~aquakin.ParticleTrackReactor`,
+    :class:`~aquakin.CFDReactor`, :class:`~aquakin.DispersedFlowReactor`,
+    :class:`~aquakin.TanksInSeries`), so the defaults are the same for all of
+    them and a configuration can be built once and reused.
+
+    Parameters
+    ----------
+    rtol : float
+        Relative tolerance for the ODE solver.
+    atol : float or array-like, optional
+        Absolute tolerance: a scalar, a ``(n_species,)`` array applied in every
+        cell, or one value per state. ``None`` (default) uses the per-species
+        noise floor scaled off the model's reference concentrations.
+    integrator : IntegratorConfig
+        Integrator / step-size configuration.
+    diff : DifferentiationConfig
+        Autodiff configuration.
+
+    Examples
+    --------
+    >>> settings = aquakin.SolverSettings(
+    ...     rtol=1e-8, integrator=aquakin.IntegratorConfig(dtmax=0.01))
+    >>> reactor = aquakin.BatchReactor(model, conditions, settings=settings)
+    """
+
+    rtol: float = 1e-6
+    atol: object = None
+    integrator: IntegratorConfig = IntegratorConfig()
+    diff: DifferentiationConfig = DifferentiationConfig()
 
 
 # --- AD-mode helpers (hide the diffrax adjoint plumbing) ---------------------
@@ -225,12 +268,13 @@ def forward_adjoint() -> diffrax.AbstractAdjoint:
 
     A thin, dependency-free alias for ``diffrax.DirectAdjoint()``, the adjoint a
     reactor carries when built with
-    ``diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve")``
-    (see :meth:`DifferentiationConfig.reactor_adjoint`). The default
+    ``settings=aquakin.SolverSettings(diff=aquakin.DifferentiationConfig(
+    mode="forward", method="through_solve"))`` (see
+    :meth:`DifferentiationConfig.reactor_adjoint`). The default
     ``RecursiveCheckpointAdjoint`` registers a ``custom_vjp`` that rejects
-    forward mode. Reactors take the ``diff=`` config, not an adjoint object; use
-    this alias only where a raw diffrax adjoint is wanted (a hand-written
-    ``diffrax.diffeqsolve``, or :func:`with_adjoint`).
+    forward mode. Reactors take ``settings=SolverSettings(diff=...)``, not an
+    adjoint object; use this alias only where a raw diffrax adjoint is wanted (a
+    hand-written ``diffrax.diffeqsolve``, or :func:`with_adjoint`).
     """
     return diffrax.DirectAdjoint()
 
@@ -327,8 +371,8 @@ class GradientCheckMixin:
             remedy = (
                 "A reverse-mode gradient through a stiff solve overflows in the "
                 "backward pass when the integrator step is uncapped. Build the "
-                "reactor with a dtmax cap (integrator=aquakin.IntegratorConfig("
-                "dtmax=...), a small multiple of the fastest reaction timescale), "
+                f"reactor with a dtmax cap ({DTMAX_REACTOR_SETTINGS}, a small "
+                "multiple of the fastest reaction timescale), "
                 "or differentiate in forward mode (jax.jacfwd): "
                 f"{FORWARD_REACTOR_REMEDY}. aquakin.calibrate (cap-free with "
                 f"{STABLE_REVERSE_DIFF}) and aquakin.sensitivity (with "

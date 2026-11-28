@@ -6,7 +6,7 @@ either a bug (``-2**2`` was one, fixed in #699) or a decision worth stating out
 loud -- there is no third case, and this file is where the line is drawn.
 
 The check is differential: the same text is handed to Python's own ``eval`` and
-to :func:`~aquakin.plant.time_expr.compile_time_expression`, with the function
+to :func:`~aquakin.core.time_expr.compile_time_expression`, with the function
 names bound to the same callables on each side, so nothing is compared except
 syntax and operator semantics. ``eval`` here runs only the literal corpus below,
 never anything a user supplies.
@@ -25,8 +25,8 @@ import pytest
 
 from aquakin.core.nodes import ASTNode
 from aquakin.core.parser import ParseError, parse_rate_expression
+from aquakin.core.time_expr import TimeExpressionError, compile_time_expression
 from aquakin.plant.measures import MeasureSyntaxError, parse_measure
-from aquakin.plant.time_expr import TimeExpressionError, compile_time_expression
 
 T = 3.0
 

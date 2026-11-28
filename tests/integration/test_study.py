@@ -27,6 +27,7 @@ from aquakin.study import (
     freeze_study,
     read_matrix,
     read_named_values,
+    read_table,
     read_trajectory,
     run_study,
     unfreeze_study,
@@ -283,9 +284,12 @@ FIT = {
 }
 
 
-def test_a_calibration_study_recovers_a_parameter(project):
+def test_a_calibration_study_recovers_a_parameter_and_is_sampled(project):
     """The fit recovers the value the data were made with; without ``laplace``
-    there is no posterior, so no std and no covariance file."""
+    there is no posterior, so no std and no covariance file. A posterior study
+    samples it all the same (re-entering the fit computes the Laplace posterior
+    the sampler starts from), briefly here: this is the plant path, whose fit
+    has no cheaper analogue than this one-tank plant."""
     folder = project / "studies" / "fit"
     _synthetic_data(project, folder, 5.0)
     (folder / "study.yaml").write_text(
@@ -306,9 +310,18 @@ def test_a_calibration_study_recovers_a_parameter(project):
     _, fitted = read_trajectory(folder / "results" / "fitted.csv")
     _, data = read_trajectory(folder / "data.csv")
     np.testing.assert_allclose(fitted["effluent.SNH"], data["effluent.SNH"], rtol=1e-4)
-    # The data table is one of the study's inputs.
+    post = _study(project, "post", {**POSTERIOR, "n_draws": 4, "n_warmup": 0})
+    assert run_study(post).state == "fresh"
+    summary = yaml.safe_load((post / "results" / "posterior.yaml").read_text())
+    # Re-entered at the saved optimum: the optimizer starts there and stays.
+    assert summary["parameters"]["asm1_local.muH"]["optimum"] == pytest.approx(
+        fit["fitted"]["asm1_local.muH"], rel=1e-6
+    )
+    assert summary["n_draws"] == 4 and len(summary["acceptance_rate"]) == 2
+    # The data table is one of the study's inputs, and so of its posterior's.
     (folder / "data.csv").write_text((folder / "data.csv").read_text().replace("0.1,", "0.15,"))
     assert "the study's settings have changed" in check_study(folder).reasons
+    assert check_study(post).reasons == ["the setup of the calibrate study it samples has changed"]
 
 
 def test_a_run_replaces_results_only_when_it_succeeds(project):
@@ -489,6 +502,11 @@ def test_a_singular_fisher_design_is_reported_without_failing(project):
         ),
         ({**FIT, "kind": "calibrate", "sigma": [1, 2, 3]}, "3 errors for 2 measured channels"),
         ({"kind": "simulate", "streams": ["x"], "sigma": "1"}, "sigma"),
+        ({"kind": "design", "free": ["a"]}, "a design study needs reactor"),
+        (
+            {"kind": "fisher", "base_experiments": [{"initial": {}}]},
+            "experiments and observed are the settings of a reactor study",
+        ),
     ],
 )
 def test_a_study_that_cannot_run_says_why(project, study, message):
@@ -869,3 +887,750 @@ def test_a_measure_naming_an_unknown_species_says_so_at_the_run(project):
         run_study(folder)
     with pytest.raises(KeyError, match="stream 'effluent'"):
         run_study(folder)
+
+
+# ---------------------------------------------------------------------------
+# Reactor studies: a batch reactor in place of the flowsheet
+# ---------------------------------------------------------------------------
+
+#: A -> B -> C (first-order steps k and k2), a model file extending the
+#: first-order decay A -> B, so freezing has an ``extends`` chain to flatten.
+CHAIN = """\
+model:
+  name: decay_chain
+  extends: decay.yaml
+species:
+  - {name: C, description: "Final product", units: mol/L, default_concentration: 0.0}
+reactions:
+  - name: B_to_C
+    description: "First-order decay of B."
+    rate: "k2 * [B]"
+    parameters:
+      k2: {value: 0.05, units: "s-1", bounds: [1.0e-3, 10.0]}
+    stoichiometry: {B: -1, C: +1}
+"""
+TRUE = {"A_to_B.k": 0.1, "B_to_C.k2": 0.05}
+T_DATA = np.linspace(2.0, 30.0, 8)
+NOISE = 0.01
+
+
+def _chain(t, a0, k, k2):
+    """The closed form of A -> B -> C from A = a0, B = C = 0."""
+    a = a0 * np.exp(-k * t)
+    b = a0 * k / (k2 - k) * (np.exp(-k * t) - np.exp(-k2 * t))
+    return {"A": a, "B": b}
+
+
+REACTOR = {"model": "../../models/chain.yaml"}
+EXPERIMENTS = [
+    {"data": "run1.csv", "initial": {"A": 1.0}},
+    {"data": "run2.csv", "initial": {"A": 2.0}},
+]
+REACTOR_FIT = {
+    "kind": "calibrate",
+    "reactor": REACTOR,
+    "experiments": EXPERIMENTS,
+    "observed": ["A", "B"],
+    "free": ["A_to_B.k", "B_to_C.k2"],
+    "parameters": {"A_to_B.k": 0.08, "B_to_C.k2": 0.06},
+    "sigma": NOISE,
+    "laplace": True,
+}
+
+
+def _reactor_project(root):
+    """A project with the chain model and, for any study, noisy data of two
+    batches (A0 = 1 and 2) made with the closed form at TRUE."""
+    from tests.conftest import FIXTURES
+
+    (root / "models").mkdir(parents=True)
+    shutil.copyfile(FIXTURES / "simple_model.yaml", root / "models" / "decay.yaml")
+    (root / "models" / "chain.yaml").write_text(CHAIN)
+    return root
+
+
+def _reactor_study(project, name, study):
+    from aquakin.study import write_trajectory
+
+    folder = _study(project, name, study)
+    rng = np.random.default_rng(7)
+    for run, a0 in (("run1", 1.0), ("run2", 2.0)):
+        exact = _chain(T_DATA, a0, TRUE["A_to_B.k"], TRUE["B_to_C.k2"])
+        noisy = {s: v + NOISE * rng.standard_normal(v.shape) for s, v in exact.items()}
+        write_trajectory(folder / f"{run}.csv", T_DATA, noisy)
+    return folder
+
+
+@pytest.fixture(scope="module")
+def fitted_reactor(tmp_path_factory):
+    """A reactor project whose calibrate study ``fit`` has run once; a test that
+    changes it works on a copy (:func:`_copy_project`)."""
+    project = _reactor_project(tmp_path_factory.mktemp("reactor") / "project")
+    folder = _reactor_study(project, "fit", REACTOR_FIT)
+    seen = []
+    run_study(folder, progress=seen.append)
+    return project, [p.stage for p in seen]
+
+
+def _copy_project(fitted_reactor, tmp_path):
+    project = tmp_path / "project"
+    shutil.copytree(fitted_reactor[0], project)
+    return project, project / "studies" / "fit"
+
+
+def test_a_reactor_calibration_study_recovers_its_parameters(fitted_reactor):
+    """Two batches fitted jointly recover the rates their data were made with,
+    within three standard deviations of the fit; the saved fit reads back with
+    ``load_calibration``, and the fitted trajectories are the closed form at
+    the fitted rates."""
+    from aquakin.study import study_results
+
+    project, stages = fitted_reactor
+    folder = project / "studies" / "fit"
+    assert stages == ["setup", "fit", "fit"]
+    assert check_study(folder).state == "fresh"
+    fit = yaml.safe_load((folder / "results" / "fit.yaml").read_text())
+    for name, value in TRUE.items():
+        assert fit["std"][name] > 0
+        assert abs(fit["fitted"][name] - value) < 3 * fit["std"][name], name
+    loaded = aquakin.load_calibration(folder / "results")
+    assert loaded.params_named == fit["fitted"] and loaded.params_named_std == fit["std"]
+    params = read_named_values(folder / "results" / "parameters.yaml")
+    assert params == fit["fitted"]
+    assert dict(zip(["A_to_B.k", "B_to_C.k2"], map(float, loaded.params))) == params
+    covariance, rows, _ = read_matrix(folder / "results" / "covariance.csv")
+    assert rows == ["A_to_B.k", "B_to_C.k2"]
+    np.testing.assert_allclose(np.sqrt(np.diag(covariance)), list(fit["std"].values()), rtol=1e-12)
+
+    t, fitted = read_trajectory(folder / "results" / "fitted.csv")
+    np.testing.assert_array_equal(t, T_DATA)
+    assert list(fitted) == ["run1.A", "run1.B", "run2.A", "run2.B"]
+    for run, a0 in (("run1", 1.0), ("run2", 2.0)):
+        exact = _chain(T_DATA, a0, params["A_to_B.k"], params["B_to_C.k2"])
+        for species in ("A", "B"):
+            # An adaptive solve at rtol 1e-6, checked two decades above it.
+            np.testing.assert_allclose(fitted[f"{run}.{species}"], exact[species], rtol=1e-4)
+
+    shown = study_results(folder)
+    assert shown["summary"]["fitted"] == fit["fitted"]
+    assert shown["fitted"]["values"]["run2"]["B"] == list(fitted["run2.B"])
+    _, data = read_trajectory(folder / "run2.csv")
+    assert shown["data"]["values"]["run2"]["B"] == list(data["B"])
+
+    with pytest.raises(StudyError, match="already has results"):
+        run_study(folder)
+
+
+def test_a_reactor_study_goes_stale_naming_what_changed(fitted_reactor, tmp_path):
+    project, folder = _copy_project(fitted_reactor, tmp_path)
+    assert check_study(folder).state == "fresh"
+    model = project / "models" / "chain.yaml"
+    model.write_text(CHAIN.replace("value: 0.05", "value: 0.06"))
+    assert check_study(folder).reasons == ["model '../../models/chain.yaml' has changed"]
+    model.write_text(CHAIN)
+    # A change to the model it extends reaches it too.
+    base = project / "models" / "decay.yaml"
+    original = base.read_text()
+    base.write_text(original.replace("value: 0.1", "value: 0.2"))
+    assert check_study(folder).reasons == ["model '../../models/chain.yaml' has changed"]
+    base.write_text(original)
+    assert check_study(folder).state == "fresh"
+
+    data = folder / "run2.csv"
+    original = data.read_text()
+    data.write_text(original.replace("2.0,", "2.5,", 1))
+    assert check_study(folder).reasons == ["data table 'run2.csv' has changed"]
+    data.write_text(original)
+    assert check_study(folder).state == "fresh"
+
+    study = yaml.safe_load((folder / "study.yaml").read_text())
+    study["study"]["reactor"]["conditions"] = {"T": 300.0}
+    (folder / "study.yaml").write_text(yaml.safe_dump(study))
+    assert check_study(folder).reasons == ["the study's settings have changed"]
+
+    data.unlink()
+    status = check_study(folder)
+    assert status.state == "stale"
+    assert status.reasons[-1].startswith("the reactor's model or data cannot be read")
+    assert "run2.csv does not exist" in status.reasons[-1]
+    # The results still show, beside the data that is left.
+    from aquakin.study import study_results
+
+    shown = study_results(folder)
+    assert set(shown["data"]["values"]) == {"run1"} and set(shown["fitted"]["values"]) == {
+        "run1",
+        "run2",
+    }
+
+
+def test_a_frozen_reactor_study_runs_from_its_snapshot(fitted_reactor, tmp_path):
+    """The snapshot holds the model with its ``extends`` chain merged in and the
+    data; the frozen study stays fresh (the same model and data), reruns to the
+    same numbers from the snapshot, and an edit to the live model or data no
+    longer reaches it."""
+    project, folder = _copy_project(fitted_reactor, tmp_path)
+    before = (folder / "results" / "fitted.csv").read_text()
+    record = freeze_study(folder)
+    assert record["from"] == "../../models/chain.yaml"
+    flat = yaml.safe_load((folder / "snapshot" / "models" / "chain.yaml").read_text())
+    assert "extends" not in flat["model"] and flat["model"]["name"] == "decay_chain"
+    assert [r["name"] for r in flat["reactions"]] == ["A_to_B", "B_to_C"]
+    for run in ("run1.csv", "run2.csv"):
+        assert (folder / "snapshot" / "data" / run).read_bytes() == (folder / run).read_bytes()
+    status = check_study(folder)
+    assert status.state == "fresh" and status.frozen
+
+    (project / "models" / "chain.yaml").write_text(CHAIN.replace("value: 0.05", "value: 0.5"))
+    (project / "models" / "decay.yaml").unlink()
+    (folder / "run1.csv").write_text("t,A,B\n1.0,0.0,0.0\n")
+    assert check_study(folder).state == "fresh"
+    assert run_study(folder, replace=True).state == "fresh"
+    assert (folder / "results" / "fitted.csv").read_text() == before
+
+
+def test_a_shipped_reactor_model_is_frozen_as_a_copy(tmp_path):
+    """A shipped model is fingerprinted by its shipped content, and the snapshot
+    holds it flattened: the copy builds the same model."""
+    project = tmp_path / "project"
+    study = {
+        "kind": "fisher",
+        "reactor": {"model": "ozone_bromate", "conditions": {"pH": 8.0}},
+        "experiments": [{"initial": {"O3": 1.0e-4}}],
+        "observed": ["O3"],
+        "free": ["O3_decay_OH.k_dec"],
+        "t_obs": [60.0],
+        "sigma": 1.0e-6,
+    }
+    folder = _study(project, "shipped", study)
+    model = aquakin.load_model("ozone_bromate")
+    freeze_study(folder)
+    copy = aquakin.load_model_from_file(folder / "snapshot" / "models" / "ozone_bromate.yaml")
+    assert copy.species == model.species and copy.parameters == model.parameters
+    np.testing.assert_array_equal(
+        np.asarray(copy.default_parameters()), np.asarray(model.default_parameters())
+    )
+    record = yaml.safe_load((folder / "frozen.yaml").read_text())
+    from aquakin.plant.spec import _shipped_fingerprint
+
+    assert record["spec_inputs"] == {"model:ozone_bromate": _shipped_fingerprint("ozone_bromate")}
+
+
+def test_a_reactor_profile_study_is_the_profile_likelihood(tmp_path):
+    from aquakin import OptimizerConfig, profile_likelihood
+    from aquakin.study import read_table
+
+    project = _reactor_project(tmp_path / "project")
+    grid = [0.095, 0.1, 0.105]
+    study = {
+        **REACTOR_FIT,
+        "kind": "profile",
+        "experiments": EXPERIMENTS[1:],
+        "profile": "A_to_B.k",
+        "grid": grid,
+    }
+    del study["laplace"]
+    folder = _reactor_study(project, "profile", study)
+    seen = []
+    run_study(folder, progress=seen.append)
+    assert [p.stage for p in seen] == ["setup", "profile"]
+
+    model = aquakin.load_model_from_file(project / "models" / "chain.yaml")
+    _, data = read_trajectory(folder / "run2.csv")
+    direct = profile_likelihood(
+        aquakin.BatchReactor(model, model.default_conditions()),
+        model.concentrations({"A": 2.0}),
+        np.stack([data["A"], data["B"]], axis=1),
+        T_DATA,
+        ["A_to_B.k", "B_to_C.k2"],
+        grid=grid,
+        profile_param="A_to_B.k",
+        initial_params=model.parameter_values(REACTOR_FIT["parameters"]),
+        observed_species=["A", "B"],
+        loss="nll",
+        sigma=NOISE,
+        optimizer=OptimizerConfig(n_starts=1, max_iter=500),
+    )
+    table = read_table(folder / "results" / "profile.csv")
+    assert table["A_to_B.k"] == grid
+    np.testing.assert_allclose(table["delta_loss"], direct.delta_loss, rtol=1e-10, atol=1e-10)
+    summary = yaml.safe_load((folder / "results" / "profile.yaml").read_text())
+    np.testing.assert_allclose(summary["ci"], direct.ci, rtol=1e-10)
+    assert summary["mle"] == direct.mle and summary["parameter"] == "A_to_B.k"
+    lo, hi = summary["ci"]
+    assert lo < TRUE["A_to_B.k"] < hi
+
+
+def test_a_reactor_fisher_study_is_the_fisher_information(tmp_path):
+    """Two batches without data: the matrix is ``fisher_information`` of the same
+    design, and its k entry is the closed form sum of (t a0 exp(-k t) / sigma)^2
+    over the A samples plus the B samples' share."""
+    from aquakin import Experiment, fisher_information
+
+    project = _reactor_project(tmp_path / "project")
+    t_obs = [5.0, 10.0, 20.0]
+    study = {
+        "kind": "fisher",
+        "reactor": {**REACTOR, "integrator": {"rtol": 1.0e-8}},
+        "experiments": [{"initial": {"A": 1.0}}, {"initial": {"A": 2.0}}],
+        "observed": ["A", "B"],
+        "free": ["A_to_B.k", "B_to_C.k2"],
+        "t_obs": t_obs,
+        "sigma": [0.01, 0.02],
+        "time_unit": "min",
+    }
+    folder = _study(project, "fisher", study)
+    run_study(folder)
+    matrix, rows, cols = read_matrix(folder / "results" / "fisher.csv")
+    assert rows == cols == ["A_to_B.k", "B_to_C.k2"]
+
+    model = aquakin.load_model_from_file(project / "models" / "chain.yaml")
+    reactor = aquakin.BatchReactor(model, model.default_conditions(), settings=aquakin.SolverSettings(
+        rtol=1.0e-8,
+    ))
+    design = [
+        Experiment(
+            model.concentrations({"A": a0}),
+            t_obs=60.0 * np.asarray(t_obs),
+            sigma=np.asarray([0.01, 0.02]),
+            observed_species=["A", "B"],
+        )
+        for a0 in (1.0, 2.0)
+    ]
+    direct = fisher_information(reactor, design, rows)
+    np.testing.assert_allclose(matrix, direct.matrix, rtol=1e-10)
+    # The A samples alone give the closed form d A / d k = -t a0 exp(-k t); the
+    # B samples add a positive share, so the entry is at least that.
+    t_s = 60.0 * np.asarray(t_obs)
+    from_a = sum(np.sum((t_s * a0 * np.exp(-0.1 * t_s) / 0.01) ** 2) for a0 in (1.0, 2.0))
+    assert matrix[0, 0] > from_a
+    summary = yaml.safe_load((folder / "results" / "summary.yaml").read_text())
+    assert summary["values"] == {"A_to_B.k": 0.1, "B_to_C.k2": 0.05}
+    params = read_named_values(folder / "results" / "parameters.yaml")
+    assert params == {"A_to_B.k": 0.1, "B_to_C.k2": 0.05}
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"flowsheet": "../../flowsheet.yaml"}, "give a flowsheet or a reactor to study, not both"),
+        ({"reactor": None}, "experiments and observed are the settings of a reactor study"),
+        ({"kind": "simulate"}, "the simulate kind does not take a reactor target yet"),
+        ({"kind": "rank"}, "the rank kind does not take a reactor target yet"),
+        ({"observed": []}, "a calibrate study needs observed"),
+        ({"streams": ["effluent"], "t_span": [0, 1]}, "streams, t_span are settings of a flowsheet"),
+        ({"kind": "fisher", "t_obs": [1.0]}, "a fisher study reads no data"),
+        ({"experiments": [{"initial": {"A": 1.0}}]}, "experiments 0 give no data table to fit"),
+        (
+            {"kind": "profile", "profile": "A_to_B.k", "grid": [0.1]},
+            "a profile study of a reactor takes one experiment, not 2",
+        ),
+        (
+            {"experiments": [{"data": "run1.csv"}, {"data": "other/run1.csv"}]},
+            "run1 names more than one",
+        ),
+        ({"sigma": [0.1, 0.2, 0.3]}, "3 errors for 2 measured channels"),
+        (
+            {"experiments": [{"data": "run1.csv", "t_obs": [1.0]}]},
+            "experiments 0 give t_obs, but a calibrate study takes its times from each "
+            "experiment's data",
+        ),
+        ({"base_experiments": [{"initial": {}}]}, "base_experiments are a design study's setting"),
+        (
+            {"kind": "fisher", "experiments": [{"initial": {}, "t_obs": [1.0]}, {"initial": {}}]},
+            "give the sampling times, t_obs, for the study or for each experiment",
+        ),
+        (
+            {
+                "kind": "design",
+                "experiments": [{"initial": {}}],
+                "base_experiments": [{"data": "run1.csv"}],
+                "t_obs": [1.0],
+            },
+            "a design study reads no data; its base_experiments give their initial",
+        ),
+        (
+            {
+                "kind": "design",
+                "experiments": [{"initial": {}}],
+                "t_obs": [1.0],
+                "optimize_times": False,
+            },
+            r"optimizes the sampling times \(optimize_times\) or the initial concentrations "
+            r"\(initial_bounds\); it has neither",
+        ),
+        (
+            {
+                "kind": "fisher",
+                "experiments": [{"initial": {}}],
+                "t_obs": [1.0],
+                "sigma": [0.1, 0.2, 0.3],
+            },
+            "3 errors for 2 measured channels",
+        ),
+    ],
+)
+def test_a_reactor_study_that_cannot_run_says_why(tmp_path, change, message):
+    study = {**REACTOR_FIT, **change}
+    study = {k: v for k, v in study.items() if v is not None}
+    folder = _study(_reactor_project(tmp_path / "project"), "bad", study)
+    with pytest.raises(StudyError, match=message):
+        check_study(folder)
+
+
+#: A reactor fit turned into a design of the same reactor, for the refusals at run time.
+DESIGN_CHANGE = {
+    "kind": "design",
+    "experiments": [{"initial": {"A": 1.0}}],
+    "t_obs": [5.0],
+    "laplace": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"observed": ["A", "Z"]}, r"observed: the model has no species Z \(its species: A, B, C\)"),
+        ({"reactor": {"model": "no_such_model"}}, "'no_such_model' is neither a model file"),
+        ({"reactor": {"model": "../../models/gone.yaml"}}, r"reactor.model: .*gone\.yaml does not exist"),
+        ({"reactor": {**REACTOR, "conditions": {"pH": 7.0}}}, "reactor.conditions: .*pH"),
+        ({"parameters": {"A_to_B.kk": 1.0}}, "parameters: .*A_to_B.kk"),
+        ({"experiments": [{"data": "run1.csv", "initial": {"Q": 1.0}}]}, r"experiments\[0\].initial"),
+        ({"time_unit": "fortnight"}, "time_unit: Unknown time_unit 'fortnight'"),
+        (
+            {"experiments": [{"data": "run1.csv", "initial": {}}], "observed": ["A", "C"]},
+            r"experiments\[0\].data: run1.csv has no column C \(its columns: A, B\)",
+        ),
+        ({"experiments": [{"data": "nowhere.csv"}]}, r"experiments\[0\].data: .*nowhere\.csv does not exist"),
+        (
+            {**DESIGN_CHANGE, "base_experiments": [{"initial": {"Q": 1.0}}]},
+            r"base_experiments\[0\].initial",
+        ),
+        ({**DESIGN_CHANGE, "initial_bounds": {"Q": [0.0, 1.0]}}, "design: Unknown species 'Q' in initial_bounds"),
+        ({**DESIGN_CHANGE, "subset": ["A_to_B.kk"]}, "design: Unknown subset name 'A_to_B.kk'"),
+    ],
+)  # fmt: skip
+def test_a_reactor_study_names_what_it_cannot_find(tmp_path, change, message):
+    folder = _reactor_study(_reactor_project(tmp_path / "project"), "bad", {**REACTOR_FIT, **change})
+    with pytest.raises(StudyError, match=message):
+        run_study(folder)
+
+
+def test_a_reactor_study_whose_data_is_gone_cannot_be_frozen(tmp_path):
+    folder = _reactor_study(_reactor_project(tmp_path / "project"), "gone", REACTOR_FIT)
+    (folder / "run2.csv").unlink()
+    with pytest.raises(StudyError, match=r"experiments\[1\].data: .*run2\.csv does not exist"):
+        freeze_study(folder)
+    assert not (folder / "snapshot").exists() and not (folder / "frozen.yaml").exists()
+
+
+def test_the_worker_lists_a_reactor_study_by_its_model(tmp_path):
+    project = _reactor_project(tmp_path / "project")
+    _reactor_study(project, "fit", REACTOR_FIT)
+    (reply,) = _serve({"id": 1, "command": "list_studies", "project": str(project)})
+    (listed,) = reply["result"]
+    assert listed["flowsheet"] is None and listed["reactor"] == "../../models/chain.yaml"
+    assert listed["state"] == "not run" and listed["kind"] == "calibrate"
+
+
+def test_experiments_sampled_at_other_times_share_one_table():
+    """A reactor study's fitted and observed series are written on every time any
+    experiment has, empty where an experiment has no sample."""
+    from aquakin.study.reactor import _on_one_grid
+
+    t, columns = _on_one_grid(
+        [
+            ("run1", np.array([1.0, 3.0]), {"A": [10.0, 30.0]}),
+            ("run2", np.array([2.0, 3.0]), {"A": [20.0, 31.0], "B": [2.0, 3.1]}),
+        ]
+    )
+    np.testing.assert_array_equal(t, [1.0, 2.0, 3.0])
+    assert list(columns) == ["run1.A", "run2.A", "run2.B"]
+    np.testing.assert_array_equal(columns["run1.A"], [10.0, np.nan, 30.0])
+    np.testing.assert_array_equal(columns["run2.B"], [np.nan, 2.0, 3.1])
+
+
+# ---------------------------------------------------------------------------
+# design: optimizing a reactor's experiments
+# ---------------------------------------------------------------------------
+
+#: One sample of A in first-order decay (k = 0.1 per second) carries the
+#: information (t A0 exp(-k t) / sigma)^2 about k, largest at t = 1/k = 10 s,
+#: with A0 as large as it may be. Times in minutes, to check the units.
+DECAY_K, DECAY_SIGMA = 0.1, 0.01
+BASE_T, BASE_A0 = 5.0, 1.0  # seconds; a batch already run, sampled once
+DESIGN = {
+    "kind": "design",
+    "reactor": {"model": "../../models/decay.yaml", "integrator": {"rtol": 1.0e-10}},
+    "experiments": [{"initial": {"A": 1.0}, "t_obs": [0.05]}],
+    "base_experiments": [{"initial": {"A": BASE_A0}, "t_obs": [BASE_T / 60.0]}],
+    "observed": ["A"],
+    "free": ["A_to_B.k"],
+    "sigma": DECAY_SIGMA,
+    "time_unit": "min",
+    "time_bounds": [0.0, 1.0],
+    "initial_bounds": {"A": [0.5, 2.0]},
+}
+
+
+def _decay_information(t, a0):
+    """The information about k of one sample of A at t seconds, from A0 = a0."""
+    return (t * a0 * np.exp(-DECAY_K * t) / DECAY_SIGMA) ** 2
+
+
+@pytest.fixture(scope="module")
+def designed_decay(tmp_path_factory):
+    project = _reactor_project(tmp_path_factory.mktemp("design") / "project")
+    folder = _study(project, "design", DESIGN)
+    seen = []
+    run_study(folder, progress=seen.append)
+    return project, folder, seen
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"initial_bounds": ["A"]}, "initial_bounds: Input should be a valid dictionary"),
+        ({"initial_bounds": {"A": 0.5}}, r"initial_bounds\.A: Input should be a valid tuple"),
+        ({"time_bounds": 1.0}, "time_bounds: Input should be a valid tuple"),
+    ],
+)
+def test_a_design_s_bounds_are_checked_as_it_is_read(tmp_path, change, message):
+    folder = _study(_reactor_project(tmp_path / "project"), "bad", {**DESIGN, **change})
+    with pytest.raises(StudyError, match=message):
+        check_study(folder)
+
+
+def test_a_design_study_finds_the_closed_form_optimum(designed_decay):
+    """The sample moves to t = 1/k (1/6 min) and A0 to its upper bound; the
+    standard deviations at the start and at the optimum are the closed form
+    1 / sqrt(information), the batch already run included; the criterion is
+    the D criterion of those designs."""
+    from aquakin import design_criterion, fisher_information
+
+    _, folder, seen = designed_decay
+    assert [p.stage for p in seen] == ["setup", "design", "design"]
+    design = yaml.safe_load((folder / "results" / "design.yaml").read_text())
+    (designed,) = design["experiments"]
+    assert designed["t_obs"] == [pytest.approx(1 / (60 * DECAY_K), rel=1e-4)]
+    assert designed["initial"] == {"A": pytest.approx(2.0, rel=1e-12)}
+    assert design["converged"] and design["criterion"] == "D" and design["subset"] == []
+    base = _decay_information(BASE_T, BASE_A0)
+    start = base + _decay_information(0.05 * 60, 1.0)
+    optimum = base + _decay_information(1 / DECAY_K, 2.0)
+    assert design["std"]["A_to_B.k"]["start"] == pytest.approx(start**-0.5, rel=1e-6)
+    assert design["std"]["A_to_B.k"]["optimum"] == pytest.approx(optimum**-0.5, rel=1e-6)
+    assert design["optimum"] > design["start"]
+    model = aquakin.load_model_from_file(folder.parents[1] / "models" / "decay.yaml")
+    reactor = aquakin.BatchReactor(model, model.default_conditions(), settings=aquakin.SolverSettings(rtol=1.0e-10))
+    experiments = [
+        aquakin.Experiment(model.concentrations({"A": a0}), t_obs=np.asarray([t]),
+                           sigma=DECAY_SIGMA, observed_species=["A"])
+        for t, a0 in ((BASE_T, BASE_A0), (3.0, 1.0))
+    ]  # fmt: skip
+    fim = fisher_information(reactor, experiments, ["A_to_B.k"])
+    assert design["start"] == pytest.approx(float(design_criterion(fim, "D")), rel=1e-8)
+
+
+def test_a_designed_experiment_pastes_into_a_fisher_study(designed_decay, tmp_path):
+    """The written experiments: list, with the batch already run beside it, is a
+    fisher study's design (each experiment with its own t_obs), and gives the
+    standard deviation the design predicted."""
+    from aquakin.study import study_results
+
+    project, folder, _ = designed_decay
+    design = yaml.safe_load((folder / "results" / "design.yaml").read_text())
+    fisher = {
+        key: DESIGN[key] for key in ("reactor", "observed", "free", "sigma", "time_unit")
+    }
+    fisher.update(
+        kind="fisher", experiments=DESIGN["base_experiments"] + design["experiments"]
+    )
+    pasted = _study(_copy_project((project, None), tmp_path)[0], "pasted", fisher)
+    run_study(pasted)
+    summary = yaml.safe_load((pasted / "results" / "summary.yaml").read_text())
+    assert summary["std"]["A_to_B.k"] == pytest.approx(
+        design["std"]["A_to_B.k"]["optimum"], rel=1e-8
+    )
+    results = study_results(folder)
+    assert results["kind"] == "design" and results["files"] == ["design.yaml"]
+    assert results["summary"]["experiments"] == design["experiments"]
+
+
+# ---------------------------------------------------------------------------
+# posterior: sampling a calibrate study's fit
+# ---------------------------------------------------------------------------
+
+POSTERIOR = {"kind": "posterior", "fit": "fit", "n_chains": 2, "n_draws": 400, "n_warmup": 200}
+SHORT_POSTERIOR = {**POSTERIOR, "n_draws": 20, "n_warmup": 20}
+
+
+@pytest.fixture(scope="module")
+def sampled_reactor(fitted_reactor, tmp_path_factory):
+    """A copy of the fitted reactor project with a posterior study of its fit,
+    run once; a test that changes it works on a copy (:func:`_copy_project`)."""
+    project, _ = _copy_project(fitted_reactor, tmp_path_factory.mktemp("sampled"))
+    folder = _study(project, "post", POSTERIOR)
+    seen = []
+    status = run_study(folder, progress=seen.append)
+    return project, status, seen
+
+
+def test_a_posterior_study_samples_its_calibration(sampled_reactor):
+    """The draws of the reactor fit's two rates centre on the fit's optimum, with
+    the spread of its Laplace posterior: for a well-determined fit both agree,
+    within the Monte Carlo error of the draws (the error of a mean is about
+    std / sqrt(ESS), of a standard deviation about 1 / sqrt(2 ESS) of it)."""
+    project, status, seen = sampled_reactor
+    assert status.state == "fresh" and status.running is None
+    stages = [p.stage for p in seen]
+    assert stages[:2] == ["setup", "fit"] and set(stages[2:]) == {"sample"}
+    assert seen[-1].done == seen[-1].total == 600  # warm-up and draws
+    fit = yaml.safe_load((project / "studies" / "fit" / "results" / "fit.yaml").read_text())
+    summary = yaml.safe_load((project / "studies" / "post" / "results" / "posterior.yaml").read_text())
+    assert summary["fit"] == "fit" and summary["prior_space"] == "transformed"
+    assert (summary["n_chains"], summary["n_draws"], summary["n_warmup"]) == (2, 400, 200)
+    for name in TRUE:
+        p = summary["parameters"][name]
+        # Re-entered at the saved optimum: the optimizer starts there and stays.
+        assert p["optimum"] == pytest.approx(fit["fitted"][name], rel=1e-6)
+        assert abs(p["mean"] - p["optimum"]) < 4 * p["std"] / np.sqrt(p["ess_bulk"]), name
+        assert p["std"] / fit["std"][name] == pytest.approx(
+            1.0, abs=4 / np.sqrt(2 * p["ess_bulk"])
+        ), name
+        assert p["q05"] < p["q50"] < p["q95"]
+    draws = read_table(project / "studies" / "post" / "results" / "draws.csv")
+    assert list(draws) == ["chain", "draw", *TRUE]
+    assert len(draws["chain"]) == 800 and sorted(set(draws["chain"])) == [0, 1]
+
+
+def test_posterior_results_read_back_for_the_editor(sampled_reactor):
+    from aquakin.study import study_results
+
+    project, _, _ = sampled_reactor
+    results = study_results(project / "studies" / "post")
+    assert results["kind"] == "posterior" and results["has_results"]
+    from aquakin.study import list_studies
+
+    listed = {s["name"]: s for s in list_studies(project)}
+    assert listed["post"]["flowsheet"] is None and listed["post"]["state"] == "fresh"
+    assert results["files"] == ["draws.csv", "posterior.yaml"]
+    for name in TRUE:
+        histogram = results["histograms"][name]
+        assert sum(histogram["counts"]) == 800 and len(histogram["edges"]) == 31
+    assert set(results["summary"]["parameters"]) == set(TRUE)
+
+
+def test_a_posterior_goes_stale_when_its_calibration_changes(sampled_reactor, tmp_path):
+    """About 14 s: it redoes the reactor fit, which is what it tests."""
+    from aquakin.study import read_study, update_study
+
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    post = project / "studies" / "post"
+    assert check_study(post).state == "fresh"
+    fit = project / "studies" / "fit"
+    update_study(fit, {**read_study(fit), "sigma": 2 * NOISE})
+    status = check_study(post)
+    assert status.state == "stale"
+    assert status.reasons == ["the setup of the calibrate study it samples has changed"]
+    # Run again on a fit that is not fresh: refused, saying why.
+    with pytest.raises(StudyError, match=r"fit: the calibrate study 'fit' is stale \("):
+        run_study(post, replace=True)
+    # Redone, the fit has other results (a wider error, wider uncertainties).
+    run_study(fit, replace=True)
+    assert check_study(post).reasons == [
+        "the fit of the calibrate study it samples has changed",
+        "the setup of the calibrate study it samples has changed",
+    ]
+    update_study(post, SHORT_POSTERIOR)  # a short run: only the state is checked
+    assert run_study(post, replace=True).state == "fresh"
+
+
+def test_a_frozen_posterior_keeps_the_fit_it_sampled(sampled_reactor, tmp_path):
+    """Freezing copies the calibrate study, frozen and with its results, into the
+    snapshot: the samples stay fresh, and run again, after the original is gone."""
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    post = project / "studies" / "post"
+    freeze_study(post)
+    kept = post / "snapshot" / "fit"
+    assert (kept / "frozen.yaml").is_file() and (kept / "results" / "fit.yaml").is_file()
+    assert not list((project / "studies").glob(".*"))  # the copy frozen beside is gone
+    shutil.rmtree(project / "studies" / "fit")
+    assert check_study(post).state == "fresh"
+    (post / "study.yaml").write_text(yaml.safe_dump({"study": SHORT_POSTERIOR}))
+    assert run_study(post, replace=True).state == "fresh"
+    unfreeze_study(post, discard_results=True)
+    assert not (post / "snapshot").exists()
+    with pytest.raises(StudyError, match="fit: this project has no study 'fit'"):
+        run_study(post)
+
+
+def test_a_posterior_of_a_frozen_fit_keeps_that_fit_s_own_snapshot(sampled_reactor, tmp_path):
+    """A calibrate study frozen already is copied as it is, not frozen again."""
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    fit = project / "studies" / "fit"
+    freeze_study(fit)
+    record = (fit / "frozen.yaml").read_text()
+    post = project / "studies" / "post"
+    freeze_study(post)
+    assert (post / "snapshot" / "fit" / "frozen.yaml").read_text() == record
+    assert check_study(post).state == "fresh"
+
+
+def test_posterior_results_without_their_draws_read_as_damaged(sampled_reactor, tmp_path):
+    """With draws.csv gone the summary still reads, without histograms."""
+    from aquakin.study import study_results
+
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    post = project / "studies" / "post"
+    (post / "results" / "draws.csv").unlink()
+    results = study_results(post)
+    assert results["state"] == "damaged" and "histograms" not in results
+    assert set(results["summary"]["parameters"]) == set(TRUE)
+
+
+@pytest.mark.parametrize(
+    "study, message",
+    [
+        ({"kind": "posterior"}, "a posterior study needs fit"),
+        (
+            {**POSTERIOR, "reactor": REACTOR},
+            "it takes no flowsheet or reactor of its own",
+        ),
+        (
+            {**POSTERIOR, "flowsheet": "../../other.yaml"},
+            "it takes no flowsheet or reactor of its own",
+        ),
+        ({**POSTERIOR, "fit": "../fit"}, r"by its name \(the folder under studies/\), not '\.\./fit'"),
+        ({**POSTERIOR, "n_chains": 1}, "n_chains must be at least 2"),
+    ],
+)
+def test_a_posterior_study_that_cannot_run_is_refused_when_read(project, study, message):
+    from aquakin.study import load_study
+
+    folder = _study(project, "post", study)
+    with pytest.raises(StudyError, match=message):
+        load_study(folder)
+
+
+def test_a_posterior_needs_a_fresh_calibrate_study(project):
+    """A fit that has not run, a study of another kind, and no study at all are
+    each refused, naming the problem."""
+    fit = _study(project, "fit", {"kind": "calibrate", **FIT})
+    post = _study(project, "post", POSTERIOR)
+    with pytest.raises(StudyError, match=r"fit: the calibrate study 'fit' is not run; run it"):
+        run_study(post)
+    other = _study(project, "other", {**POSTERIOR, "fit": "post"})
+    with pytest.raises(StudyError, match="fit: 'post' is a posterior study; a posterior study"):
+        run_study(other)
+    lost = _study(project, "lost", {**POSTERIOR, "fit": "nowhere"})
+    with pytest.raises(StudyError, match="fit: this project has no study 'nowhere'"):
+        run_study(lost)
+    assert fit.is_dir()
+
+
+def test_a_calibration_being_run_is_not_sampled(sampled_reactor, tmp_path, hold_run):
+    """Its results would be replaced while they are read: refused until it ends."""
+    project, _ = _copy_project((sampled_reactor[0], None), tmp_path)
+    hold_run(project / "studies" / "fit")
+    with pytest.raises(StudyError, match="fit: the calibrate study 'fit' is running; sample it"):
+        run_study(project / "studies" / "post", replace=True)

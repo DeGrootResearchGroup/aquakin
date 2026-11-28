@@ -110,7 +110,10 @@ def test_static_path_unaffected():
 
 def test_calibration_recovers_yield(model):
     """Generate noisy synthetic obs at a known Y, then fit Y back."""
-    reactor = aquakin.BatchReactor(model, model.default_conditions(), rtol=1e-8, atol=1e-10)
+    reactor = aquakin.BatchReactor(model, model.default_conditions(), settings=aquakin.SolverSettings(
+        rtol=1e-8,
+        atol=1e-10,
+    ))
     C0 = jnp.asarray([100.0, 50.0])
 
     # Truth: Y = 0.3, mu = 1.0 (default).

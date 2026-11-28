@@ -181,3 +181,42 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist-installers/* --clobber
+
+  # ---- Attach the Claude Desktop extension to the release --------------------
+  # After PyPI has the release: the bundle's environment installs
+  # aquakin[mcp]==<this version> from PyPI on the user's machine. The documented
+  # link `releases/latest/download/aquakin.mcpb` then serves the newest one.
+  desktop-extension:
+    name: Attach the Claude Desktop extension
+    needs: publish-pypi
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install aquakin (the tool list is read from the server)
+        run: python -m pip install -e ".[mcp]" -c constraints.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Stage, validate and pack the extension
+        run: |
+          python scripts/build_mcpb.py "${GITHUB_REF_NAME#v}" build/mcpb
+          npx -y @anthropic-ai/mcpb@2.1.2 validate build/mcpb/manifest.json
+          mkdir -p dist-mcpb
+          npx -y @anthropic-ai/mcpb@2.1.2 pack build/mcpb dist-mcpb/aquakin.mcpb
+
+      - name: Upload it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist-mcpb/aquakin.mcpb --clobber
