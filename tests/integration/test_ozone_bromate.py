@@ -19,7 +19,9 @@ def _run(model, *, OH_scavenging, t_end=600.0, n=61):
     conditions = aquakin.SpatialConditions.uniform(
         1, pH=7.5, T=293.15, OH_scavenging=OH_scavenging
     )
-    reactor = aquakin.BatchReactor(model, conditions, atol=_atol_for(model))
+    reactor = aquakin.BatchReactor(model, conditions, settings=aquakin.SolverSettings(
+        atol=_atol_for(model),
+    ))
     C0 = model.concentrations({"O3": 1.0e-4, "Br-": 1.0e-5})
     return reactor.solve(
         C0,

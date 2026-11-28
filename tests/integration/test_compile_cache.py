@@ -62,8 +62,12 @@ def test_different_settings_do_not_collide(simple_model):
     net = simple_model
     cond = aquakin.SpatialConditions.uniform(1, T=293.15)
     C0, p = net.default_concentrations(), net.default_parameters()
-    s_loose = aquakin.BatchReactor(net, cond, rtol=1e-4).solve(C0, (0.0, 1.0), params=p)
-    s_tight = aquakin.BatchReactor(net, cond, rtol=1e-9).solve(C0, (0.0, 1.0), params=p)
+    s_loose = aquakin.BatchReactor(net, cond, settings=aquakin.SolverSettings(
+        rtol=1e-4,
+    )).solve(C0, (0.0, 1.0), params=p)
+    s_tight = aquakin.BatchReactor(net, cond, settings=aquakin.SolverSettings(
+        rtol=1e-9,
+    )).solve(C0, (0.0, 1.0), params=p)
     A_loose = np.asarray(s_loose.C_named("A"))[-1]
     A_tight = np.asarray(s_tight.C_named("A"))[-1]
     exact = np.exp(-float(p[0]))
@@ -97,27 +101,34 @@ def test_each_compile_affecting_setting_keys_the_cache():
         return len(_common._SOLVER_CACHE) > n
 
     # Distinctive values, so the keys cannot pre-exist from another test.
-    assert adds_entry(R(simple_model, cond, rtol=3.3e-5),
-                      R(simple_model, cond, rtol=7.7e-5)), "rtol not in cache key"
-    assert adds_entry(R(simple_model, cond, atol=3.3e-7),
-                      R(simple_model, cond, atol=7.7e-7)), "atol not in cache key"
+    S = aquakin.SolverSettings
+    assert adds_entry(R(simple_model, cond, settings=S(rtol=3.3e-5)),
+                      R(simple_model, cond, settings=S(rtol=7.7e-5))), "rtol not in cache key"
+    assert adds_entry(R(simple_model, cond, settings=S(atol=3.3e-7)),
+                      R(simple_model, cond, settings=S(atol=7.7e-7))), "atol not in cache key"
     assert adds_entry(
-        R(simple_model, cond, integrator=aquakin.IntegratorConfig(dtmax=0.37)),
-        R(simple_model, cond, integrator=aquakin.IntegratorConfig(dtmax=0.19)),
+        R(simple_model, cond, settings=aquakin.SolverSettings(
+            integrator=aquakin.IntegratorConfig(dtmax=0.37),
+        )),
+        R(simple_model, cond, settings=aquakin.SolverSettings(
+            integrator=aquakin.IntegratorConfig(dtmax=0.19),
+        )),
     ), "dtmax not in cache key"
     assert adds_entry(
         R(simple_model, cond,
-          integrator=aquakin.IntegratorConfig(max_steps=51_234)),
+          settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(max_steps=51_234))),
         R(simple_model, cond,
-          integrator=aquakin.IntegratorConfig(max_steps=61_234)),
+          settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(max_steps=61_234))),
     ), "max_steps not in cache key"
     # A custom differentiation config must not reuse the default reactor's
     # compiled solve.
     assert adds_entry(
         R(simple_model, cond),
         R(simple_model, cond,
-          diff=aquakin.DifferentiationConfig(mode="forward",
-                                             method="through_solve")),
+          settings=aquakin.SolverSettings(
+              diff=aquakin.DifferentiationConfig(mode="forward",
+                                             method="through_solve"),
+          )),
     ), "adjoint not in cache key"
 
 
@@ -130,7 +141,10 @@ def test_solver_cache_bypassed_under_tracing(simple_model):
     p = simple_model.default_parameters()
 
     def loss(params, atol):
-        reactor = aquakin.BatchReactor(simple_model, cond, rtol=1e-10, atol=atol)
+        reactor = aquakin.BatchReactor(simple_model, cond, settings=aquakin.SolverSettings(
+            rtol=1e-10,
+            atol=atol,
+        ))
         return reactor.solve(C0, (0.0, 1.0), jnp.array([1.0]), params=params).C[-1, 0]
 
     n_before = len(_common._SOLVER_CACHE)

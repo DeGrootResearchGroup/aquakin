@@ -90,7 +90,8 @@ exception is raised, so the bad gradient flows into your optimizer.
 and raise an error naming the remedy instead of returning `NaN`. They do not
 make it finite by themselves. To get a finite gradient through a stiff reactor:
 
-- cap the step with `integrator=aquakin.IntegratorConfig(dtmax=...)`;
+- cap the step, building the reactor with
+  `settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(dtmax=...))`;
 - use forward-mode sensitivities (`solve_sensitivity`, or
   `diff=aquakin.DifferentiationConfig(mode="forward")`), which need no cap; or
 - in `calibrate`, use the cap-free adjoint,
@@ -359,8 +360,9 @@ opt.x_named, opt.feasible     # about 42.7 µmol/L, True
 ## Differentiation options
 
 The tools above choose how to differentiate a solve for you. To change it,
-pass an `aquakin.DifferentiationConfig` as `diff=`; it says how a gradient
-flows through a solve. Its fields are:
+pass an `aquakin.DifferentiationConfig` as `diff=` (to a reactor, inside its
+`settings=aquakin.SolverSettings(...)`); it says how a gradient flows through a
+solve. Its fields are:
 
 - `mode`: `"reverse"` (default; `jax.grad`, one pass for many parameters) or
   `"forward"` (`jax.jacfwd`, or the variational solve; finite through stiff

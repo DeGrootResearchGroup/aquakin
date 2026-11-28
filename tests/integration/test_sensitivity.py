@@ -228,7 +228,7 @@ def test_sensitivity_doutput_dconditions_matches_finite_diff():
         conditions = aquakin.SpatialConditions.uniform(
             pH=7.5, T=293.15, OH_scavenging=scavenging
         )
-        return aquakin.BatchReactor(model, conditions, atol=atol)
+        return aquakin.BatchReactor(model, conditions, settings=aquakin.SolverSettings(atol=atol))
 
     def bromate(scavenging):
         sol = reactor_at(scavenging).solve(C0, params=params, t_span=(0.0, 300.0), t_eval=t_eval)
@@ -790,7 +790,9 @@ def test_dgsm_forward_through_reactor_matches_reverse(simple_model):
             aquakin.BatchReactor(
                 simple_model,
                 conds,
-                diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+                settings=aquakin.SolverSettings(
+                    diff=aquakin.DifferentiationConfig(mode="forward", method="through_solve"),
+                ),
             )
         ),
         [(0.1, 0.5)],

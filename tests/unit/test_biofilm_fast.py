@@ -286,7 +286,7 @@ def test_construct_and_solve_inside_jit(net, cond):
 
     def final_A(k, atol=None):
         p = net.default_parameters().at[ki].set(k)
-        return _tiny(net, cond, atol=atol).solve(C0, (0.0, 5.0), params=p).C_named("A")[-1]
+        return _tiny(net, cond, settings=aquakin.SolverSettings(atol=atol)).solve(C0, (0.0, 5.0), params=p).C_named("A")[-1]
 
     eager = final_A(0.1)
     np.testing.assert_allclose(jax.jit(final_A)(0.1), eager, rtol=1e-8)

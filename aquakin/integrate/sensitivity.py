@@ -25,7 +25,7 @@ from aquakin.integrate._common import (
     forward_adjoint,
     with_adjoint,
 )
-from aquakin.integrate._config import FORWARD_DIFF
+from aquakin.integrate._config import DTMAX_REACTOR_SETTINGS, FORWARD_DIFF
 
 
 @dataclass
@@ -203,8 +203,7 @@ def sensitivity(
     if check_finite:
         remedy = (
             f"Pass {FORWARD_DIFF} (forward-mode AD is finite through a stiff "
-            "solve), or build the reactor with a dtmax cap "
-            "(integrator=aquakin.IntegratorConfig(dtmax=...))."
+            f"solve), or build the reactor with a dtmax cap ({DTMAX_REACTOR_SETTINGS})."
             if ad_mode == "reverse"
             else "Check the model and ranges; even forward-mode AD returned non-finite."
         )

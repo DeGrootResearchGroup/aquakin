@@ -18,7 +18,7 @@ import numpy as np
 
 from aquakin.core.model import CompiledModel
 from aquakin.core.tolerance import default_atol
-from aquakin.integrate._config import FORWARD_DIFF, FORWARD_REACTOR_REMEDY
+from aquakin.integrate._config import FORWARD_DIFF, FORWARD_REACTOR_REMEDY, SolverSettings
 
 
 def validate_t_eval(t_eval_arr: jnp.ndarray, t0: float, t1: float) -> None:
@@ -200,7 +200,7 @@ def friendly_solve_errors(*, what: str = "solve"):
     a ``jax.jacfwd`` / ``jax.jvp`` through the solve fails with JAX's "can't
     apply forward-mode autodiff (jvp) to a custom_vjp function" -- which never
     mentions the cure. It is re-raised naming the forward-mode
-    ``diff=aquakin.DifferentiationConfig(...)`` the reactor should be built
+    ``settings=aquakin.SolverSettings(diff=...)`` the reactor should be built
     with. (A solve that runs out of steps is reported by
     :func:`check_solve_result`, not here.)
 
@@ -349,21 +349,23 @@ def resolve_layered_atol(model, atol, n_compartments):
     )
 
 
-def init_solver_settings(reactor, model, *, rtol, integrator, diff):
+def init_solver_settings(reactor, model, settings: SolverSettings) -> None:
     """Store the solver settings every reactor shares, on ``reactor``.
 
-    Resolves the public :class:`IntegratorConfig` + :class:`DifferentiationConfig`
-    into the primitive attributes the cache + ``_run_diffeqsolve`` path read:
+    Resolves the public :class:`SolverSettings` (its ``rtol`` and its
+    :class:`IntegratorConfig` + :class:`DifferentiationConfig`) into the
+    primitive attributes the cache + ``_run_diffeqsolve`` path read:
     ``model``, ``rtol``, ``adjoint`` (the diffrax adjoint object, resolved from
     the differentiation config), ``dtmax``, ``max_steps``, ``order``,
     ``factormax`` and ``solver``. ``atol`` is **not** set here because its
     resolution depends on the reactor's state shape (see
     :func:`resolve_state_atol` for the single-vector case and
     :func:`resolve_layered_atol` for the layered biofilm); the caller sets
-    ``reactor.atol`` itself.
+    ``reactor.atol`` itself from ``settings.atol``.
     """
+    integrator, diff = settings.integrator, settings.diff
     reactor.model = model
-    reactor.rtol = float(rtol)
+    reactor.rtol = float(settings.rtol)
     reactor.integrator = integrator
     reactor.diff = diff
     reactor.adjoint = diff.reactor_adjoint()

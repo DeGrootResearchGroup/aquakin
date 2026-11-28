@@ -26,6 +26,7 @@ import pytest
 import aquakin
 from aquakin.integrate.batch import BatchReactor
 from aquakin.integrate.biofilm import BiofilmReactor
+from aquakin.integrate.cfd import CFDReactor
 from aquakin.integrate.dispersed_flow import DispersedFlowReactor, TanksInSeries
 from aquakin.integrate.particle import ParticleTrackReactor
 from aquakin.integrate.pfr import PlugFlowReactor
@@ -115,6 +116,70 @@ def test_plant_solve_contract():
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY, (
             f"Plant.solve '{name}' must stay KEYWORD_ONLY"
         )
+
+
+# Every reactor constructor, built on the tiny A->B model with ``**extra``
+# keyword arguments (no solve, so building one costs nothing).
+_COND = aquakin.SpatialConditions.uniform(1, T=293.15)
+_TRACK = aquakin.Track(t=jnp.asarray([0.0, 1.0]), fields={"T": jnp.asarray([293.15, 293.15])})
+_BUILDERS = {
+    BatchReactor: lambda m, **kw: BatchReactor(m, _COND, **kw),
+    PlugFlowReactor: lambda m, **kw: PlugFlowReactor(m, _COND, 3, 1.0, 1.0, **kw),
+    BiofilmReactor: lambda m, **kw: BiofilmReactor(
+        m, _COND, n_layers=2, thickness=8e-4, area_per_volume=50.0,
+        diffusivity=1e-4, boundary_layer=1e-4, **kw,
+    ),
+    ParticleTrackReactor: lambda m, **kw: ParticleTrackReactor(m, _TRACK, **kw),
+    CFDReactor: lambda m, **kw: CFDReactor(m, **kw),
+    DispersedFlowReactor: lambda m, **kw: DispersedFlowReactor(
+        m, _COND, 1.0, 1.0, 5, dispersion=0.01, **kw,
+    ),
+    TanksInSeries: lambda m, **kw: TanksInSeries(m, _COND, 5, 1.0, **kw),
+}
+
+
+@pytest.mark.parametrize("cls", list(_BUILDERS))
+def test_reactor_takes_solver_settings_as_one_keyword(cls):
+    """Every reactor takes its solver configuration as one keyword-only
+    ``settings=SolverSettings()``, and none takes the loose ``rtol`` / ``atol``
+    / ``integrator`` / ``diff`` keywords, so the two spellings cannot coexist."""
+    params = inspect.signature(cls.__init__).parameters
+    assert params["settings"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["settings"].default == aquakin.SolverSettings()
+    loose = {"rtol", "atol", "integrator", "diff"} & set(params)
+    assert not loose, f"{cls.__name__}.__init__ takes the loose keywords {sorted(loose)}"
+
+
+@pytest.mark.parametrize("keyword", ["rtol", "atol", "integrator", "diff"])
+@pytest.mark.parametrize("cls", list(_BUILDERS))
+def test_reactor_rejects_loose_solver_keywords(simple_model, cls, keyword):
+    """The loose spelling is a ``TypeError``, not silently accepted."""
+    with pytest.raises(TypeError, match=f"unexpected keyword argument '{keyword}'"):
+        _BUILDERS[cls](simple_model, **{keyword: None})
+
+
+def test_integrate_ensemble_takes_solver_settings_as_one_keyword():
+    """``integrate_ensemble`` passes one ``settings=`` to every track's reactor,
+    with no loose ``rtol`` / ``atol`` / ``integrator`` / ``diff`` keywords."""
+    params = inspect.signature(aquakin.integrate_ensemble).parameters
+    assert params["settings"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["settings"].default == aquakin.SolverSettings()
+    assert not {"rtol", "atol", "integrator", "diff"} & set(params)
+
+
+@pytest.mark.parametrize("cls", list(_BUILDERS))
+def test_reactor_reads_its_solver_settings(simple_model, cls):
+    """The fields of ``settings`` reach the reactor's solver attributes."""
+    integrator = aquakin.IntegratorConfig(order=5, dtmax=0.25, max_steps=1234)
+    diff = aquakin.DifferentiationConfig(mode="forward", method="through_solve")
+    r = _BUILDERS[cls](
+        simple_model,
+        settings=aquakin.SolverSettings(rtol=1e-9, atol=1e-11, integrator=integrator, diff=diff),
+    )
+    assert (r.rtol, r.order, r.dtmax, r.max_steps) == (1e-9, 5, 0.25, 1234)
+    assert r.integrator is integrator and r.diff is diff
+    assert type(r.adjoint).__name__ == "DirectAdjoint"
+    assert jnp.all(jnp.asarray(r.atol) == 1e-11)
 
 
 def test_every_reactor_has_check_gradient_finite():

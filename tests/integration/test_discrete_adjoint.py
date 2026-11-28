@@ -381,8 +381,9 @@ def test_calibrate_stable_adjoint_runs_the_reactor_solver(
     wiggle = 0.01 * jnp.sin(1.7 * t_obs)
     obs = jnp.stack([e + wiggle, 1.0 - e - wiggle], axis=1)
     integrator_kw = {} if integrator is None else {"integrator": integrator}
-    reactor = aquakin.BatchReactor(simple_model, cond, rtol=1e-8, atol=1e-11,
-                                   **integrator_kw)
+    reactor = aquakin.BatchReactor(simple_model, cond, settings=aquakin.SolverSettings(
+        rtol=1e-8, atol=1e-11, **integrator_kw,
+    ))
 
     res = aquakin.calibrate(
         reactor, C0, obs, t_obs, ["A_to_B.k"], observed_species=["A", "B"],
@@ -418,7 +419,10 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint(stiff_sewer_model):
 
     idx = [net.param_index[n] for n in free]
     p_true = p_def.at[jnp.array(idx)].multiply(jnp.array([1.4, 0.6]))
-    gen = aquakin.BatchReactor(net, cond, rtol=1e-9, atol=1e-11)
+    gen = aquakin.BatchReactor(net, cond, settings=aquakin.SolverSettings(
+        rtol=1e-9,
+        atol=1e-11,
+    ))
     obs = gen.solve(C0, params=p_true, t_span=span, t_eval=t_obs).C[
         :, [net.species_index[s] for s in obs_species]
     ]
@@ -430,14 +434,20 @@ def test_calibrate_stable_adjoint_matches_jax_adjoint(stiff_sewer_model):
     common = dict(observed_species=obs_species, loss="mse", laplace=False,
                   optimizer=OptimizerConfig(max_iter=150, tol=1e-9))
     r_ref = aquakin.calibrate(
-        aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol,
-                             integrator=aquakin.IntegratorConfig(dtmax=5e-4)),
+        aquakin.BatchReactor(net, cond, settings=aquakin.SolverSettings(
+            rtol=rtol,
+            atol=atol,
+            integrator=aquakin.IntegratorConfig(dtmax=5e-4),
+        )),
         C0, obs, t_obs, free,
         diff=aquakin.DifferentiationConfig(mode="reverse", method="through_solve"),
         **common,
     )
     r_da = aquakin.calibrate(
-        aquakin.BatchReactor(net, cond, rtol=rtol, atol=atol),
+        aquakin.BatchReactor(net, cond, settings=aquakin.SolverSettings(
+            rtol=rtol,
+            atol=atol,
+        )),
         C0, obs, t_obs, free,
         diff=aquakin.DifferentiationConfig(method="stable",
                                            adjoint_max_steps=max_steps),

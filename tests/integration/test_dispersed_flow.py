@@ -111,7 +111,10 @@ def test_implicit_solve_from_a_clean_basin_reaches_the_closed_form_steady_state(
 def test_vanishing_dispersion_reduces_to_the_plug_flow_reactor(simple_model):
     """At ``d = 1e-6`` the outlet equals the PlugFlowReactor's, within the 3e-5 spatial
     error of 200 cells (the PFR integrates the axis adaptively to 1e-8)."""
-    pfr = aquakin.PlugFlowReactor(simple_model, COND, 2, LENGTH, VELOCITY, rtol=1e-10, atol=1e-12)
+    pfr = aquakin.PlugFlowReactor(simple_model, COND, 2, LENGTH, VELOCITY, settings=aquakin.SolverSettings(
+        rtol=1e-10,
+        atol=1e-12,
+    ))
     plug = float(pfr.solve(jnp.array([1.0, 0.0])).C_named("A")[-1])
     assert plug == pytest.approx(math.exp(-K * TAU), rel=1e-8)
     assert steady_outlet(simple_model, 1e-6, n_cells=200) == pytest.approx(plug, rel=1e-4)

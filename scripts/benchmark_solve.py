@@ -25,7 +25,7 @@ def setup():
     )
     atol = jnp.full((model.n_species,), 1e-12)
     atol = atol.at[model.species_index["OH"]].set(1e-20)
-    reactor = aquakin.BatchReactor(model, conditions, atol=atol)
+    reactor = aquakin.BatchReactor(model, conditions, settings=aquakin.SolverSettings(atol=atol))
     C0 = model.default_concentrations()
     C0 = C0.at[model.species_index["O3"]].set(1.0e-4)
     C0 = C0.at[model.species_index["Br-"]].set(1.0e-5)

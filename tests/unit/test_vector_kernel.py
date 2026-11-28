@@ -137,7 +137,7 @@ def test_grad_flows_through_kernel():
     net = aquakin.load_model("asm1")
     reactor = aquakin.BatchReactor(
         net, net.default_conditions(),
-        integrator=aquakin.IntegratorConfig(dtmax=1e-2))
+        settings=aquakin.SolverSettings(integrator=aquakin.IntegratorConfig(dtmax=1e-2)))
     C0 = net.default_concentrations()
     p = net.default_parameters()
     t_eval = jnp.array([5.0])

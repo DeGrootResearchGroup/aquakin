@@ -67,9 +67,10 @@ The Python entry point is `aquakin.CFDReactor`. A C++ `fvOptions` plugin
 ```python
 reactor = aquakin.CFDReactor(
     model,        # CompiledModel loaded via aquakin.load_model(...)
-    rtol=1e-6,
-    atol=1e-9,      # scalar or (n_species,) array for per-species tolerance
-    adjoint=None,   # diffrax adjoint strategy; defaults to RecursiveCheckpoint
+    settings=aquakin.SolverSettings(
+        rtol=1e-6,
+        atol=1e-9,  # scalar or (n_species,) array for per-species tolerance
+    ),
     on_nan="raise", # or "ignore"; raises with offending cell indices
 )
 
